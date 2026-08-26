@@ -44,30 +44,48 @@ export const DECIMALS = 6;
 
 /** `oku_shared::MAX_FEE_BPS` — the ceiling on `tin`/`tout`. */
 export const MAX_FEE_BPS = 100;
+/**
+ * `oku_shared::MAX_STEP_BPS` — simultaneously the per-step ceiling and the
+ * PER-LEG floor under `tin`/`tout`. The single number defining step coverage.
+ */
+export const MAX_STEP_BPS = 5;
 /** `oku_shared::DEFAULT_SYNC_WINDOW_SECS` — window length written at init. */
 export const DEFAULT_SYNC_WINDOW_SECS = 60;
 
 /**
  * Default `tout` applied by `initializePsm`.
  *
- * WHY TESTS MUST SET A FEE AT ALL. The program refuses any multiplier increase
- * unless `tin_bps + tout_bps` covers the step (`step_is_covered`), and both
- * ship at 0 bps — fail-closed, so the step-arbitrage condition cannot be
- * created by accident. A suite that wants to move the multiplier therefore has
- * to configure a fee first, exactly as a real deployment does.
+ * TESTS NO LONGER NEED TO SET A FEE TO MOVE THE MULTIPLIER. `initialize` seeds
+ * both legs at `MAX_STEP_BPS` and `set_fees` refuses anything below it, so every
+ * step `set_multiplier` admits is covered from the first slot. The old
+ * fail-closed-at-zero state is gone: with the program no longer reading the fee
+ * schedule at write time, a zero-fee window would be an uncovered-step window.
  *
- * `MAX_FEE_BPS` is used so no test is ever blocked by coverage. Note the
- * consequence: it also caps a single step at 1%, so a test that wants a large
- * multiplier must take several steps — see `stepMultiplierTo` in
- * `tests/shared/multiplier.ts`.
+ * `MAX_FEE_BPS` is still the default here so fee arithmetic stays visible in
+ * every suite rather than sitting at the floor where rounding is smallest.
+ *
+ * Note the standing consequence of `MAX_STEP_BPS`: a single step is capped at
+ * 5 bps, so a test wanting a large multiplier must take many steps — see
+ * `stepMultiplierTo` in `tests/shared/multiplier.ts`.
  */
 export const DEFAULT_TEST_TOUT_BPS = MAX_FEE_BPS;
+
+/**
+ * Default `tin` applied by `initializePsm` — the per-leg floor.
+ *
+ * Exported so suites can state fee-adjusted expectations against the value the
+ * fixture actually configured rather than hardcoding 5.
+ */
+export const DEFAULT_TEST_TIN_BPS = MAX_STEP_BPS;
 
 export interface InitializePsmOptions {
   /**
    * `tout` to configure immediately after `initialize`. Defaults to
-   * `DEFAULT_TEST_TOUT_BPS`. Pass `0` to observe the raw fail-closed
-   * post-initialize state (no multiplier increase will be permitted).
+   * `DEFAULT_TEST_TOUT_BPS`.
+   *
+   * CLAMPED UP to `MAX_STEP_BPS`: the per-leg floor is enforced on-chain, so
+   * there is no reachable state below it. Passing `0` no longer observes a
+   * fail-closed state — it gets the floor.
    */
   toutBps?: number;
   /** `tin` to configure. Defaults to 0. */
@@ -207,12 +225,14 @@ export async function initializePsm(
   // reference `vaultOkuMAta`.
   await ensureAtaViaBankrun(h, configPda, okuMMint, TOKEN_2022_PROGRAM_ID);
 
-  // Configure fees. The program ships at 0 bps and refuses every multiplier
-  // increase while `tout_bps == 0`, so any suite that moves the multiplier has
-  // to do this — the same first step a real deployment takes.
-  const toutBps = options.toutBps ?? DEFAULT_TEST_TOUT_BPS;
-  const tinBps = options.tinBps ?? 0;
-  if (toutBps !== 0 || tinBps !== 0) {
+  // Configure fees. `initialize` already seeded both legs at the step-coverage
+  // floor, so this is a raise rather than an enable. Values below
+  // `MAX_STEP_BPS` are rejected on-chain (`FeeBelowStepFloor`), so both
+  // defaults are clamped up to the floor — a suite asking for 0 gets the floor,
+  // which is the minimum reachable state rather than an error.
+  const toutBps = Math.max(options.toutBps ?? DEFAULT_TEST_TOUT_BPS, MAX_STEP_BPS);
+  const tinBps = Math.max(options.tinBps ?? 0, MAX_STEP_BPS);
+  {
     await program.methods
       .setFees(new BN(tinBps), new BN(toutBps))
       .accountsPartial({ capManager: coldMultisig.publicKey, config: configPda })

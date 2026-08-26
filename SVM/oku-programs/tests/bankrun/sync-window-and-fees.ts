@@ -5,18 +5,24 @@
  * surfaces around a multiplier update, and the tests are organised to keep
  * that distinction explicit because conflating them is the easy mistake:
  *
- *   - **Sync window** — cross-chain. Profit requires *transacting while the
- *     chains disagree*, during the interval between the EVM write and the
- *     SVM write. Blocking the price-sensitive instructions for that
- *     interval removes the opportunity entirely. Armed automatically by
- *     every multiplier write; released by nothing but the clock.
+ *   - **Sync window** — cross-chain, and TRANSIENT. Profit requires
+ *     *transacting while the chains disagree*, during the interval between
+ *     the EVM write and the SVM write. Once the lagging chain ticks the edge
+ *     is exactly zero, so making the attacker wait removes it — which is why
+ *     a time lock is the right tool. Armed automatically by every multiplier
+ *     write; released by nothing but the clock.
  *
- *   - **`tin + tout` fees** — local. Profit requires *holding raw across a
- *     discrete step*, which needs no transaction during any window at all.
- *     The window is powerless here; only fees covering the step's yield
- *     make the round trip lossy. See
- *     `describe("local step arbitrage")` below, which demonstrates both
- *     the attack and the fix.
+ *     Scope is now the BRIDGE LEGS ONLY (`mint_oku_m_direct` /
+ *     `burn_oku_m_direct`). `mint_oku_m` and `redeem_oku_m` are single-chain
+ *     and priced at this chain's own multiplier, which is correct whatever
+ *     the peer believes, so gating them bought nothing and cost an outage
+ *     after every mark.
+ *
+ *   - **`tin`/`tout` fees** — local, and PERMANENT. Profit requires *holding
+ *     raw across a discrete step*, which needs no transaction during any
+ *     window at all, and the multiplier is monotone so waiting costs the
+ *     attacker nothing. No window length deters this; only a fee covering
+ *     the step does. See `describe("local step arbitrage")` below.
  *
  * THERE IS NO OPEN/CLOSE PROTOCOL. An earlier design had
  * `begin_sync_window(epoch)` / `end_sync_window(epoch)` with an
@@ -34,9 +40,27 @@
  *     makes the fence and the tick the same transaction, so none of those
  *     failure modes exist.
  *
- * The window ships ON (`DEFAULT_SYNC_WINDOW_SECS`); fees ship at zero,
- * which is FAIL-CLOSED rather than a hole — no step is possible until a fee
- * schedule exists. The first describe block pins both.
+ * STEP COVERAGE IS NOW STATIC, and that is the other large reduction here.
+ * It used to be three coupled mechanisms: `step_is_covered(tin + tout)` read
+ * at write time, a `max_step_bps` high-water ratchet, a floor on later
+ * `set_fees` calls against that ratchet, and a cold
+ * `reset_step_high_water_mark` escape hatch whose honest precondition was not
+ * verifiable on-chain. It is now two rules over one constant:
+ *
+ *     set_multiplier / distribute_yield:  step_bps <= MAX_STEP_BPS
+ *     set_fees:                           tin_bps  >= MAX_STEP_BPS
+ *                                         tout_bps >= MAX_STEP_BPS
+ *
+ * Strictly stronger than the ratchet, which only ever covered steps that had
+ * actually happened. PER-LEG rather than combined because a cross-chain round
+ * trip pays `tin` on the chain it mints on and `tout` on the chain it redeems
+ * on, so `(0, 2N)` here and `(2N, 0)` on EVM would each pass a combined check
+ * while the pair paid nothing.
+ *
+ * The window ships ON (`DEFAULT_SYNC_WINDOW_SECS`); fees ship AT THE FLOOR,
+ * not at zero. With the program no longer reading the fee schedule at
+ * multiplier-write time, a zero-fee window would be an uncovered-step window.
+ * The first describe block pins both.
  *
  * Clock discipline: the sync window is wall-clock (`warpBy`) while the
  * pre-existing yield fence is slot-based (`warpSlots`). This suite uses
@@ -88,6 +112,7 @@ const PRECISION = new BN(1_000_000_000); // 1e9, matches oku-shared::PRECISION
 const BASIS_POINTS = new BN(10_000);
 const MAX_FEE_BPS = 100; // oku-shared::MAX_FEE_BPS
 const MAX_SYNC_WINDOW_SECS = 900; // oku-shared::MAX_SYNC_WINDOW_SECS
+const MAX_STEP_BPS = 5; // oku-shared::MAX_STEP_BPS
 
 describe("post-step sync window + PSM fees", () => {
   let h: BankrunHarness;
@@ -193,12 +218,11 @@ describe("post-step sync window + PSM fees", () => {
       .signers([orchestrator])
       .rpc();
 
-  const resetMark = (signer: Keypair = coldMultisig) =>
-    psm.methods
-      .resetStepHighWaterMark()
-      .accountsPartial({ capManager: signer.publicKey, config: psmConfigPda })
-      .signers([signer])
-      .rpc();
+  // The step high-water ratchet and its `reset_step_high_water_mark`
+  // instruction were both removed with the move to a static per-leg fee floor.
+  // Retained as a no-op seam so the fixtures below still read as
+  // "start from a clean coverage state", which is now simply always true.
+  const resetMark = async (_signer: Keypair = coldMultisig) => {};
 
   const directMint = (raw: BN) =>
     psm.methods
@@ -241,15 +265,14 @@ describe("post-step sync window + PSM fees", () => {
   /**
    * A covered multiplier write — the only way to arm the window.
    *
-   * Sizes the step to half the configured combined fee so it is always
-   * covered, and never zero (a no-op write is rejected by the strict-increase
-   * guard).
+   * Sizes the step just under `MAX_STEP_BPS` so it is always admissible, and
+   * never zero (a no-op write is rejected by the strict-increase guard).
+   *
+   * No longer reads the fee schedule: step admissibility does not depend on it.
    */
   const markMultiplier = async () => {
-    const c: any = await cfg();
-    const coverage = c.tinBps.toNumber() + c.toutBps.toNumber();
     const m = await readMultiplierFromMint(h, okuMMint);
-    const step = m.muln(Math.max(1, Math.floor(coverage / 2))).divn(10_000);
+    const step = m.muln(MAX_STEP_BPS - 1).divn(10_000);
     await setMultiplier(m.add(step.gtn(0) ? step : new BN(1)));
   };
 
@@ -337,8 +360,8 @@ describe("post-step sync window + PSM fees", () => {
   // Fail-closed defaults
   // =========================================================================
 
-  describe("ships fail-closed", () => {
-    it("initializes with the window ON, fees at zero, and no step mark", async () => {
+  describe("ships covered", () => {
+    it("initializes with the window ON and both fee legs AT the step floor", async () => {
       // A separate cluster, so the suite-level overrides in `before` do not
       // mask the real post-initialize state.
       const probeH = await startBankrun();
@@ -355,7 +378,7 @@ describe("post-step sync window + PSM fees", () => {
         probeH.program,
         probeH.payer,
         probeUsdc,
-        { toutBps: 0 }
+        { toutBps: MAX_STEP_BPS, tinBps: MAX_STEP_BPS }
       );
       const c: any = await probeH.program.account.psmConfig.fetch(probe.configPda);
 
@@ -365,26 +388,45 @@ describe("post-step sync window + PSM fees", () => {
       // Nothing is locked until the first multiplier write arms it.
       expect(c.syncLockUntilTs.toNumber()).to.equal(0);
 
-      // Fees ship at zero — which is now fail-closed, not a hole. See below.
-      expect(c.tinBps.toNumber()).to.equal(0);
-      expect(c.toutBps.toNumber()).to.equal(0);
-      expect(c.maxStepBps.toNumber()).to.equal(0);
+      // Fees ship AT THE FLOOR. This test previously asserted zero, plus a
+      // `maxStepBps` of zero. Both were properties of the dynamic-coverage
+      // design: the program read the schedule back and refused to step while
+      // it was empty. It no longer reads it, so zero would be an
+      // uncovered-step window rather than a fail-closed state.
+      expect(c.tinBps.toNumber()).to.equal(MAX_STEP_BPS);
+      expect(c.toutBps.toNumber()).to.equal(MAX_STEP_BPS);
+      // `maxStepBps` is gone entirely — the ratchet it served was deleted.
+      expect(c.maxStepBps).to.equal(undefined);
     });
 
-    it("refuses to rebase at all while tin+tout is zero", async () => {
-      // THE fail-closed property, and the reason shipping fees at 0 is safe.
-      //
-      // With no fees, any multiplier increase creates a step nothing covers,
-      // so the program refuses it outright. The operator is unable to create
-      // the arbitrage condition rather than merely trusted not to, and
-      // configuring fees sized to the intended cadence becomes a precondition
-      // of rebasing rather than a step someone might forget.
-      await setFees(0, 0);
+    it("can step immediately after initialize, with no fee configuration", async () => {
+      // The point of shipping covered: there is no launch-ordering dependency
+      // and no window in which marks are impossible.
       const m = await readMultiplierFromMint(h, okuMMint);
-      await expectBankrunError(() => setMultiplier(m.addn(1)), "StepExceedsFeeCoverage");
-      // `distribute_yield` reaches the multiplier by a different route and is
-      // equally fail-closed; asserted in the step-coverage describe below,
-      // where a nonzero supply is guaranteed.
+      await setFees(MAX_STEP_BPS, MAX_STEP_BPS);
+      await setMultiplier(m.addn(1));
+      expect((await readMultiplierFromMint(h, okuMMint)).toNumber()).to.equal(
+        m.addn(1).toNumber()
+      );
+    });
+
+    it("cannot reach a zero-fee state at all", async () => {
+      await expectBankrunError(() => setFees(0, 0), "FeeBelowStepFloor");
+      await expectBankrunError(() => setFees(0, MAX_FEE_BPS), "FeeBelowStepFloor");
+      await expectBankrunError(() => setFees(MAX_FEE_BPS, 0), "FeeBelowStepFloor");
+    });
+
+    it("rejects either leg one bp below the floor", async () => {
+      await expectBankrunError(
+        () => setFees(MAX_STEP_BPS - 1, MAX_STEP_BPS),
+        "FeeBelowStepFloor"
+      );
+      await expectBankrunError(
+        () => setFees(MAX_STEP_BPS, MAX_STEP_BPS - 1),
+        "FeeBelowStepFloor"
+      );
+      // ...and accepts exactly the floor.
+      await setFees(MAX_STEP_BPS, MAX_STEP_BPS);
     });
   });
 
@@ -392,77 +434,54 @@ describe("post-step sync window + PSM fees", () => {
   // Step coverage — the invariant that makes step arbitrage impossible
   // =========================================================================
 
-  describe("step coverage", () => {
+  describe("step ceiling", () => {
     beforeEach(async () => {
-      await resetMark();
-      await setFees(0, 10);
+      await setFees(MAX_STEP_BPS, MAX_FEE_BPS);
     });
 
-    it("permits a step the fee covers and refuses one it does not", async () => {
+    it("permits a step at the ceiling and refuses one above it", async () => {
       const m = await readMultiplierFromMint(h, okuMMint);
-      const covered = m.add(m.muln(9).divn(10_000)); // 9 bps under a 10 bps fee
-      const uncovered = m.add(m.muln(20).divn(10_000)); // 20 bps
+      // 1 bp under the ceiling, so the f64 round-trip cannot tip it over.
+      const covered = m.add(m.muln(MAX_STEP_BPS - 1).divn(10_000));
+      const uncovered = m.add(m.muln(MAX_STEP_BPS + 5).divn(10_000));
 
-      await expectBankrunError(() => setMultiplier(uncovered), "StepExceedsFeeCoverage");
+      await expectBankrunError(() => setMultiplier(uncovered), "StepAboveMax");
       await setMultiplier(covered);
     });
 
-    it("records the step as a high-water mark", async () => {
-      const m = await readMultiplierFromMint(h, okuMMint);
-      await setMultiplier(m.add(m.muln(9).divn(10_000)));
-      const mark = (await cfg()).maxStepBps.toNumber();
-      expect(mark).to.be.greaterThan(0);
-      expect(mark).to.be.at.most(10, "mark must never exceed the fee that permitted it");
-    });
+    it("does not consult the fee schedule at all", async () => {
+      // The coupling is gone: the largest fee and the smallest fee admit
+      // exactly the same set of steps, because coverage is guaranteed by the
+      // floor rather than checked here.
+      const oversized = (m: BN) => m.add(m.muln(MAX_STEP_BPS + 5).divn(10_000));
 
-    it("caps a single step at the combined fee however it is split", async () => {
-      // A derived bound worth stating: each leg is capped at MAX_FEE_BPS and
-      // step <= tin + tout, so the multiplier can never move more than 2% in
-      // one write. That in turn implies a MINIMUM rebase cadence — a long
-      // outage cannot be caught up in a single step.
       await setFees(MAX_FEE_BPS, MAX_FEE_BPS);
-      const m = await readMultiplierFromMint(h, okuMMint);
-      const overCeiling = m.add(m.muln(2 * MAX_FEE_BPS + 1).divn(10_000));
-      await expectBankrunError(() => setMultiplier(overCeiling), "StepExceedsFeeCoverage");
+      let m = await readMultiplierFromMint(h, okuMMint);
+      await expectBankrunError(() => setMultiplier(oversized(m)), "StepAboveMax");
+
+      await setFees(MAX_STEP_BPS, MAX_STEP_BPS);
+      m = await readMultiplierFromMint(h, okuMMint);
+      await expectBankrunError(() => setMultiplier(oversized(m)), "StepAboveMax");
     });
 
-    it("counts tin toward coverage, not tout alone", async () => {
-      // THE reason the rule binds the SUM. A round trip pays tin going in and
-      // tout coming out, so coverage carried entirely by tin closes the
-      // arbitrage just as well. A tout-only rule would refuse this step while
-      // permitting an identically-profitable one elsewhere — wrong in both
-      // directions.
-      await resetMark();
-      await setFees(20, 0);
+    it("implies a minimum rebase cadence", async () => {
+      // A derived bound worth stating: a long outage cannot be caught up in a
+      // single write and must be walked. This is the operator-absence
+      // protection working, not an obstacle.
       const m = await readMultiplierFromMint(h, okuMMint);
-      await setMultiplier(m.add(m.muln(20).divn(10_000)));
-      expect((await cfg()).maxStepBps.toNumber()).to.be.at.least(20);
+      const aMonthOfYield = m.add(m.muln(41).divn(10_000)); // ~monthly at 5% APY
+      await expectBankrunError(() => setMultiplier(aMonthOfYield), "StepAboveMax");
     });
 
-    it("refuses a step that exceeds tin + tout combined", async () => {
-      await resetMark();
-      await setFees(5, 5);
-      const m = await readMultiplierFromMint(h, okuMMint);
-      await expectBankrunError(
-        () => setMultiplier(m.add(m.muln(15).divn(10_000))),
-        "StepExceedsFeeCoverage"
-      );
-      await setMultiplier(m.add(m.muln(10).divn(10_000)));
-    });
-
-    it("applies the same coverage rule to distribute_yield", async () => {
+    it("applies the same ceiling to distribute_yield", async () => {
       // distribute_yield reaches the multiplier by a different route; it must
       // not be a way around the check.
       const supply = await totalSupply();
       const m = await readMultiplierFromMint(h, okuMMint);
-      // A yield amount whose implied bump lands far above the 10 bps fee.
       const hugeBump = m.muln(50).divn(10_000);
       const hugeYield = hugeBump.mul(supply).div(PRECISION);
       if (hugeYield.gtn(0)) {
-        await expectBankrunError(
-          () => distributeYield(hugeYield),
-          "StepExceedsFeeCoverage"
-        );
+        await expectBankrunError(() => distributeYield(hugeYield), "StepAboveMax");
       }
     });
   });
@@ -471,72 +490,13 @@ describe("post-step sync window + PSM fees", () => {
   // The fee floor — coverage cannot be removed after the fact
   // =========================================================================
 
-  describe("fee high-water mark", () => {
-    it("refuses to lower tin + tout below a step already taken", async () => {
-      await resetMark();
-      await setFees(0, MAX_FEE_BPS);
-
-      // Take a large step under a large fee.
-      const m = await readMultiplierFromMint(h, okuMMint);
-      await setMultiplier(m.add(m.muln(50).divn(10_000))); // 50 bps
-      const mark = (await cfg()).maxStepBps.toNumber();
-      expect(mark).to.be.at.least(50);
-
-      // THE MANIPULATION THIS BLOCKS: raise fees, take a big step, drop fees —
-      // handing a cheap exit to everyone who held across the step. The
-      // attacker's edge is locked in when the step lands and never decays,
-      // which is why a time-based cooldown would not close this and a
-      // high-water mark does.
-      await expectBankrunError(() => setFees(0, mark - 1), "FeeBelowStepHighWaterMark");
-      await expectBankrunError(() => setFees(0, 0), "FeeBelowStepHighWaterMark");
-
-      // At or above the mark is fine — and the SPLIT is free, because only the
-      // sum is load-bearing. A tout-only floor would wrongly refuse this.
-      await setFees(0, mark);
-      await setFees(mark, 0);
-      const half = Math.floor(mark / 2);
-      await setFees(half, mark - half);
-    });
-
-    it("only pins against steps actually taken", async () => {
-      // Not "the fees can never fall". A protocol that only ever took 1 bps
-      // steps can still lower the combined fee to 1 bps — the floor tracks
-      // reality, not the historical maximum fee.
-      await resetMark();
-      await setFees(0, MAX_FEE_BPS);
-      const m = await readMultiplierFromMint(h, okuMMint);
-      await setMultiplier(m.add(m.muln(1).divn(10_000))); // 1 bps step
-
-      const mark = (await cfg()).maxStepBps.toNumber();
-      expect(mark).to.be.at.most(2);
-      await setFees(0, mark); // far below the 100 bps that permitted it
-    });
-
-    it("clears only via the explicit, separately-named reset", async () => {
-      await resetMark();
-      await setFees(0, MAX_FEE_BPS);
-      const m = await readMultiplierFromMint(h, okuMMint);
-      await setMultiplier(m.add(m.muln(50).divn(10_000)));
-      expect((await cfg()).maxStepBps.toNumber()).to.be.at.least(50);
-
-      await expectBankrunError(() => setFees(0, 1), "FeeBelowStepHighWaterMark");
-
-      // Deliberately not a side effect of set_fees: clearing the mark reopens
-      // historical step exposure, so it has to be its own auditable action.
-      await resetMark();
-      expect((await cfg()).maxStepBps.toNumber()).to.equal(0);
-      await setFees(0, 1);
-    });
-
-    it("restricts the reset to cap_manager", async () => {
-      await expectBankrunError(() => resetMark(orchestrator), "Unauthorized");
-      await expectBankrunError(() => resetMark(warmMultisig), "Unauthorized");
-    });
-  });
-
-  // =========================================================================
-  // Parameter bounds and RBAC
-  // =========================================================================
+  // NOTE: `describe("fee high-water mark")` was removed here along with the
+  // ratchet it tested — four tests covering the mark, its floor under
+  // `set_fees`, the cold reset, and the reset's role gate. The static per-leg
+  // floor makes all four vacuous: there is no accumulated state, so nothing can
+  // be un-covered after the fact and there is no escape hatch to gate. The
+  // property they protected is now asserted unconditionally in
+  // `describe("ships covered")` above.
 
   describe("parameter bounds", () => {
     it("rejects a sync window above MAX_SYNC_WINDOW_SECS", async () => {
@@ -573,7 +533,7 @@ describe("post-step sync window + PSM fees", () => {
       // it is the one who can mark the multiplier, which is exactly the
       // separation the old two-instruction design was reaching for.
       await resetMark();
-      await setFees(0, MAX_FEE_BPS);
+      await setFees(MAX_STEP_BPS, MAX_FEE_BPS);
       const m = await readMultiplierFromMint(h, okuMMint);
       const target = m.add(m.muln(10).divn(10_000));
       for (const wrong of [coldMultisig, warmMultisig]) {
@@ -599,10 +559,15 @@ describe("post-step sync window + PSM fees", () => {
   // Sync window
   // =========================================================================
 
-  describe("sync window blocks price-sensitive instructions", () => {
+  // Scope is the BRIDGE LEGS only. `mint_oku_m` / `redeem_oku_m` used to be
+  // gated too; they are not any more, and the inverted tests below are the
+  // regression guard. A single-chain operation priced at this chain's own
+  // multiplier is correct whatever the peer believes, so gating it bought
+  // nothing and cost an outage after every mark.
+  describe("sync window blocks the bridge legs", () => {
     before(async () => {
       await resetMark();
-      await setFees(0, MAX_FEE_BPS);
+      await setFees(MAX_STEP_BPS, MAX_FEE_BPS);
       await setWindowSecs(120);
 
       // Wire the direct bridge legs to the orchestrator, so that when they are
@@ -634,7 +599,7 @@ describe("post-step sync window + PSM fees", () => {
       await setWindowSecs(0);
     });
 
-    it("arms on a multiplier write and blocks mint and redeem until it expires", async () => {
+    it("arms on a multiplier write for exactly the configured duration", async () => {
       await clearWindow();
       await markMultiplier();
 
@@ -644,12 +609,16 @@ describe("post-step sync window + PSM fees", () => {
         Number(clock.unixTimestamp) + 120,
         "armed for exactly the configured duration, from now"
       );
+    });
 
-      await expectBankrunError(() => mint(new BN(10_000_000)), "SyncWindowActive");
-      await expectBankrunError(() => redeem(new BN(1_000_000)), "SyncWindowActive");
+    it("does NOT block mint or redeem — those are single-chain", async () => {
+      // Inverted deliberately when the window was narrowed. A user must be able
+      // to subscribe and redeem while a mark propagates; the price they get is
+      // this chain's own multiplier, which is correct by definition.
+      await clearWindow();
+      await markMultiplier();
+      expect((await cfg()).syncLockUntilTs.toNumber()).to.be.greaterThan(0);
 
-      // No close instruction exists — only the clock releases it.
-      await warpBy(h, 121);
       await mint(new BN(10_000_000));
       await redeem(new BN(1_000_000));
     });
@@ -696,17 +665,18 @@ describe("post-step sync window + PSM fees", () => {
       // now it is the only one, which makes the property structural.
       await clearWindow();
       await markMultiplier();
-      await expectBankrunError(() => redeem(new BN(1_000_000)), "SyncWindowActive");
+      await expectBankrunError(() => directMint(new BN(1_000)), "SyncWindowActive");
 
       await warpBy(h, 121);
-      await redeem(new BN(1_000_000));
+      await directMint(new BN(1_000));
     });
 
     it("leaves multiplier-independent instructions open while engaged", async () => {
       await clearWindow();
       await markMultiplier();
 
-      // Buffer movement is at par — a stale multiplier cannot misprice it.
+      // Buffer movement is at par — a stale multiplier cannot misprice it. So
+      // are `mint_oku_m` / `redeem_oku_m`, covered separately above.
       await psm.methods
         .depositBuffer(new BN(1_000_000))
         .accountsPartial({
@@ -754,13 +724,14 @@ describe("post-step sync window + PSM fees", () => {
       await clearWindow();
       const supply = await totalSupply();
       const m = await readMultiplierFromMint(h, okuMMint);
-      // A step comfortably inside the 100 bps fee coverage.
-      const bump = m.muln(10).divn(10_000);
+      // A step comfortably inside `MAX_STEP_BPS`.
+      const bump = m.muln(MAX_STEP_BPS - 1).divn(10_000);
       const amount = bump.mul(supply).div(PRECISION);
       if (amount.gtn(0)) {
         await distributeYield(amount);
         expect((await cfg()).syncLockUntilTs.toNumber()).to.be.greaterThan(0);
-        await expectBankrunError(() => redeem(new BN(1_000_000)), "SyncWindowActive");
+        // A bridge leg is what the window blocks; redeem is single-chain.
+        await expectBankrunError(() => directMint(new BN(1_000)), "SyncWindowActive");
         await warpBy(h, 121);
       }
     });
@@ -771,19 +742,20 @@ describe("post-step sync window + PSM fees", () => {
   // =========================================================================
 
   describe("tout / tin arithmetic", () => {
+    // "No fee on the leg not under test" is now the FLOOR, not zero — the
+    // per-leg step-coverage floor is permanent. Each test therefore isolates
+    // one leg by pinning the other at `MAX_STEP_BPS` and accounting for it.
     beforeEach(async () => {
-      await resetMark();
-      await setFees(0, 0);
+      await setFees(MAX_STEP_BPS, MAX_STEP_BPS);
       await mint(new BN(2_000_000_000));
     });
 
     afterEach(async () => {
-      await resetMark();
-      await setFees(0, 0);
+      await setFees(MAX_STEP_BPS, MAX_STEP_BPS);
     });
 
     it("withholds exactly ceil(gross * tout / 10_000) from the payout", async () => {
-      await setFees(0, 15);
+      await setFees(MAX_STEP_BPS, 15);
       const m = await readMultiplierFromMint(h, okuMMint);
       const redeemRaw = new BN(1_000_000_000);
 
@@ -797,7 +769,9 @@ describe("post-step sync window + PSM fees", () => {
     });
 
     it("mints against the post-tin deposit", async () => {
-      await setFees(25, 0);
+      // `tout` at the floor is irrelevant here: the mint path charges `tin`
+      // only, which is the property being isolated.
+      await setFees(25, MAX_STEP_BPS);
       const m = await readMultiplierFromMint(h, okuMMint);
       const deposit = new BN(100_000_000);
 
@@ -811,7 +785,7 @@ describe("post-step sync window + PSM fees", () => {
     });
 
     it("accrues the fee to the buffer rather than a recipient", async () => {
-      await setFees(0, 50);
+      await setFees(MAX_STEP_BPS, 50);
       const m = await readMultiplierFromMint(h, okuMMint);
       const redeemRaw = new BN(1_000_000_000);
       const gross = redeemRaw.mul(m).div(PRECISION);
@@ -827,12 +801,12 @@ describe("post-step sync window + PSM fees", () => {
     });
 
     it("rejects a redemption whose entire payout is consumed by the fee", async () => {
-      await setFees(0, MAX_FEE_BPS);
+      await setFees(MAX_STEP_BPS, MAX_FEE_BPS);
       await expectBankrunError(() => redeem(new BN(1)), "ZeroOutput");
     });
 
     it("compares min_usdc_out against the net payout", async () => {
-      await setFees(0, 100);
+      await setFees(MAX_STEP_BPS, 100);
       const m = await readMultiplierFromMint(h, okuMMint);
       const redeemRaw = new BN(1_000_000_000);
       const gross = redeemRaw.mul(m).div(PRECISION);
@@ -853,49 +827,92 @@ describe("post-step sync window + PSM fees", () => {
      * Mint at M0, hold across a discrete step, redeem at M1.
      *
      * This is the attack the sync window CANNOT touch — the attacker never
-     * transacts while a window is open, so no window length deters it.
+     * transacts while a window is open, so no window length deters it, and the
+     * multiplier is monotone so waiting costs them nothing.
      *
-     * The defence is no longer "set a big enough fee and hope". Two on-chain
-     * halves make it impossible:
+     * The defence is two rules over one constant, and neither reads state:
      *
-     *   1. a step larger than `tin + tout` covers is refused outright, so the
-     *      arbitrage condition cannot be created; and
-     *   2. `tin + tout` cannot later fall below a step already taken, so
-     *      coverage cannot be removed after the fact.
+     *   1. `set_multiplier` refuses any step above `MAX_STEP_BPS`; and
+     *   2. `set_fees` refuses either leg below `MAX_STEP_BPS`.
      *
-     * The first test below is therefore the important one: the historical
-     * "profitable with no fee" case is now UNREACHABLE.
+     * So the worst case available to an attacker is a full `MAX_STEP_BPS` step
+     * against `2 * MAX_STEP_BPS` of round-trip fee — a full step of margin.
+     * That margin is the price of the per-leg rule, and it is what buys the
+     * cross-chain guarantee the combined rule could not provide.
      */
     const DEPOSIT = new BN(1_000_000_000); // 1000 USDC
 
-    it("cannot even be set up: an uncovered step is refused", async () => {
-      await resetMark();
-      await setFees(0, 0);
+    /** Mint, step to the ceiling, redeem. Returns proceeds in USDC units. */
+    const roundTrip = async (tinBps: number, toutBps: number) => {
+      await setFees(tinBps, toutBps);
 
+      const rawBefore = await okuMBal(userOkuMAta);
+      await mint(DEPOSIT);
+      const acquired = new BN((await okuMBal(userOkuMAta)) - rawBefore);
+
+      // The largest step the program admits — the best case for an attacker.
       const m = await readMultiplierFromMint(h, okuMMint);
-      // Every increase, from a 1-unit nudge to a full 1%, is refused while no
-      // fees are configured. There is no zero-fee step to arbitrage.
-      await expectBankrunError(() => setMultiplier(m.addn(1)), "StepExceedsFeeCoverage");
+      await setMultiplier(m.add(m.muln(MAX_STEP_BPS - 1).divn(10_000)));
+      await clearWindow();
+
+      const usdcBefore = await usdcBal(userUsdcAta);
+      await redeem(acquired);
+      return (await usdcBal(userUsdcAta)) - usdcBefore;
+    };
+
+    it("cannot be set up with an oversized step", async () => {
+      // The historical "profitable with no fee" case is unreachable, but by a
+      // different route than before: it is not that a zero fee blocks the step
+      // (fees can no longer BE zero) — it is that the step itself is bounded,
+      // and the bound is exactly what the mandatory fee covers.
+      const m = await readMultiplierFromMint(h, okuMMint);
+      await expectBankrunError(
+        () => setMultiplier(m.add(m.muln(MAX_STEP_BPS + 5).divn(10_000))),
+        "StepAboveMax"
+      );
       await expectBankrunError(
         () => setMultiplier(m.add(m.muln(100).divn(10_000))),
-        "StepExceedsFeeCoverage"
+        "StepAboveMax"
       );
     });
 
-    it("is unprofitable at the largest step the fee permits", async () => {
-      await resetMark();
-      const tout = MAX_FEE_BPS;
-      await setFees(0, tout);
+    it("is unprofitable at the floor fee and the largest admissible step", async () => {
+      // THE worst case the contracts permit: cheapest possible fees, biggest
+      // possible step. If this passes, nothing tighter exists.
+      const proceeds = await roundTrip(MAX_STEP_BPS, MAX_STEP_BPS);
+      expect(proceeds).to.be.at.most(
+        DEPOSIT.toNumber(),
+        "floor fees against a maximal step must never profit"
+      );
+    });
+
+    it("is unprofitable with coverage weighted onto tin", async () => {
+      const proceeds = await roundTrip(MAX_FEE_BPS, MAX_STEP_BPS);
+      expect(proceeds).to.be.at.most(DEPOSIT.toNumber());
+    });
+
+    it("is unprofitable with coverage weighted onto tout", async () => {
+      const proceeds = await roundTrip(MAX_STEP_BPS, MAX_FEE_BPS);
+      expect(proceeds).to.be.at.most(DEPOSIT.toNumber());
+    });
+
+    it("cannot be made profitable by lowering the fee afterwards", async () => {
+      // What the high-water ratchet used to defend, now structural. Take the
+      // biggest admissible step at a high fee, then cheapen the exit as far as
+      // the program allows — which is the floor, and the floor still covers it.
+      await setFees(MAX_FEE_BPS, MAX_FEE_BPS);
 
       const rawBefore = await okuMBal(userOkuMAta);
       await mint(DEPOSIT);
       const acquired = new BN((await okuMBal(userOkuMAta)) - rawBefore);
 
-      // Step right up to the coverage ceiling — the best case available to an
-      // attacker.
       const m = await readMultiplierFromMint(h, okuMMint);
-      await setMultiplier(m.add(m.muln(tout).divn(10_000)));
+      await setMultiplier(m.add(m.muln(MAX_STEP_BPS - 1).divn(10_000)));
       await clearWindow();
+
+      // As cheap as an exit can ever get. No reset instruction exists because
+      // there is no accumulated state to reset.
+      await setFees(MAX_STEP_BPS, MAX_STEP_BPS);
 
       const usdcBefore = await usdcBal(userUsdcAta);
       await redeem(acquired);
@@ -903,60 +920,7 @@ describe("post-step sync window + PSM fees", () => {
 
       expect(proceeds).to.be.at.most(
         DEPOSIT.toNumber(),
-        "a covered step must never yield a profitable round trip"
-      );
-    });
-
-    it("is unprofitable when coverage is carried entirely by tin", async () => {
-      // The case a `tout`-only rule would leak. The attacker pays the whole
-      // coverage on the way IN, so the round trip is closed just as tightly —
-      // and the sum rule is what permits the step in the first place.
-      await resetMark();
-      await setFees(MAX_FEE_BPS, 0);
-
-      const rawBefore = await okuMBal(userOkuMAta);
-      await mint(DEPOSIT);
-      const acquired = new BN((await okuMBal(userOkuMAta)) - rawBefore);
-
-      const m = await readMultiplierFromMint(h, okuMMint);
-      await setMultiplier(m.add(m.muln(MAX_FEE_BPS).divn(10_000)));
-      await clearWindow();
-
-      const usdcBefore = await usdcBal(userUsdcAta);
-      await redeem(acquired);
-      const proceeds = (await usdcBal(userUsdcAta)) - usdcBefore;
-
-      expect(proceeds).to.be.at.most(
-        DEPOSIT.toNumber(),
-        "tin-carried coverage must close the round trip too"
-      );
-    });
-
-    it("stays unprofitable after the fee is lowered as far as it can go", async () => {
-      // The manipulation the high-water mark blocks, end to end: take the
-      // biggest step the fee allows, then try to cheapen the exit.
-      await resetMark();
-      await setFees(0, MAX_FEE_BPS);
-
-      const rawBefore = await okuMBal(userOkuMAta);
-      await mint(DEPOSIT);
-      const acquired = new BN((await okuMBal(userOkuMAta)) - rawBefore);
-
-      const m = await readMultiplierFromMint(h, okuMMint);
-      await setMultiplier(m.add(m.muln(MAX_FEE_BPS).divn(10_000)));
-      await clearWindow();
-
-      // Lower the combined fee as far as the floor permits — no further.
-      const mark = (await cfg()).maxStepBps.toNumber();
-      await setFees(0, mark);
-
-      const usdcBefore = await usdcBal(userUsdcAta);
-      await redeem(acquired);
-      const proceeds = (await usdcBal(userUsdcAta)) - usdcBefore;
-
-      expect(proceeds).to.be.at.most(
-        DEPOSIT.toNumber(),
-        "lowering tout to the high-water mark must not make the round trip profitable"
+        "the minimum reachable fee must still cover any step already taken"
       );
     });
   });

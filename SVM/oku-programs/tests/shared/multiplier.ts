@@ -3,15 +3,20 @@
  *
  * # Why these exist
  *
- * The program enforces `step_is_covered`: a multiplier increase is rejected
- * unless `tout_bps` covers it. Since `tout_bps <= MAX_FEE_BPS` (100 = 1%), a
- * single step can never exceed 1%.
+ * The program enforces `step_bps <= MAX_STEP_BPS` (5 = 0.05%), so a single
+ * multiplier increase can never exceed 5 bps. Coverage itself no longer enters
+ * into it: `set_fees` floors each leg at `MAX_STEP_BPS`, so every step the
+ * program admits is already covered and there is no fee to arrange per step.
  *
  * That is a real production property, not a test artifact — you cannot jump the
  * multiplier, you can only walk it. A suite that wants a materially higher
  * multiplier has to take several steps, exactly as an operator would after an
  * outage. `stepMultiplierTo` encodes that walk once so individual tests do not
  * each reinvent it.
+ *
+ * The walk got 20x longer when `MAX_STEP_BPS` was tightened from 100 to 5, so
+ * the iteration guard below is sized accordingly. A suite needing a multiplier
+ * far from 1.0 should reconsider whether it needs the real walk at all.
  *
  * Each step also trips two independent guards that have to be cleared between
  * iterations:
@@ -29,7 +34,7 @@ import {
   warpBy,
   warpSlots,
 } from './bankrun';
-import { MAX_FEE_BPS } from './setup';
+import { MAX_FEE_BPS, MAX_STEP_BPS } from './setup';
 
 const BASIS_POINTS = 10_000;
 
@@ -40,11 +45,11 @@ const BASIS_POINTS = 10_000;
  * stored on the mint as an `f64` and round-tripped through
  * `(value * PRECISION).round()`, so the integer this client reads back can
  * differ from the program's own view by a unit or two. Stepping to the exact
- * ceiling would intermittently land a hair over it and trip
- * `StepExceedsFeeCoverage` non-deterministically.
+ * ceiling would intermittently land a hair over it and trip `StepAboveMax`
+ * non-deterministically.
  */
-export function maxCoveredStep(current: BN, toutBps: number = MAX_FEE_BPS): BN {
-  const delta = current.muln(toutBps).divn(BASIS_POINTS);
+export function maxCoveredStep(current: BN, stepBps: number = MAX_STEP_BPS): BN {
+  const delta = current.muln(stepBps).divn(BASIS_POINTS);
   return current.add(delta.muln(99).divn(100));
 }
 
@@ -62,24 +67,24 @@ export async function stepMultiplierTo(
   configPda: PublicKey,
   okuMMint: PublicKey,
   target: BN,
-  toutBps: number = MAX_FEE_BPS
+  stepBps: number = MAX_STEP_BPS
 ): Promise<BN> {
   let current = await readMultiplierFromMint(h, okuMMint);
   let guard = 0;
 
   while (current.lt(target)) {
-    if (++guard > 512) {
+    if (++guard > 8192) {
       throw new Error(
         `stepMultiplierTo: ${target.toString()} unreachable from ${current.toString()} ` +
-          `in 512 covered steps at tout=${toutBps}bps`
+          `in 8192 steps at ${stepBps}bps each`
       );
     }
 
-    const ceiling = maxCoveredStep(current, toutBps);
+    const ceiling = maxCoveredStep(current, stepBps);
     const next = target.lt(ceiling) ? target : ceiling;
     if (next.lte(current)) {
       throw new Error(
-        `stepMultiplierTo: no progress possible at tout=${toutBps}bps ` +
+        `stepMultiplierTo: no progress possible at ${stepBps}bps steps ` +
           `(current=${current.toString()}). A nonzero tout is required to move ` +
           `the multiplier at all.`
       );
@@ -189,4 +194,17 @@ export function expectedRedeemNet(
   if (toutBps === 0) return gross;
   const fee = gross.muln(toutBps).addn(BASIS_POINTS - 1).divn(BASIS_POINTS); // ceil
   return gross.sub(fee);
+}
+
+/**
+ * Net USDC credited on a mint of `usdcIn` after `tinBps`.
+ *
+ * The mint-side twin of `expectedRedeemNet`, needed now that `tin` is nonzero
+ * by default: `initialize` seeds both legs at `MAX_STEP_BPS` and neither can
+ * return to zero, so a 1:1 mint expectation is no longer correct anywhere.
+ */
+export function expectedMintNet(usdcIn: BN, tinBps: number = MAX_STEP_BPS): BN {
+  if (tinBps === 0) return usdcIn;
+  const fee = usdcIn.muln(tinBps).addn(BASIS_POINTS - 1).divn(BASIS_POINTS); // ceil
+  return usdcIn.sub(fee);
 }

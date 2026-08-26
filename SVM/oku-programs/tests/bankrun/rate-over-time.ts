@@ -199,8 +199,10 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
       expectedUsdc0.toNumber()
     );
 
-    // ===== Tick: bump multiplier by 1%, then redeem again =====
-    const m1 = m0.mul(new BN(101)).div(new BN(100));
+    // ===== Tick: bump the multiplier, then redeem again =====
+    // 4 bps, inside `MAX_STEP_BPS` (5) with headroom for the f64 round-trip.
+    // Was 1%, which the tightened step ceiling now refuses.
+    const m1 = m0.add(m0.muln(4).divn(10_000));
     await psm.methods
       .setMultiplier(m1)
       .accountsPartial({
@@ -383,7 +385,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
 
     let mCurrent = mStart;
     for (let i = 0; i < 3; i++) {
-      const next = mCurrent.add(mCurrent.div(new BN(1000))); // +0.1%
+      const next = mCurrent.add(mCurrent.muln(4).divn(10_000)); // +4 bps
       await psm.methods
         .setMultiplier(next)
         .accountsPartial({
@@ -557,7 +559,7 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
     const m0 = await readMultiplierFromMint(h, okuMMint);
     // +0.99% — just inside what the 1% test `tout` covers, since the program
     // now refuses a step the redemption fee cannot cover.
-    const m1 = m0.add(m0.muln(99).divn(10_000));
+    const m1 = m0.add(m0.muln(4).divn(10_000));
 
     // Stamp the yield-lock slot.
     //

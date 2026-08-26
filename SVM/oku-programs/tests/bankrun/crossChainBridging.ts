@@ -391,7 +391,7 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
     // ===== Multiplier tick BETWEEN the legs =====
     // A rebase lands while the orchestrator is in flight. Step by 0.99%, just
     // inside what the configured `tout` covers.
-    const multiplier1 = multiplier0.add(multiplier0.muln(99).divn(10_000));
+    const multiplier1 = multiplier0.add(multiplier0.muln(4).divn(10_000));
     await psm.methods
       .setMultiplier(multiplier1)
       .accountsPartial({

@@ -520,7 +520,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const curMultiplierE1 = await readMultiplierFromMint(ctx.h, ctx.okuMMint);
       // +0.99%: a single step can never exceed MAX_FEE_BPS (1%), because the
       // program refuses any step the redemption fee does not cover.
-      const newMultiplier = curMultiplierE1.add(curMultiplierE1.muln(99).divn(10_000));
+      const newMultiplier = curMultiplierE1.add(curMultiplierE1.muln(4).divn(10_000));
       await ctx.psm.methods.setMultiplier(newMultiplier)
         .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda, okuMMint: ctx.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
         .signers([psmOrchestrator]).rpc();
@@ -601,7 +601,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       // Multiplier tick (+1%) between legs
       await warpSlots(ctx.h, 1);
       const curMultiplierE3 = await readMultiplierFromMint(ctx.h, ctx.okuMMint);
-      const newMultiplier = curMultiplierE3.add(curMultiplierE3.muln(99).divn(10_000));
+      const newMultiplier = curMultiplierE3.add(curMultiplierE3.muln(4).divn(10_000));
       await ctx.psm.methods.setMultiplier(newMultiplier)
         .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda, okuMMint: ctx.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
         .signers([psmOrchestrator]).rpc();
@@ -619,10 +619,20 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const orchOkuMAfter = await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID);
       const okuMMinted = orchOkuMAfter - orchOkuMBefore;
 
-      // Dollar value check: okuMMinted * newMultiplier ~ usdcFromRedeem * 1e9 (within rounding)
+      // Dollar value check. The mint leg charges `tin`, which is nonzero by
+      // default now that fees ship at the step-coverage floor, so the value
+      // arriving is the deposit net of that fee rather than the deposit. The
+      // property under test is that the MULTIPLIER TICK introduces no drift
+      // beyond rounding — the fee is a known, intended deduction and is
+      // subtracted rather than tolerated, so the drift bound stays at 2 units.
+      const cfgE3: any = await ctx.psm.account.psmConfig.fetch(ctx.configPda);
+      const tinBpsE3 = BigInt(cfgE3.tinBps.toString());
+      const feeE3 = (usdcFromRedeem * tinBpsE3 + 9_999n) / 10_000n; // ceil, as the program does
+      const creditedE3 = usdcFromRedeem - feeE3;
+
       const newMultiplierBig = BigInt(newMultiplier.toString());
       const dollarValue = (okuMMinted * newMultiplierBig) / 1_000_000_000n;
-      const drift = dollarValue > usdcFromRedeem ? dollarValue - usdcFromRedeem : usdcFromRedeem - dollarValue;
+      const drift = dollarValue > creditedE3 ? dollarValue - creditedE3 : creditedE3 - dollarValue;
       assertLte(drift, 2n, "dollar value drift after multiplier tick");
 
       // Forward and clear float

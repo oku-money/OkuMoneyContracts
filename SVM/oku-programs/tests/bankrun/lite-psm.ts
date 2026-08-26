@@ -21,8 +21,11 @@ import {
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
   DECIMALS,
+  MAX_STEP_BPS,
+  DEFAULT_TEST_TIN_BPS,
+  DEFAULT_TEST_TOUT_BPS,
 } from "../shared/setup";
-import { clearSyncWindow } from "../shared/multiplier";
+import { clearSyncWindow, expectedMintNet, expectedRedeemNet } from "../shared/multiplier";
 import {
   BankrunHarness,
   startBankrun,
@@ -168,7 +171,12 @@ describe("lite-psm", () => {
   });
 
   describe("mint", () => {
-    it("mints okuM 1:1 with USDC (pre-created ATA)", async () => {
+    // 1:1 NET OF `tin`. Fees ship at the step-coverage floor rather than at
+    // zero — the program stopped reading the fee schedule at multiplier-write
+    // time, so a zero-fee window would be an uncovered-step window. The
+    // identity is on the credited amount, and the whole deposit still lands in
+    // the vault (the fee is withheld from the credit, not from the transfer).
+    it("mints okuM 1:1 with USDC net of tin (pre-created ATA)", async () => {
       const mintAmount = new BN(1_000_000); // 1 USDC/OkuM
 
       // Pre-create okuM ATA
@@ -207,7 +215,9 @@ describe("lite-psm", () => {
       const userOkuMAfter = await getAccount(provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID);
 
       expect(Number(userUsdcBefore.amount) - Number(userUsdcAfter.amount)).to.equal(mintAmount.toNumber());
-      expect(Number(userOkuMAfter.amount) - Number(userOkuMBefore)).to.equal(mintAmount.toNumber());
+      expect(Number(userOkuMAfter.amount) - Number(userOkuMBefore)).to.equal(
+        expectedMintNet(mintAmount, DEFAULT_TEST_TIN_BPS).toNumber()
+      );
     });
 
     it("mints okuM with init_if_needed ATA creation", async () => {
@@ -255,7 +265,9 @@ describe("lite-psm", () => {
       const okuMAccount = await getAccount(
         provider.connection, freshUserOkuMAta, undefined, TOKEN_2022_PROGRAM_ID
       );
-      expect(Number(okuMAccount.amount)).to.equal(mintAmount.toNumber());
+      expect(Number(okuMAccount.amount)).to.equal(
+        expectedMintNet(mintAmount, DEFAULT_TEST_TIN_BPS).toNumber()
+      );
     });
 
     it("fails to mint when paused", async () => {
@@ -656,7 +668,7 @@ describe("lite-psm", () => {
 
         // Stamp the yield-lock slot via set_multiplier.
         const m0 = await readMultiplierFromMint(h2, okuMMint2);
-        const m1 = m0.add(m0.div(new BN(100))); // +1%
+        const m1 = m0.add(m0.muln(4).divn(10_000)); // +4 bps (MAX_STEP_BPS is 5)
         await program2.methods
           .setMultiplier(m1)
           .accountsPartial({
@@ -794,7 +806,7 @@ describe("lite-psm", () => {
   describe("yield operations", () => {
     it("rebaser can distribute yield via multiplier increase", async () => {
       // Multiplier has been bumped by previous tests. Set to a higher value.
-      const newMultiplier = new BN(1_010_000_000); // ~$1.01
+      const newMultiplier = new BN(1_000_400_000); // +4 bps (MAX_STEP_BPS is 5)
       
       await program.methods
         .setMultiplier(newMultiplier)
@@ -852,10 +864,15 @@ describe("lite-psm", () => {
       const supply = BigInt(mintInfo.supply.toString());
       const PRECISION_BI = 1_000_000_000n;
 
-      // Distribute $0.001 worth of yield (1000 base units of dollars).
-      // Picked deliberately small so yield_per_token > 0 even at high supply
-      // but doesn't push price near MAX_OKU_M_PRICE.
-      const yieldAmount = 1_000n;
+      // Distribute a small amount of yield: large enough that
+      // `yield_per_token > 0` at this supply, small enough that the implied
+      // multiplier bump stays under `MAX_STEP_BPS` (5 bps). The step ceiling
+      // binds `distribute_yield` exactly as it binds `set_multiplier` — there
+      // is deliberately no second door past the gates.
+      const currentM = BigInt((await readMultiplierFromMint(h, okuMMint)).toString());
+      const maxBump = (currentM * 4n) / 10_000n; // 4 bps, one under the ceiling
+      const maxYield = (maxBump * supply) / PRECISION_BI;
+      const yieldAmount = maxYield < 1_000n ? maxYield : 1_000n;
       const expectedBump = (yieldAmount * PRECISION_BI) / supply;
       // If expected bump truncates to 0 (e.g. tiny yield vs huge supply), the
       // program returns YieldTooSmall — exercise both branches.
@@ -1099,10 +1116,23 @@ describe("lite-psm", () => {
 
       // okuM burned from user
       expect(Number(userOkuMBefore.amount) - Number(userOkuMAfter.amount)).to.equal(redeemAmount.toNumber());
-      // USDC sent to user -- multiplier > PRECISION so user gets more
-      // USDC than raw tokens redeemed (yield accrual from prior tests).
+      // The multiplier is above PRECISION from prior tests, so the GROSS
+      // conversion exceeds the raw redeemed — but `tout` is charged on top and
+      // is no longer zero, so the net payout need not. Assert against the
+      // program's own arithmetic instead of against the raw amount: the
+      // property under test is "instant settlement at the live multiplier",
+      // not "the fee happens to be smaller than the accrued yield".
       const usdcReceived = Number(userUsdcAfter.amount) - Number(userUsdcBefore.amount);
-      expect(usdcReceived).to.be.greaterThan(redeemAmount.toNumber());
+      const liveMultiplier = await readMultiplierFromMint(h, okuMMint);
+      expect(usdcReceived).to.equal(
+        expectedRedeemNet(
+          redeemAmount,
+          liveMultiplier,
+          new BN(1_000_000_000),
+          DEFAULT_TEST_TOUT_BPS
+        ).toNumber()
+      );
+      expect(usdcReceived).to.be.greaterThan(0);
       // Vault USDC decreased by the same amount the user received
       const vaultDecrease = Number(vaultUsdcBefore.amount) - Number(vaultUsdcAfter.amount);
       expect(vaultDecrease).to.equal(usdcReceived);

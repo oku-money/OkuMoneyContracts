@@ -36,8 +36,15 @@ import {
   MINTER_ALLOWANCE,
   DECIMALS,
   MAX_FEE_BPS,
+  MAX_STEP_BPS,
+  DEFAULT_TEST_TIN_BPS,
 } from "../shared/setup";
-import { clearSyncWindow, expectedRedeemNet, stepMultiplierTo } from "../shared/multiplier";
+import {
+  clearSyncWindow,
+  expectedMintNet,
+  expectedRedeemNet,
+  stepMultiplierTo,
+} from "../shared/multiplier";
 import {
   BankrunHarness,
   startBankrun,
@@ -181,7 +188,10 @@ describe("ScaledUiAmount extension behavior", () => {
 
     const balBefore = await getAccount(provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID);
     const rawBefore = Number(balBefore.amount);
-    expect(rawBefore).to.be.greaterThanOrEqual(mintAmount.toNumber());
+    // Net of `tin`, which is nonzero by default now that fees ship at the
+    // step-coverage floor. The property under test is that this raw balance is
+    // UNCHANGED by a multiplier update, not what it started at.
+    expect(rawBefore).to.be.greaterThan(0);
 
     // Bump multiplier to 2.0 (2_000_000_000)
     const newMultiplier = new BN(2_000_000_000);
@@ -225,9 +235,15 @@ describe("ScaledUiAmount extension behavior", () => {
     );
     const rawMintedAt3x = Number(user2OkuAfter.amount) - rawBefore;
 
-    // At multiplier 3.0: raw_tokens = usdc_amount * PRECISION / multiplier
-    //   = 1_000_000 * 1_000_000_000 / 3_000_000_000 = 333_333
-    expect(rawMintedAt3x).to.equal(333_333);
+    // At multiplier 3.0: raw = credited * PRECISION / multiplier, where
+    // `credited` is the deposit net of `tin`. `tin` is nonzero by default now
+    // (fees ship at the step-coverage floor), so this is 333_166 rather than
+    // the fee-free 333_333. Asserted against the program's own arithmetic
+    // rather than a hardcoded figure so the fee value is not baked in twice.
+    const creditedAt3x = expectedMintNet(new BN(1_000_000), DEFAULT_TEST_TIN_BPS);
+    expect(rawMintedAt3x).to.equal(
+      creditedAt3x.mul(PRECISION).div(new BN(3_000_000_000)).toNumber()
+    );
 
     // Now bump multiplier to 6.0 and mint another 1 USDC
     const m6 = new BN(6_000_000_000);
@@ -252,8 +268,11 @@ describe("ScaledUiAmount extension behavior", () => {
     );
     const rawMintedAt6x = Number(userOkuAfter2.amount) - rawBefore2;
 
-    // At multiplier 6.0: raw_tokens = 1_000_000 * 1_000_000_000 / 6_000_000_000 = 166_666
-    expect(rawMintedAt6x).to.equal(166_666);
+    // At multiplier 6.0: raw = credited * PRECISION / 6e9, credited net of `tin`.
+    const creditedAt6x = expectedMintNet(new BN(1_000_000), DEFAULT_TEST_TIN_BPS);
+    expect(rawMintedAt6x).to.equal(
+      creditedAt6x.mul(PRECISION).div(new BN(6_000_000_000)).toNumber()
+    );
 
     // Confirm: higher multiplier -> fewer raw tokens per USDC
     expect(rawMintedAt6x).to.be.lessThan(rawMintedAt3x);
@@ -408,7 +427,9 @@ describe("ScaledUiAmount extension behavior", () => {
     // stays within what `tout` covers. The program refuses a step larger than
     // the redemption fee can cover, and by this point in the suite the
     // multiplier is high and the supply low, so a flat $1 would overshoot.
-    const maxBump = startMultiplier.muln(MAX_FEE_BPS).divn(10_000).muln(99).divn(100);
+    // Sized against `MAX_STEP_BPS`, the step ceiling — not `MAX_FEE_BPS`. The
+    // fee schedule no longer bounds a step; the constant does.
+    const maxBump = startMultiplier.muln(MAX_STEP_BPS).divn(10_000).muln(90).divn(100);
     const maxYield = maxBump.mul(totalSupply).div(PRECISION);
     const yieldAmount = BN.min(new BN(1_000_000), maxYield);
     expect(yieldAmount.toNumber()).to.be.greaterThan(0);

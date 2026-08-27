@@ -81,10 +81,8 @@ const SVM_IDL = path.join(ROOT, 'artifacts/svm/lite_psm.json');
  */
 const OKU_M_ABI = [
   'function uiMultiplier() view returns (uint256)',
-  'function isSyncLocked() view returns (bool)',
-  'function syncLockedUntil() view returns (uint256)',
-  'function syncWindowDuration() view returns (uint256)',
-  'function stepHighWaterMark() view returns (uint256)',
+  'function lastSteppedAt() view returns (uint256)',
+  'function nextMarkAllowedAt() view returns (uint256)',
 ];
 
 /** EVM precision (1e18) over SVM precision (1e9). */
@@ -110,22 +108,18 @@ async function readEvm(chain: string) {
   const provider = new ethers.JsonRpcProvider(process.env.EVM_RPC_URL ?? entry.rpcUrl);
   const token = new ethers.Contract(addr, OKU_M_ABI, provider);
 
-  const [multiplier, locked, lockedUntil, duration, stepHwm] = await Promise.all([
+  const [multiplier, lastMark, nextMark] = await Promise.all([
     token.uiMultiplier(),
-    token.isSyncLocked(),
-    token.syncLockedUntil(),
-    token.syncWindowDuration(),
-    token.stepHighWaterMark(),
+    token.lastSteppedAt(),
+    token.nextMarkAllowedAt(),
   ]);
 
   return {
     address: addr,
     /** Raw 1e18-scaled multiplier. */
     raw: BigInt(multiplier),
-    locked: Boolean(locked),
-    lockedUntil: BigInt(lockedUntil),
-    duration: BigInt(duration),
-    stepHwm: BigInt(stepHwm),
+    lastMark: BigInt(lastMark),
+    nextMark: BigInt(nextMark),
   };
 }
 
@@ -171,7 +165,7 @@ async function readSvm(network: string) {
     duration: BigInt(cfg.syncWindowSecs.toString()),
     tinBps: BigInt(cfg.tinBps.toString()),
     toutBps: BigInt(cfg.toutBps.toString()),
-    maxStepBps: BigInt(cfg.maxStepBps.toString()),
+    lastMarkTs: BigInt(cfg.lastMarkTs.toString()),
   };
 }
 
@@ -221,11 +215,11 @@ async function main() {
   console.log(`  ${'-'.repeat(22)} ${'-'.repeat(26)} ${'-'.repeat(26)}`);
   row('multiplier', fmt(evm.raw, 18), fmt(svm.raw, 9));
   row('multiplier (raw)', evm.raw, svm.raw);
-  row('windowOpen', evm.locked, svm.locked);
-  row('lockedUntil', evm.lockedUntil, svm.lockedUntil);
-  row('windowDuration', `${evm.duration}s`, `${svm.duration}s`);
-  row('stepHighWaterMark', `${evm.stepHwm} bps`, `${svm.maxStepBps} bps`);
-  row('tin+tout', 'see module', `${svm.tinBps + svm.toutBps} bps`);
+  row('lastMark', new Date(Number(evm.lastMark) * 1000).toISOString(), `${svm.lastMarkTs}`);
+  row('nextMarkAllowedAt', new Date(Number(evm.nextMark) * 1000).toISOString(), '-');
+  row('windowOpen', 'n/a (removed on EVM)', svm.locked);
+  row('windowDuration', 'n/a (removed on EVM)', `${svm.duration}s`);
+  row('tout', 'see module', `${svm.toutBps} bps`);
   console.log('');
   console.log(`  difference: ${diff} SVM unit(s)   (tolerance ${TOLERANCE})`);
   console.log('');
@@ -272,20 +266,17 @@ async function main() {
         'that chain.'
     );
   }
-  if (evm.duration === 0n) {
-    problems.push(
-      'EVM sync window is DISABLED (syncWindowDuration = 0) — marks are not gated on ' +
-        'that chain.'
-    );
-  }
-
-  if (evm.stepHwm !== svm.maxStepBps) {
-    problems.push(
-      `STEP HIGH-WATER MARK DIVERGENCE: EVM=${evm.stepHwm} bps SVM=${svm.maxStepBps} bps. ` +
-        `The two chains have taken differently-sized largest steps, which means their ` +
-        `fee floors differ. Usually a sign that marks were not applied symmetrically.`
-    );
-  }
+  // NOTE: there is no EVM sync window to check. It was removed — EVM has no
+  // dedicated bridge instruction for it to gate, and a mechanism that gates
+  // nothing is worse than an absent one. SVM keeps its window for the two
+  // direct bridge legs, so only that side is checked above.
+  //
+  // The step high-water-mark comparison went too, along with the ratchet. Its
+  // replacement is not a cross-chain comparison at all: `MAX_STEP_BPS` is a
+  // compile-time constant on both chains, so divergence would be a BUILD
+  // mismatch rather than a runtime state divergence. See TRACKER.md — comparing
+  // `tout` and `MAX_STEP_BPS` across builds is a tracked follow-up for this
+  // script, and is the check that would actually catch it.
 
   if (problems.length === 0) {
     console.log('\x1b[32mPARITY OK\x1b[0m — both chains carry the same multiplier.\n');

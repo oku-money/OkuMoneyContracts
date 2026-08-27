@@ -247,10 +247,11 @@ Controls capping damage from a compromised setter key (EVM):
 
 | Control | Value | Purpose |
 |---|---|---|
-| `MAX_STEP_BPS` | 5 (provisional) | Ceiling on a single step, AND the per-leg floor under `tin`/`tout` |
+| `MAX_STEP_BPS` | 2 (provisional) | Ceiling on a single mark, AND the floor under `tout` |
+| `MIN_MARK_INTERVAL` | 1 hour | Minimum gap between marks — makes `MAX_STEP_BPS` a bound per unit *time*, not per call |
 | `MAX_MULTIPLIER` | 1e24 | Cumulative ceiling |
 | Monotonicity | `newMultiplier >= current` | The multiplier can never decrease |
-| Step coverage | `tin >= MAX_STEP_BPS` and `tout >= MAX_STEP_BPS` | Round trip cannot extract the step. Static and per-leg: composed with the step ceiling, every admissible step is covered on each leg with no stored state (`FeeBelowStepFloor`, `StepAboveMaximum`) |
+| Step coverage | `tout >= MAX_STEP_BPS` | Round trip cannot extract the mark. Static, and on the EXIT leg only — the gain is realised on exit, so `tin` is irrelevant and ships at **0** (`FeeBelowStepFloor`, `StepAboveMaximum`) |
 | `haltAccrual()` | `OKU_GUARDIAN`, no timelock | Freeze further steps; withhold-only, cannot reduce |
 
 ### `M_usd` — continuous, EVM-only
@@ -315,13 +316,22 @@ transaction to go USDC ↔ USDOku, chaining through `USDOkuWrapper` internally s
 users don't need three or four separate transactions to get or exit USDOku.
 `quoteMintUsdOku` / `quoteRedeemUsdOku` are the corresponding views.
 
-`tin`/`tout` fees are a **real step-arbitrage defence**, not just a parity knob,
-and the enforcement is static: `setFees` floors each leg at `MAX_STEP_BPS` while
-`setOkuMultiplier` caps a step at `MAX_STEP_BPS`, so every admissible step is
-covered on each leg for all time. `initialize` seeds both legs at the floor, so
-there is no uncovered window and no configuration step to forget. Per-leg rather
-than combined because a cross-chain round trip pays `tin` on one chain and `tout`
-on the other.
+`tout` is a **real step-arbitrage defence**, not just a parity knob, and the
+enforcement is static: `setFees` floors `tout` at `MAX_STEP_BPS` while
+`setOkuMultiplier` caps a mark at `MAX_STEP_BPS`, so the exit fee always covers
+the largest mark. `initialize` seeds `tout` at the floor, so there is no
+uncovered window and no configuration step to forget.
+
+**`tin` ships at 0 and has no floor.** The arbitrage gain is realised on exit, so
+the exit leg alone closes it — including cross-chain, since whichever chain the
+attacker exits on charges its own `tout`. Deposits stay free, which is the
+point: permissionless frictionless entry is what this product offers.
+
+**The fee is the price of discreteness.** One mark is worth `APY x interval`, so
+marking more often lowers the required fee toward zero — which is why
+continuously-accruing designs (Maker `chi`, Aave, Ondo's USDY oracle) need none.
+Token-2022's `ScaledUiAmount` stores a *discrete* multiplier, so we cannot accrue
+continuously and this fee is the exact cost of that constraint.
 
 There is a single source of truth for the USDC binding: OkuM holds `asset()`
 and `usdcDecimalMultiplier()`, and `SubscriptionModule.initialize` and
@@ -588,6 +598,7 @@ not rotated in > 7 days.
 | Sync window liveness (SVM) | window still locked past `MAX_SYNC_WINDOW_SECS` from arm time | Same class of check as EVM — should never fire under correct auto-expiry |
 | Oversized mark refused | EVM `StepAboveMaximum` / SVM `StepAboveMax` on a multiplier write | The intended mark exceeds `MAX_STEP_BPS`. Raising fees does NOT help — the ceiling is a constant. Either the cadence has slipped and the mark must be walked over several ticks, or `MAX_STEP_BPS` is mis-sized for the published cadence |
 | Fee below floor refused | EVM `FeeBelowStepFloor` / SVM `FeeBelowStepFloor` | Should be unreachable: `initialize` seeds the floor and `setFees` is the only writer. If observed, the deployed bytecode may not be the reviewed source |
+| Mark too soon | EVM `MarkTooSoon` / SVM `MarkTooSoon` | The orchestrator attempted two marks inside `MIN_MARK_INTERVAL`. Benign if it is a retry; investigate if sustained, since it may indicate a loop |
 
 SVM bridges use direct `burn_oku_m_direct` / `mint_oku_m_direct`
 — there is no orchestrator token float to monitor (no USDC
@@ -1025,7 +1036,8 @@ PRIVATE_KEY=<evm-key> tsx scripts/test/bridge-svm-evm.ts \
 |---|---|---|
 | `maxSupply` | 1 B OkuM (1e27 raw) | 1 B token cap. |
 | `minterAllowance` | 1 B OkuM | Matches `maxSupply` (effectively uncapped on testnet). **Production**: 1 % of weekly bridging volume, weekly rotation. |
-| `MAX_STEP_BPS` | 5 (provisional) | Ceiling on a single `M_oku` step AND the per-leg floor under `tin`/`tout`. The single number defining step coverage; sized for a DAILY cadence at ~5% APY. |
+| `MAX_STEP_BPS` | 2 (provisional) | Ceiling on a single `M_oku` mark AND the floor under `tout`. The single number defining step coverage; sized for a 6-HOURLY cadence at ~5% APY. |
+| `MIN_MARK_INTERVAL` | 1 hour | Minimum wall-clock gap between marks. |
 | `MAX_IMPLIED_APR` (USDOku `M_usd` only) | 1000 bps nominal | Placeholder — needs a real number. The binding economic bound on `setUsdOkuRate`. |
 | `MAX_RATE_DURATION` (USDOku `M_usd` only) | 30 days | Caps the exposure window of any single rate write. |
 | `MAX_SOLVENCY_GAP_BPS` (USDOku only) | placeholder | How far USDOku's declared liability may outrun realized OkuM backing. |

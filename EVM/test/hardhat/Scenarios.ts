@@ -81,8 +81,9 @@ const MAX_RATE_DURATION = 30n * DAY;
 const MAX_STEP_BPS = 2n;
 /** `Constants.MAX_SOLVENCY_GAP_BPS` — the cumulative ceiling on the gap. */
 const MAX_SOLVENCY_GAP_BPS = 100n;
-/** `Constants.MIN_MARK_INTERVAL`. Minimum wall-clock gap between two marks. */
-const MIN_MARK_INTERVAL = 60n * 60n;
+// NOTE: `MIN_MARK_INTERVAL` is not mirrored here. Fixtures read
+// `okuM.nextMarkAllowedAt()` instead (see `readyMark`), which cannot drift from
+// the contract the way a hardcoded copy would.
 
 /** ~5% APY as a per-second `M_usd` rate. The live Sepolia rate. */
 const RATE_5_PCT_APY = 1_000_000_001_546_176_000n;

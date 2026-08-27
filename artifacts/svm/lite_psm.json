@@ -2464,7 +2464,12 @@
     {
       "code": 6030,
       "name": "FeeBelowStepFloor",
-      "msg": "Proposed fee is below the per-leg step-coverage floor (MAX_STEP_BPS)"
+      "msg": "Proposed tout_bps is below the step-coverage floor (MAX_STEP_BPS)"
+    },
+    {
+      "code": 6031,
+      "name": "MarkTooSoon",
+      "msg": "Multiplier mark attempted too soon after the previous one"
     }
   ],
   "types": [
@@ -3298,6 +3303,27 @@
               "Redemption fee in basis points, charged on the USDC paid out."
             ],
             "type": "u64"
+          },
+          {
+            "name": "last_mark_ts",
+            "docs": [
+              "Unix timestamp of the last multiplier mark. `0` until the first one.",
+              "",
+              "Backs `MIN_MARK_INTERVAL_SECS`, which is what makes `MAX_STEP_BPS` a",
+              "bound on yield per unit TIME rather than per call. Without it a",
+              "compromised `rebaser` could loop `set_multiplier` — each call",
+              "individually legal — and compound the multiplier arbitrarily fast.",
+              "",
+              "WALL-CLOCK, deliberately, and therefore NOT a reuse of",
+              "`last_yield_distribution_slot`. That field is a same-slot reentrancy",
+              "fence measured in slots; this is a cadence control measured in seconds,",
+              "and slot times stretch under exactly the congestion that would delay a",
+              "mark. Two mechanisms, two units, both correct for their own property.",
+              "",
+              "EVM mirror: `OkuM` reads `effectiveAt()`, which ERC-8056 makes it store",
+              "anyway — so EVM needs no extra field where SVM does."
+            ],
+            "type": "i64"
           }
         ]
       }

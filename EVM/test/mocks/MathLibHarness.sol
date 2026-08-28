@@ -1,84 +1,49 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 import {MathLib} from "../../src/lib/MathLib.sol";
 
-/// @title MathLibHarness
-/// @notice Test-only harness that exposes MathLib's `internal` functions as
-///         external callable surface. Used by `test/lib/MathLib.t.sol` to drive
-///         every branch of `rpow` (zero-base, overflow) which is otherwise
-///         unreachable from production callers operating in safe input ranges.
-/// @dev NOT FOR PRODUCTION DEPLOYMENT.
+/**
+ * @title MathLibHarness
+ * @notice Exposes MathLib's internal functions so the assembly branches in
+ *         `rpow` — which no production call path can reach — are testable.
+ * @dev Test-only. `rpow` is MakerDAO's, retained verbatim; the `x == 0` and
+ *      `n == 0` cases and the overflow reverts are unreachable from `USDOku`
+ *      because the setter bounds the rate, but they still need coverage.
+ */
 contract MathLibHarness {
     function rpow(uint256 x, uint256 n, uint256 b) external pure returns (uint256) {
         return MathLib.rpow(x, n, b);
     }
 
-    function okuMToDollars(
-        uint256 okuMAmount,
-        uint256 okuMMultiplier
-    )
-        external
-        pure
-        returns (uint256)
-    {
-        return MathLib.okuMToDollars(okuMAmount, okuMMultiplier);
+    function toUIAmount(uint256 raw, uint256 m) external pure returns (uint256) {
+        return MathLib.toUIAmount(raw, m);
     }
 
-    function dollarsToOkuM(
-        uint256 dollarValue,
-        uint256 okuMMultiplier
-    )
-        external
-        pure
-        returns (uint256)
-    {
-        return MathLib.dollarsToOkuM(dollarValue, okuMMultiplier);
+    function fromUIAmount(uint256 ui, uint256 m) external pure returns (uint256) {
+        return MathLib.fromUIAmount(ui, m);
     }
 
-    function dollarsToUsdc(
-        uint256 dollarValue18,
-        uint256 decimalMultiplier
-    )
-        external
-        pure
-        returns (uint256)
-    {
-        return MathLib.dollarsToUsdc(dollarValue18, decimalMultiplier);
+    function usdcToDollars(uint256 a, uint256 dm) external pure returns (uint256) {
+        return MathLib.usdcToDollars(a, dm);
     }
 
-    function usdcToDollars(
-        uint256 usdcAmount,
-        uint256 decimalMultiplier
-    )
-        external
-        pure
-        returns (uint256)
-    {
-        return MathLib.usdcToDollars(usdcAmount, decimalMultiplier);
+    function dollarsToUsdc(uint256 a, uint256 dm) external pure returns (uint256) {
+        return MathLib.dollarsToUsdc(a, dm);
     }
 
-    function wrappedSharesFromOkuM(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
+    function applyFeeCeil(
+        uint256 amount,
+        uint256 bps
     )
         external
         pure
-        returns (uint256)
+        returns (uint256 net, uint256 fee)
     {
-        return MathLib.wrappedSharesFromOkuM(okuMAmount, okuMMult, usdMult);
+        return MathLib.applyFeeCeil(amount, bps);
     }
 
-    function okuMToWrappedUsd(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
-    )
-        external
-        pure
-        returns (uint256)
-    {
-        return MathLib.okuMToWrappedUsd(okuMAmount, okuMMult, usdMult);
+    function impliedAprBps(uint256 ratePerSecond) external pure returns (uint256) {
+        return MathLib.impliedAprBps(ratePerSecond);
     }
 }

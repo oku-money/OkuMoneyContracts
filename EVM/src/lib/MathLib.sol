@@ -7,26 +7,25 @@ import {Constants} from "./Constants.sol";
 
 /**
  * @title MathLib
- * @notice Shared math utilities for OkuMoney contracts
- * @dev See Constants.sol for terminology legend.
+ * @notice Shared math utilities for the reviewed-conversion contract suite.
+ * @dev ROUNDING POLICY: every conversion here uses OpenZeppelin `Math.mulDiv` for
+ *      full-precision 512-bit intermediates with explicit `Math.Rounding`. Floor
+ *      is the default — every conversion rounds against the caller, in favour of
+ *      the protocol. `rpow` keeps MakerDAO's half-up assembly rounding; it has no
+ *      direct `mulDiv` equivalent.
  *
- *      ROUNDING POLICY: All conversion functions use OpenZeppelin
- *      `Math.mulDiv` for full-precision 512-bit intermediate computation and
- *      explicit `Math.Rounding` semantics. Floor is the default direction;
- *      the only Ceil site in the protocol is `OkuDollar.unwrap`'s
- *      `sharesToBurn` computation, which favors the vault on user
- *      withdrawals (ERC-4626 convention). `rpow` retains MakerDAO's
- *      half-up assembly rounding because it has no direct `mulDiv`
- *      equivalent.
+ *      `toUIAmount` / `fromUIAmount` are the single source of truth for the
+ *      raw <-> UI conversion — `USDOkuWrapper.wrap`/`unwrap` and
+ *      `ScaledUIAmountUpgradeable`'s own views both call through here, so a wrap
+ *      and a display read can never disagree about rounding.
  */
 library MathLib {
     /**
-     * @notice Raise x to the power of n, modulo base b (exponentiation by squaring)
+     * @notice Raise x to the power of n, modulo base b (exponentiation by squaring).
      * @dev Adapted verbatim from MakerDAO's `rpow` — battle-tested since 2017.
      *      Taken from https://github.com/makerdao/dss/blob/master/src/pot.sol
-     *      Used by OkuDollar for continuous yield accrual via usdMultiplier().
-     *      OkuMoney updates its multiplier discretely (setOkuMMultiplier /
-     *      distributeYield) and does NOT use rpow.
+     *      Used by USDOku for continuous yield accrual via usdOkuIndex(). OkuM
+     *      updates `M_oku` discretely via `setOkuMultiplier` and does NOT use rpow.
      * @param x Base value (typically ratePerSecond, scaled by PRECISION)
      * @param n Exponent (typically elapsed seconds)
      * @param b Precision base (typically 1e18)
@@ -66,63 +65,31 @@ library MathLib {
     }
 
     /**
-     * @notice Convert OkuMoney token amount to dollar value
-     * @param okuMAmount Amount of OkuMoney tokens
-     * @param okuMMultiplier Current OkuMoney multiplier (dollar value per token, scaled by PRECISION)
-     * @return Dollar value in 18 decimals
+     * @notice Convert a raw OkuM amount to its dollar (UI) value at `multiplier`.
+     * @dev raw -> UI: `ui = raw * multiplier / PRECISION`, floored. Single source
+     *      of truth for `toUIAmount`, `balanceOfUI`, and `USDOkuWrapper.wrap`.
      */
-    function okuMToDollars(
-        uint256 okuMAmount,
-        uint256 okuMMultiplier
-    )
-        internal
-        pure
-        returns (uint256)
-    {
-        return Math.mulDiv(okuMAmount, okuMMultiplier, Constants.PRECISION, Math.Rounding.Floor);
+    function toUIAmount(uint256 rawAmount, uint256 multiplier) internal pure returns (uint256) {
+        return Math.mulDiv(rawAmount, multiplier, Constants.PRECISION, Math.Rounding.Floor);
     }
 
     /**
-     * @notice Convert dollar value to OkuMoney token amount
-     * @param dollarValue Dollar value in 18 decimals
-     * @param okuMMultiplier Current OkuMoney multiplier (dollar value per token, scaled by PRECISION)
-     * @return Amount of OkuMoney tokens
+     * @notice Convert a dollar (UI) value back to a raw OkuM amount at `multiplier`.
+     * @dev UI -> raw: `raw = ui * PRECISION / multiplier`, floored. Single source
+     *      of truth for `fromUIAmount` and `USDOkuWrapper.unwrap`.
+     *      `fromUIAmount(toUIAmount(x))` is `x - 1` for most `x` — see the
+     *      max-send rule in `EVM/README.md`; callers computing a max-send MUST
+     *      derive from raw `balanceOf`, never round-trip through this pair.
      */
-    function dollarsToOkuM(
-        uint256 dollarValue,
-        uint256 okuMMultiplier
-    )
-        internal
-        pure
-        returns (uint256)
-    {
-        return Math.mulDiv(dollarValue, Constants.PRECISION, okuMMultiplier, Math.Rounding.Floor);
+    function fromUIAmount(uint256 uiAmount, uint256 multiplier) internal pure returns (uint256) {
+        return Math.mulDiv(uiAmount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
     }
 
     /**
-     * @notice Convert 18-decimal dollar value to USDC's native decimal representation
-     * @param dollarValue18 Dollar value in 18 decimals
-     * @param decimalMultiplier 10**(18 - usdcDecimals); supplied by the caller from
-     *        an immutable / storage value resolved at init time via
-     *        IERC20Metadata(usdc).decimals(). For Circle USDC this is 1e12.
-     * @return USDC amount in its native decimals
-     */
-    function dollarsToUsdc(
-        uint256 dollarValue18,
-        uint256 decimalMultiplier
-    )
-        internal
-        pure
-        returns (uint256)
-    {
-        return dollarValue18 / decimalMultiplier;
-    }
-
-    /**
-     * @notice Convert USDC amount (native decimals) to 18-decimal dollar value
-     * @param usdcAmount USDC amount in its native decimals
-     * @param decimalMultiplier 10**(18 - usdcDecimals); see {dollarsToUsdc} for sourcing.
-     * @return Dollar value in 18 decimals
+     * @notice Convert a USDC amount (native decimals) to an 18-decimal dollar value.
+     * @param usdcAmount USDC amount in its native decimals.
+     * @param decimalMultiplier `10**(18 - usdcDecimals)`, resolved once at init from
+     *        `IERC20Metadata(usdc).decimals()`. For Circle USDC (6dp) this is 1e12.
      */
     function usdcToDollars(
         uint256 usdcAmount,
@@ -136,49 +103,57 @@ library MathLib {
     }
 
     /**
-     * @notice Compute the OkuDollar share count produced by wrapping `okuMAmount`.
-     * @dev Single source of truth for `OkuDollar.wrap`'s share formula.
-     *      shares = mulDiv(okuMAmount, okuMMultiplier, usdMultiplier, Floor)
-     * @param okuMAmount OkuMoney token amount being wrapped
-     * @param okuMMult Current okuMMultiplier
-     * @param usdMult Current usdMultiplier (must be non-zero)
-     * @return shares Internal OkuDollar share count credited to the receiver
+     * @notice Convert an 18-decimal dollar value to USDC's native decimal representation.
+     * @dev Floors — sub-USDC-unit dust is dropped in the protocol's favour.
+     * @param dollarValue18 Dollar value in 18 decimals.
+     * @param decimalMultiplier See {usdcToDollars}.
      */
-    function wrappedSharesFromOkuM(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
+    function dollarsToUsdc(
+        uint256 dollarValue18,
+        uint256 decimalMultiplier
     )
         internal
         pure
-        returns (uint256 shares)
+        returns (uint256)
     {
-        return Math.mulDiv(okuMAmount, okuMMult, usdMult, Math.Rounding.Floor);
+        return dollarValue18 / decimalMultiplier;
     }
 
     /**
-     * @notice Compute the dollar-denominated UsdOku amount minted when wrapping `okuMAmount`.
-     * @dev Replicates `OkuDollar.wrap`'s two-step truncation exactly:
-     *        shares    = mulDiv(okuMAmount, okuMMultiplier, usdMultiplier, Floor)
-     *        usdMinted = mulDiv(shares,     usdMultiplier,  PRECISION,     Floor)
-     *      Used by both `OkuDollar.wrap` and `LitePSM.mintUsdOku` so the slippage
-     *      floor passed to `wrap` matches what `wrap` actually produces — eliminating
-     *      reverts driven solely by integer-division rounding at non-even multipliers.
-     * @param okuMAmount OkuMoney token amount being wrapped
-     * @param okuMMult Current okuMMultiplier
-     * @param usdMult Current usdMultiplier (must be non-zero)
-     * @return usdMinted Dollar value (18 decimals) the wrap would credit
+     * @notice Apply a basis-point fee, rounding the fee up (against the payer).
+     * @dev Matches `dss-lite-psm`'s ceil-fee / floor-payout convention: fees round
+     *      up, payouts round down, so the protocol never under-collects.
+     * @param amount Gross amount the fee is charged against.
+     * @param feeBps Fee in basis points (0-10_000).
+     * @return net `amount - fee`.
+     * @return fee The fee withheld (rounds up).
      */
-    function okuMToWrappedUsd(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
+    function applyFeeCeil(
+        uint256 amount,
+        uint256 feeBps
     )
         internal
         pure
-        returns (uint256 usdMinted)
+        returns (uint256 net, uint256 fee)
     {
-        uint256 shares = Math.mulDiv(okuMAmount, okuMMult, usdMult, Math.Rounding.Floor);
-        return Math.mulDiv(shares, usdMult, Constants.PRECISION, Math.Rounding.Floor);
+        fee = Math.mulDiv(amount, feeBps, Constants.BASIS_POINTS, Math.Rounding.Ceil);
+        net = amount - fee;
+    }
+
+    /**
+     * @notice Nominal (simple) annualized rate implied by a per-second compounding rate.
+     * @dev `aprBps = (ratePerSecond - PRECISION) * SECONDS_PER_YEAR * BASIS_POINTS / PRECISION`.
+     *      Deliberately the *nominal* rate, not compounded APY — a monotone-in-rate
+     *      check against a nominal cap is cheaper to audit than an `rpow` round trip
+     *      inside the setter. Reverts on underflow if `ratePerSecond < PRECISION`;
+     *      callers must check `ratePerSecond >= PRECISION` first.
+     */
+    function impliedAprBps(uint256 ratePerSecond) internal pure returns (uint256) {
+        return Math.mulDiv(
+            ratePerSecond - Constants.PRECISION,
+            Constants.SECONDS_PER_YEAR * Constants.BASIS_POINTS,
+            Constants.PRECISION,
+            Math.Rounding.Floor
+        );
     }
 }

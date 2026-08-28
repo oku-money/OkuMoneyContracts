@@ -335,6 +335,17 @@ const config: HardhatUserConfig & { typechain?: any } = {
     apiKey: process.env.ETHERSCAN_API_KEY || "",
   },
 
+  // Sourcify verification.
+  //
+  // Not redundant with Etherscan: the ERC-7730 linter used by the clear-signing
+  // registry resolves a reference ABI from SOURCIFY FIRST and only falls back to
+  // Etherscan. A contract missing from Sourcify produces a "Could not fetch ABI"
+  // warning, which the registry's REVIEWING.md instructs reviewers to push back
+  // on. Verifying here is what keeps our descriptor submission reviewable.
+  sourcify: {
+    enabled: true,
+  },
+
   // Mocha test configuration
   mocha: {
     timeout: 200000, // 200 seconds for fork tests

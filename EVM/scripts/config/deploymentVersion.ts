@@ -13,8 +13,13 @@
  * same address on every EVM chain it has been deployed to (gas-funded by
  * a presigned Nick's-method tx; see github.com/Arachnid/deterministic-deployment-proxy).
  *
- * Salt derivation (`saltFor("OkuMoney.impl")` etc.):
+ * Salt derivation (`saltFor("OkuM.impl")` etc.):
  *   keccak256("okumoney." + DEPLOYMENT_VERSION + "." + contractName)
+ *
+ * v0.3 is the reviewed-conversion contract set (OkuM, USDOku, USDOkuWrapper,
+ * SubscriptionModule). Every ERC-7201 storage namespace changed relative to the
+ * retired v0.2 set, so v0.2 proxies CANNOT be upgraded into these - v0.3 is a
+ * fresh deploy and the v0.2 address book was wiped rather than migrated.
  *
  * CREATE2 address derivation:
  *   address = keccak256(0xff ++ CREATE2_FACTORY ++ salt ++ keccak256(initCode))[12:]
@@ -29,7 +34,7 @@
  * Constructor args that are chain-specific (real USDC on mainnet vs.
  * MockUSDC on testnet, Chainlink feed addresses) cascade into different
  * proxy addresses on those chains. For pre-audit v0.1 testnets we deploy
- * MockUSDC deterministically too, so `RedemptionQueue` and `LitePSM` end
+ * MockUSDC deterministically too, so every proxy ends
  * up with identical addresses across every testnet that has the factory.
  *
  * Chains without the CREATE2 factory fall through to standard
@@ -43,7 +48,7 @@
  * deploys take new addresses). Pre-audit iterate with v0.x; reserve v1.0+
  * for audited deployments.
  */
-export const DEPLOYMENT_VERSION = "v0.2";
+export const DEPLOYMENT_VERSION = "v0.3";
 
 /**
  * Canonical Arachnid CREATE2 factory. Same address on every supported chain.
@@ -62,9 +67,9 @@ export const CREATE2_FACTORY = "0x4e59b44847b379578588920cA78FbF26c0B4956C";
  *
  * The full salt is `keccak256("okumoney." + DEPLOYMENT_VERSION + "." + name)`,
  * where `name` typically includes the contract name + a role suffix
- * (e.g. `OkuMoney.impl`, `OkuMoney.proxy`).
+ * (e.g. `OkuM.impl`, `OkuM.proxy`).
  *
- * @param name salt namespace, e.g. "OkuMoney.impl", "MockUSDC".
+ * @param name salt namespace, e.g. "OkuM.impl", "MockUSDC".
  * @returns 32-byte salt as a 0x-prefixed hex string.
  */
 export function saltFor(name: string): string {

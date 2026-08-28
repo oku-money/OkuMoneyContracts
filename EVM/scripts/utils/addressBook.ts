@@ -2,7 +2,7 @@
  * Address book utilities for saving and loading deployed contract addresses
  *
  * The on-disk file mixes two shapes under one top-level object:
- *   1. Per-network maps of contract-name -> proxy address (e.g. addresses["base"].LitePSM).
+ *   1. Per-network maps of contract-name -> proxy address (e.g. addresses["base"].OkuM).
  *      These are managed by the existing save/load/has helpers below.
  *   2. A reserved `upgrades` key whose value is { [bookKey]: UpgradeRecord[] }.
  *      Append-only audit trail of proxy upgrades. Lookups by contract name skip
@@ -23,7 +23,7 @@ export const UPGRADES_KEY = "upgrades";
  * to forensically reconstruct an upgrade later without touching the chain.
  */
 export interface UpgradeRecord {
-  /** Contract name as known to hardhat (e.g. "LitePSM"). */
+  /** Contract name as known to hardhat (e.g. "OkuM"). */
   contract: string;
   /** Proxy address — never changes across an upgrade. */
   proxy: string;

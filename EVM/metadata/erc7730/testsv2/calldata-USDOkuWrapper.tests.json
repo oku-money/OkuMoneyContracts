@@ -1,0 +1,74 @@
+{
+  "$schema": "../../../specs/erc7730-tests-v2.schema.json",
+  "descriptor": "../calldata-USDOkuWrapper.json",
+  "dataProvider": {
+    "tokens": {
+      "0x0000000000000000000000000000000000000000": {
+        "symbol": "USDOku",
+        "decimals": 18,
+        "name": "Oku Dollar"
+      }
+    },
+    "addressNames": {
+      "0x1111111111111111111111111111111111111111": "Alice",
+      "0x2222222222222222222222222222222222222222": "Bob",
+      "0x3333333333333333333333333333333333333333": "Treasury"
+    }
+  },
+  "tests": [
+    {
+      "description": "Wrap 1000 raw OkuM into USDOku, min 1000 USDOku out",
+      "rawTx": "0x02f88e8080843b9aca008504a817c80083030d4094000000000000000000000000000000000000000080b864d01ab8ee00000000000000000000000000000000000000000000003635c9adc5dea00000000000000000000000000000111111111111111111111111111111111111111100000000000000000000000000000000000000000000003635c9adc5dea00000c0",
+      "expected": {
+        "intent": "Wrap OkuM into USDOku",
+        "owner": "TODO_SET_OWNER",
+        "fields": [
+          {
+            "label": "OkuM Amount",
+            "value": "1000 OkuM"
+          },
+          {
+            "label": "Min USDOku Amount",
+            "value": "1000 USDOku"
+          },
+          {
+            "label": "Receiver",
+            "value": "Alice"
+          }
+        ]
+      }
+    },
+    {
+      "description": "Unwrap 250 USDOku back to OkuM",
+      "rawTx": "0x02f86e8080843b9aca008504a817c80083030d4094000000000000000000000000000000000000000080b8447647691d00000000000000000000000000000000000000000000000d8d726b7177a800000000000000000000000000001111111111111111111111111111111111111111c0",
+      "expected": {
+        "intent": "Unwrap USDOku into OkuM",
+        "owner": "TODO_SET_OWNER",
+        "fields": [
+          {
+            "label": "USDOku Amount",
+            "value": "250 USDOku"
+          },
+          {
+            "label": "Receiver",
+            "value": "Alice"
+          }
+        ]
+      }
+    },
+    {
+      "description": "Disable wrapping (sunset step 1)",
+      "rawTx": "0x02f84d8080843b9aca008504a817c80083030d4094000000000000000000000000000000000000000080a45e21bc150000000000000000000000000000000000000000000000000000000000000000c0",
+      "expected": {
+        "intent": "Toggle USDOku wrapping",
+        "owner": "TODO_SET_OWNER",
+        "fields": [
+          {
+            "label": "Wrapping",
+            "value": "Disabled"
+          }
+        ]
+      }
+    }
+  ]
+}

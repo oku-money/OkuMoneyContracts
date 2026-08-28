@@ -1,0 +1,224 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ethereum/clear-signing-erc7730-registry/master/specs/erc7730-v2.schema.json",
+  "$comment": "The wrapper moves between two 18-decimal tokens, so a decimals heuristic cannot tell them apart - `wrap` takes RAW OkuM in and returns USDOku DOLLARS, and the two amounts sit in the same call. Both directions price at M_oku (the realized index), never at M_usd. Note `unwrap` has no slippage parameter by design, because M_oku is monotone. See metadata/DISPLAY_CONVENTION.md.",
+  "includes": "./common-oku-definitions.json",
+  "context": {
+    "$id": "USDOkuWrapper",
+    "contract": {
+      "deployments": [
+        {
+          "chainId": 0,
+          "address": "0x0000000000000000000000000000000000000000"
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "TODO_SET_OWNER",
+    "contractName": "USDOkuWrapper",
+    "info": {
+      "url": "https://example.invalid/TODO"
+    },
+    "constants": {
+      "okuMAddress": "0x0000000000000000000000000000000000000000",
+      "usdOkuAddress": "0x0000000000000000000000000000000000000000"
+    }
+  },
+  "display": {
+    "formats": {
+      "grantRole(bytes32 role,address account)": {
+        "$id": "grantRole",
+        "intent": "Grant role on wrapper",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "account",
+            "$ref": "$.display.definitions.roleHolder"
+          }
+        ]
+      },
+      "initialize(address _okuM,address _usdOku,address _admin)": {
+        "$id": "initialize",
+        "intent": "Initialize wrapper",
+        "fields": [
+          {
+            "path": "_okuM",
+            "label": "OkuM",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "token"
+              ]
+            }
+          },
+          {
+            "path": "_usdOku",
+            "label": "USDOku",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "token"
+              ]
+            }
+          },
+          {
+            "path": "_admin",
+            "label": "Admin",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "renounceRole(bytes32 role,address callerConfirmation)": {
+        "$id": "renounceRole",
+        "intent": "Renounce role on wrapper",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "callerConfirmation",
+            "$ref": "$.display.definitions.roleHolder",
+            "label": "Confirm self"
+          }
+        ]
+      },
+      "revokeRole(bytes32 role,address account)": {
+        "$id": "revokeRole",
+        "intent": "Revoke role on wrapper",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "account",
+            "$ref": "$.display.definitions.roleHolder"
+          }
+        ]
+      },
+      "setWrapEnabled(bool enabled)": {
+        "$id": "setWrapEnabled",
+        "intent": "Toggle USDOku wrapping",
+        "fields": [
+          {
+            "path": "enabled",
+            "label": "Wrapping",
+            "format": "enum",
+            "params": {
+              "$ref": "$.metadata.enums.wrapEnabled"
+            }
+          }
+        ]
+      },
+      "unwrap(uint256 usdOkuAmount,address receiver)": {
+        "$id": "unwrap",
+        "intent": "Unwrap USDOku into OkuM",
+        "fields": [
+          {
+            "path": "usdOkuAmount",
+            "label": "USDOku Amount",
+            "format": "tokenAmount",
+            "params": {
+              "token": "$.metadata.constants.usdOkuAddress"
+            }
+          },
+          {
+            "path": "receiver",
+            "label": "Receiver",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "upgradeToAndCall(address newImplementation,bytes data)": {
+        "$id": "upgradeToAndCall",
+        "intent": "Upgrade wrapper logic",
+        "fields": [
+          {
+            "path": "newImplementation",
+            "$ref": "$.display.definitions.newImplementation"
+          },
+          {
+            "path": "data",
+            "$ref": "$.display.definitions.upgradeInitData"
+          }
+        ]
+      },
+      "withdrawSurplus(uint256 okuMAmount,address to)": {
+        "$id": "withdrawSurplus",
+        "intent": "Withdraw wrapper surplus",
+        "fields": [
+          {
+            "path": "okuMAmount",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "token": "$.metadata.constants.okuMAddress"
+            }
+          },
+          {
+            "path": "to",
+            "label": "To",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "wrap(uint256 okuMAmount,address receiver,uint256 minUsdOkuOut)": {
+        "$id": "wrap",
+        "intent": "Wrap OkuM into USDOku",
+        "fields": [
+          {
+            "path": "okuMAmount",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "token": "$.metadata.constants.okuMAddress"
+            }
+          },
+          {
+            "path": "minUsdOkuOut",
+            "label": "Min USDOku Amount",
+            "format": "tokenAmount",
+            "params": {
+              "token": "$.metadata.constants.usdOkuAddress"
+            }
+          },
+          {
+            "path": "receiver",
+            "label": "Receiver",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

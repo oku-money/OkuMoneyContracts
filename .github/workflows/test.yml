@@ -43,14 +43,25 @@ jobs:
       - name: Run Forge tests
         run: forge test -vvv
 
-      - name: Run Forge coverage (line threshold = 95%)
+      - name: Run Forge coverage (95% per src/ file, 100% on pricing paths)
         run: |
           # Exclude test mocks / harnesses from the coverage run itself.
-          forge coverage --no-match-coverage 'test/|script/' --report summary | tee coverage.txt
+          #
+          # The dependency patterns MUST be anchored. An unanchored 'lib/' also
+          # matches src/lib/, which silently dropped ScaledUIAmountUpgradeable,
+          # MathLib and ReentrancyGuardUpgradeable from the gate entirely — the
+          # ERC-8056 display layer was unmeasured. Anchoring with ^lib/ excludes
+          # the forge dependency directory only. node_modules/ stays unanchored
+          # because npm nests transitive copies.
+          forge coverage \
+            --no-match-coverage '^(test|script)/|node_modules/|^lib/' \
+            --report summary | tee coverage.txt
 
-          # Gate: every src/ file must have >= 95% line coverage, and the
-          # overall Total line must be >= 95%. Parses the rendered summary
-          # table. Awk-only — no jq/python needed in CI.
+          # Gate: every src/ file needs >= 95% line coverage, and the three
+          # files on a pricing path need 100% — a single unexercised line in
+          # ScaledUIAmountUpgradeable, USDOkuWrapper or SubscriptionModule is a
+          # line that moves money. Parses the rendered summary table.
+          # Awk-only — no jq/python needed in CI.
           awk -F'|' '
             /^\| (src\/|Total)/ {
               # Strip leading/trailing whitespace from each field.
@@ -59,17 +70,35 @@ jobs:
               }
               file = $2
               lines = $3
+
+              threshold = 95.0
+              if (file ~ /ScaledUIAmountUpgradeable\.sol$/ \
+                  || file ~ /USDOkuWrapper\.sol$/ \
+                  || file ~ /SubscriptionModule\.sol$/) {
+                threshold = 100.0
+              }
+
               # Extract the percentage (e.g. "98.43% (188/191)" -> 98.43).
               if (match(lines, /[0-9]+\.[0-9]+/)) {
                 pct = substr(lines, RSTART, RLENGTH) + 0
-                printf "  %-50s %s\n", file, lines
-                if (pct < 95.0) {
-                  printf "::error::%s line coverage %s is below 95%% threshold\n", file, lines
+                printf "  %-50s %-20s (need %d%%)\n", file, lines, threshold
+                if (pct < threshold) {
+                  printf "::error::%s line coverage %s is below the %d%% threshold\n", \
+                    file, lines, threshold
                   failed = 1
                 }
+                seen++
               }
             }
-            END { exit failed }
+            END {
+              # A filter typo that matches everything would produce an empty
+              # table and a silently passing gate. Nine src/ files + Total.
+              if (seen < 9) {
+                printf "::error::coverage gate parsed only %d rows - check the --no-match-coverage filter\n", seen
+                exit 1
+              }
+              exit failed
+            }
           ' coverage.txt
 
       - name: Set up Node.js
@@ -90,6 +119,30 @@ jobs:
         run: npx hardhat test
         env:
           FORK_NETWORK: mainnet
+
+      - name: Validate ERC-7730 clear-signing descriptors
+        run: |
+          # Regenerate from the compiled ABI and fail if the committed
+          # descriptors drift from it. The official registry linter SKIPS field
+          # validation on proxy contracts (all four of ours are UUPS proxies),
+          # so this local gate is the only thing checking that selectors, ABI
+          # fragments and field paths still line up.
+          npm run metadata:build
+          npm run metadata:validate
+          if [ -n "$(git status --porcelain metadata/erc7730/)" ]; then
+            echo "::error::metadata/erc7730/ is out of date. Run \`npm run metadata\` and commit the result."
+            git status --porcelain metadata/erc7730/
+            exit 1
+          fi
+
+      - name: Lint ERC-7730 descriptors (official tool)
+        continue-on-error: true
+        run: |
+          # Advisory: schema validation plus Ledger truncation limits. Allowed to
+          # fail so a transient PyPI/Sourcify outage cannot block the build - the
+          # authoritative structural check is the step above.
+          pipx install erc7730 || pip install --user erc7730 || true
+          erc7730 lint metadata/erc7730/calldata-*.json metadata/erc7730/eip712-*.json || true
 
       - name: Export ABIs
         run: npm run export-abis

@@ -1,0 +1,309 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ethereum/clear-signing-erc7730-registry/master/specs/erc7730-v2.schema.json",
+  "$comment": "Requests MIX DECIMALS within a single call: requestSubscription takes 6dp USDC then 18dp raw OkuM, and requestRedemption reverses that order. Pricing happens at FULFILMENT against the live M_oku, never at the request block, so the amount signed here is an input and a floor - not a quote. `sweepToken` amounts take whatever decimals the swept token has, which is why that field binds tokenPath to its sibling parameter. See metadata/DISPLAY_CONVENTION.md.",
+  "includes": "./common-oku-definitions.json",
+  "context": {
+    "$id": "SubscriptionModule",
+    "contract": {
+      "deployments": [
+        {
+          "chainId": 0,
+          "address": "0x0000000000000000000000000000000000000000"
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "TODO_SET_OWNER",
+    "contractName": "SubscriptionModule",
+    "info": {
+      "url": "https://example.invalid/TODO"
+    },
+    "constants": {
+      "okuMAddress": "0x0000000000000000000000000000000000000000",
+      "usdcAddress": "0x0000000000000000000000000000000000000000"
+    }
+  },
+  "display": {
+    "formats": {
+      "cancelRequest(uint256 requestId)": {
+        "$id": "cancelRequest",
+        "intent": "Cancel request",
+        "fields": [
+          {
+            "path": "requestId",
+            "$ref": "$.display.definitions.requestId"
+          }
+        ]
+      },
+      "fulfillRedemption(uint256 requestId)": {
+        "$id": "fulfillRedemption",
+        "intent": "Fulfil redemption",
+        "fields": [
+          {
+            "path": "requestId",
+            "$ref": "$.display.definitions.requestId"
+          }
+        ]
+      },
+      "fulfillSubscription(uint256 requestId)": {
+        "$id": "fulfillSubscription",
+        "intent": "Fulfil subscription",
+        "fields": [
+          {
+            "path": "requestId",
+            "$ref": "$.display.definitions.requestId"
+          }
+        ]
+      },
+      "grantRole(bytes32 role,address account)": {
+        "$id": "grantRole",
+        "intent": "Grant role on module",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "account",
+            "$ref": "$.display.definitions.roleHolder"
+          }
+        ]
+      },
+      "initialize(address _okuM,address _usdc,address _admin,address _treasury)": {
+        "$id": "initialize",
+        "intent": "Initialize module",
+        "fields": [
+          {
+            "path": "_okuM",
+            "label": "OkuM",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "token"
+              ]
+            }
+          },
+          {
+            "path": "_usdc",
+            "label": "USDC",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "token"
+              ]
+            }
+          },
+          {
+            "path": "_admin",
+            "label": "Admin",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          },
+          {
+            "path": "_treasury",
+            "label": "Treasury",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "pause()": {
+        "$id": "pause",
+        "intent": "Pause requests",
+        "fields": []
+      },
+      "rejectRequest(uint256 requestId,bytes32 reasonCode)": {
+        "$id": "rejectRequest",
+        "intent": "Reject request",
+        "fields": [
+          {
+            "path": "requestId",
+            "$ref": "$.display.definitions.requestId"
+          },
+          {
+            "path": "reasonCode",
+            "label": "Reason",
+            "format": "raw"
+          }
+        ]
+      },
+      "renounceRole(bytes32 role,address callerConfirmation)": {
+        "$id": "renounceRole",
+        "intent": "Renounce role on module",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "callerConfirmation",
+            "$ref": "$.display.definitions.roleHolder",
+            "label": "Confirm self"
+          }
+        ]
+      },
+      "requestRedemption(uint256 okuMAmount,uint256 minUsdcOut)": {
+        "$id": "requestRedemption",
+        "intent": "Request OkuM redemption",
+        "fields": [
+          {
+            "path": "okuMAmount",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "token": "$.metadata.constants.okuMAddress"
+            }
+          },
+          {
+            "path": "minUsdcOut",
+            "label": "Min Amount",
+            "format": "tokenAmount",
+            "params": {
+              "token": "$.metadata.constants.usdcAddress"
+            }
+          }
+        ]
+      },
+      "requestSubscription(uint256 usdcAmount,uint256 minOkuMOut)": {
+        "$id": "requestSubscription",
+        "intent": "Request OkuM subscription",
+        "fields": [
+          {
+            "path": "usdcAmount",
+            "label": "Amount",
+            "format": "tokenAmount",
+            "params": {
+              "token": "$.metadata.constants.usdcAddress"
+            }
+          },
+          {
+            "path": "minOkuMOut",
+            "label": "Min OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "token": "$.metadata.constants.okuMAddress"
+            }
+          }
+        ]
+      },
+      "revokeRole(bytes32 role,address account)": {
+        "$id": "revokeRole",
+        "intent": "Revoke role on module",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "account",
+            "$ref": "$.display.definitions.roleHolder"
+          }
+        ]
+      },
+      "setFees(uint256 newTin,uint256 newTout)": {
+        "$id": "setFees",
+        "intent": "Set conversion fees",
+        "fields": [
+          {
+            "path": "newTin",
+            "label": "Subscribe fee",
+            "format": "unit",
+            "params": {
+              "base": "bps"
+            }
+          },
+          {
+            "path": "newTout",
+            "label": "Redeem fee",
+            "format": "unit",
+            "params": {
+              "base": "bps"
+            }
+          }
+        ]
+      },
+      "setTreasury(address newTreasury)": {
+        "$id": "setTreasury",
+        "intent": "Set treasury",
+        "fields": [
+          {
+            "path": "newTreasury",
+            "label": "Treasury",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "sweepToken(address token,address to,uint256 amount)": {
+        "$id": "sweepToken",
+        "intent": "Sweep stray tokens",
+        "fields": [
+          {
+            "path": "amount",
+            "label": "Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "token"
+            }
+          },
+          {
+            "path": "token",
+            "label": "Token",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "token"
+              ]
+            }
+          },
+          {
+            "path": "to",
+            "label": "To",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "unpause()": {
+        "$id": "unpause",
+        "intent": "Unpause requests",
+        "fields": []
+      },
+      "upgradeToAndCall(address newImplementation,bytes data)": {
+        "$id": "upgradeToAndCall",
+        "intent": "Upgrade module logic",
+        "fields": [
+          {
+            "path": "newImplementation",
+            "$ref": "$.display.definitions.newImplementation"
+          },
+          {
+            "path": "data",
+            "$ref": "$.display.definitions.upgradeInitData"
+          }
+        ]
+      }
+    }
+  }
+}

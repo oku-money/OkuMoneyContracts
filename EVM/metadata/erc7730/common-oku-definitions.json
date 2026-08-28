@@ -1,0 +1,79 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ethereum/clear-signing-erc7730-registry/master/specs/erc7730-v2.schema.json",
+  "$comment": "Shared definitions for the OkuDollar suite, included by every calldata descriptor. Carries no `context`, so it is never applied to a transaction on its own - it exists only to be merged. The `roles` enum turns opaque bytes32 role hashes into the exact constant names used in the operator runbook, which is what makes a cold-multisig role grant verifiable on a device.",
+  "metadata": {
+    "enums": {
+      "roles": {
+        "0x0000000000000000000000000000000000000000000000000000000000000000": "DEFAULT_ADMIN_ROLE",
+        "0x4c4ff94857fb252cf127df271a02d09028e1687e90af52a84aaafb253e8a6533": "OKU_UPGRADER",
+        "0x50720e1a401e42ef37411eb6b5ecd079677142c7104f7bb6308baa302335bcab": "OKU_PAUSER",
+        "0x5afc8c56836c8c2ea20fdd9d73067fd41f7d72dd699135694bce5d5d08eb1d82": "OKU_UNPAUSER",
+        "0xe7c179c2065725ccc36b19be656de8685e51c77c6957f8d17f97906974085433": "OKU_MINTER",
+        "0x8b198642cc5e6661fd4f366f622d1908c392ec2c3e48e8cfc08d3da91fad40f4": "OKU_BURNER",
+        "0xf02dbd527c04f8f09b8b4ae4c3418973201b4deab2d41079a338ef2bfdd068b8": "OKU_BLACKLISTER",
+        "0xd04b68dc0f21044a6dc5bb0596d51eb35444878cd6a11aad94ceca40cde7041c": "OKU_UNBLACKLISTER",
+        "0xc7b9bd2e7c0e84475b524659e241247154f34e79f005b28595526f3f7e6c7913": "OKU_CAP_MANAGER",
+        "0xed71eae228760321e4e903afa3c6689c587515cdb435cdab40069134a5cbc6c5": "OKU_ALLOWANCE_MGR",
+        "0x4e62c3355f346fbd631866571a6968519690d3a074ec8a6f17ad30d29634aa34": "OKU_RATE_SETTER",
+        "0xfdc084f16b4e658f8207966bf9a7c1420ee9fa7b971b9cfcc4d44f3e468cf575": "OKU_GUARDIAN",
+        "0x8f5cf3bc0fc90832ab9018e5a8d2267f34025d0fc617f61b5f37cf6c2ebbe954": "OKU_ACCRUAL_RESUMER",
+        "0x203f3fb7292f93f2e1d3b73bed3e25a847a55694bfd7b2566ce560debf32297c": "USD_UPGRADER",
+        "0x373a76dd1e7e5148f104f9fcfb11ef405ceaed9fb16d9c6986afe9ac657160c5": "USD_PAUSER",
+        "0x76c64191b586191a3b0581e9782dc160eed0e0e8110463f30e156a9903e79def": "USD_UNPAUSER",
+        "0x8b7cc7e3cda3b7da9a07d3fc144017569e656fe25f3e56f0f6783d912196b276": "WRAPPER_UPGRADER",
+        "0xd7db76336823d48bd5f069bfaa11d40c40bc15af80d0032528a07a7147eb9f5d": "WRAPPER_ADMIN",
+        "0x2a2c889079ee0f8f496b61762af7638f30f616a7a216c2938286737359accc0a": "SUB_UPGRADER",
+        "0xb463b74d4c038582342e00e81c3f23d133776f9ecd4c4192edda0c4165297661": "SUB_PAUSER",
+        "0x2ea024df0eef12acf6bc21ce3bd6045b3f78a0e8940f42ef8ed2acd1a5aaee30": "SUB_UNPAUSER",
+        "0xa7cb98b217fa6797ca245295a9eab4e2344fadaae9fdbde3761d5a2e2ab7e217": "REQUEST_FULFILLER",
+        "0x59c05ef0363056a17a623e733e7abb55cb9854b40d0b7cdee2291b837469bd99": "SUB_FEE_MANAGER",
+        "0x74c9f8d1ab05eb0b488413321d0abc6f27168ebf103ba556ff6c236c03fc0580": "SUB_TREASURY_MANAGER",
+        "0x9609da9d27a7994757ceaba6c53c57e899a7877cdab9514c0557529e12381672": "SUB_SWEEPER"
+      },
+      "wrapEnabled": {
+        "true": "Enabled",
+        "false": "Disabled"
+      }
+    }
+  },
+  "display": {
+    "definitions": {
+      "roleName": {
+        "label": "Role",
+        "format": "enum",
+        "params": {
+          "$ref": "$.metadata.enums.roles"
+        }
+      },
+      "roleHolder": {
+        "label": "Account",
+        "format": "addressName",
+        "params": {
+          "types": [
+            "wallet",
+            "eoa",
+            "contract"
+          ]
+        }
+      },
+      "newImplementation": {
+        "label": "New logic",
+        "format": "addressName",
+        "params": {
+          "types": [
+            "contract"
+          ]
+        }
+      },
+      "upgradeInitData": {
+        "label": "Init calldata",
+        "format": "raw"
+      },
+      "requestId": {
+        "label": "Request ID",
+        "format": "raw"
+      }
+    },
+    "formats": {}
+  }
+}

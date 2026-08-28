@@ -1,0 +1,432 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ethereum/clear-signing-erc7730-registry/master/specs/erc7730-v2.schema.json",
+  "$comment": "OkuM is an ERC-8056 scaled-UI token. EVERY amount here is RAW OkuM, never dollars. A raw amount's dollar value is `amount * uiMultiplier() / 1e18` and it only RISES, so a device showing '1000 OkuM' is showing strictly less than the app's dollar figure. Labels read 'OkuM Amount' so a signer cannot mistake the number for dollars. Note also that a bounded OkuM approval GROWS in dollar value over time, because it is raw-denominated. See metadata/DISPLAY_CONVENTION.md.",
+  "includes": "./common-oku-definitions.json",
+  "context": {
+    "$id": "OkuM",
+    "contract": {
+      "deployments": [
+        {
+          "chainId": 0,
+          "address": "0x0000000000000000000000000000000000000000"
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "TODO_SET_OWNER",
+    "contractName": "OkuM",
+    "info": {
+      "url": "https://example.invalid/TODO"
+    }
+  },
+  "display": {
+    "formats": {
+      "approve(address spender,uint256 value)": {
+        "$id": "approve",
+        "intent": "Approve OkuM",
+        "fields": [
+          {
+            "path": "value",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to",
+              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
+              "message": "Unlimited"
+            }
+          },
+          {
+            "path": "spender",
+            "label": "Spender",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "blacklist(address account)": {
+        "$id": "blacklist",
+        "intent": "Blacklist on OkuM",
+        "fields": [
+          {
+            "path": "account",
+            "label": "Account",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "burn(uint256 amount)": {
+        "$id": "burn",
+        "intent": "Burn OkuM",
+        "fields": [
+          {
+            "path": "amount",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to"
+            }
+          }
+        ]
+      },
+      "configureMinterAllowance(address minter_,uint256 newAllowance)": {
+        "$id": "configureMinterAllowance",
+        "intent": "Set OkuM minter allowance",
+        "fields": [
+          {
+            "path": "newAllowance",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to"
+            }
+          },
+          {
+            "path": "minter_",
+            "label": "Minter",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "grantRole(bytes32 role,address account)": {
+        "$id": "grantRole",
+        "intent": "Grant role on OkuM",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "account",
+            "$ref": "$.display.definitions.roleHolder"
+          }
+        ]
+      },
+      "haltAccrual()": {
+        "$id": "haltAccrual",
+        "intent": "Halt OkuM marks",
+        "fields": []
+      },
+      "initialize(string name_,string symbol_,address _admin,uint256 initialMaxSupply,address _asset)": {
+        "$id": "initialize",
+        "intent": "Initialize OkuM",
+        "fields": [
+          {
+            "path": "name_",
+            "label": "Name",
+            "format": "raw"
+          },
+          {
+            "path": "symbol_",
+            "label": "Symbol",
+            "format": "raw"
+          },
+          {
+            "path": "_admin",
+            "label": "Admin",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          },
+          {
+            "path": "initialMaxSupply",
+            "label": "OkuM Amount",
+            "format": "raw"
+          },
+          {
+            "path": "_asset",
+            "label": "Backing asset",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "token"
+              ]
+            }
+          }
+        ]
+      },
+      "mint(address to,uint256 amount)": {
+        "$id": "mint",
+        "intent": "Mint OkuM",
+        "fields": [
+          {
+            "path": "amount",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to"
+            }
+          },
+          {
+            "path": "to",
+            "label": "To",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "pause()": {
+        "$id": "pause",
+        "intent": "Pause OkuM",
+        "fields": []
+      },
+      "permit(address owner,address spender,uint256 value,uint256 deadline,uint8 v,bytes32 r,bytes32 s)": {
+        "$id": "permit",
+        "intent": "Approve OkuM by signature",
+        "fields": [
+          {
+            "path": "value",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to",
+              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
+              "message": "Unlimited"
+            }
+          },
+          {
+            "path": "owner",
+            "label": "Owner",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa"
+              ]
+            }
+          },
+          {
+            "path": "spender",
+            "label": "Spender",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          },
+          {
+            "path": "deadline",
+            "label": "Expires",
+            "format": "date",
+            "params": {
+              "encoding": "timestamp"
+            }
+          },
+          {
+            "path": "v",
+            "format": "raw",
+            "visible": "never"
+          },
+          {
+            "path": "r",
+            "format": "raw",
+            "visible": "never"
+          },
+          {
+            "path": "s",
+            "format": "raw",
+            "visible": "never"
+          }
+        ]
+      },
+      "renounceRole(bytes32 role,address callerConfirmation)": {
+        "$id": "renounceRole",
+        "intent": "Renounce role on OkuM",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "callerConfirmation",
+            "$ref": "$.display.definitions.roleHolder",
+            "label": "Confirm self"
+          }
+        ]
+      },
+      "resumeAccrual()": {
+        "$id": "resumeAccrual",
+        "intent": "Resume OkuM marks",
+        "fields": []
+      },
+      "revokeRole(bytes32 role,address account)": {
+        "$id": "revokeRole",
+        "intent": "Revoke role on OkuM",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "account",
+            "$ref": "$.display.definitions.roleHolder"
+          }
+        ]
+      },
+      "setMaxSupply(uint256 newMaxSupply)": {
+        "$id": "setMaxSupply",
+        "intent": "Set OkuM supply cap",
+        "fields": [
+          {
+            "path": "newMaxSupply",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to"
+            }
+          }
+        ]
+      },
+      "setOkuMultiplier(uint256 newMultiplier,uint256 epoch)": {
+        "$id": "setOkuMultiplier",
+        "intent": "Publish OkuM mark",
+        "fields": [
+          {
+            "path": "newMultiplier",
+            "label": "New mark",
+            "format": "unit",
+            "params": {
+              "base": "$/OkuM",
+              "decimals": 18
+            }
+          },
+          {
+            "path": "epoch",
+            "label": "Mark number",
+            "format": "raw"
+          }
+        ]
+      },
+      "transfer(address to,uint256 amount)": {
+        "$id": "transfer",
+        "intent": "Send OkuM",
+        "fields": [
+          {
+            "path": "amount",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to"
+            }
+          },
+          {
+            "path": "to",
+            "label": "To",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "transferFrom(address from,address to,uint256 value)": {
+        "$id": "transferFrom",
+        "intent": "Send OkuM on behalf of",
+        "fields": [
+          {
+            "path": "value",
+            "label": "OkuM Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to"
+            }
+          },
+          {
+            "path": "from",
+            "label": "From",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          },
+          {
+            "path": "to",
+            "label": "To",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "unblacklist(address account)": {
+        "$id": "unblacklist",
+        "intent": "Unblacklist on OkuM",
+        "fields": [
+          {
+            "path": "account",
+            "label": "Account",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "unpause()": {
+        "$id": "unpause",
+        "intent": "Unpause OkuM",
+        "fields": []
+      },
+      "upgradeToAndCall(address newImplementation,bytes data)": {
+        "$id": "upgradeToAndCall",
+        "intent": "Upgrade OkuM logic",
+        "fields": [
+          {
+            "path": "newImplementation",
+            "$ref": "$.display.definitions.newImplementation"
+          },
+          {
+            "path": "data",
+            "$ref": "$.display.definitions.upgradeInitData"
+          }
+        ]
+      }
+    }
+  }
+}

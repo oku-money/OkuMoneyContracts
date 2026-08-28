@@ -7,8 +7,9 @@
  * roles via DEFAULT_ADMIN_ROLE.
  *
  * Decisions baked in:
- *   - QUEUE_PSM is intentionally NOT granted to an EOA (must remain on the
- *     LitePSM proxy, otherwise an EOA could bypass LitePSM accounting).
+ *   - OKU_MINTER / OKU_BURNER are intentionally NOT granted to an EOA (must
+ *     remain on the SubscriptionModule / USDOkuWrapper proxies, otherwise an
+ *     EOA could mint or burn outside the accounted paths).
  *
  * The signer used to send the grants must hold DEFAULT_ADMIN_ROLE on every
  * contract being touched. On testnet deployments that is the deployer / dev
@@ -121,64 +122,63 @@ type RoleName = keyof typeof ROLES;
  * NOTE: every list begins with DEFAULT_ADMIN_ROLE so the master EOA can
  * subsequently grant/revoke any role itself.
  *
- * OkuDollar reuses the OKUM_BLACKLISTER / OKUM_UNBLACKLISTER role hashes
+ * USDOku reuses the OKU_BLACKLISTER / OKU_UNBLACKLISTER role hashes
  * (so a single role *name* spans both tokens for regulatory enforcement),
  * but AccessControl mappings are per-contract — the role must be granted
- * separately on OkuMoney AND OkuDollar. Mirrors deploy/index.ts and
+ * separately on OkuM AND USDOku. Mirrors deploy/index.ts and
  * grantRolesMainnet.ts.
  */
 const ROLE_MAP: Record<string, readonly RoleName[]> = {
-  OkuMoney: [
+  // TESTNET CONVENIENCE ONLY. Grants the full operator surface to a single EOA
+  // so a developer can drive every path without juggling keys. Production uses
+  // grantRolesMainnet.ts, which splits these across cold / warm / orchestrator.
+  //
+  // OKU_MINTER and OKU_BURNER are deliberately EXCLUDED from every entry: they
+  // are contract-only (SubscriptionModule on OkuM, USDOkuWrapper on USDOku) and
+  // granting them to an EOA would collapse the authority model that
+  // grantRolesMainnet.ts asserts.
+  OkuM: [
     "DEFAULT_ADMIN_ROLE",
-    "OKUM_UPGRADER",
-    "OKUM_PAUSER",
-    "OKUM_UNPAUSER",
-    "OKUM_MINTER",
-    // Cycle 4 (EVM-15): OKUM_BURNER required for redeem flows on both LitePSM
-    // and RedemptionQueue. Granting it to the master EOA is a no-op safety net
-    // (the master EOA never calls OkuMoney.burn() directly) but keeps the role
-    // surface complete for emergency operator action.
-    "OKUM_BURNER",
-    "OKUM_REBASER",
-    "OKUM_BLACKLISTER",
-    "OKUM_UNBLACKLISTER",
-    "OKUM_CAP_MANAGER",
-    "OKUM_ALLOWANCE_MANAGER",
+    "OKU_UPGRADER",
+    "OKU_PAUSER",
+    "OKU_UNPAUSER",
+    "OKU_RATE_SETTER",
+    "OKU_GUARDIAN",
+    "OKU_ACCRUAL_RESUMER",
+    "OKU_BLACKLISTER",
+    "OKU_UNBLACKLISTER",
+    "OKU_CAP_MANAGER",
+    "OKU_ALLOWANCE_MANAGER",
   ],
-  OkuDollar: [
-    "DEFAULT_ADMIN_ROLE",
-    "VAULT_UPGRADER",
-    "VAULT_REBASER",
-    "VAULT_RESERVE_MANAGER",
-    "VAULT_PAUSER",
-    "VAULT_UNPAUSER",
-    "VAULT_ADMIN",
-    // Per-contract grants of the shared OKUM_BLACKLISTER / OKUM_UNBLACKLISTER
-    // role hashes — required for OkuDollar.blacklist() / unblacklist() since
+  USDOku: [
+    "DEFAULT_ADMIN_ROLE",   // also gates the one-time setWrapper wiring
+    "USD_UPGRADER",
+    "USD_PAUSER",
+    "USD_UNPAUSER",
+    "OKU_RATE_SETTER",
+    "OKU_GUARDIAN",
+    "OKU_ACCRUAL_RESUMER",
+    // Per-contract grants of the shared OKU_BLACKLISTER / OKU_UNBLACKLISTER
+    // hashes — required for USDOku.blacklist() / unblacklist() since
     // AccessControl role mappings are per-contract even when the hash is shared.
-    "OKUM_BLACKLISTER",
-    "OKUM_UNBLACKLISTER",
+    "OKU_BLACKLISTER",
+    "OKU_UNBLACKLISTER",
   ],
-  LitePSM: [
+  USDOkuWrapper: [
     "DEFAULT_ADMIN_ROLE",
-    "PSM_UPGRADER",
-    "PSM_PAUSER",
-    "PSM_UNPAUSER",
-    "PSM_QUEUE_PROCESSOR",
-    "PSM_BUFFER_DEPOSITOR",
-    "PSM_BUFFER_WITHDRAWER",
+    "WRAPPER_UPGRADER",
+    "WRAPPER_ADMIN",
   ],
-  // NOTE: QUEUE_PSM intentionally excluded — must stay on the LitePSM proxy.
-  RedemptionQueue: [
+  SubscriptionModule: [
     "DEFAULT_ADMIN_ROLE",
-    "QUEUE_UPGRADER",
-    "QUEUE_RESCUER",
+    "SUB_UPGRADER",
+    "SUB_PAUSER",
+    "SUB_UNPAUSER",
+    "REQUEST_FULFILLER",
+    "SUB_FEE_MANAGER",
+    "SUB_TREASURY_MANAGER",
+    "SUB_SWEEPER",
   ],
-  // OkuBridge / OkuBridgeRouter entries removed in the noBridge refactor.
-  // Note: live deployments from prior to the refactor may still have these
-  // proxies on-chain. The address-book lookup loop below silently skips any
-  // contract name not in ROLE_MAP, so those live proxies are simply not
-  // touched by this script until they are formally retired.
 };
 
 // ============================================================================

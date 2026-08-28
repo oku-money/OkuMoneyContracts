@@ -5,6 +5,13 @@ Each file is a stable JSON representation that can be imported directly without 
 
 > **This directory is auto-generated.** Do not hand-edit files here. Run the relevant export command after rebuilding to refresh.
 
+> ⚠️ **`artifacts/evm/` is currently EMPTY.** The EVM contract set was rewritten
+> (OkuM, USDOku, USDOkuWrapper, SubscriptionModule, OkuMultiplierAdapter) and the
+> four retired ABIs — `OkuMoney`, `OkuDollar`, `LitePSM`, `RedemptionQueue` — were
+> deleted rather than left to mislead consumers. Regenerating requires the Hardhat
+> build and `scripts/utils/exportAbis.ts` to be updated for the new contract
+> names, which is pending. See [`../TRACKER.md`](../TRACKER.md).
+
 ## Layout
 
 ```

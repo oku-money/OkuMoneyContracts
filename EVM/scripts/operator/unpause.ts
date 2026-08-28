@@ -1,17 +1,17 @@
 /**
- * Unpause one of the OkuMoney protocol contracts.
+ * Unpause one of the OkuM protocol contracts.
  *
- * Single script with --target={psm|okuM|usdOku}. Each target's unpause()
+ * Single script with --target={module|okuM|usdOku}. Each target's unpause()
  * is gated by a distinct role:
- *   psm    -> LitePSM.unpause()    [PSM_UNPAUSER]
- *   okuM   -> OkuMoney.unpause()   [OKUM_UNPAUSER]
- *   usdOku -> OkuDollar.unpause()  [VAULT_UNPAUSER]
+ *   psm    -> SubscriptionModule.unpause()    [SUB_UNPAUSER]
+ *   okuM   -> OkuM.unpause()   [OKU_UNPAUSER]
+ *   usdOku -> USDOku.unpause()  [USD_UNPAUSER]
  *
  * Usage:
- *   NETWORK=base npx hardhat run scripts/operator/unpause.ts --network base --target=psm
+ *   NETWORK=base npx hardhat run scripts/operator/unpause.ts --network base --target=module
  *
  * Environment:
- *   TARGET         psm|okuM|usdOku
+ *   TARGET         module|okuM|usdOku
  *   DRY_RUN=true
  *   --yes-mainnet
  */
@@ -31,10 +31,11 @@ function parseArg(name: string): string | undefined {
 const YES_MAINNET = process.argv.includes("--yes-mainnet");
 const DRY_RUN = process.env.DRY_RUN === "true";
 
-const TARGET_MAP: Record<string, { name: "LitePSM" | "OkuMoney" | "OkuDollar"; bookKey: string }> = {
-  psm: { name: "LitePSM", bookKey: "LitePSM" },
-  okuM: { name: "OkuMoney", bookKey: "OkuMoney" },
-  usdOku: { name: "OkuDollar", bookKey: "OkuDollar" },
+const TARGET_MAP: Record<string, { name: "SubscriptionModule" | "OkuM" | "USDOku"; bookKey: string }> = {
+  module: { name: "SubscriptionModule", bookKey: "SubscriptionModule" },
+  psm: { name: "SubscriptionModule", bookKey: "SubscriptionModule" }, // legacy alias
+  okuM: { name: "OkuM", bookKey: "OkuM" },
+  usdOku: { name: "USDOku", bookKey: "USDOku" },
 };
 
 async function main() {
@@ -45,7 +46,7 @@ async function main() {
 
   const target = parseArg("target") ?? parseArg("TARGET");
   if (!target || !(target in TARGET_MAP)) {
-    throw new Error(`Required: --target=psm|okuM|usdOku (got ${target ?? "<none>"})`);
+    throw new Error(`Required: --target=module|okuM|usdOku (got ${target ?? "<none>"})`);
   }
   const sel = TARGET_MAP[target];
 

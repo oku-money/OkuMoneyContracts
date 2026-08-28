@@ -1,8 +1,8 @@
 /**
- * Set the OkuMoney global supply cap (`OKUM_CAP_MANAGER` role required).
+ * Set the OkuM global supply cap (`OKU_CAP_MANAGER` role required).
  *
- * Calls `OkuMoney.setMaxSupply(newMaxSupply)`. The contract rejects values
- * below current totalSupply. Cap raises are the typical operation; cap
+ * Calls `OkuM.setMaxSupply(newMaxSupply)`. The contract rejects values below
+ * current totalSupply, and values above `MAX_TOTAL_SUPPLY` (1e33). Cap raises are the typical operation; cap
  * lowers are only safe when totalSupply has room.
  *
  * See ../../README.md § Authority model.
@@ -45,14 +45,14 @@ async function main() {
   const newMaxSupply = BigInt(newMaxStr);
   if (newMaxSupply <= 0n) throw new Error("--maxSupply must be > 0");
 
-  const okuMoneyAddr = loadAddress(ctx.bookKey, "OkuMoney");
-  if (!okuMoneyAddr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
+  const okuMAddr = loadAddress(ctx.bookKey, "OkuM");
+  if (!okuMAddr) throw new Error(`Missing OkuM in address book for ${ctx.bookKey}`);
 
   const [signer] = await ethers.getSigners();
-  const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer) as Contract;
+  const okuM = (await getDeployedContract("OkuM", okuMAddr)).connect(signer) as Contract;
 
-  const currentMax = await (okuMoney as any).maxSupply();
-  const currentSupply = await (okuMoney as any).totalSupply();
+  const currentMax = await (okuM as any).maxSupply();
+  const currentSupply = await (okuM as any).totalSupply();
 
   logger.info(`Signer (capManager): ${await signer.getAddress()}`);
   logger.info(`Current maxSupply:   ${ethers.formatEther(currentMax)} OkuM`);
@@ -70,11 +70,11 @@ async function main() {
     return;
   }
 
-  const tx = await (okuMoney as any).setMaxSupply(newMaxSupply);
+  const tx = await (okuM as any).setMaxSupply(newMaxSupply);
   const receipt = await tx.wait(1);
   logger.success(`setMaxSupply tx: ${receipt.hash}`);
 
-  const confirmed = await (okuMoney as any).maxSupply();
+  const confirmed = await (okuM as any).maxSupply();
   logger.success(`Confirmed maxSupply: ${ethers.formatEther(confirmed)} OkuM`);
 }
 

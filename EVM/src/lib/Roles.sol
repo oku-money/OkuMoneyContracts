@@ -3,50 +3,53 @@ pragma solidity 0.8.28;
 
 /**
  * @title Roles
- * @notice Centralized role constants for all OkuMoney contracts
- * @dev All roles use contract-specific prefixes (OKUM_, VAULT_, PSM_, QUEUE_)
- *      to prevent accidental role collisions across contracts.
+ * @notice Centralized role constants for the reviewed-conversion contract suite
+ *         (OkuM, USDOku, USDOkuWrapper, SubscriptionModule).
+ * @dev Contract-specific prefixes (OKU_, WRAPPER_, SUB_) avoid accidental role
+ *      collisions across contracts. See `EVM/README.md § Roles` for who holds
+ *      each role and the warm/cold/orchestrator custody split.
  */
 library Roles {
-    // ============ OkuMoney Roles ============
-    bytes32 public constant OKUM_UPGRADER = keccak256("OKUM_UPGRADER");
-    bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
-    bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");
-    bytes32 public constant OKUM_MINTER = keccak256("OKUM_MINTER");
-    /// @dev Split from `OKUM_MINTER` so the burn surface can be locked
-    ///      down independently of the mint allowance system. Granted to
-    ///      LitePSM at deploy time alongside `OKUM_MINTER` because both
-    ///      flows route through the PSM.
-    bytes32 public constant OKUM_BURNER = keccak256("OKUM_BURNER");
-    bytes32 public constant OKUM_REBASER = keccak256("OKUM_REBASER");
-    bytes32 public constant OKUM_BLACKLISTER = keccak256("OKUM_BLACKLISTER");
-    bytes32 public constant OKUM_UNBLACKLISTER = keccak256("OKUM_UNBLACKLISTER");
-    bytes32 public constant OKUM_CAP_MANAGER = keccak256("OKUM_CAP_MANAGER");
-    bytes32 public constant OKUM_ALLOWANCE_MANAGER = keccak256("OKUM_ALLOWANCE_MANAGER");
+    // ============ OkuM roles ============
+    bytes32 public constant OKU_UPGRADER = keccak256("OKU_UPGRADER");
+    bytes32 public constant OKU_PAUSER = keccak256("OKU_PAUSER");
+    bytes32 public constant OKU_UNPAUSER = keccak256("OKU_UNPAUSER");
+    bytes32 public constant OKU_MINTER = keccak256("OKU_MINTER");
+    bytes32 public constant OKU_BURNER = keccak256("OKU_BURNER");
+    bytes32 public constant OKU_BLACKLISTER = keccak256("OKU_BLACKLISTER");
+    bytes32 public constant OKU_UNBLACKLISTER = keccak256("OKU_UNBLACKLISTER");
+    bytes32 public constant OKU_CAP_MANAGER = keccak256("OKU_CAP_MANAGER");
+    bytes32 public constant OKU_ALLOWANCE_MANAGER = keccak256("OKU_ALLOWANCE_MANAGER");
+    /// @dev Sets `setOkuMultiplier` / `setUsdOkuRate`. Held by the orchestrator on
+    ///      both OkuM and USDOku.
+    bytes32 public constant OKU_RATE_SETTER = keccak256("OKU_RATE_SETTER");
+    /// @dev `haltAccrual()` (OkuM) / `haltUsdOkuAccrual()` (USDOku). Warm — can only
+    ///      stop growth, never set a rate or move a multiplier down.
+    bytes32 public constant OKU_GUARDIAN = keccak256("OKU_GUARDIAN");
+    /// @dev Cold-only reversal of `haltAccrual()` / `haltUsdOkuAccrual()`. Deliberately
+    ///      split from `OKU_GUARDIAN` so a compromised warm key can halt but never
+    ///      resume — mirrors the OKU_PAUSER / OKU_UNPAUSER split.
+    bytes32 public constant OKU_ACCRUAL_RESUMER = keccak256("OKU_ACCRUAL_RESUMER");
 
-    // ============ OkuDollar (Vault) Roles ============
-    bytes32 public constant VAULT_UPGRADER = keccak256("VAULT_UPGRADER");
-    bytes32 public constant VAULT_REBASER = keccak256("VAULT_REBASER");
-    bytes32 public constant VAULT_RESERVE_MANAGER = keccak256("VAULT_RESERVE_MANAGER");
-    bytes32 public constant VAULT_PAUSER = keccak256("VAULT_PAUSER");
-    bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
-    /// @dev Dedicated vault-admin role for parameter updates (e.g. min collateral
-    ///      ratio) that previously gated on `DEFAULT_ADMIN_ROLE`. Carving it out
-    ///      keeps the AccessControl super-admin role focused on role-management
-    ///      duties and lets the operational vault-config key be rotated
-    ///      independently of the meta-role holder.
-    bytes32 public constant VAULT_ADMIN = keccak256("VAULT_ADMIN");
+    // ============ USDOku roles ============
+    bytes32 public constant USD_UPGRADER = keccak256("USD_UPGRADER");
+    bytes32 public constant USD_PAUSER = keccak256("USD_PAUSER");
+    bytes32 public constant USD_UNPAUSER = keccak256("USD_UNPAUSER");
 
-    // ============ LitePSM Roles ============
-    bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");
-    bytes32 public constant PSM_PAUSER = keccak256("PSM_PAUSER");
-    bytes32 public constant PSM_UNPAUSER = keccak256("PSM_UNPAUSER");
-    bytes32 public constant PSM_QUEUE_PROCESSOR = keccak256("PSM_QUEUE_PROCESSOR");
-    bytes32 public constant PSM_BUFFER_DEPOSITOR = keccak256("PSM_BUFFER_DEPOSITOR");
-    bytes32 public constant PSM_BUFFER_WITHDRAWER = keccak256("PSM_BUFFER_WITHDRAWER");
+    // ============ USDOkuWrapper roles ============
+    bytes32 public constant WRAPPER_UPGRADER = keccak256("WRAPPER_UPGRADER");
+    /// @dev Disables `wrap()` (sunset step 1). Cannot disable `unwrap()`.
+    bytes32 public constant WRAPPER_ADMIN = keccak256("WRAPPER_ADMIN");
 
-    // ============ RedemptionQueue Roles ============
-    bytes32 public constant QUEUE_UPGRADER = keccak256("QUEUE_UPGRADER");
-    bytes32 public constant QUEUE_PSM = keccak256("QUEUE_PSM");
-    bytes32 public constant QUEUE_RESCUER = keccak256("QUEUE_RESCUER");
+    // ============ SubscriptionModule roles ============
+    bytes32 public constant SUB_UPGRADER = keccak256("SUB_UPGRADER");
+    bytes32 public constant SUB_PAUSER = keccak256("SUB_PAUSER");
+    bytes32 public constant SUB_UNPAUSER = keccak256("SUB_UNPAUSER");
+    /// @dev `fulfillSubscription` / `fulfillRedemption` / `rejectRequest`. Held by
+    ///      the orchestrator, deliberately separate from `OKU_RATE_SETTER` — see
+    ///      `EVM/README.md § Rate authority`.
+    bytes32 public constant REQUEST_FULFILLER = keccak256("REQUEST_FULFILLER");
+    bytes32 public constant SUB_FEE_MANAGER = keccak256("SUB_FEE_MANAGER");
+    bytes32 public constant SUB_TREASURY_MANAGER = keccak256("SUB_TREASURY_MANAGER");
+    bytes32 public constant SUB_SWEEPER = keccak256("SUB_SWEEPER");
 }

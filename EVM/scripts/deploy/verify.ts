@@ -23,16 +23,52 @@ const VERIFIABLE_NETWORKS = [
   "bsc",
 ];
 
+/**
+ * Verify on BOTH Etherscan and Sourcify.
+ *
+ * Sourcify is not optional cosmetics: the ERC-7730 linter used by the
+ * clear-signing registry resolves reference ABIs from Sourcify FIRST, falling
+ * back to Etherscan. A contract absent from Sourcify yields a "Could not fetch
+ * ABI" warning that the registry's REVIEWING.md tells reviewers to challenge.
+ * See metadata/erc7730/README.md.
+ */
+async function verifyBoth(address: string, label: string, constructorArgs: any[]): Promise<void> {
+  // Etherscan
+  try {
+    await run("verify:verify", { address, constructorArguments: constructorArgs });
+    logger.success(`  ${label} verified (Etherscan)`);
+  } catch (error: any) {
+    if (/already verified/i.test(error.message)) {
+      logger.info(`  ${label} already verified (Etherscan)`);
+    } else {
+      logger.warning(`  ${label} Etherscan verification failed: ${error.message}`);
+    }
+  }
+
+  // Sourcify
+  try {
+    await run("verify:sourcify", { address });
+    logger.success(`  ${label} verified (Sourcify)`);
+  } catch (error: any) {
+    if (/already verified/i.test(error.message)) {
+      logger.info(`  ${label} already verified (Sourcify)`);
+    } else {
+      logger.warning(
+        `  ${label} Sourcify verification failed: ${error.message}` +
+          " - the ERC-7730 registry linter will not be able to fetch this ABI"
+      );
+    }
+  }
+}
+
 async function verifyImplementation(proxyAddress: string, contractName: string): Promise<void> {
   try {
     const implAddress = await upgrades.erc1967.getImplementationAddress(proxyAddress);
     logger.info(`  ${contractName} implementation: ${implAddress}`);
-    
-    await run("verify:verify", {
-      address: implAddress,
-      constructorArguments: [],
-    });
-    logger.success(`  ${contractName} implementation verified`);
+    await verifyBoth(implAddress, `${contractName} implementation`, []);
+    // The PROXY is the address users transact with and the address the
+    // ERC-7730 descriptors bind to, so it must be resolvable too.
+    await verifyBoth(proxyAddress, `${contractName} proxy`, []);
   } catch (error: any) {
     if (error.message.includes("Already Verified") || error.message.includes("already verified")) {
       logger.info(`  ${contractName} already verified`);
@@ -43,19 +79,7 @@ async function verifyImplementation(proxyAddress: string, contractName: string):
 }
 
 async function verifyNonProxy(address: string, contractName: string, constructorArgs: any[] = []): Promise<void> {
-  try {
-    await run("verify:verify", {
-      address,
-      constructorArguments: constructorArgs,
-    });
-    logger.success(`  ${contractName} verified`);
-  } catch (error: any) {
-    if (error.message.includes("Already Verified") || error.message.includes("already verified")) {
-      logger.info(`  ${contractName} already verified`);
-    } else {
-      logger.warning(`  ${contractName} verification failed: ${error.message}`);
-    }
-  }
+  await verifyBoth(address, contractName, constructorArgs);
 }
 
 async function main() {
@@ -85,7 +109,7 @@ async function main() {
   // Proxy contracts
   // OkuBridge / OkuBridgeRouter removed in the noBridge refactor; PSM is the
   // sole user-facing mint/burn surface.
-  const proxyContracts = ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
+  const proxyContracts = ["OkuM", "SubscriptionModule", "USDOku", "USDOkuWrapper"];
   
   for (const contractName of proxyContracts) {
     const address = addresses[contractName];

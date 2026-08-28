@@ -1,0 +1,412 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ethereum/clear-signing-erc7730-registry/master/specs/erc7730-v2.schema.json",
+  "$comment": "USDOku is a REBASING token: balanceOf returns DOLLARS while the internal ledger is SHARES. transfer/transferFrom/approve/permit are all denominated in dollars, but mint and burn are denominated in SHARES - they are labelled 'USDOku Shares' and deliberately do NOT use a tokenAmount binding, which would be wrong by usdOkuIndex()/1e18 and drift every second. Note also that a USDOku approval SHRINKS in share purchasing power over time - the exact opposite drift direction to OkuM. See metadata/DISPLAY_CONVENTION.md.",
+  "includes": "./common-oku-definitions.json",
+  "context": {
+    "$id": "USDOku",
+    "contract": {
+      "deployments": [
+        {
+          "chainId": 0,
+          "address": "0x0000000000000000000000000000000000000000"
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "TODO_SET_OWNER",
+    "contractName": "USDOku",
+    "info": {
+      "url": "https://example.invalid/TODO"
+    }
+  },
+  "display": {
+    "formats": {
+      "approve(address spender,uint256 value)": {
+        "$id": "approve",
+        "intent": "Approve USDOku",
+        "fields": [
+          {
+            "path": "value",
+            "label": "USDOku Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to",
+              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
+              "message": "Unlimited"
+            }
+          },
+          {
+            "path": "spender",
+            "label": "Spender",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "blacklist(address account)": {
+        "$id": "blacklist",
+        "intent": "Blacklist on USDOku",
+        "fields": [
+          {
+            "path": "account",
+            "label": "Account",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "burn(address from,uint256 shares)": {
+        "$id": "burn",
+        "intent": "Burn USDOku shares",
+        "fields": [
+          {
+            "path": "shares",
+            "label": "USDOku Shares",
+            "format": "unit",
+            "params": {
+              "base": "shares",
+              "decimals": 18
+            }
+          },
+          {
+            "path": "from",
+            "label": "From",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "grantRole(bytes32 role,address account)": {
+        "$id": "grantRole",
+        "intent": "Grant role on USDOku",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "account",
+            "$ref": "$.display.definitions.roleHolder"
+          }
+        ]
+      },
+      "haltUsdOkuAccrual()": {
+        "$id": "haltUsdOkuAccrual",
+        "intent": "Halt USDOku accrual",
+        "fields": []
+      },
+      "initialize(string name_,string symbol_,address _admin)": {
+        "$id": "initialize",
+        "intent": "Initialize USDOku",
+        "fields": [
+          {
+            "path": "name_",
+            "label": "Name",
+            "format": "raw"
+          },
+          {
+            "path": "symbol_",
+            "label": "Symbol",
+            "format": "raw"
+          },
+          {
+            "path": "_admin",
+            "label": "Admin",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "mint(address to,uint256 shares)": {
+        "$id": "mint",
+        "intent": "Mint USDOku shares",
+        "fields": [
+          {
+            "path": "shares",
+            "label": "USDOku Shares",
+            "format": "unit",
+            "params": {
+              "base": "shares",
+              "decimals": 18
+            }
+          },
+          {
+            "path": "to",
+            "label": "To",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "pause()": {
+        "$id": "pause",
+        "intent": "Pause USDOku",
+        "fields": []
+      },
+      "permit(address owner,address spender,uint256 value,uint256 deadline,uint8 v,bytes32 r,bytes32 s)": {
+        "$id": "permit",
+        "intent": "Approve USDOku by signature",
+        "fields": [
+          {
+            "path": "value",
+            "label": "USDOku Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to",
+              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
+              "message": "Unlimited"
+            }
+          },
+          {
+            "path": "owner",
+            "label": "Owner",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa"
+              ]
+            }
+          },
+          {
+            "path": "spender",
+            "label": "Spender",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          },
+          {
+            "path": "deadline",
+            "label": "Expires",
+            "format": "date",
+            "params": {
+              "encoding": "timestamp"
+            }
+          },
+          {
+            "path": "v",
+            "format": "raw",
+            "visible": "never"
+          },
+          {
+            "path": "r",
+            "format": "raw",
+            "visible": "never"
+          },
+          {
+            "path": "s",
+            "format": "raw",
+            "visible": "never"
+          }
+        ]
+      },
+      "renounceRole(bytes32 role,address callerConfirmation)": {
+        "$id": "renounceRole",
+        "intent": "Renounce role on USDOku",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "callerConfirmation",
+            "$ref": "$.display.definitions.roleHolder",
+            "label": "Confirm self"
+          }
+        ]
+      },
+      "resumeUsdOkuAccrual()": {
+        "$id": "resumeUsdOkuAccrual",
+        "intent": "Resume USDOku accrual",
+        "fields": []
+      },
+      "revokeRole(bytes32 role,address account)": {
+        "$id": "revokeRole",
+        "intent": "Revoke role on USDOku",
+        "fields": [
+          {
+            "path": "role",
+            "$ref": "$.display.definitions.roleName"
+          },
+          {
+            "path": "account",
+            "$ref": "$.display.definitions.roleHolder"
+          }
+        ]
+      },
+      "setUsdOkuRate(uint256 newRate,uint256 endTimestamp)": {
+        "$id": "setUsdOkuRate",
+        "intent": "Set USDOku yield rate",
+        "fields": [
+          {
+            "path": "newRate",
+            "label": "Yield rate",
+            "format": "unit",
+            "params": {
+              "base": "/s",
+              "decimals": 18
+            }
+          },
+          {
+            "path": "endTimestamp",
+            "label": "Rate ends",
+            "format": "date",
+            "params": {
+              "encoding": "timestamp"
+            }
+          }
+        ]
+      },
+      "setWrapper(address newWrapper)": {
+        "$id": "setWrapper",
+        "intent": "Set USDOku wrapper",
+        "fields": [
+          {
+            "path": "newWrapper",
+            "label": "Wrapper",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "transfer(address to,uint256 amount)": {
+        "$id": "transfer",
+        "intent": "Send USDOku",
+        "fields": [
+          {
+            "path": "amount",
+            "label": "USDOku Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to"
+            }
+          },
+          {
+            "path": "to",
+            "label": "To",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "transferFrom(address from,address to,uint256 amount)": {
+        "$id": "transferFrom",
+        "intent": "Send USDOku on behalf of",
+        "fields": [
+          {
+            "path": "amount",
+            "label": "USDOku Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to"
+            }
+          },
+          {
+            "path": "from",
+            "label": "From",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          },
+          {
+            "path": "to",
+            "label": "To",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "unblacklist(address account)": {
+        "$id": "unblacklist",
+        "intent": "Unblacklist on USDOku",
+        "fields": [
+          {
+            "path": "account",
+            "label": "Account",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract"
+              ]
+            }
+          }
+        ]
+      },
+      "unpause()": {
+        "$id": "unpause",
+        "intent": "Unpause USDOku",
+        "fields": []
+      },
+      "upgradeToAndCall(address newImplementation,bytes data)": {
+        "$id": "upgradeToAndCall",
+        "intent": "Upgrade USDOku logic",
+        "fields": [
+          {
+            "path": "newImplementation",
+            "$ref": "$.display.definitions.newImplementation"
+          },
+          {
+            "path": "data",
+            "$ref": "$.display.definitions.upgradeInitData"
+          }
+        ]
+      }
+    }
+  }
+}

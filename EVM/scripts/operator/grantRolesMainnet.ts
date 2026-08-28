@@ -3,19 +3,21 @@
  *
  * Implements the documented 3-key mainnet role distribution from README.md §RBAC:
  *
- *   Cold Multisig   → ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER,
- *                     ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER,
- *                     RESERVE_MANAGER
- *   Warm Multisig   → all PAUSER, all BLACKLISTER
- *   Orchestrator    → OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR
+ *   Cold Multisig   → ADMIN, all UPGRADER, all UNPAUSER, all UNBLACKLISTER,
+ *                     CAP_MANAGER, ALLOWANCE_MANAGER, ACCRUAL_RESUMER,
+ *                     WRAPPER_ADMIN, SUB_FEE_MANAGER, SUB_TREASURY_MANAGER
+ *   Warm Multisig   → all PAUSER, all BLACKLISTER, OKU_GUARDIAN, SUB_SWEEPER
+ *   Orchestrator    → OKU_RATE_SETTER, REQUEST_FULFILLER
  *
- * QUEUE_PSM is intentionally NOT in this list — it must remain on the LitePSM
- * proxy address (set at deploy time via configureRoles).
+ * OKU_RATE_SETTER and REQUEST_FULFILLER both sit on the orchestrator but are
+ * deliberately SEPARATE roles: one can misprice, the other can convert, and a
+ * single compromised key must not be able to do both. Use DISTINCT KEYS in
+ * production, not merely distinct role constants.
  *
- * OKUM_MINTER and OKUM_BURNER (cycle 4 / EVM-15) are likewise intentionally
- * NOT in this list — they must remain on the LitePSM and RedemptionQueue
- * proxy addresses (granted at deploy time via configureRoles). This script
- * verifies those grants exist before proceeding; missing grants are fatal.
+ * OKU_MINTER / OKU_BURNER are intentionally NOT in this list — they must remain
+ * on the SubscriptionModule (for OkuM) and USDOkuWrapper (for USDOku) proxy
+ * addresses, granted at deploy time via configureRoles. This script verifies
+ * those grants exist AND that no human key holds them; either failure is fatal.
  *
  * Final step: revokes DEFAULT_ADMIN_ROLE from the deployer key, making the
  * Cold Multisig the sole meta-role holder.
@@ -48,7 +50,7 @@ import { Contract } from "ethers";
 import { resolveNetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
-import { ROLES } from "../config/roles";
+import { ROLES, CONTRACT_ONLY_ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
 
 // ============================================================================
@@ -88,48 +90,59 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
   warm: Map<string, RoleName[]>;
   orch: Map<string, RoleName[]>;
 } {
+  // COLD: everything that can change the rules, plus every "un-" counterpart.
+  // The un-roles are cold precisely so a compromised warm key can stop the
+  // protocol but never restart it.
   const coldRoles = new Map<string, RoleName[]>([
-    ["OkuMoney", [
+    ["OkuM", [
       "DEFAULT_ADMIN_ROLE",
-      "OKUM_UPGRADER",
-      "OKUM_UNPAUSER",
-      "OKUM_UNBLACKLISTER",
-      "OKUM_CAP_MANAGER",
-      "OKUM_ALLOWANCE_MANAGER",
+      "OKU_UPGRADER",
+      "OKU_UNPAUSER",
+      "OKU_UNBLACKLISTER",
+      "OKU_CAP_MANAGER",
+      "OKU_ALLOWANCE_MANAGER",
+      "OKU_ACCRUAL_RESUMER",
     ]],
-    ["OkuDollar", [
-      "DEFAULT_ADMIN_ROLE",
-      "VAULT_UPGRADER",
-      "VAULT_UNPAUSER",
-      "VAULT_RESERVE_MANAGER",
-      "VAULT_ADMIN",
-      "OKUM_UNBLACKLISTER",
+    ["USDOku", [
+      "DEFAULT_ADMIN_ROLE",   // also gates the one-time setWrapper wiring
+      "USD_UPGRADER",
+      "USD_UNPAUSER",
+      "OKU_UNBLACKLISTER",
+      "OKU_ACCRUAL_RESUMER",
     ]],
-    ["LitePSM", [
+    ["USDOkuWrapper", [
       "DEFAULT_ADMIN_ROLE",
-      "PSM_UPGRADER",
-      "PSM_UNPAUSER",
-      "PSM_BUFFER_WITHDRAWER",
+      "WRAPPER_UPGRADER",
+      // WRAPPER_ADMIN gates BOTH the sunset toggle and withdrawSurplus, which
+      // is the only path other than unwrap by which OkuM leaves the wrapper.
+      "WRAPPER_ADMIN",
     ]],
-    ["RedemptionQueue", [
+    ["SubscriptionModule", [
       "DEFAULT_ADMIN_ROLE",
-      "QUEUE_UPGRADER",
-      "QUEUE_RESCUER",
+      "SUB_UPGRADER",
+      "SUB_UNPAUSER",
+      "SUB_FEE_MANAGER",
+      "SUB_TREASURY_MANAGER",
     ]],
   ]);
 
+  // WARM: stop-only levers. None of these can move value or change a price.
   const warmRoles = new Map<string, RoleName[]>([
-    ["OkuMoney", ["OKUM_PAUSER", "OKUM_BLACKLISTER"]],
-    ["OkuDollar", ["VAULT_PAUSER", "OKUM_BLACKLISTER"]],
-    ["LitePSM", ["PSM_PAUSER"]],
-    ["RedemptionQueue", []],
+    ["OkuM", ["OKU_PAUSER", "OKU_BLACKLISTER", "OKU_GUARDIAN"]],
+    ["USDOku", ["USD_PAUSER", "OKU_BLACKLISTER", "OKU_GUARDIAN"]],
+    ["USDOkuWrapper", []],
+    ["SubscriptionModule", ["SUB_PAUSER", "SUB_SWEEPER"]],
   ]);
 
+  // ORCHESTRATOR: the two value-path capabilities, deliberately SPLIT.
+  // OKU_RATE_SETTER can misprice but not convert; REQUEST_FULFILLER can convert
+  // but not misprice. Honour this with DISTINCT KEYS in production, not just
+  // distinct role constants - the separation is the whole point.
   const orchRoles = new Map<string, RoleName[]>([
-    ["OkuMoney", ["OKUM_REBASER"]],
-    ["OkuDollar", ["VAULT_REBASER"]],
-    ["LitePSM", ["PSM_QUEUE_PROCESSOR", "PSM_BUFFER_DEPOSITOR"]],
-    ["RedemptionQueue", []],
+    ["OkuM", ["OKU_RATE_SETTER"]],
+    ["USDOku", ["OKU_RATE_SETTER"]],
+    ["USDOkuWrapper", []],
+    ["SubscriptionModule", ["REQUEST_FULFILLER"]],
   ]);
 
   return { cold: coldRoles, warm: warmRoles, orch: orchRoles };
@@ -231,7 +244,7 @@ async function main() {
   const { cold: coldMap, warm: warmMap, orch: orchMap } = buildRoleMap(cold, warm, orch);
 
   const contracts: Record<string, Contract> = {};
-  for (const name of ["OkuMoney", "OkuDollar", "LitePSM", "RedemptionQueue"]) {
+  for (const name of ["OkuM", "USDOku", "USDOkuWrapper", "SubscriptionModule"]) {
     let addr: string;
     try {
       addr = loadAddress(bookKey, name);
@@ -243,30 +256,74 @@ async function main() {
   }
 
   // -------- Sanity check: deploy-time proxy grants must already exist --------
-  // EVM-A1: OKUM_MINTER and OKUM_BURNER live on the LitePSM/RedemptionQueue
-  // proxies, not on EOAs. They are granted in scripts/deploy/index.ts and must
-  // be present before this script runs. Missing grants here mean a fresh
-  // deploy is broken — fail loudly before we touch any role state.
-  if (contracts.OkuMoney && contracts.LitePSM && contracts.RedemptionQueue) {
-    const okuMoney = contracts.OkuMoney;
-    const psmAddr = await contracts.LitePSM.getAddress();
-    const queueAddr = await contracts.RedemptionQueue.getAddress();
-    const checks: Array<[string, string, string]> = [
-      ["OKUM_MINTER on LitePSM", ROLES.OKUM_MINTER, psmAddr],
-      ["OKUM_MINTER on RedemptionQueue", ROLES.OKUM_MINTER, queueAddr],
-      ["OKUM_BURNER on LitePSM", ROLES.OKUM_BURNER, psmAddr],
-      ["OKUM_BURNER on RedemptionQueue", ROLES.OKUM_BURNER, queueAddr],
-    ];
-    for (const [label, role, account] of checks) {
-      const has = await okuMoney.hasRole(role, account);
-      if (!has) {
+  // OKU_MINTER / OKU_BURNER are CONTRACT-ONLY and scoped PER TOKEN:
+  //   SubscriptionModule holds them on OkuM   (mints on fulfilled subscription,
+  //                                            burns escrow on fulfilled redemption)
+  //   USDOkuWrapper      holds them on USDOku (mints on wrap, burns on unwrap)
+  // They are granted in scripts/deploy/index.ts. Missing grants mean a broken
+  // deploy — fail before touching any role state.
+  if (contracts.OkuM && contracts.SubscriptionModule) {
+    const moduleAddr = await contracts.SubscriptionModule.getAddress();
+    for (const [label, role] of [
+      ["OKU_MINTER on OkuM -> SubscriptionModule", ROLES.OKU_MINTER],
+      ["OKU_BURNER on OkuM -> SubscriptionModule", ROLES.OKU_BURNER],
+    ] as Array<[string, string]>) {
+      if (!(await contracts.OkuM.hasRole(role, moduleAddr))) {
         throw new Error(
           `Deploy-time proxy grant missing: ${label}. ` +
-          `Re-run scripts/deploy/index.ts:configureRoles or grant manually before continuing.`
+          `Re-run scripts/deploy/index.ts:configureRoles before continuing.`
         );
       }
       logger.info(`  [verified] ${label}`);
     }
+  }
+  if (contracts.USDOku && contracts.USDOkuWrapper) {
+    const wrapperAddr = await contracts.USDOkuWrapper.getAddress();
+    for (const [label, role] of [
+      ["OKU_MINTER on USDOku -> USDOkuWrapper", ROLES.OKU_MINTER],
+      ["OKU_BURNER on USDOku -> USDOkuWrapper", ROLES.OKU_BURNER],
+    ] as Array<[string, string]>) {
+      if (!(await contracts.USDOku.hasRole(role, wrapperAddr))) {
+        throw new Error(
+          `Deploy-time proxy grant missing: ${label}. ` +
+          `Re-run scripts/deploy/index.ts:configureRoles before continuing.`
+        );
+      }
+      logger.info(`  [verified] ${label}`);
+    }
+
+    // USDOku must be wired to the wrapper or every positive rate reverts.
+    const wired = (await contracts.USDOku.wrapper()).toLowerCase();
+    if (wired !== wrapperAddr.toLowerCase()) {
+      throw new Error(
+        `USDOku.wrapper() is ${wired}, expected ${wrapperAddr}. Run setWrapper before continuing.`
+      );
+    }
+    logger.info("  [verified] USDOku wired to USDOkuWrapper");
+  }
+
+  // -------- Separation of duties: no human key may hold a contract-only role --
+  // This is the check that fails the run rather than warning. A cold, warm or
+  // orchestrator key holding mint/burn would collapse the whole authority model.
+  {
+    const humanKeys: Array<[string, string]> = [["cold", cold], ["warm", warm], ["orchestrator", orch]];
+    const tokenTargets: Array<[string, any]> = [];
+    if (contracts.OkuM) tokenTargets.push(["OkuM", contracts.OkuM]);
+    if (contracts.USDOku) tokenTargets.push(["USDOku", contracts.USDOku]);
+
+    for (const [tokenName, token] of tokenTargets) {
+      for (const roleName of CONTRACT_ONLY_ROLES) {
+        for (const [keyLabel, keyAddr] of humanKeys) {
+          if (await token.hasRole(ROLES[roleName], keyAddr)) {
+            throw new Error(
+              `SEPARATION OF DUTIES VIOLATION: ${keyLabel} key ${keyAddr} holds ` +
+              `${roleName} on ${tokenName}. Revoke it before continuing.`
+            );
+          }
+        }
+      }
+    }
+    logger.success("  [verified] no human key holds OKU_MINTER / OKU_BURNER");
   }
 
   // -------- Grant Cold Multisig roles --------

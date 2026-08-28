@@ -15,10 +15,10 @@ import { resolveNetworkContext } from "../utils/networkContext";
 import { logger } from "../utils/logger";
 
 const TARGETS: Record<string, string> = {
-  OkuMoney: "OkuMoney",
-  OkuDollar: "OkuDollar",
-  RedemptionQueue: "RedemptionQueue",
-  LitePSM: "LitePSM",
+  OkuM: "OkuM",
+  USDOku: "USDOku",
+  USDOkuWrapper: "USDOkuWrapper",
+  SubscriptionModule: "SubscriptionModule",
 };
 
 async function main() {

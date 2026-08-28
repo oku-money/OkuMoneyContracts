@@ -1,19 +1,19 @@
 /**
- * Pause one of the OkuMoney protocol contracts.
+ * Pause one of the OkuM protocol contracts.
  *
- * Single script with --target={psm|okuM|usdOku}. Each target's pause()
+ * Single script with --target={module|okuM|usdOku}. Each target's pause()
  * is gated by a distinct role:
- *   psm    -> LitePSM.pause()    [PSM_PAUSER]
- *   okuM   -> OkuMoney.pause()   [OKUM_PAUSER]
- *   usdOku -> OkuDollar.pause()  [VAULT_PAUSER]
+ *   psm    -> SubscriptionModule.pause()    [SUB_PAUSER]
+ *   okuM   -> OkuM.pause()   [OKU_PAUSER]
+ *   usdOku -> USDOku.pause()  [USD_PAUSER]
  *
  * Usage:
- *   NETWORK=base npx hardhat run scripts/operator/pause.ts --network base --target=psm
+ *   NETWORK=base npx hardhat run scripts/operator/pause.ts --network base --target=module
  *   NETWORK=base npx hardhat run scripts/operator/pause.ts --network base --target=okuM
  *   NETWORK=base npx hardhat run scripts/operator/pause.ts --network base --target=usdOku
  *
  * Environment:
- *   TARGET         psm|okuM|usdOku (alternative to --target)
+ *   TARGET         module|okuM|usdOku (alternative to --target)
  *   DRY_RUN=true   Simulate without submitting
  *   --yes-mainnet  Required to broadcast on a mainnet network
  */
@@ -33,10 +33,11 @@ function parseArg(name: string): string | undefined {
 const YES_MAINNET = process.argv.includes("--yes-mainnet");
 const DRY_RUN = process.env.DRY_RUN === "true";
 
-const TARGET_MAP: Record<string, { name: "LitePSM" | "OkuMoney" | "OkuDollar"; bookKey: string }> = {
-  psm: { name: "LitePSM", bookKey: "LitePSM" },
-  okuM: { name: "OkuMoney", bookKey: "OkuMoney" },
-  usdOku: { name: "OkuDollar", bookKey: "OkuDollar" },
+const TARGET_MAP: Record<string, { name: "SubscriptionModule" | "OkuM" | "USDOku"; bookKey: string }> = {
+  module: { name: "SubscriptionModule", bookKey: "SubscriptionModule" },
+  psm: { name: "SubscriptionModule", bookKey: "SubscriptionModule" }, // legacy alias
+  okuM: { name: "OkuM", bookKey: "OkuM" },
+  usdOku: { name: "USDOku", bookKey: "USDOku" },
 };
 
 async function main() {
@@ -47,7 +48,7 @@ async function main() {
 
   const target = parseArg("target") ?? parseArg("TARGET");
   if (!target || !(target in TARGET_MAP)) {
-    throw new Error(`Required: --target=psm|okuM|usdOku (got ${target ?? "<none>"})`);
+    throw new Error(`Required: --target=module|okuM|usdOku (got ${target ?? "<none>"})`);
   }
   const sel = TARGET_MAP[target];
 

@@ -19,6 +19,14 @@ invariant = { runs = 256, depth = 500 }
 # Gas reporting
 gas_reports = ["*"]
 
+[profile.ci]
+# CI sets FOUNDRY_PROFILE=ci; without this section it silently fell back to
+# `default` (256 runs x 500 depth), which happens to match anyway, but an
+# explicit profile means a future default-profile speedup doesn't silently
+# weaken CI. See TRACKER.md.
+fuzz = { runs = 256 }
+invariant = { runs = 256, depth = 500 }
+
 # Additional remappings (add your dependencies here)
 remappings = [
     "forge-std/=lib/forge-std/src/",

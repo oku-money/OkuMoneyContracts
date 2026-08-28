@@ -1,0 +1,77 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ethereum/clear-signing-erc7730-registry/master/specs/erc7730-v2.schema.json",
+  "$comment": "ERC-2612 permit for USDOku. `value` is USDOku DOLLARS, not shares. Its share purchasing power falls as M_usd rises - the opposite drift direction to OkuM's permit.",
+  "context": {
+    "$id": "USDOku permit",
+    "eip712": {
+      "deployments": [
+        {
+          "chainId": 0,
+          "address": "0x0000000000000000000000000000000000000000"
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "TODO_SET_OWNER",
+    "contractName": "USDOku",
+    "info": {
+      "url": "https://example.invalid/TODO"
+    }
+  },
+  "display": {
+    "formats": {
+      "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)": {
+        "$id": "permit",
+        "intent": "Approve USDOku by signature",
+        "fields": [
+          {
+            "path": "value",
+            "label": "USDOku Amount",
+            "format": "tokenAmount",
+            "params": {
+              "tokenPath": "@.to",
+              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
+              "message": "Unlimited"
+            }
+          },
+          {
+            "path": "owner",
+            "label": "Owner",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa"
+              ]
+            }
+          },
+          {
+            "path": "spender",
+            "label": "Spender",
+            "format": "addressName",
+            "params": {
+              "types": [
+                "eoa",
+                "contract"
+              ]
+            }
+          },
+          {
+            "path": "deadline",
+            "label": "Expires",
+            "format": "date",
+            "params": {
+              "encoding": "timestamp"
+            }
+          },
+          {
+            "path": "nonce",
+            "format": "raw",
+            "visible": "never"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,119 +1,67 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
-import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-
-import {OkuMoney} from "../../src/token/OkuMoney.sol";
-import {OkuDollar} from "../../src/token/OkuDollar.sol";
-import {LitePSM} from "../../src/psm/LitePSM.sol";
-import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
-
-import {TestConstants} from "./Constants.sol";
+import {OkuM} from "../../src/token/OkuM.sol";
+import {USDOku} from "../../src/token/USDOku.sol";
+import {USDOkuWrapper} from "../../src/wrapper/USDOkuWrapper.sol";
+import {SubscriptionModule} from "../../src/subscription/SubscriptionModule.sol";
 
 /**
  * @title Deploy
- * @notice Proxy deployment helpers for all OkuMoney contracts
- * @dev Use these helpers to deploy UUPS proxies with consistent initialization.
+ * @notice UUPS proxy deployers for the four production proxies.
+ * @dev Deploy ORDER MATTERS and mirrors `scripts/deploy/index.ts`:
+ *      OkuM (owns `usdcDecimalMultiplier`) -> SubscriptionModule (cross-asserts
+ *      against it) -> USDOku -> USDOkuWrapper (needs both tokens). USDOku must
+ *      then be wired to the wrapper via `setWrapper`, which cannot happen at
+ *      USDOku's `initialize` because the wrapper does not exist yet.
  */
 library Deploy {
-    /// @notice Deploy OkuMoney with UUPS proxy
-    /// @param admin_ Admin address (receives DEFAULT_ADMIN_ROLE)
-    /// @param maxSupply_ Maximum token supply
-    /// @return proxy The deployed proxy contract
-    /// @return impl The implementation contract
-    function deployOkuMoney(
-        address admin_,
-        uint256 maxSupply_
+    function okuM(
+        address admin,
+        uint256 maxSupply,
+        address asset
     )
         internal
-        returns (OkuMoney proxy, OkuMoney impl)
+        returns (OkuM proxy, OkuM impl)
     {
-        impl = new OkuMoney();
-        bytes memory initData =
-            abi.encodeCall(OkuMoney.initialize, ("OkuMoney", "OkuM", admin_, maxSupply_));
-        proxy = OkuMoney(address(new ERC1967Proxy(address(impl), initData)));
+        impl = new OkuM();
+        bytes memory data =
+            abi.encodeCall(OkuM.initialize, ("Oku Money", "OkuM", admin, maxSupply, asset));
+        proxy = OkuM(address(new ERC1967Proxy(address(impl), data)));
     }
 
-    /// @notice Deploy OkuMoney with default max supply
-    function deployOkuMoney(address admin_) internal returns (OkuMoney proxy, OkuMoney impl) {
-        return deployOkuMoney(admin_, TestConstants.MAX_SUPPLY);
-    }
-
-    /// @notice Deploy OkuDollar vault with UUPS proxy
-    /// @param okuMoney_ OkuMoney token address
-    /// @param admin_ Admin address
-    /// @param minCollateralRatio_ Minimum collateral ratio (e.g., 95e16 = 95%)
-    /// @return proxy The deployed proxy contract
-    /// @return impl The implementation contract
-    function deployOkuDollar(
-        address okuMoney_,
-        address admin_,
-        uint256 minCollateralRatio_
+    function subscriptionModule(
+        address okuMAddr,
+        address usdc,
+        address admin,
+        address treasury
     )
         internal
-        returns (OkuDollar proxy, OkuDollar impl)
+        returns (SubscriptionModule proxy, SubscriptionModule impl)
     {
-        impl = new OkuDollar();
-        bytes memory initData = abi.encodeCall(
-            OkuDollar.initialize, (okuMoney_, "OkuDollar", "usdOku", admin_, minCollateralRatio_)
-        );
-        proxy = OkuDollar(address(new ERC1967Proxy(address(impl), initData)));
+        impl = new SubscriptionModule();
+        bytes memory data =
+            abi.encodeCall(SubscriptionModule.initialize, (okuMAddr, usdc, admin, treasury));
+        proxy = SubscriptionModule(address(new ERC1967Proxy(address(impl), data)));
     }
 
-    /// @notice Deploy OkuDollar with default collateral ratio
-    function deployOkuDollar(
-        address okuMoney_,
-        address admin_
-    )
-        internal
-        returns (OkuDollar proxy, OkuDollar impl)
-    {
-        return deployOkuDollar(okuMoney_, admin_, TestConstants.MIN_COLLATERAL_RATIO);
+    function usdOku(address admin) internal returns (USDOku proxy, USDOku impl) {
+        impl = new USDOku();
+        bytes memory data = abi.encodeCall(USDOku.initialize, ("Oku Dollar", "USDOku", admin));
+        proxy = USDOku(address(new ERC1967Proxy(address(impl), data)));
     }
 
-    /// @notice Deploy RedemptionQueue with UUPS proxy
-    /// @param okuMoney_ OkuMoney token address
-    /// @param usdc_ USDC token address (used for decimal multiplier resolution)
-    /// @param admin_ Admin address
-    /// @return proxy The deployed proxy contract
-    /// @return impl The implementation contract
-    function deployRedemptionQueue(
-        address okuMoney_,
-        address usdc_,
-        address admin_
+    function wrapper(
+        address okuMAddr,
+        address usdOkuAddr,
+        address admin
     )
         internal
-        returns (RedemptionQueue proxy, RedemptionQueue impl)
+        returns (USDOkuWrapper proxy, USDOkuWrapper impl)
     {
-        impl = new RedemptionQueue();
-        bytes memory initData =
-            abi.encodeCall(RedemptionQueue.initialize, (okuMoney_, usdc_, admin_));
-        proxy = RedemptionQueue(address(new ERC1967Proxy(address(impl), initData)));
-    }
-
-    /// @notice Deploy LitePSM with UUPS proxy
-    /// @param okuMoney_ OkuMoney token address
-    /// @param okuDollar_ OkuDollar vault address
-    /// @param usdc_ USDC token address
-    /// @param redemptionQueue_ RedemptionQueue address
-    /// @param admin_ Admin address
-    /// @return proxy The deployed proxy contract
-    /// @return impl The implementation contract
-    function deployLitePSM(
-        address okuMoney_,
-        address okuDollar_,
-        address usdc_,
-        address redemptionQueue_,
-        address admin_
-    )
-        internal
-        returns (LitePSM proxy, LitePSM impl)
-    {
-        impl = new LitePSM();
-        bytes memory initData = abi.encodeCall(
-            LitePSM.initialize, (okuMoney_, okuDollar_, usdc_, redemptionQueue_, admin_)
-        );
-        proxy = LitePSM(address(new ERC1967Proxy(address(impl), initData)));
+        impl = new USDOkuWrapper();
+        bytes memory data = abi.encodeCall(USDOkuWrapper.initialize, (okuMAddr, usdOkuAddr, admin));
+        proxy = USDOkuWrapper(address(new ERC1967Proxy(address(impl), data)));
     }
 }

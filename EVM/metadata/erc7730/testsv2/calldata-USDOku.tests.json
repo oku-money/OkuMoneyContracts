@@ -1,0 +1,74 @@
+{
+  "$schema": "../../../specs/erc7730-tests-v2.schema.json",
+  "descriptor": "../calldata-USDOku.json",
+  "dataProvider": {
+    "tokens": {
+      "0x0000000000000000000000000000000000000000": {
+        "symbol": "USDOku",
+        "decimals": 18,
+        "name": "Oku Dollar"
+      }
+    },
+    "addressNames": {
+      "0x1111111111111111111111111111111111111111": "Alice",
+      "0x2222222222222222222222222222222222222222": "Bob",
+      "0x3333333333333333333333333333333333333333": "Treasury"
+    }
+  },
+  "tests": [
+    {
+      "description": "Send 500 USDOku dollars to Bob",
+      "rawTx": "0x02f86e8080843b9aca008504a817c80083030d4094000000000000000000000000000000000000000080b844a9059cbb000000000000000000000000222222222222222222222222222222222222222200000000000000000000000000000000000000000000001b1ae4d6e2ef500000c0",
+      "expected": {
+        "intent": "Send USDOku",
+        "owner": "TODO_SET_OWNER",
+        "fields": [
+          {
+            "label": "USDOku Amount",
+            "value": "500 USDOku"
+          },
+          {
+            "label": "To",
+            "value": "Bob"
+          }
+        ]
+      }
+    },
+    {
+      "description": "Mint 500 USDOku SHARES to Bob (shares, not dollars)",
+      "rawTx": "0x02f86e8080843b9aca008504a817c80083030d4094000000000000000000000000000000000000000080b84440c10f19000000000000000000000000222222222222222222222222222222222222222200000000000000000000000000000000000000000000001b1ae4d6e2ef500000c0",
+      "expected": {
+        "intent": "Mint USDOku shares",
+        "owner": "TODO_SET_OWNER",
+        "fields": [
+          {
+            "label": "USDOku Shares",
+            "value": "500 shares"
+          },
+          {
+            "label": "To",
+            "value": "Bob"
+          }
+        ]
+      }
+    },
+    {
+      "description": "Set USDOku yield rate to ~10% APR for 30 days",
+      "rawTx": "0x02f86e8080843b9aca008504a817c80083030d4094000000000000000000000000000000000000000080b844de27688c0000000000000000000000000000000000000000000000000de0b6b464654d7e0000000000000000000000000000000000000000000000000000000067748580c0",
+      "expected": {
+        "intent": "Set USDOku yield rate",
+        "owner": "TODO_SET_OWNER",
+        "fields": [
+          {
+            "label": "Yield rate",
+            "value": "1.000000003170979198 /s"
+          },
+          {
+            "label": "Rate ends",
+            "value": "2025-01-01T00:00:00Z"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -325,4 +325,71 @@ contract RegressionTest is BaseTest {
 
         assertEq(module.pendingDepositRequest(0, alice), 0, "cleared after fulfillment");
     }
+
+    // =====================================================================
+    // Documented behaviour: an OkuM pause traps escrow in a pending redemption
+    // =====================================================================
+
+    /// @dev NOT a fixed bug — this locks in a known, tracked defect so the
+    ///      behaviour cannot change silently, in either direction.
+    ///
+    ///      `SubscriptionModule.pause()` deliberately gates only intake, so that
+    ///      escrow stays recoverable and the backlog stays drainable while
+    ///      paused. That was the explicit correction to the retired design,
+    ///      where pausing also froze payouts to everyone already queued.
+    ///
+    ///      `OkuM.pause()` reintroduces the trap through a different surface:
+    ///      `_refund` returns escrowed OkuM with a module -> user transfer, which
+    ///      passes through `OkuM._update`'s pause check. Neither the user nor the
+    ///      operator can move the tokens back.
+    ///
+    ///      See TRACKER.md, "Pausing OkuM traps escrowed OkuM in a pending
+    ///      redemption". If that item is resolved, this test should be inverted,
+    ///      not deleted.
+    function test_okuMPauseTrapsEscrowedRedemption() public {
+        uint256 raw = _subscribe(alice, 1000 * USDC_UNIT);
+
+        vm.startPrank(alice);
+        okuM.approve(address(module), raw);
+        uint256 requestId = module.requestRedemption(raw, 0);
+        vm.stopPrank();
+
+        assertEq(module.totalEscrowedOkuM(), raw, "module holds the escrow");
+        assertEq(okuM.balanceOf(alice), 0, "user no longer holds the tokens");
+
+        vm.warp(block.timestamp + Constants.MIN_CANCEL_DELAY + 1);
+
+        // Fixture check: the refund path works normally, so the assertions below
+        // fail for the pause and not for some unrelated reason.
+        uint256 snap = vm.snapshotState();
+        vm.prank(alice);
+        module.cancelRequest(requestId);
+        assertEq(okuM.balanceOf(alice), raw, "unpaused cancel refunds in full");
+        vm.revertToState(snap);
+
+        // Pause the TOKEN only. The module is left deliberately unpaused.
+        vm.prank(admin);
+        okuM.pause();
+        assertFalse(module.paused(), "module is not the thing that is paused");
+
+        // The user cannot recover their own escrowed tokens.
+        vm.prank(alice);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        module.cancelRequest(requestId);
+
+        // And the operator cannot return them on the user's behalf either.
+        vm.prank(fulfiller);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        module.rejectRequest(requestId, bytes32("REASON"));
+
+        assertEq(okuM.balanceOf(alice), 0, "escrow stays trapped while paused");
+        assertEq(module.totalEscrowedOkuM(), raw, "and stays on the module's books");
+
+        // It is recoverable again the moment the token unpauses.
+        vm.prank(admin);
+        okuM.unpause();
+        vm.prank(alice);
+        module.cancelRequest(requestId);
+        assertEq(okuM.balanceOf(alice), raw, "recoverable after unpause");
+    }
 }

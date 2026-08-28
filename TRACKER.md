@@ -163,6 +163,32 @@ movement is arguably the point. Flagged because the wrapper is deliberately
 Decide whether the exit path should be exempt (e.g. a pause-exempt transfer path
 for the wrapper) or whether the coupling is intended.
 
+### Pausing OkuM traps escrowed OkuM in a pending redemption `[EVM]`
+
+Same root cause as the item above, but with a sharper consequence, and found
+while auditing `master`'s redemption controls for comparison.
+
+`SubscriptionModule._refund` returns a redemption request's escrow with
+`okuM.safeTransfer(req.user, req.amountIn)` (`SubscriptionModule.sol:468`). That
+is a module → user transfer, so both addresses are non-zero and `OkuM._update`
+fires `_requireNotPaused()` (`OkuM.sol:383-385`).
+
+**While OkuM is paused, a user with a pending redemption cannot `cancelRequest`
+and recover their tokens.** `rejectRequest` refunds through the same path, so the
+operator cannot return the escrow either.
+
+This matters more than the `unwrap` case: the module's pause was deliberately
+scoped to intake only, so that escrow stays recoverable and the backlog stays
+drainable while paused. The *token's* pause reintroduces the trap through a
+different surface, and here the funds are held by the protocol rather than by the
+user. It is the one place `noRedeem` still reproduces the failure shape it was
+built to remove — an emergency lever that strands the people already in the
+queue.
+
+Options: exempt the module (and wrapper) from the pause check on the refund path,
+or accept the coupling and state plainly that an OkuM pause freezes escrow. Worth
+deciding together with the `unwrap` item — same fix shape.
+
 ### `setUsdOkuRate` cannot show an APR on a hardware wallet `[EVM]`
 
 `newRate` is an 18dp per-second compounding rate: `1000000003170979198` is

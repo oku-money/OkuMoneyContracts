@@ -1,5 +1,5 @@
 /**
- * Redeem OkuMoney via LitePSM (noBridge orchestrator workflow).
+ * Redeem OkuM via LitePSM (noBridge orchestrator workflow).
  *
  * Calls `LitePSM.redeemOkuM(okuMAmount)` as the orchestrator. If the PSM
  * buffer has insufficient USDC the transaction still succeeds: the OkuM is
@@ -49,18 +49,18 @@ async function main() {
   if (okuMAmount <= 0n) throw new Error("--okuMAmount must be > 0");
 
   const psmAddr = loadAddress(ctx.bookKey, "LitePSM");
-  const okuMoneyAddr = loadAddress(ctx.bookKey, "OkuMoney");
-  if (!psmAddr || !okuMoneyAddr) throw new Error(`Missing LitePSM or OkuMoney in address book for ${ctx.bookKey}`);
+  const okuMAddr = loadAddress(ctx.bookKey, "OkuM");
+  if (!psmAddr || !okuMAddr) throw new Error(`Missing LitePSM or OkuM in address book for ${ctx.bookKey}`);
 
   const [signer] = await ethers.getSigners();
   const signerAddr = await signer.getAddress();
 
   const psm = (await getDeployedContract("LitePSM", psmAddr)).connect(signer);
-  const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer);
+  const okuM = (await getDeployedContract("OkuM", okuMAddr)).connect(signer);
   const usdcAddr = loadAddress(ctx.bookKey, "MockUSDC") ?? loadAddress(ctx.bookKey, "USDC");
 
-  const okuMBalance = await (okuMoney as any).balanceOf(signerAddr);
-  const psmMultiplier = await (okuMoney as any).okuMMultiplier();
+  const okuMBalance = await (okuM as any).balanceOf(signerAddr);
+  const psmMultiplier = await (okuM as any).uiMultiplier();
   const expectedUsdc = (okuMAmount * psmMultiplier) / (10n ** 18n) / (10n ** 12n); // 18-dec OkuM → 6-dec USDC
 
   logger.info(`Signer: ${signerAddr}`);
@@ -77,7 +77,7 @@ async function main() {
   }
 
   // Approve PSM to spend OkuM
-  const approveTx = await (okuMoney as any).approve(psmAddr, okuMAmount);
+  const approveTx = await (okuM as any).approve(psmAddr, okuMAmount);
   await approveTx.wait(1);
   logger.success(`Approved ${ethers.formatEther(okuMAmount)} OkuM to PSM`);
 

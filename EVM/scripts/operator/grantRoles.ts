@@ -121,41 +121,37 @@ type RoleName = keyof typeof ROLES;
  * NOTE: every list begins with DEFAULT_ADMIN_ROLE so the master EOA can
  * subsequently grant/revoke any role itself.
  *
- * OkuDollar reuses the OKUM_BLACKLISTER / OKUM_UNBLACKLISTER role hashes
+ * USDOku reuses the OKUM_BLACKLISTER / OKUM_UNBLACKLISTER role hashes
  * (so a single role *name* spans both tokens for regulatory enforcement),
  * but AccessControl mappings are per-contract — the role must be granted
- * separately on OkuMoney AND OkuDollar. Mirrors deploy/index.ts and
+ * separately on OkuM AND USDOku. Mirrors deploy/index.ts and
  * grantRolesMainnet.ts.
  */
 const ROLE_MAP: Record<string, readonly RoleName[]> = {
-  OkuMoney: [
+  OkuM: [
     "DEFAULT_ADMIN_ROLE",
     "OKUM_UPGRADER",
     "OKUM_PAUSER",
     "OKUM_UNPAUSER",
     "OKUM_MINTER",
-    // Cycle 4 (EVM-15): OKUM_BURNER required for redeem flows on both LitePSM
-    // and RedemptionQueue. Granting it to the master EOA is a no-op safety net
-    // (the master EOA never calls OkuMoney.burn() directly) but keeps the role
-    // surface complete for emergency operator action.
     "OKUM_BURNER",
-    "OKUM_REBASER",
+    // The highest-value key in the system: it sets the price every permissionless
+    // conversion executes at, on every chain.
+    "OKUM_RATE_SETTER",
     "OKUM_BLACKLISTER",
     "OKUM_UNBLACKLISTER",
     "OKUM_CAP_MANAGER",
     "OKUM_ALLOWANCE_MANAGER",
   ],
-  OkuDollar: [
+  USDOku: [
     "DEFAULT_ADMIN_ROLE",
     "VAULT_UPGRADER",
-    "VAULT_REBASER",
+    "VAULT_RATE_SETTER",
     "VAULT_RESERVE_MANAGER",
     "VAULT_PAUSER",
     "VAULT_UNPAUSER",
-    "VAULT_ADMIN",
     // Per-contract grants of the shared OKUM_BLACKLISTER / OKUM_UNBLACKLISTER
-    // role hashes — required for OkuDollar.blacklist() / unblacklist() since
-    // AccessControl role mappings are per-contract even when the hash is shared.
+    // hashes. AccessControl mappings are per-contract even when the hash is shared.
     "OKUM_BLACKLISTER",
     "OKUM_UNBLACKLISTER",
   ],
@@ -164,21 +160,10 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "PSM_UPGRADER",
     "PSM_PAUSER",
     "PSM_UNPAUSER",
-    "PSM_QUEUE_PROCESSOR",
+    "PSM_GATEKEEPER",
     "PSM_BUFFER_DEPOSITOR",
     "PSM_BUFFER_WITHDRAWER",
   ],
-  // NOTE: QUEUE_PSM intentionally excluded — must stay on the LitePSM proxy.
-  RedemptionQueue: [
-    "DEFAULT_ADMIN_ROLE",
-    "QUEUE_UPGRADER",
-    "QUEUE_RESCUER",
-  ],
-  // OkuBridge / OkuBridgeRouter entries removed in the noBridge refactor.
-  // Note: live deployments from prior to the refactor may still have these
-  // proxies on-chain. The address-book lookup loop below silently skips any
-  // contract name not in ROLE_MAP, so those live proxies are simply not
-  // touched by this script until they are formally retired.
 };
 
 // ============================================================================

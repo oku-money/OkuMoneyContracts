@@ -1,9 +1,9 @@
 /**
- * Blacklist or unblacklist an account on BOTH OkuMoney and OkuDollar in one
+ * Blacklist or unblacklist an account on BOTH OkuM and USDOku in one
  * shot, since the two contracts maintain INDEPENDENT blacklist mappings
  * despite sharing the OKUM_BLACKLISTER / OKUM_UNBLACKLISTER role hashes.
- * Calling only one leaves a hole (e.g. a user blacklisted on OkuMoney can
- * still hold/move OkuDollar). This wrapper closes that operational footgun.
+ * Calling only one leaves a hole (e.g. a user blacklisted on OkuM can
+ * still hold/move USDOku). This wrapper closes that operational footgun.
  *
  * The role hash is shared but role grants are per-contract: the signer must
  * already hold the role on EACH contract. See scripts/operator/grantRoles*.ts.
@@ -84,34 +84,34 @@ async function main() {
   }
   const action = actionRaw as "blacklist" | "unblacklist";
 
-  const okuMoneyAddr = loadAddress(ctx.bookKey, "OkuMoney");
-  const okuDollarAddr = loadAddress(ctx.bookKey, "OkuDollar");
-  if (!okuMoneyAddr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
-  if (!okuDollarAddr) throw new Error(`Missing OkuDollar in address book for ${ctx.bookKey}`);
+  const okuMAddr = loadAddress(ctx.bookKey, "OkuM");
+  const usdOkuAddr = loadAddress(ctx.bookKey, "USDOku");
+  if (!okuMAddr) throw new Error(`Missing OkuM in address book for ${ctx.bookKey}`);
+  if (!usdOkuAddr) throw new Error(`Missing USDOku in address book for ${ctx.bookKey}`);
 
   const [signer] = await ethers.getSigners();
   const signerAddr = await signer.getAddress();
-  const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer) as Contract;
-  const okuDollar = (await getDeployedContract("OkuDollar", okuDollarAddr)).connect(signer) as Contract;
+  const okuM = (await getDeployedContract("OkuM", okuMAddr)).connect(signer) as Contract;
+  const usdOku = (await getDeployedContract("USDOku", usdOkuAddr)).connect(signer) as Contract;
 
   logger.info(`Signer:    ${signerAddr}`);
   logger.info(`Account:   ${account}`);
   logger.info(`Action:    ${action} on BOTH contracts`);
-  logger.info(`OkuMoney:  ${okuMoneyAddr}`);
-  logger.info(`OkuDollar: ${okuDollarAddr}`);
+  logger.info(`OkuM:  ${okuMAddr}`);
+  logger.info(`USDOku: ${usdOkuAddr}`);
 
-  await applyOne("OkuMoney", okuMoney, account, action);
-  await applyOne("OkuDollar", okuDollar, account, action);
+  await applyOne("OkuM", okuM, account, action);
+  await applyOne("USDOku", usdOku, account, action);
 
   // Post-state verification — read each side and ensure both match the target.
-  const okuMoneyState: boolean = await (okuMoney as any).isBlacklisted(account);
-  const okuDollarState: boolean = await (okuDollar as any).isBlacklisted(account);
+  const okuMState: boolean = await (okuM as any).isBlacklisted(account);
+  const usdOkuState: boolean = await (usdOku as any).isBlacklisted(account);
   const expected = action === "blacklist";
-  logger.info(`Post-state OkuMoney.isBlacklisted:  ${okuMoneyState}`);
-  logger.info(`Post-state OkuDollar.isBlacklisted: ${okuDollarState}`);
-  if (!DRY_RUN && (okuMoneyState !== expected || okuDollarState !== expected)) {
+  logger.info(`Post-state OkuM.isBlacklisted:  ${okuMState}`);
+  logger.info(`Post-state USDOku.isBlacklisted: ${usdOkuState}`);
+  if (!DRY_RUN && (okuMState !== expected || usdOkuState !== expected)) {
     throw new Error(
-      `Post-state mismatch: OkuMoney=${okuMoneyState}, OkuDollar=${okuDollarState}, expected=${expected}`
+      `Post-state mismatch: OkuM=${okuMState}, USDOku=${usdOkuState}, expected=${expected}`
     );
   }
   logger.success(`Done — both contracts in sync (isBlacklisted=${expected})`);

@@ -1,11 +1,11 @@
 /**
- * Unpause one of the OkuMoney protocol contracts.
+ * Unpause one of the OkuM protocol contracts.
  *
  * Single script with --target={psm|okuM|usdOku}. Each target's unpause()
  * is gated by a distinct role:
  *   psm    -> LitePSM.unpause()    [PSM_UNPAUSER]
- *   okuM   -> OkuMoney.unpause()   [OKUM_UNPAUSER]
- *   usdOku -> OkuDollar.unpause()  [VAULT_UNPAUSER]
+ *   okuM   -> OkuM.unpause()   [OKUM_UNPAUSER]
+ *   usdOku -> USDOku.unpause()  [VAULT_UNPAUSER]
  *
  * Usage:
  *   NETWORK=base npx hardhat run scripts/operator/unpause.ts --network base --target=psm
@@ -31,10 +31,10 @@ function parseArg(name: string): string | undefined {
 const YES_MAINNET = process.argv.includes("--yes-mainnet");
 const DRY_RUN = process.env.DRY_RUN === "true";
 
-const TARGET_MAP: Record<string, { name: "LitePSM" | "OkuMoney" | "OkuDollar"; bookKey: string }> = {
+const TARGET_MAP: Record<string, { name: "LitePSM" | "OkuM" | "USDOku"; bookKey: string }> = {
   psm: { name: "LitePSM", bookKey: "LitePSM" },
-  okuM: { name: "OkuMoney", bookKey: "OkuMoney" },
-  usdOku: { name: "OkuDollar", bookKey: "OkuDollar" },
+  okuM: { name: "OkuM", bookKey: "OkuM" },
+  usdOku: { name: "USDOku", bookKey: "USDOku" },
 };
 
 async function main() {

@@ -1,7 +1,7 @@
 /**
- * Configure OkuMoney minter allowance (OKUM_ALLOWANCE_MANAGER role required).
+ * Configure OkuM minter allowance (OKUM_ALLOWANCE_MANAGER role required).
  *
- * Calls `OkuMoney.configureMinterAllowance(minter, allowance)`.
+ * Calls `OkuM.configureMinterAllowance(minter, allowance)`.
  * In production, minterAllowance should be set well below maxSupply (e.g. 1%
  * of max supply) and rotated weekly. This script is the rotation tool.
  *
@@ -41,9 +41,9 @@ async function main() {
 
   mainnetGuard(ctx.networkName, { yesMainnet: YES_MAINNET, dryRun: DRY_RUN });
 
-  const okuMoneyAddr = loadAddress(ctx.bookKey, "OkuMoney");
+  const okuMAddr = loadAddress(ctx.bookKey, "OkuM");
   const psmAddr = loadAddress(ctx.bookKey, "LitePSM");
-  if (!okuMoneyAddr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
+  if (!okuMAddr) throw new Error(`Missing OkuM in address book for ${ctx.bookKey}`);
 
   const minterArg = parseArg("minter") ?? parseArg("MINTER");
   const minterAddr = minterArg && isAddress(minterArg) ? minterArg : psmAddr;
@@ -57,10 +57,10 @@ async function main() {
   if (allowance < 0n) throw new Error("--allowance must be ≥ 0");
 
   const [signer] = await ethers.getSigners();
-  const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer);
+  const okuM = (await getDeployedContract("OkuM", okuMAddr)).connect(signer);
 
-  const currentAllowance = await (okuMoney as any).minterAllowance(minterAddr);
-  const maxSupply = await (okuMoney as any).maxSupply();
+  const currentAllowance = await (okuM as any).minterAllowance(minterAddr);
+  const maxSupply = await (okuM as any).maxSupply();
 
   logger.info(`Signer (allowanceManager): ${await signer.getAddress()}`);
   logger.info(`Minter:                    ${minterAddr}`);
@@ -78,11 +78,11 @@ async function main() {
     return;
   }
 
-  const tx = await (okuMoney as any).configureMinterAllowance(minterAddr, allowance);
+  const tx = await (okuM as any).configureMinterAllowance(minterAddr, allowance);
   const receipt = await tx.wait(1);
   logger.success(`configureMinterAllowance tx: ${receipt.hash}`);
 
-  const newAllowance = await (okuMoney as any).minterAllowance(minterAddr);
+  const newAllowance = await (okuM as any).minterAllowance(minterAddr);
   logger.success(`Confirmed new allowance: ${ethers.formatEther(newAllowance)} OkuM`);
 }
 

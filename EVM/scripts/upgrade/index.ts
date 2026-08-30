@@ -1,5 +1,5 @@
 /**
- * Generic Upgrade Script for OkuMoney EVM Contracts
+ * Generic Upgrade Script for OkuM EVM Contracts
  *
  * Upgrades the implementation behind one or more existing UUPS proxies to the
  * freshly-compiled source in `./src`. Works against:
@@ -8,16 +8,16 @@
  *   - A live network: uses the signer derived from PRIVATE_KEY. Aborts if the
  *     signer doesn't already hold the contract-specific upgrader role.
  *
- * v1 supports `LitePSM` and `OkuDollar`. Future targets are added by extending
+ * v1 supports `LitePSM` and `USDOku`. Future targets are added by extending
  * the UPGRADE_TARGETS table and adding a matching state reader in ./preState.ts.
  *
  * Usage:
  *
  *   # Fork rehearsal (terminal 1: `FORK_NETWORK=sepolia npm run node`)
- *   TARGETS=LitePSM,OkuDollar npx hardhat run scripts/upgrade/index.ts --network localhost
+ *   TARGETS=LitePSM,USDOku npx hardhat run scripts/upgrade/index.ts --network localhost
  *
  *   # Live network
- *   TARGETS=LitePSM,OkuDollar npx hardhat run scripts/upgrade/index.ts --network sepolia
+ *   TARGETS=LitePSM,USDOku npx hardhat run scripts/upgrade/index.ts --network sepolia
  *
  *   # Single target
  *   TARGETS=LitePSM npx hardhat run scripts/upgrade/index.ts --network base
@@ -88,9 +88,8 @@ interface UpgradeTarget {
 // on-chain; they can be upgraded by re-adding entries here when needed.
 const UPGRADE_TARGETS: Record<string, UpgradeTarget> = {
   // UUPS proxies — upgrade gated by the contract's own _authorizeUpgrade role.
-  OkuMoney:        { factory: "OkuMoney",        upgraderRole: ROLES.OKUM_UPGRADER },
-  OkuDollar:       { factory: "OkuDollar",       upgraderRole: ROLES.VAULT_UPGRADER },
-  RedemptionQueue: { factory: "RedemptionQueue", upgraderRole: ROLES.QUEUE_UPGRADER },
+  OkuM:        { factory: "OkuM",        upgraderRole: ROLES.OKUM_UPGRADER },
+  USDOku:       { factory: "USDOku",       upgraderRole: ROLES.VAULT_UPGRADER },
   LitePSM:         { factory: "LitePSM",         upgraderRole: ROLES.PSM_UPGRADER },
 };
 
@@ -567,7 +566,7 @@ async function ensureUpgraderRole(
   );
 
   // On a freshly-restarted fork, ROLES.DEFAULT_ADMIN_ROLE is held by whoever
-  // originally called `initialize`. For OkuMoney's role-grant policy that is
+  // originally called `initialize`. For OkuM's role-grant policy that is
   // also the dev wallet, so the same impersonated signer should be able to
   // self-grant. We still go through grantRole to keep this path generic in
   // case the admin diverges from the signer.
@@ -1111,7 +1110,7 @@ function parseTargets(): string[] {
   if (!raw) {
     throw new Error(
       `TARGETS env var not set. Specify one or more contracts to upgrade, e.g. ` +
-        `TARGETS=LitePSM,OkuDollar. Known targets: ${Object.keys(UPGRADE_TARGETS).join(", ")}.`
+        `TARGETS=LitePSM,USDOku. Known targets: ${Object.keys(UPGRADE_TARGETS).join(", ")}.`
     );
   }
   const list = Array.from(
@@ -1170,7 +1169,7 @@ async function main() {
   const targets = parseTargets();
 
   logger.header(
-    `OkuMoney Upgrade on ${chainConfig.name}${isFork ? " (LOCAL FORK)" : ""}`
+    `OkuM Upgrade on ${chainConfig.name}${isFork ? " (LOCAL FORK)" : ""}`
   );
   logger.info(`Network: ${networkName} (chainId: ${chainConfig.chainId})`);
   logger.info(`Address book key: ${bookKey}${isFork ? " (live key reused on fork)" : ""}`);

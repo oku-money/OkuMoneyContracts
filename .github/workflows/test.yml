@@ -43,33 +43,46 @@ jobs:
       - name: Run Forge tests
         run: forge test -vvv
 
-      - name: Run Forge coverage (line threshold = 95%)
+      - name: Run Forge coverage (95% per src/ file)
         run: |
-          # Exclude test mocks / harnesses from the coverage run itself.
-          forge coverage --no-match-coverage 'test/|script/' --report summary | tee coverage.txt
+          # The dependency patterns MUST be anchored. An unanchored 'lib/' also
+          # matches src/lib/, which silently drops ScaledUIAmountUpgradeable and
+          # MathLib from the gate - the entire ERC-8056 display layer unmeasured.
+          # node_modules/ stays unanchored because npm nests transitive copies.
+          # Without excluding them at all, the Total row measures OpenZeppelin's
+          # coverage rather than ours and the gate is meaningless.
+          forge coverage \
+            --no-match-coverage '^(test|script)/|node_modules/|^lib/' \
+            --report summary | tee coverage.txt
 
-          # Gate: every src/ file must have >= 95% line coverage, and the
-          # overall Total line must be >= 95%. Parses the rendered summary
-          # table. Awk-only — no jq/python needed in CI.
+          # Gate: every src/ file and the Total must be >= 95% line coverage.
+          # Awk-only - no jq/python needed in CI.
           awk -F'|' '
             /^\| (src\/|Total)/ {
-              # Strip leading/trailing whitespace from each field.
               for (i = 1; i <= NF; i++) {
                 gsub(/^[ \t]+|[ \t]+$/, "", $i)
               }
               file = $2
               lines = $3
-              # Extract the percentage (e.g. "98.43% (188/191)" -> 98.43).
               if (match(lines, /[0-9]+\.[0-9]+/)) {
                 pct = substr(lines, RSTART, RLENGTH) + 0
                 printf "  %-50s %s\n", file, lines
                 if (pct < 95.0) {
-                  printf "::error::%s line coverage %s is below 95%% threshold\n", file, lines
+                  printf "::error::%s line coverage %s is below the 95%% threshold\n", file, lines
                   failed = 1
                 }
+                seen++
               }
             }
-            END { exit failed }
+            END {
+              # A filter typo matching everything would produce an empty table and
+              # a silently passing gate. Six src/ files + Total.
+              if (seen < 7) {
+                printf "::error::coverage gate parsed only %d rows - check the --no-match-coverage filter\n", seen
+                exit 1
+              }
+              exit failed
+            }
           ' coverage.txt
 
       - name: Set up Node.js

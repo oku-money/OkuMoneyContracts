@@ -15,8 +15,8 @@ import { resolveNetworkContext } from "../utils/networkContext";
 import { logger } from "../utils/logger";
 
 const TARGETS: Record<string, string> = {
-  OkuMoney: "OkuMoney",
-  OkuDollar: "OkuDollar",
+  OkuM: "OkuM",
+  USDOku: "USDOku",
   RedemptionQueue: "RedemptionQueue",
   LitePSM: "LitePSM",
 };

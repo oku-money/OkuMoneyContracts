@@ -16,14 +16,14 @@
  *    2. mint                  MockUSDC -> psm.mintOkuM; assert OkuM delta.
  *    3. transfer              OkuM.transfer between deployer and a second
  *                             throwaway signer; assert balance moves.
- *    4. wrap                  okuMoney.approve + okuDollar.wrap(minShares=0).
- *    5. unwrap                okuDollar.unwrap; assert OkuM returned.
+ *    4. wrap                  okuM.approve + usdOku.wrap(minShares=0).
+ *    5. unwrap                usdOku.unwrap; assert OkuM returned.
  *    6. redeem                Operator depositBuffer (fork-only auto;
  *                             live: assumed already funded) + user redeem;
  *                             assert USDC delta.
- *    7. queueRedeem           Drain buffer to 0 -> redeem forces queue ->
- *                             refill -> processQueue drains -> queue empty.
- *    8. distributeYield       OkuMoney.distributeYield; assert multiplier
+ *    7. bufferBound           Drain buffer to 0 -> redeem must REVERT (there is
+ *                             no queue) -> refill.
+ *    8. setRate               OkuM.setOkuMRate; assert continuous accrual
  *                             bump and signer balance grows.
  *    9. pause                 psm.pause -> assert mint reverts -> unpause ->
  *                             assert mint succeeds.
@@ -70,6 +70,9 @@ const STEP = parseArg("step") ?? process.env.STEP;
 const YES_MAINNET = process.argv.includes("--yes-mainnet");
 const DRY_RUN = process.env.DRY_RUN === "true";
 
+/** 1e18 fixed-point base, mirroring Constants.PRECISION. */
+const PRECISION = 10n ** 18n;
+
 const DEFAULT_USDC_AMOUNT = process.env.USDC_AMOUNT ?? "100"; // 100 USDC (6 decimals)
 
 // ============================================================================
@@ -80,10 +83,9 @@ interface TestCtx {
   netCtx: NetworkContext;
   user: any; // signer (deployer/dev wallet)
   usdc: any;
-  okuMoney: any;
-  okuDollar: any;
+  okuM: any;
+  usdOku: any;
   litePSM: any;
-  queue: any;
   hasMockUsdc: boolean;
 }
 
@@ -94,7 +96,7 @@ async function setupCtx(): Promise<TestCtx> {
   );
   mainnetGuard(netCtx.networkName, { yesMainnet: YES_MAINNET, dryRun: DRY_RUN });
 
-  if (!hasAddress(netCtx.bookKey, "OkuMoney")) {
+  if (!hasAddress(netCtx.bookKey, "OkuM")) {
     throw new Error(
       `No deployment found under address book key "${netCtx.bookKey}".\n` +
         (netCtx.isFork
@@ -107,16 +109,14 @@ async function setupCtx(): Promise<TestCtx> {
   const usdcAddr = hasAddress(netCtx.bookKey, "MockUSDC")
     ? loadAddress(netCtx.bookKey, "MockUSDC")
     : loadAddress(netCtx.bookKey, "USDC");
-  const okuMoneyAddr = loadAddress(netCtx.bookKey, "OkuMoney");
-  const okuDollarAddr = loadAddress(netCtx.bookKey, "OkuDollar");
+  const okuMAddr = loadAddress(netCtx.bookKey, "OkuM");
+  const usdOkuAddr = loadAddress(netCtx.bookKey, "USDOku");
   const litePSMAddr = loadAddress(netCtx.bookKey, "LitePSM");
-  const queueAddr = loadAddress(netCtx.bookKey, "RedemptionQueue");
 
   logger.info(`USDC:            ${usdcAddr}`);
-  logger.info(`OkuMoney:        ${okuMoneyAddr}`);
-  logger.info(`OkuDollar:       ${okuDollarAddr}`);
+  logger.info(`OkuM:        ${okuMAddr}`);
+  logger.info(`USDOku:       ${usdOkuAddr}`);
   logger.info(`LitePSM:         ${litePSMAddr}`);
-  logger.info(`RedemptionQueue: ${queueAddr}`);
 
   const [user] = await ethers.getSigners();
   logger.info(`Signer: ${user.address}`);
@@ -130,37 +130,34 @@ async function setupCtx(): Promise<TestCtx> {
     ],
     usdcAddr
   );
-  const okuMoney = await getDeployedContract("OkuMoney", okuMoneyAddr);
-  const okuDollar = await getDeployedContract("OkuDollar", okuDollarAddr);
+  const okuM = await getDeployedContract("OkuM", okuMAddr);
+  const usdOku = await getDeployedContract("USDOku", usdOkuAddr);
   const litePSM = await getDeployedContract("LitePSM", litePSMAddr);
-  const queue = await getDeployedContract("RedemptionQueue", queueAddr);
 
   // Fork-only bootstrap (mirrors the old test-flow.ts behavior). On a fresh
   // fork, the deployer wallet may not have the OKUM_ALLOWANCE_MANAGER role
   // wired or the LitePSM minter allowance configured. Heal silently.
   if (netCtx.isFork) {
-    await healForkRoles(litePSM, okuMoney, queue);
+    await healForkRoles(litePSM, okuM);
   }
 
   return {
     netCtx,
     user,
     usdc,
-    okuMoney,
-    okuDollar,
+    okuM,
+    usdOku,
     litePSM,
-    queue,
     hasMockUsdc: hasAddress(netCtx.bookKey, "MockUSDC"),
   };
 }
 
 async function healForkRoles(
   litePSM: any,
-  okuMoney: any,
-  queue: any
+  okuM: any,
 ): Promise<void> {
   const litePSMAddr = await litePSM.getAddress();
-  const currentAllowance: bigint = await okuMoney.minterAllowance(litePSMAddr);
+  const currentAllowance: bigint = await okuM.minterAllowance(litePSMAddr);
   if (currentAllowance > 0n) {
     logger.info("Fork already has minter allowance configured; skipping heal.");
     return;
@@ -177,7 +174,7 @@ async function healForkRoles(
     value: ethers.parseEther("1"),
   });
   const deployer = await ethers.getSigner(DEV_WALLET_ADDRESS);
-  const okuMAsDep = okuMoney.connect(deployer);
+  const okuMAsDep = okuM.connect(deployer);
 
   if (!(await okuMAsDep.hasRole(ROLES.OKUM_ALLOWANCE_MANAGER, DEV_WALLET_ADDRESS))) {
     await waitForTx(
@@ -190,11 +187,6 @@ async function healForkRoles(
   await waitForTx(
     await okuMAsDep.configureMinterAllowance(litePSMAddr, billion),
     "configureMinterAllowance(LitePSM, 1B)"
-  );
-  const queueAddr = await queue.getAddress();
-  await waitForTx(
-    await okuMAsDep.configureMinterAllowance(queueAddr, billion),
-    "configureMinterAllowance(RedemptionQueue, 1B)"
   );
 
   await hhNetwork.provider.request({
@@ -221,7 +213,7 @@ async function ensureUsdc(ctx: TestCtx, amount: bigint): Promise<void> {
 }
 
 async function ensureRole(ctx: TestCtx, role: string, label: string) {
-  const has: boolean = await ctx.okuMoney.hasRole(role, ctx.user.address);
+  const has: boolean = await ctx.okuM.hasRole(role, ctx.user.address);
   if (has) return;
   if (!ctx.netCtx.isFork) {
     throw new Error(
@@ -239,8 +231,35 @@ async function ensureRole(ctx: TestCtx, role: string, label: string) {
   await funder.sendTransaction({ to: DEV_WALLET_ADDRESS, value: ethers.parseEther("0.5") });
   const admin = await ethers.getSigner(DEV_WALLET_ADDRESS);
   await waitForTx(
-    await (ctx.okuMoney.connect(admin) as any).grantRole(role, ctx.user.address),
+    await (ctx.okuM.connect(admin) as any).grantRole(role, ctx.user.address),
     `grantRole(${label}, signer)`
+  );
+  await hhNetwork.provider.request({
+    method: "hardhat_stopImpersonatingAccount",
+    params: [DEV_WALLET_ADDRESS],
+  });
+}
+
+async function ensureOkuMRole(ctx: TestCtx, role: string, label: string) {
+  const has: boolean = await ctx.okuM.hasRole(role, ctx.user.address);
+  if (has) return;
+  if (!ctx.netCtx.isFork) {
+    throw new Error(
+      `Signer ${ctx.user.address} is missing role ${label} (${role}) on OkuM ` +
+        `on live ${ctx.netCtx.networkName}. Grant via grantRoles.ts.`
+    );
+  }
+  logger.warning(`Granting OkuM ${label} on fork via impersonation.`);
+  await hhNetwork.provider.request({
+    method: "hardhat_impersonateAccount",
+    params: [DEV_WALLET_ADDRESS],
+  });
+  const [funder] = await ethers.getSigners();
+  await funder.sendTransaction({ to: DEV_WALLET_ADDRESS, value: ethers.parseEther("0.5") });
+  const admin = await ethers.getSigner(DEV_WALLET_ADDRESS);
+  await waitForTx(
+    await (ctx.okuM.connect(admin) as any).grantRole(role, ctx.user.address),
+    `OkuM.grantRole(${label}, signer)`
   );
   await hhNetwork.provider.request({
     method: "hardhat_stopImpersonatingAccount",
@@ -279,42 +298,59 @@ async function ensurePsmRole(ctx: TestCtx, role: string, label: string) {
 // Step implementations
 // ============================================================================
 
+async function stepOpenWindow(ctx: TestCtx) {
+  logger.section("Step 0: open the conversion window");
+
+  // The PSM deploys with both windows CLOSED so the first rate segment can be
+  // published before anyone trades against the default 1.0 multiplier. Opening it
+  // is a deliberate, separate operator action.
+  await ensurePsmRole(ctx, ROLES.PSM_GATEKEEPER, "PSM_GATEKEEPER");
+
+  const open: boolean = await ctx.litePSM.conversionsOpen();
+  if (open) {
+    logger.info("  window already open");
+    return;
+  }
+  await waitForTx(await ctx.litePSM.openWindow(), "psm.openWindow()");
+  const nowOpen: boolean = await ctx.litePSM.conversionsOpen();
+  if (!nowOpen) throw new Error("window failed to open");
+  logger.success("  conversion window open");
+}
+
 async function stepState(ctx: TestCtx) {
   logger.section("Step 1: state");
 
-  const okuMSupply: bigint = await ctx.okuMoney.totalSupply();
-  const okuMMaxSupply: bigint = await ctx.okuMoney.maxSupply();
+  const okuMSupply: bigint = await ctx.okuM.totalSupply();
+  const okuMMaxSupply: bigint = await ctx.okuM.maxSupply();
   const psmAddr = await ctx.litePSM.getAddress();
-  const psmAllowance: bigint = await ctx.okuMoney.minterAllowance(psmAddr);
-  const multiplier: bigint = await ctx.okuMoney.okuMMultiplier();
-  const okuMPaused: boolean = await ctx.okuMoney.paused();
+  const psmAllowance: bigint = await ctx.okuM.minterAllowance(psmAddr);
+  const multiplier: bigint = await ctx.okuM.uiMultiplier();
+  const okuMPaused: boolean = await ctx.okuM.paused();
 
-  const usdoSupply: bigint = await ctx.okuDollar.totalSupply();
-  const usdoPaused: boolean = await ctx.okuDollar.paused();
+  const usdoSupply: bigint = await ctx.usdOku.totalSupply();
+  const usdoPaused: boolean = await ctx.usdOku.paused();
 
   const psmUsdcBuf: bigint = await ctx.usdc.balanceOf(psmAddr);
   const psmPaused: boolean = await ctx.litePSM.paused();
 
-  const qHead: bigint = await ctx.queue.queueHead();
-  const qTail: bigint = await ctx.queue.queueTail();
-  const qPending: bigint = qTail - qHead;
-  const totalQueuedOkuM: bigint = await ctx.queue.totalQueuedOkuM();
+  const mintOpen: boolean = await ctx.litePSM.mintEnabled();
+  const redeemOpen: boolean = await ctx.litePSM.redeemEnabled();
+  const available: bigint = await ctx.litePSM.availableToRedeem();
 
-  logger.info(`OkuMoney:`);
+  logger.info(`OkuM:`);
   logger.info(`  totalSupply: ${ethers.formatUnits(okuMSupply, 18)}`);
   logger.info(`  maxSupply:   ${ethers.formatUnits(okuMMaxSupply, 18)}`);
   logger.info(`  multiplier:  ${multiplier}`);
   logger.info(`  paused:      ${okuMPaused}`);
   logger.info(`  PSM allowance: ${ethers.formatUnits(psmAllowance, 18)}`);
-  logger.info(`OkuDollar:`);
+  logger.info(`USDOku:`);
   logger.info(`  totalSupply: ${ethers.formatUnits(usdoSupply, 18)}`);
   logger.info(`  paused:      ${usdoPaused}`);
   logger.info(`LitePSM:`);
   logger.info(`  USDC buffer:   ${ethers.formatUnits(psmUsdcBuf, 6)}`);
   logger.info(`  paused:        ${psmPaused}`);
-  logger.info(`RedemptionQueue:`);
-  logger.info(`  head/tail/pending: ${qHead} / ${qTail} / ${qPending}`);
-  logger.info(`  totalQueuedOkuM:   ${ethers.formatUnits(totalQueuedOkuM, 18)}`);
+  logger.info(`  mint / redeem: ${mintOpen} / ${redeemOpen}`);
+  logger.info(`  availableToRedeem: ${ethers.formatUnits(available, 6)} USDC`);
 }
 
 async function stepMint(ctx: TestCtx): Promise<bigint> {
@@ -323,12 +359,15 @@ async function stepMint(ctx: TestCtx): Promise<bigint> {
   await ensureUsdc(ctx, usdcAmount);
 
   const psmAddr = await ctx.litePSM.getAddress();
-  const okuMBefore: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  const okuMBefore: bigint = await ctx.okuM.balanceOf(ctx.user.address);
 
   await waitForTx(await ctx.usdc.approve(psmAddr, usdcAmount), "usdc.approve(LitePSM)");
-  await waitForTx(await ctx.litePSM.mintOkuM(usdcAmount), `LitePSM.mintOkuM(${DEFAULT_USDC_AMOUNT})`);
+  await waitForTx(
+    await ctx.litePSM.mintOkuM(usdcAmount, 0n),
+    `LitePSM.mintOkuM(${DEFAULT_USDC_AMOUNT}, minOut=0)`
+  );
 
-  const okuMAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  const okuMAfter: bigint = await ctx.okuM.balanceOf(ctx.user.address);
   const minted = okuMAfter - okuMBefore;
   logger.success(`Minted ${ethers.formatUnits(minted, 18)} OkuM`);
   if (minted === 0n) throw new Error("mint produced zero OkuM");
@@ -341,13 +380,13 @@ async function stepTransfer(ctx: TestCtx) {
   // mnemonic). Live testnets only — never used as a custody account.
   const recipient = ethers.Wallet.createRandom().address;
   // Poll for non-zero balance — BSC testnet RPCs can lag a block after mint.
-  let balBefore: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  let balBefore: bigint = await ctx.okuM.balanceOf(ctx.user.address);
   if (balBefore === 0n) {
     logger.info("Waiting for OkuM balance to propagate...");
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 2000));
-      balBefore = await ctx.okuMoney.balanceOf(ctx.user.address);
+      balBefore = await ctx.okuM.balanceOf(ctx.user.address);
       if (balBefore > 0n) break;
     }
   }
@@ -358,11 +397,11 @@ async function stepTransfer(ctx: TestCtx) {
   if (amt === 0n) throw new Error("Transfer amount rounded to zero");
 
   await waitForTx(
-    await ctx.okuMoney.transfer(recipient, amt),
-    `okuMoney.transfer(${ethers.formatUnits(amt, 18)} OkuM -> ${recipient})`
+    await ctx.okuM.transfer(recipient, amt),
+    `okuM.transfer(${ethers.formatUnits(amt, 18)} OkuM -> ${recipient})`
   );
-  const recipBal: bigint = await ctx.okuMoney.balanceOf(recipient);
-  const balAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  const recipBal: bigint = await ctx.okuM.balanceOf(recipient);
+  const balAfter: bigint = await ctx.okuM.balanceOf(ctx.user.address);
   logger.info(`Recipient OkuM:  ${ethers.formatUnits(recipBal, 18)}`);
   logger.info(`Signer OkuM:     ${ethers.formatUnits(balAfter, 18)} (delta -${ethers.formatUnits(balBefore - balAfter, 18)})`);
   // Allow ±1 wei drift from rebase math (multiplier rounding).
@@ -372,29 +411,29 @@ async function stepTransfer(ctx: TestCtx) {
 
 async function stepWrap(ctx: TestCtx): Promise<bigint> {
   logger.section("Step 4: wrap");
-  const okuMBal: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  const okuMBal: bigint = await ctx.okuM.balanceOf(ctx.user.address);
   if (okuMBal === 0n) throw new Error("No OkuM to wrap; run mint first.");
   const half = okuMBal / 2n;
 
-  const okuDollarAddr = await ctx.okuDollar.getAddress();
-  const usdoBefore: bigint = await ctx.okuDollar.balanceOf(ctx.user.address);
+  const usdOkuAddr = await ctx.usdOku.getAddress();
+  const usdoBefore: bigint = await ctx.usdOku.balanceOf(ctx.user.address);
 
-  await waitForTx(await ctx.okuMoney.approve(okuDollarAddr, half), "okuMoney.approve(OkuDollar)");
+  await waitForTx(await ctx.okuM.approve(usdOkuAddr, half), "okuM.approve(USDOku)");
   // BSC RPCs can lag — poll until the allowance is visible before calling wrap.
   {
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
-      const allowance: bigint = await ctx.okuMoney.allowance(ctx.user.address, okuDollarAddr);
+      const allowance: bigint = await ctx.okuM.allowance(ctx.user.address, usdOkuAddr);
       if (allowance >= half) break;
       await new Promise((r) => setTimeout(r, 2000));
     }
   }
   await waitForTx(
-    await ctx.okuDollar.wrap(half, ctx.user.address, 0n),
-    `okuDollar.wrap(${ethers.formatUnits(half, 18)} OkuM)`
+    await ctx.usdOku.wrap(half, ctx.user.address, 0n),
+    `usdOku.wrap(${ethers.formatUnits(half, 18)} OkuM)`
   );
 
-  const usdoAfter: bigint = await ctx.okuDollar.balanceOf(ctx.user.address);
+  const usdoAfter: bigint = await ctx.usdOku.balanceOf(ctx.user.address);
   const minted = usdoAfter - usdoBefore;
   logger.success(`Received ${ethers.formatUnits(minted, 18)} usdOku`);
   if (minted === 0n) throw new Error("wrap produced zero usdOku");
@@ -403,20 +442,20 @@ async function stepWrap(ctx: TestCtx): Promise<bigint> {
 
 async function stepUnwrap(ctx: TestCtx): Promise<bigint> {
   logger.section("Step 5: unwrap");
-  const usdoBal: bigint = await ctx.okuDollar.balanceOf(ctx.user.address);
+  const usdoBal: bigint = await ctx.usdOku.balanceOf(ctx.user.address);
   if (usdoBal === 0n) throw new Error("No usdOku to unwrap; run wrap first.");
   const half = usdoBal / 2n;
 
-  const okuMBefore: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  const okuMBefore: bigint = await ctx.okuM.balanceOf(ctx.user.address);
   await waitForTx(
-    await ctx.okuDollar.unwrap(half, ctx.user.address),
-    `okuDollar.unwrap(${ethers.formatUnits(half, 18)} usdOku)`
+    await ctx.usdOku.unwrap(half, ctx.user.address),
+    `usdOku.unwrap(${ethers.formatUnits(half, 18)} usdOku)`
   );
   // Poll for balance change — load-balanced RPCs can return stale reads.
   let returned = 0n;
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    const okuMAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+    const okuMAfter: bigint = await ctx.okuM.balanceOf(ctx.user.address);
     returned = okuMAfter - okuMBefore;
     if (returned > 0n) break;
     await new Promise((r) => setTimeout(r, 1000));
@@ -446,23 +485,23 @@ async function ensureBufferFunded(ctx: TestCtx, minBuffer: bigint) {
 
 async function stepRedeem(ctx: TestCtx) {
   logger.section("Step 6: redeem (buffered, instant)");
-  const okuMBal: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  const okuMBal: bigint = await ctx.okuM.balanceOf(ctx.user.address);
   if (okuMBal === 0n) throw new Error("No OkuM to redeem; run mint first.");
   const amt = okuMBal / 4n;
   if (amt === 0n) throw new Error("Redeem amount rounded to zero");
 
   // Make sure the buffer can cover the redeem to take the instant path.
   // Conservative: deposit twice the USDC equivalent of `amt` so we stay
-  // off the queue path even with multiplier drift.
-  const usdcEquiv = (amt * (await ctx.okuMoney.okuMMultiplier())) / 10n ** 30n; // 18 + 12 = 30
+  // clear of the buffer bound even with multiplier drift.
+  const usdcEquiv = (amt * (await ctx.okuM.uiMultiplier())) / 10n ** 30n; // 18 + 12 = 30
   await ensureBufferFunded(ctx, usdcEquiv * 2n);
 
   const psmAddr = await ctx.litePSM.getAddress();
   const usdcBefore: bigint = await ctx.usdc.balanceOf(ctx.user.address);
-  await waitForTx(await ctx.okuMoney.approve(psmAddr, amt), "okuMoney.approve(LitePSM)");
+  await waitForTx(await ctx.okuM.approve(psmAddr, amt), "okuM.approve(LitePSM)");
   await waitForTx(
-    await ctx.litePSM.redeemOkuM(amt),
-    `LitePSM.redeemOkuM(${ethers.formatUnits(amt, 18)} OkuM)`
+    await ctx.litePSM.redeemOkuM(amt, 0n),
+    `LitePSM.redeemOkuM(${ethers.formatUnits(amt, 18)} OkuM, minOut=0)`
   );
   // Some public RPCs (e.g. baseSepolia) lag a block or two before tx state
   // is visible to subsequent reads. Poll the USDC balance until it changes
@@ -474,7 +513,7 @@ async function stepRedeem(ctx: TestCtx) {
     /* maxMs */ 30_000
   );
   logger.success(`Received ${ethers.formatUnits(received, 6)} USDC`);
-  if (received === 0n) throw new Error("redeem returned zero USDC (likely queued — buffer too low?)");
+  if (received === 0n) throw new Error("redeem returned zero USDC");
 }
 
 /**
@@ -496,134 +535,113 @@ async function pollBalanceDelta(
   return (await read()) - baseline;
 }
 
-async function stepQueueRedeem(ctx: TestCtx) {
-  logger.section("Step 7: queueRedeem (force queue + processQueue drain)");
+async function stepBufferBound(ctx: TestCtx) {
+  logger.section("Step 7: buffer bound (redemption reverts, never queues)");
 
-  await ensurePsmRole(ctx, ROLES.PSM_BUFFER_DEPOSITOR, "PSM_BUFFER_DEPOSITOR");
   await ensurePsmRole(ctx, ROLES.PSM_BUFFER_WITHDRAWER, "PSM_BUFFER_WITHDRAWER");
-  await ensurePsmRole(ctx, ROLES.PSM_QUEUE_PROCESSOR, "PSM_QUEUE_PROCESSOR");
+  await ensurePsmRole(ctx, ROLES.PSM_BUFFER_DEPOSITOR, "PSM_BUFFER_DEPOSITOR");
 
+  // Drain the buffer, then confirm a redemption fails LOUDLY rather than entering
+  // any pending state. There is no queue: the permissionless window is bounded on
+  // purpose, and an exhausted window is instant-or-nothing.
   const psmAddr = await ctx.litePSM.getAddress();
-
-  // We need (a) some OkuM on the signer to redeem and (b) the PSM USDC
-  // buffer to be empty when we call `redeemOkuM`. Order of operations:
-  //   1. If signer holds < 1 OkuM, mint 1 OkuM first (this puts 1 USDC into
-  //      the buffer as a side effect).
-  //   2. Drain the entire buffer via `withdrawUsdc` so it sits at 0.
-  //   3. Call `redeemOkuM(1 OkuM)` — the buffer is empty so the program
-  //      escrows the OkuM and pushes a queue entry.
-  const queueRedeemAmt = ethers.parseUnits("1", 18);
-  let signerOkuM: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
-  if (signerOkuM < queueRedeemAmt) {
-    const seedUsdc = ethers.parseUnits("1", 6);
-    await ensureUsdc(ctx, seedUsdc);
+  const buffer: bigint = await ctx.usdc.balanceOf(psmAddr);
+  if (buffer > 0n) {
     await waitForTx(
-      await ctx.usdc.approve(psmAddr, seedUsdc),
-      "usdc.approve(LitePSM) [queue seed]"
-    );
-    await waitForTx(
-      await ctx.litePSM.mintOkuM(seedUsdc),
-      "LitePSM.mintOkuM (queue seed)"
+      await ctx.litePSM.withdrawBuffer(ctx.user.address, buffer),
+      `psm.withdrawBuffer(${ethers.formatUnits(buffer, 6)} USDC)`
     );
   }
 
-  // Drain the buffer to zero — must happen AFTER any seeding mint that
-  // would re-fill it.
-  const buf: bigint = await ctx.usdc.balanceOf(psmAddr);
-  if (buf > 0n) {
-    await waitForTx(
-      await ctx.litePSM.withdrawUsdc(ctx.user.address, buf),
-      `LitePSM.withdrawUsdc(${ethers.formatUnits(buf, 6)} USDC)`
-    );
-  }
-
-  // Redeem with empty buffer -> queue path.
-  await waitForTx(
-    await ctx.okuMoney.approve(psmAddr, queueRedeemAmt),
-    "okuMoney.approve(LitePSM) [queue]"
-  );
-  await waitForTx(
-    await ctx.litePSM.redeemOkuM(queueRedeemAmt),
-    "LitePSM.redeemOkuM (queue path)"
-  );
-
-  const qTail: bigint = await ctx.queue.queueTail();
-  const qHead: bigint = await ctx.queue.queueHead();
-  const qPending: bigint = qTail - qHead;
-  if (qPending === 0n) {
-    logger.warning(
-      "Queue did not grow after empty-buffer redeem — possible that " +
-        "withdrawUsdc was blocked by an existing pending obligation. Skipping drain."
-    );
+  const okuMBal: bigint = await ctx.okuM.balanceOf(ctx.user.address);
+  if (okuMBal === 0n) {
+    logger.warning("  no OkuM held; skipping the revert assertion");
     return;
   }
-  logger.info(`Queue pending after forced redeem: ${qPending}`);
 
-  // Refill the buffer with exactly the queued USDC obligation + a small margin.
-  const obligation: bigint = await ctx.queue.totalQueuedUsdc();
-  const refill = obligation + ethers.parseUnits("0.1", 6);
-  await ensureUsdc(ctx, refill);
-  await waitForTx(await ctx.usdc.approve(psmAddr, refill), "usdc.approve(LitePSM) [refill]");
   await waitForTx(
-    await ctx.litePSM.depositBuffer(refill),
-    `LitePSM.depositBuffer(${ethers.formatUnits(refill, 6)} USDC)`
+    await ctx.okuM.approve(psmAddr, okuMBal),
+    `okuM.approve(psm, ${ethers.formatUnits(okuMBal, 18)})`
   );
 
-  // Drain via processQueue. processQueue's `approveAmount` arg is the USDC
-  // the PSM grants the queue for paying out — set to current PSM balance.
-  const head: bigint = await ctx.queue.queueHead();
-  const tail: bigint = await ctx.queue.queueTail();
-  const bufNow: bigint = await ctx.usdc.balanceOf(psmAddr);
-  await waitForTx(
-    await ctx.litePSM.processQueue(head, tail, bufNow),
-    `LitePSM.processQueue(${head}, ${tail}, ${ethers.formatUnits(bufNow, 6)} USDC)`
-  );
+  let reverted = false;
+  try {
+    await ctx.litePSM.redeemOkuM.staticCall(okuMBal, 0);
+  } catch (err: any) {
+    reverted = true;
+    logger.success(`  redeem correctly reverted: ${String(err.message).slice(0, 90)}`);
+  }
+  if (!reverted) throw new Error("redeem should have reverted on an empty buffer");
 
-  // processQueue clears entries (sets user=address(0)) but does NOT
-  // auto-advance queueHead. Call advanceHead to move it past cleared slots.
+  // Refill so later steps have liquidity.
   await waitForTx(
-    await ctx.queue.advanceHead(tail - head),
-    `queue.advanceHead(${tail - head})`
+    await ctx.usdc.approve(psmAddr, buffer),
+    `usdc.approve(psm, ${ethers.formatUnits(buffer, 6)})`
   );
-
-  const tailFinal: bigint = await ctx.queue.queueTail();
-  const headFinal: bigint = await ctx.queue.queueHead();
-  const remaining: bigint = tailFinal - headFinal;
-  if (remaining !== 0n) throw new Error(`Queue did not fully drain (remaining=${remaining})`);
-  logger.success("Queue drained to empty");
+  await waitForTx(
+    await ctx.litePSM.depositBuffer(buffer),
+    `psm.depositBuffer(${ethers.formatUnits(buffer, 6)} USDC)`
+  );
 }
 
-async function stepDistributeYield(ctx: TestCtx) {
-  logger.section("Step 8: distributeYield");
-  const supply: bigint = await ctx.okuMoney.totalSupply();
-  if (supply === 0n) throw new Error("Total supply is zero; cannot distribute yield");
+async function stepSetRate(ctx: TestCtx) {
+  logger.section("Step 8: setOkuMRate (closed-window rule + continuous accrual)");
 
-  await ensureRole(ctx, ROLES.OKUM_REBASER, "OKUM_REBASER");
+  await ensureOkuMRole(ctx, ROLES.OKUM_RATE_SETTER, "OKUM_RATE_SETTER");
+  await ensurePsmRole(ctx, ROLES.PSM_GATEKEEPER, "PSM_GATEKEEPER");
 
-  const mBefore: bigint = await ctx.okuMoney.okuMMultiplier();
-  const balBefore: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  const mBefore: bigint = await ctx.okuM.uiMultiplier();
+  logger.info(`  uiMultiplier before: ${ethers.formatUnits(mBefore, 18)}`);
 
-  // Pick a yield amount that produces a measurable per-token bump but stays
-  // well below MAX_MULTIPLIER (1e30 wei equivalent). A 0.01% yield on
-  // current supply is plenty.
-  const yieldAmount = supply / 10000n; // 1 bps
-  if (yieldAmount === 0n) throw new Error("Computed yield amount rounded to zero");
+  // The window must be shut to publish. Prove the rule is live before satisfying it.
+  const openBefore: boolean = await ctx.litePSM.conversionsOpen();
+  if (openBefore) {
+    let refused = false;
+    try {
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      await ctx.okuM.setOkuMRate.staticCall(mBefore, PRECISION, now, now + 3600n, 0);
+    } catch {
+      refused = true;
+    }
+    if (!refused) throw new Error("setOkuMRate should be refused while the window is open");
+    logger.success("  rate publication correctly refused while the window was open");
+
+    await waitForTx(await ctx.litePSM.closeWindow(), "psm.closeWindow()");
+  }
+
+  // 5% nominal APR over 30 days, anchored to absolute wall-clock time so the same
+  // parameters produce the same multiplier on every chain.
+  const block = await ethers.provider.getBlock("latest");
+  const start = BigInt(block!.timestamp);
+  const end = start + 30n * 86400n;
+  const rate = PRECISION + (PRECISION * 500n) / 10_000n / 31_536_000n;
 
   await waitForTx(
-    await ctx.okuMoney.distributeYield(yieldAmount),
-    `okuMoney.distributeYield(${ethers.formatUnits(yieldAmount, 18)})`
+    await ctx.okuM.setOkuMRate(mBefore, rate, start, end, 0),
+    `okuM.setOkuMRate(rate=5% APR, window=30d)`
   );
 
-  const mAfter: bigint = await ctx.okuMoney.okuMMultiplier();
-  const balAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
-  logger.info(`Multiplier: ${mBefore} -> ${mAfter} (+${mAfter - mBefore})`);
-  logger.info(
-    `Signer balance: ${ethers.formatUnits(balBefore, 18)} -> ` +
-      `${ethers.formatUnits(balAfter, 18)} (+${ethers.formatUnits(balAfter - balBefore, 18)})`
-  );
-  if (mAfter <= mBefore) throw new Error("distributeYield did not bump multiplier");
+  await waitForTx(await ctx.litePSM.openWindow(), "psm.openWindow()");
+
+  // Advance time and confirm the multiplier moved CONTINUOUSLY rather than stepping.
+  await ethers.provider.send("evm_increaseTime", [86400]);
+  await ethers.provider.send("evm_mine", []);
+
+  const mAfter: bigint = await ctx.okuM.uiMultiplier();
+  logger.info(`  uiMultiplier after 1 day: ${ethers.formatUnits(mAfter, 18)}`);
+  if (mAfter <= mBefore) throw new Error("multiplier did not accrue");
+
+  const projected: bigint = await ctx.okuM.indexAt(end);
+  logger.info(`  projected at rateEnd:     ${ethers.formatUnits(projected, 18)}`);
+  if (projected <= mAfter) throw new Error("projection should exceed the live value mid-segment");
+
+  // Flatline past rateEnd: a missed renewal freezes yield rather than compounding on.
+  const wayPast: bigint = await ctx.okuM.indexAt(end + 365n * 86400n);
+  if (wayPast !== projected) throw new Error("accrual did not flatline past rateEnd");
+  logger.success("  accrual flatlines past rateEnd as designed");
 }
 
+/** Poll a chain read until it satisfies `predicate`, or time out. */
 async function pollUntil<T>(
   read: () => Promise<T>,
   predicate: (v: T) => boolean,
@@ -697,7 +715,7 @@ async function stepConfigureMinterAllowance(ctx: TestCtx) {
   await ensureRole(ctx, ROLES.OKUM_ALLOWANCE_MANAGER, "OKUM_ALLOWANCE_MANAGER");
 
   const psmAddr = await ctx.litePSM.getAddress();
-  const before: bigint = await ctx.okuMoney.minterAllowance(psmAddr);
+  const before: bigint = await ctx.okuM.minterAllowance(psmAddr);
   const halved = before / 2n;
   if (halved === 0n) {
     logger.warning(`Current allowance is ${before}; cannot halve below 1. Skipping rotation.`);
@@ -705,21 +723,21 @@ async function stepConfigureMinterAllowance(ctx: TestCtx) {
   }
 
   await waitForTx(
-    await ctx.okuMoney.configureMinterAllowance(psmAddr, halved),
+    await ctx.okuM.configureMinterAllowance(psmAddr, halved),
     `configureMinterAllowance(LitePSM, ${ethers.formatUnits(halved, 18)})`
   );
   await pollUntil<bigint>(
-    () => ctx.okuMoney.minterAllowance(psmAddr),
+    () => ctx.okuM.minterAllowance(psmAddr),
     (v) => v === halved,
     30_000,
     "allowance halved"
   );
   await waitForTx(
-    await ctx.okuMoney.configureMinterAllowance(psmAddr, before),
+    await ctx.okuM.configureMinterAllowance(psmAddr, before),
     `configureMinterAllowance(LitePSM, ${ethers.formatUnits(before, 18)}) [restore]`
   );
   await pollUntil<bigint>(
-    () => ctx.okuMoney.minterAllowance(psmAddr),
+    () => ctx.okuM.minterAllowance(psmAddr),
     (v) => v === before,
     30_000,
     "allowance restored"
@@ -732,27 +750,29 @@ async function stepConfigureMinterAllowance(ctx: TestCtx) {
 // ============================================================================
 
 const STEPS: Record<string, (ctx: TestCtx) => Promise<unknown>> = {
+  openWindow: stepOpenWindow,
   state: stepState,
   mint: stepMint,
   transfer: stepTransfer,
   wrap: stepWrap,
   unwrap: stepUnwrap,
   redeem: stepRedeem,
-  queueRedeem: stepQueueRedeem,
-  distributeYield: stepDistributeYield,
+  bufferBound: stepBufferBound,
+  setRate: stepSetRate,
   pause: stepPause,
   configureMinterAllowance: stepConfigureMinterAllowance,
 };
 
 const STEP_ORDER = [
+  "openWindow",
   "state",
   "mint",
   "transfer",
   "wrap",
   "unwrap",
   "redeem",
-  "queueRedeem",
-  "distributeYield",
+  "bufferBound",
+  "setRate",
   "pause",
   "configureMinterAllowance",
 ];

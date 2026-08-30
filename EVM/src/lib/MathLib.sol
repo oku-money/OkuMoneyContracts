@@ -7,26 +7,34 @@ import {Constants} from "./Constants.sol";
 
 /**
  * @title MathLib
- * @notice Shared math utilities for OkuMoney contracts
- * @dev See Constants.sol for terminology legend.
+ * @notice Shared math utilities for the Oku Money suite.
+ * @dev See Constants.sol for the terminology legend.
  *
- *      ROUNDING POLICY: All conversion functions use OpenZeppelin
- *      `Math.mulDiv` for full-precision 512-bit intermediate computation and
- *      explicit `Math.Rounding` semantics. Floor is the default direction;
- *      the only Ceil site in the protocol is `OkuDollar.unwrap`'s
- *      `sharesToBurn` computation, which favors the vault on user
- *      withdrawals (ERC-4626 convention). `rpow` retains MakerDAO's
- *      half-up assembly rounding because it has no direct `mulDiv`
- *      equivalent.
+ *      ROUNDING POLICY: every conversion uses OpenZeppelin `Math.mulDiv` for
+ *      full-precision 512-bit intermediates with explicit `Math.Rounding`. Floor is
+ *      the default direction, so truncation always favours the protocol. The only
+ *      Ceil site is `USDOku.unwrap`'s `sharesToBurn`, which favours the vault on
+ *      withdrawal (ERC-4626 convention) and is what makes liability fall at least as
+ *      fast as backing. `rpow` retains MakerDAO's half-up assembly rounding — it has
+ *      no direct `mulDiv` equivalent.
+ *
+ *      NOTE ON NAMING: `toUIAmount`/`fromUIAmount` are the canonical names for the
+ *      OkuM <-> dollar conversion. They were previously `okuMToDollars` /
+ *      `dollarsToOkuM`. These are the SAME operation: an OkuM amount's dollar value
+ *      IS its ERC-8056 UI amount, because `uiMultiplier()` is the redemption price.
+ *      Keeping one name for one operation is what stops a display price and a
+ *      settlement price drifting apart.
  */
 library MathLib {
     /**
      * @notice Raise x to the power of n, modulo base b (exponentiation by squaring)
      * @dev Adapted verbatim from MakerDAO's `rpow` — battle-tested since 2017.
      *      Taken from https://github.com/makerdao/dss/blob/master/src/pot.sol
-     *      Used by OkuDollar for continuous yield accrual via usdMultiplier().
-     *      OkuMoney updates its multiplier discretely (setOkuMMultiplier /
-     *      distributeYield) and does NOT use rpow.
+     *      Used by BOTH tokens for continuous accrual: OkuM's `uiMultiplier()`
+     *      (rear-facing) and USDOku's `usdOkuIndex()` (forward-looking) are each
+     *      `base * rpow(rate, elapsed) / PRECISION`. Determinism matters here beyond
+     *      the usual: it is what lets ten chains compute an identical multiplier from
+     *      identical segment parameters.
      * @param x Base value (typically ratePerSecond, scaled by PRECISION)
      * @param n Exponent (typically elapsed seconds)
      * @param b Precision base (typically 1e18)
@@ -66,37 +74,26 @@ library MathLib {
     }
 
     /**
-     * @notice Convert OkuMoney token amount to dollar value
-     * @param okuMAmount Amount of OkuMoney tokens
-     * @param okuMMultiplier Current OkuMoney multiplier (dollar value per token, scaled by PRECISION)
-     * @return Dollar value in 18 decimals
+     * @notice Raw OkuM -> its dollar (ERC-8056 UI) value. Floors.
+     * @param rawAmount Raw OkuM token count (18dp).
+     * @param multiplier `M_oku` — dollars per OkuM, PRECISION-scaled.
+     * @return Dollar value, 18dp.
      */
-    function okuMToDollars(
-        uint256 okuMAmount,
-        uint256 okuMMultiplier
-    )
-        internal
-        pure
-        returns (uint256)
-    {
-        return Math.mulDiv(okuMAmount, okuMMultiplier, Constants.PRECISION, Math.Rounding.Floor);
+    function toUIAmount(uint256 rawAmount, uint256 multiplier) internal pure returns (uint256) {
+        return Math.mulDiv(rawAmount, multiplier, Constants.PRECISION, Math.Rounding.Floor);
     }
 
     /**
-     * @notice Convert dollar value to OkuMoney token amount
-     * @param dollarValue Dollar value in 18 decimals
-     * @param okuMMultiplier Current OkuMoney multiplier (dollar value per token, scaled by PRECISION)
-     * @return Amount of OkuMoney tokens
+     * @notice Dollar (ERC-8056 UI) value -> raw OkuM. Floors.
+     * @dev NOT an exact inverse of {toUIAmount}: `fromUIAmount(toUIAmount(x))` is
+     *      `x - 1` for most `x`. Never round-trip a max-send through this pair —
+     *      compute the transfer from the raw balance. See DISPLAY_CONVENTION.md.
+     * @param uiAmount Dollar value, 18dp.
+     * @param multiplier `M_oku` — dollars per OkuM, PRECISION-scaled.
+     * @return Raw OkuM token count.
      */
-    function dollarsToOkuM(
-        uint256 dollarValue,
-        uint256 okuMMultiplier
-    )
-        internal
-        pure
-        returns (uint256)
-    {
-        return Math.mulDiv(dollarValue, Constants.PRECISION, okuMMultiplier, Math.Rounding.Floor);
+    function fromUIAmount(uint256 uiAmount, uint256 multiplier) internal pure returns (uint256) {
+        return Math.mulDiv(uiAmount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
     }
 
     /**
@@ -136,49 +133,52 @@ library MathLib {
     }
 
     /**
-     * @notice Compute the OkuDollar share count produced by wrapping `okuMAmount`.
-     * @dev Single source of truth for `OkuDollar.wrap`'s share formula.
-     *      shares = mulDiv(okuMAmount, okuMMultiplier, usdMultiplier, Floor)
-     * @param okuMAmount OkuMoney token amount being wrapped
-     * @param okuMMult Current okuMMultiplier
-     * @param usdMult Current usdMultiplier (must be non-zero)
-     * @return shares Internal OkuDollar share count credited to the receiver
+     * @notice Compound `base` at `ratePerSecond` for `elapsed` seconds.
+     * @dev The single accrual primitive. Both indices are defined as
+     *      `compound(segment.baseIndex, segment.ratePerSecond, elapsed)`, so any
+     *      change to rounding here moves both in lockstep and a display read can
+     *      never disagree with a settlement read.
+     *
+     *      Deterministic integer math, which is what makes cross-chain
+     *      synchronisation work: the same arguments produce the same result on every
+     *      chain and every client.
+     * @param base Index value at the segment anchor.
+     * @param ratePerSecond Per-second rate, PRECISION = no accrual.
+     * @param elapsed Seconds since the anchor.
      */
-    function wrappedSharesFromOkuM(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
+    function compound(
+        uint256 base,
+        uint256 ratePerSecond,
+        uint256 elapsed
     )
         internal
         pure
-        returns (uint256 shares)
+        returns (uint256)
     {
-        return Math.mulDiv(okuMAmount, okuMMult, usdMult, Math.Rounding.Floor);
+        if (elapsed == 0 || ratePerSecond <= Constants.PRECISION) return base;
+        return Math.mulDiv(
+            base,
+            rpow(ratePerSecond, elapsed, Constants.PRECISION),
+            Constants.PRECISION,
+            Math.Rounding.Floor
+        );
     }
 
     /**
-     * @notice Compute the dollar-denominated UsdOku amount minted when wrapping `okuMAmount`.
-     * @dev Replicates `OkuDollar.wrap`'s two-step truncation exactly:
-     *        shares    = mulDiv(okuMAmount, okuMMultiplier, usdMultiplier, Floor)
-     *        usdMinted = mulDiv(shares,     usdMultiplier,  PRECISION,     Floor)
-     *      Used by both `OkuDollar.wrap` and `LitePSM.mintUsdOku` so the slippage
-     *      floor passed to `wrap` matches what `wrap` actually produces — eliminating
-     *      reverts driven solely by integer-division rounding at non-even multipliers.
-     * @param okuMAmount OkuMoney token amount being wrapped
-     * @param okuMMult Current okuMMultiplier
-     * @param usdMult Current usdMultiplier (must be non-zero)
-     * @return usdMinted Dollar value (18 decimals) the wrap would credit
+     * @notice Nominal (simple) annualized APR implied by a per-second rate, in bps.
+     * @dev Linearized: `(rate - PRECISION) * SECONDS_PER_YEAR / PRECISION` in bps.
+     *      Deliberately NOT the compounded APY — it is a bound-check helper for
+     *      `MAX_IMPLIED_APR_BPS`, and linearizing keeps the check cheap and
+     *      conservative (it under-reports relative to compounding, so the true
+     *      delivered APY at the cap is slightly higher and documented as such).
      */
-    function okuMToWrappedUsd(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
-    )
-        internal
-        pure
-        returns (uint256 usdMinted)
-    {
-        uint256 shares = Math.mulDiv(okuMAmount, okuMMult, usdMult, Math.Rounding.Floor);
-        return Math.mulDiv(shares, usdMult, Constants.PRECISION, Math.Rounding.Floor);
+    function impliedAprBps(uint256 ratePerSecond) internal pure returns (uint256) {
+        if (ratePerSecond <= Constants.PRECISION) return 0;
+        return Math.mulDiv(
+            ratePerSecond - Constants.PRECISION,
+            Constants.SECONDS_PER_YEAR * Constants.BASIS_POINTS,
+            Constants.PRECISION,
+            Math.Rounding.Ceil
+        );
     }
 }

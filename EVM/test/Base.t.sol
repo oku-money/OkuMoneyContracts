@@ -1,293 +1,204 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-
-import {OkuMoney} from "../src/token/OkuMoney.sol";
-import {OkuDollar} from "../src/token/OkuDollar.sol";
+import {OkuM} from "../src/token/OkuM.sol";
+import {USDOku} from "../src/token/USDOku.sol";
 import {LitePSM} from "../src/psm/LitePSM.sol";
-import {RedemptionQueue} from "../src/psm/RedemptionQueue.sol";
+import {Constants} from "../src/lib/Constants.sol";
+import {Roles} from "../src/lib/Roles.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
-import {TestConstants} from "./shared/Constants.sol";
-import {TestRoles} from "./shared/Roles.sol";
-import {Actors} from "./shared/Actors.sol";
-import {Deploy} from "./shared/Deploy.sol";
 
 /**
  * @title BaseTest
- * @notice Base test contract with deployment helpers, actors, and utility functions
- * @dev Updated for OkuMoney non-rebasing redesign. OkuMoney is a standard ERC-20 with
- *      okuMMultiplier() tracking the dollar value per token separately from balanceOf().
- *      See Constants.sol for terminology legend.
+ * @notice Shared fixture: deployed proxies, wired roles, named actors.
  *
- *      Uses shared scaffolding:
- *      - TestConstants: All numeric constants (re-exported from src + test-only)
- *      - TestRoles: All role keccaks (re-exported from src + DEFAULT_ADMIN_ROLE)
- *      - Actors: Named test actors with deterministic addresses
- *      - Deploy: Proxy deployment helpers
+ * @dev A note on a foundry footgun this suite hits repeatedly: `vm.prank` and
+ *      `vm.expectRevert` are consumed by ARGUMENT EVALUATION. An inline
+ *      `okuM.uiMultiplier()` inside a call that follows `vm.prank` spends the prank
+ *      on the view, and the real call executes as the test contract. Every read is
+ *      therefore hoisted above the cheatcode, deliberately, throughout.
  */
-abstract contract BaseTest is Test, Actors {
-    // ============ Re-exported Constants ============
+abstract contract BaseTest is Test {
+    OkuM internal okuM;
+    USDOku internal usdOku;
+    LitePSM internal psm;
+    MockUSDC internal usdc;
 
-    uint256 public constant PRECISION = TestConstants.PRECISION;
-    uint256 public constant MAX_SUPPLY = TestConstants.MAX_SUPPLY;
-    uint256 public constant DECIMAL_MULTIPLIER = TestConstants.DECIMAL_MULTIPLIER;
-    uint256 public constant MAX_RATE = TestConstants.MAX_RATE;
-    uint256 public constant BASIS_POINTS = TestConstants.BASIS_POINTS;
+    address internal admin = makeAddr("admin");
+    address internal rateSetter = makeAddr("rateSetter");
+    address internal gatekeeper = makeAddr("gatekeeper");
+    address internal treasury = makeAddr("treasury");
+    address internal alice = makeAddr("alice");
+    address internal bob = makeAddr("bob");
 
-    // ============ Re-exported Roles ============
-
-    bytes32 public constant DEFAULT_ADMIN_ROLE = TestRoles.DEFAULT_ADMIN_ROLE;
-
-    // OkuMoney roles (OKUM_ prefix)
-    bytes32 public constant OKUM_UPGRADER = TestRoles.OKUM_UPGRADER;
-    bytes32 public constant OKUM_PAUSER = TestRoles.OKUM_PAUSER;
-    bytes32 public constant OKUM_UNPAUSER = TestRoles.OKUM_UNPAUSER;
-    bytes32 public constant OKUM_MINTER = TestRoles.OKUM_MINTER;
-    /// @dev Cycle 4 (EVM-15): burn-only role.
-    bytes32 public constant OKUM_BURNER = TestRoles.OKUM_BURNER;
-    bytes32 public constant OKUM_REBASER = TestRoles.OKUM_REBASER;
-    bytes32 public constant OKUM_BLACKLISTER = TestRoles.OKUM_BLACKLISTER;
-    bytes32 public constant OKUM_UNBLACKLISTER = TestRoles.OKUM_UNBLACKLISTER;
-    bytes32 public constant OKUM_CAP_MANAGER = TestRoles.OKUM_CAP_MANAGER;
-    bytes32 public constant OKUM_ALLOWANCE_MANAGER = TestRoles.OKUM_ALLOWANCE_MANAGER;
-
-    // OkuDollar vault roles (VAULT_ prefix)
-    bytes32 public constant VAULT_UPGRADER = TestRoles.VAULT_UPGRADER;
-    bytes32 public constant VAULT_REBASER = TestRoles.VAULT_REBASER;
-    bytes32 public constant VAULT_RESERVE_MANAGER = TestRoles.VAULT_RESERVE_MANAGER;
-    bytes32 public constant VAULT_PAUSER = TestRoles.VAULT_PAUSER;
-    bytes32 public constant VAULT_UNPAUSER = TestRoles.VAULT_UNPAUSER;
-    bytes32 public constant VAULT_ADMIN = TestRoles.VAULT_ADMIN;
-
-    // LitePSM roles (PSM_ prefix)
-    bytes32 public constant PSM_UPGRADER = TestRoles.PSM_UPGRADER;
-    bytes32 public constant PSM_PAUSER = TestRoles.PSM_PAUSER;
-    bytes32 public constant PSM_UNPAUSER = TestRoles.PSM_UNPAUSER;
-    bytes32 public constant PSM_QUEUE_PROCESSOR = TestRoles.PSM_QUEUE_PROCESSOR;
-    bytes32 public constant PSM_BUFFER_DEPOSITOR = TestRoles.PSM_BUFFER_DEPOSITOR;
-    bytes32 public constant PSM_BUFFER_WITHDRAWER = TestRoles.PSM_BUFFER_WITHDRAWER;
-    // RedemptionQueue roles (QUEUE_ prefix)
-    bytes32 public constant QUEUE_PSM = TestRoles.QUEUE_PSM;
-    bytes32 public constant QUEUE_UPGRADER = TestRoles.QUEUE_UPGRADER;
-    bytes32 public constant QUEUE_RESCUER = TestRoles.QUEUE_RESCUER;
-
-    // ============ Contracts ============
-
-    OkuMoney public okuMoney;
-    OkuMoney public okuMoneyImpl;
-    OkuDollar public okuDollar;
-    OkuDollar public okuDollarImpl;
-    LitePSM public litePsm;
-    LitePSM public litePsmImpl;
-    RedemptionQueue public redemptionQueue;
-    RedemptionQueue public redemptionQueueImpl;
-    MockUSDC public usdc;
-
-    // ============ Setup ============
+    uint256 internal constant USDC_UNIT = 1e6;
+    uint256 internal constant INITIAL_MAX_SUPPLY = 1e9 * 1e18;
 
     function setUp() public virtual {
-        _deployContracts();
-        _setupRoles();
-        _setupMinterAllowances();
-    }
+        // A non-zero start time: at timestamp 0 every segment anchor collapses and
+        // whole classes of ordering bug become invisible.
+        vm.warp(1_700_000_000);
 
-    function _deployContracts() internal {
-        // Deploy mocks
         usdc = new MockUSDC();
 
-        // Deploy OkuMoney
-        (okuMoney, okuMoneyImpl) = Deploy.deployOkuMoney(admin);
+        okuM = OkuM(
+            address(
+                new ERC1967Proxy(
+                    address(new OkuM()),
+                    abi.encodeCall(
+                        OkuM.initialize, ("Oku Money", "OkuM", admin, INITIAL_MAX_SUPPLY)
+                    )
+                )
+            )
+        );
 
-        // Deploy OkuDollar vault
-        (okuDollar, okuDollarImpl) = Deploy.deployOkuDollar(address(okuMoney), admin);
+        usdOku = USDOku(
+            address(
+                new ERC1967Proxy(
+                    address(new USDOku()),
+                    abi.encodeCall(
+                        USDOku.initialize, ("Oku Dollar", "USDOku", address(okuM), admin)
+                    )
+                )
+            )
+        );
 
-        // Deploy RedemptionQueue
-        (redemptionQueue, redemptionQueueImpl) =
-            Deploy.deployRedemptionQueue(address(okuMoney), address(usdc), admin);
+        psm = LitePSM(
+            address(
+                new ERC1967Proxy(
+                    address(new LitePSM()),
+                    abi.encodeCall(LitePSM.initialize, (address(okuM), address(usdc), admin))
+                )
+            )
+        );
 
-        // Deploy LitePSM
-        (litePsm, litePsmImpl) = Deploy.deployLitePSM(
-            address(okuMoney), address(okuDollar), address(usdc), address(redemptionQueue), admin
+        vm.startPrank(admin);
+        okuM.grantRole(Roles.OKUM_RATE_SETTER, rateSetter);
+        okuM.grantRole(Roles.OKUM_MINTER, address(psm));
+        okuM.grantRole(Roles.OKUM_BURNER, address(psm));
+        okuM.configureMinterAllowance(address(psm), INITIAL_MAX_SUPPLY);
+        okuM.setConversionGate(address(psm));
+
+        okuM.grantRole(Roles.OKUM_MINTER, address(usdOku));
+        okuM.configureMinterAllowance(address(usdOku), INITIAL_MAX_SUPPLY);
+
+        usdOku.grantRole(Roles.VAULT_RATE_SETTER, rateSetter);
+
+        psm.grantRole(Roles.PSM_GATEKEEPER, gatekeeper);
+        vm.stopPrank();
+
+        vm.prank(gatekeeper);
+        psm.openWindow();
+    }
+
+    // ============ Helpers ============
+
+    /// @dev Per-second rate delivering `aprBps` nominal (simple) APR.
+    function _rateFor(uint256 aprBps) internal pure returns (uint256) {
+        return Constants.PRECISION + (Constants.PRECISION * aprBps / Constants.BASIS_POINTS)
+            / Constants.SECONDS_PER_YEAR;
+    }
+
+    /// @dev Declare an OkuM segment starting now for `duration` at `aprBps`.
+    ///
+    ///      Closes the PSM window first and reopens after, because `setOkuMRate`
+    ///      requires a closed window. Reads are hoisted above the pranks.
+    function _setOkuMRate(uint256 aprBps, uint256 duration) internal {
+        uint256 base = okuM.uiMultiplier();
+        uint256 rate = _rateFor(aprBps);
+        uint64 start = uint64(block.timestamp);
+        uint64 end = uint64(block.timestamp + duration);
+        bool wasOpen = psm.conversionsOpen();
+
+        if (wasOpen) {
+            vm.prank(gatekeeper);
+            psm.closeWindow();
+        }
+        vm.prank(rateSetter);
+        okuM.setOkuMRate(base, rate, start, end, 0);
+        if (wasOpen) {
+            vm.prank(gatekeeper);
+            psm.openWindow();
+        }
+    }
+
+    /// @dev Declare a USDOku segment starting now for `duration` at `aprBps`.
+    function _setUsdOkuRate(uint256 aprBps, uint256 duration) internal {
+        uint256 base = usdOku.usdOkuIndex();
+        uint256 rate = _rateFor(aprBps);
+        vm.prank(rateSetter);
+        usdOku.setUsdOkuRate(
+            base, rate, uint64(block.timestamp), uint64(block.timestamp + duration)
         );
     }
 
-    function _setupRoles() internal {
-        vm.startPrank(admin);
-
-        // OkuMoney roles - Granular RBAC (OKUM_ prefix)
-        // Cycle 4 (EVM-15): OKUM_BURNER split from OKUM_MINTER. Mint
-        // and burn now require explicit grants; tests grant both
-        // together because every minter in this setup is also a burner.
-        okuMoney.grantRole(OKUM_PAUSER, pauser);
-        okuMoney.grantRole(OKUM_UNPAUSER, unpauser);
-        okuMoney.grantRole(OKUM_MINTER, minter);
-        okuMoney.grantRole(OKUM_BURNER, minter);
-        okuMoney.grantRole(OKUM_MINTER, address(litePsm)); // PSM can mint
-        okuMoney.grantRole(OKUM_BURNER, address(litePsm)); // PSM can burn
-        okuMoney.grantRole(OKUM_REBASER, rebaser);
-        okuMoney.grantRole(OKUM_BLACKLISTER, blacklister);
-        okuMoney.grantRole(OKUM_UNBLACKLISTER, unblacklister);
-        okuMoney.grantRole(OKUM_CAP_MANAGER, capManager);
-        okuMoney.grantRole(OKUM_ALLOWANCE_MANAGER, allowanceManager);
-
-        // OkuDollar vault roles (VAULT_ prefix)
-        okuDollar.grantRole(VAULT_REBASER, usdRebaser);
-        okuDollar.grantRole(VAULT_RESERVE_MANAGER, reserveManager);
-        okuDollar.grantRole(VAULT_PAUSER, vaultPauser);
-        okuDollar.grantRole(VAULT_UNPAUSER, vaultUnpauser);
-        // OkuDollar blacklist (shared OKUM_ roles — one grant covers both tokens)
-        okuDollar.grantRole(OKUM_BLACKLISTER, blacklister);
-        okuDollar.grantRole(OKUM_UNBLACKLISTER, unblacklister);
-
-        // LitePSM roles - Granular RBAC (PSM_ prefix)
-        litePsm.grantRole(PSM_PAUSER, pauser);
-        litePsm.grantRole(PSM_UNPAUSER, unpauser);
-        litePsm.grantRole(PSM_QUEUE_PROCESSOR, queueProcessor);
-        litePsm.grantRole(PSM_BUFFER_DEPOSITOR, bufferDepositor);
-        litePsm.grantRole(PSM_BUFFER_WITHDRAWER, bufferWithdrawer);
-        // RedemptionQueue roles (QUEUE_ prefix)
-        redemptionQueue.grantRole(QUEUE_PSM, address(litePsm));
-        redemptionQueue.grantRole(QUEUE_RESCUER, queueRescuer);
-
-        // Grant RedemptionQueue burn role on OkuMoney (self-burn in
-        // processQueue). Cycle 4: only OKUM_BURNER is required for the
-        // burn path now — minting is not needed.
-        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
-
-        vm.stopPrank();
-    }
-
-    function _setupMinterAllowances() internal {
-        // allowanceManager has OKUM_ALLOWANCE_MANAGER role on OkuMoney
-        vm.startPrank(allowanceManager);
-        okuMoney.configureMinterAllowance(minter, MAX_SUPPLY);
-        okuMoney.configureMinterAllowance(address(litePsm), MAX_SUPPLY);
-        okuMoney.configureMinterAllowance(address(redemptionQueue), MAX_SUPPLY);
-        vm.stopPrank();
-    }
-
-    // ============ Helper Functions ============
-
-    /// @notice Mint OkuMoney tokens to a user (raw token amount, no share conversion)
-    function _mintOkuMoney(address to, uint256 amount) internal {
-        vm.prank(minter);
-        okuMoney.mint(to, amount);
-    }
-
-    /// @notice Mint OkuDollar tokens to a user via wrap flow (multiplier-aware)
-    function _mintUsdOku(address to, uint256 okuMAmount) internal {
-        // Mint OkuMoney to the to address first
-        _mintOkuMoney(to, okuMAmount);
-        // Approve vault to pull OkuMoney
+    /// @dev Buy OkuM through the PSM the way a real user would.
+    function _mint(address to, uint256 usdcAmount) internal returns (uint256 okuMOut) {
+        usdc.mint(to, usdcAmount);
         vm.startPrank(to);
-        IERC20(address(okuMoney)).approve(address(okuDollar), okuMAmount);
-        // Wrap OkuMoney into OkuDollar (0 minAmountOut for test helpers)
-        okuDollar.wrap(okuMAmount, to, 0);
+        usdc.approve(address(psm), usdcAmount);
+        okuMOut = psm.mintOkuM(usdcAmount, 0);
         vm.stopPrank();
     }
 
-    /// @notice Mint USDC tokens to a user
-    function _mintUsdc(address to, uint256 amount) internal {
-        usdc.mint(to, amount);
+    /// @dev Seed the PSM's redemption buffer.
+    function _fundBuffer(uint256 usdcAmount) internal {
+        usdc.mint(address(this), usdcAmount);
+        usdc.approve(address(psm), usdcAmount);
+        psm.depositBuffer(usdcAmount);
     }
 
-    /// @notice Approve OkuMoney spending
-    function _approveOkuMoney(address owner, address spender, uint256 amount) internal {
-        vm.prank(owner);
-        okuMoney.approve(spender, amount);
+    /// @dev Put OkuM into the vault so USDOku can declare a forward rate.
+    function _fundVault(uint256 usdcAmount) internal returns (uint256 okuMFunded) {
+        address funder = makeAddr("issuerTreasury");
+        okuMFunded = _mint(funder, usdcAmount);
+        vm.startPrank(funder);
+        IERC20(address(okuM)).approve(address(usdOku), okuMFunded);
+        usdOku.depositReserves(okuMFunded);
+        vm.stopPrank();
     }
 
-    /// @notice Approve OkuDollar spending
-    function _approveOkuDollar(address owner, address spender, uint256 amount) internal {
-        vm.prank(owner);
-        okuDollar.approve(spender, amount);
+    /// @dev Wrap OkuM into USDOku.
+    function _wrap(address who, uint256 okuMAmount) internal returns (uint256 usdOut) {
+        vm.startPrank(who);
+        IERC20(address(okuM)).approve(address(usdOku), okuMAmount);
+        usdOut = usdOku.wrap(okuMAmount, who, 0);
+        vm.stopPrank();
     }
 
-    /// @notice Approve USDC spending
-    function _approveUsdc(address owner, address spender, uint256 amount) internal {
-        vm.prank(owner);
-        usdc.approve(spender, amount);
-    }
-
-    /// @notice Override bound() to suppress "Bound result" console logs
-    function bound(uint256 x, uint256 min, uint256 max) internal pure override returns (uint256) {
-        return _bound(x, min, max);
-    }
-
-    /// @notice Bound fuzz input to reasonable mint amount
-    function _boundMintAmount(uint256 amount) internal view returns (uint256) {
-        uint256 remaining = MAX_SUPPLY - okuMoney.totalSupply();
-        return bound(amount, 1, remaining > 0 ? remaining : 1);
-    }
-
-    /// @notice Bound fuzz input to reasonable okuMMultiplier (strictly above current, up to 2x).
-    /// @dev Tightened from 10x to 2x for more realistic scenarios.
-    ///      `setOkuMMultiplier` requires strict increase, so the lower bound is
-    ///      `current + 1`. Tests that need the no-op semantics should call the
-    ///      contract directly and assert the revert.
-    function _boundOkuMMultiplier(uint256 mult) internal view returns (uint256) {
-        uint256 current = okuMoney.okuMMultiplier();
-        return bound(mult, current + 1, current * TestConstants.MAX_MULTIPLIER_FACTOR);
-    }
-
-    /// @notice Bound fuzz input to reasonable okuMMultiplier increase (0.01% to 100%)
-    function _boundOkuMMultiplierIncrease(uint256 increase) internal view returns (uint256) {
-        uint256 current = okuMoney.okuMMultiplier();
-        return bound(increase, current / 10_000, current);
-    }
-
-    /// @notice Bound price to realistic fuzz range (capped at MAX_FUZZ_PRICE)
-    function _boundPrice(uint256 price) internal pure returns (uint256) {
-        return bound(price, PRECISION, TestConstants.MAX_FUZZ_PRICE);
-    }
-
-    /// @notice Get minimum of two values
-    function _min(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a < b ? a : b;
-    }
-
-    /// @notice Get maximum of two values
-    function _max(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a > b ? a : b;
-    }
-
-    /// @notice Set OkuMoney multiplier and roll to next block to avoid yield distribution lock
-    /// @dev Use this helper when testing multiplier-aware operations that would be blocked
-    ///      in the same block as a multiplier change (sandwich attack prevention).
-    function _setOkuMMultiplierAndRoll(uint256 newMultiplier) internal {
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newMultiplier);
-        vm.roll(block.number + 1);
-    }
-
-    /// @notice Elevate OkuDollar's `usdMultiplier()` to (approximately) `targetMultiplier`.
-    /// @dev Drives the multiplier via `setUsdYieldRate` + `vm.warp` rather than a direct
-    ///      override; this mirrors the only production path for moving the multiplier.
-    ///      The achieved value is the smallest multiplier >= target reachable by warping
-    ///      forward at MAX_RATE.
-    function _elevateUsdMultiplier(uint256 targetMultiplier) internal {
-        require(targetMultiplier >= PRECISION, "target below floor");
-        uint256 current = okuDollar.usdMultiplier();
-        if (targetMultiplier <= current) return;
-
-        // Set the active rate to MAX_RATE with no end timestamp (open-ended) so the
-        // multiplier compounds continuously. Then warp forward enough seconds to clear
-        // the target. We loop in case rounding leaves us short on the first warp.
-        vm.prank(usdRebaser);
-        okuDollar.setUsdYieldRate(MAX_RATE, 0);
-
-        uint256 elapsed = 1;
-        while (okuDollar.usdMultiplier() < targetMultiplier) {
-            vm.warp(block.timestamp + elapsed);
-            elapsed *= 2;
-            // Safety: bound the loop in case targetMultiplier is unreachable.
-            require(elapsed < 365 days * 4, "target unreachable");
-        }
-
-        // Snapshot the achieved multiplier and stop accrual so subsequent reads stay stable.
-        vm.prank(usdRebaser);
-        okuDollar.setUsdYieldRate(PRECISION, 0);
+    /// @dev Sign an ERC-2612 permit for either token; `domainSeparator` selects which,
+    ///      so a signature is never valid across both.
+    function _signPermit(
+        uint256 privateKey,
+        bytes32 domainSeparator,
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 nonce,
+        uint256 deadline
+    )
+        internal
+        pure
+        returns (uint8 v, bytes32 r, bytes32 s)
+    {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
+                owner,
+                spender,
+                value,
+                nonce,
+                deadline
+            )
+        );
+        return
+            vm.sign(
+                privateKey, keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash))
+            );
     }
 }

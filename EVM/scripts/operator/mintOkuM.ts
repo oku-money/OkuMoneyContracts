@@ -1,5 +1,5 @@
 /**
- * Mint OkuMoney via LitePSM (noBridge orchestrator workflow).
+ * Mint OkuM via LitePSM (noBridge orchestrator workflow).
  *
  * Calls `LitePSM.mintOkuM(usdcAmount)` as the orchestrator. The PSM holds
  * OKUM_MINTER and mints OkuM from the caller's USDC. The orchestrator does NOT
@@ -60,9 +60,9 @@ async function main() {
   const psm = (await getDeployedContract("LitePSM", psmAddr)).connect(signer);
   const usdc = (await ethers.getContractAt("IERC20", usdcAddr)).connect(signer);
 
-  const okuMoneyAddr2 = loadAddress(ctx.bookKey, "OkuMoney");
-  const okuMoneyForRead = okuMoneyAddr2 ? await ethers.getContractAt("OkuMoney", okuMoneyAddr2) : null;
-  const okuMBefore = okuMoneyForRead ? BigInt(await (okuMoneyForRead as any).balanceOf(signerAddr)) : 0n;
+  const okuMAddr2 = loadAddress(ctx.bookKey, "OkuM");
+  const okuMForRead = okuMAddr2 ? await ethers.getContractAt("OkuM", okuMAddr2) : null;
+  const okuMBefore = okuMForRead ? BigInt(await (okuMForRead as any).balanceOf(signerAddr)) : 0n;
   const usdcBalance = await usdc.balanceOf(signerAddr);
 
   logger.info(`Signer: ${signerAddr}`);
@@ -87,7 +87,7 @@ async function main() {
   const receipt = await mintTx.wait(1);
   logger.success(`mintOkuM tx: ${receipt.hash}`);
 
-  const okuMAfter = okuMoneyForRead ? BigInt(await (okuMoneyForRead as any).balanceOf(signerAddr)) : 0n;
+  const okuMAfter = okuMForRead ? BigInt(await (okuMForRead as any).balanceOf(signerAddr)) : 0n;
   logger.success(`OkuM received: ${ethers.formatEther(okuMAfter - okuMBefore)}`);
 }
 

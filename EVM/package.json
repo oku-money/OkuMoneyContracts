@@ -13,18 +13,14 @@
     "typechain": "hardhat typechain",
     "typecheck": "tsc --noEmit",
     "lint": "npm run typecheck",
-
     "export-abis": "ts-node scripts/utils/exportAbis.ts",
-
     "test": "hardhat test",
     "test:forge": "forge test",
     "test:all": "forge test && hardhat test",
     "test:gas": "REPORT_GAS=true hardhat test",
-
     "node": "hardhat node",
     "node:sepolia": "hardhat node --fork $(grep SEPOLIA_RPC_URL .env | cut -d '=' -f2)",
     "node:mainnet": "hardhat node --fork $(grep MAINNET_RPC_URL .env | cut -d '=' -f2)",
-
     "deploy": "hardhat run scripts/deploy/index.ts --network localhost",
     "deploy:sepolia": "hardhat run scripts/deploy/index.ts --network sepolia",
     "deploy:opSepolia": "hardhat run scripts/deploy/index.ts --network opSepolia",
@@ -33,15 +29,14 @@
     "deploy:bscTestnet": "hardhat run scripts/deploy/index.ts --network bscTestnet",
     "deploy:base": "hardhat run scripts/deploy/index.ts --network base",
     "deploy:bsc": "hardhat run scripts/deploy/index.ts --network bsc",
-
     "verify:sepolia": "hardhat run scripts/deploy/verify.ts --network sepolia",
     "verify:baseSepolia": "hardhat run scripts/deploy/verify.ts --network baseSepolia",
     "verify:arbSepolia": "hardhat run scripts/deploy/verify.ts --network arbSepolia",
     "verify:bscTestnet": "hardhat run scripts/deploy/verify.ts --network bscTestnet",
     "verify:base": "hardhat run scripts/deploy/verify.ts --network base",
     "verify:bsc": "hardhat run scripts/deploy/verify.ts --network bsc",
-
     "upgrade": "hardhat run scripts/upgrade/index.ts --network localhost",
+    "upgrade:validate": "hardhat run scripts/upgrade/validateImpls.ts",
     "upgrade:sepolia": "NETWORK=sepolia hardhat run scripts/upgrade/index.ts --network sepolia",
     "upgrade:opSepolia": "NETWORK=opSepolia hardhat run scripts/upgrade/index.ts --network opSepolia",
     "upgrade:baseSepolia": "NETWORK=baseSepolia hardhat run scripts/upgrade/index.ts --network baseSepolia",
@@ -49,23 +44,22 @@
     "upgrade:bscTestnet": "NETWORK=bscTestnet hardhat run scripts/upgrade/index.ts --network bscTestnet",
     "upgrade:base": "NETWORK=base hardhat run scripts/upgrade/index.ts --network base",
     "upgrade:bsc": "NETWORK=bsc hardhat run scripts/upgrade/index.ts --network bsc",
-
     "test:onchain": "NETWORK=sepolia hardhat run scripts/test/test-onchain.ts --network localhost",
     "test:onchain:sepolia": "NETWORK=sepolia hardhat run scripts/test/test-onchain.ts --network sepolia",
     "test:onchain:baseSepolia": "NETWORK=baseSepolia hardhat run scripts/test/test-onchain.ts --network baseSepolia",
     "test:onchain:arbSepolia": "NETWORK=arbSepolia hardhat run scripts/test/test-onchain.ts --network arbSepolia",
     "test:onchain:bscTestnet": "NETWORK=bscTestnet hardhat run scripts/test/test-onchain.ts --network bscTestnet",
-
     "operator:mint": "hardhat run scripts/operator/mintOkuM.ts",
     "operator:redeem": "hardhat run scripts/operator/redeemOkuM.ts",
     "operator:depositBuffer": "hardhat run scripts/operator/depositBuffer.ts",
     "operator:withdrawBuffer": "hardhat run scripts/operator/withdrawBuffer.ts",
-    "operator:processQueue": "hardhat run scripts/operator/processQueue.ts",
+    "operator:setOkuMRate": "hardhat run scripts/operator/setOkuMRate.ts",
+    "operator:setUsdOkuRate": "hardhat run scripts/operator/setUsdOkuRate.ts",
+    "operator:window": "hardhat run scripts/operator/window.ts",
+    "operator:solvencyStatus": "hardhat run scripts/operator/solvencyStatus.ts",
     "operator:configureMinterAllowance": "hardhat run scripts/operator/configureMinterAllowance.ts",
-    "operator:distributeYield": "hardhat run scripts/operator/distributeYield.ts",
     "operator:pause": "hardhat run scripts/operator/pause.ts",
     "operator:unpause": "hardhat run scripts/operator/unpause.ts",
-    "operator:rescueQueueEntry": "hardhat run scripts/operator/rescueQueueEntry.ts",
     "operator:grantRoles": "hardhat run scripts/operator/grantRoles.ts",
     "operator:grantRolesMainnet": "hardhat run scripts/operator/grantRolesMainnet.ts"
   },

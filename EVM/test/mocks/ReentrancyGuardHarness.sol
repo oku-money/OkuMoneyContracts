@@ -1,40 +1,29 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 import {ReentrancyGuardUpgradeable} from "../../src/lib/ReentrancyGuardUpgradeable.sol";
 
-/// @title ReentrancyGuardHarness
-/// @notice Test-only contract that exposes the `nonReentrant` modifier from
-///         {ReentrancyGuardUpgradeable}. Used by `test/lib/ReentrancyGuard.t.sol`
-///         to assert the reentrant-revert path (line 62 of the production
-///         contract) which is otherwise observable only indirectly through
-///         the OkuDollar / LitePSM / RedemptionQueue happy paths.
-/// @dev NOT FOR PRODUCTION DEPLOYMENT.
+/**
+ * @title ReentrancyGuardHarness
+ * @notice Drives the reentrant-revert branch of ReentrancyGuardUpgradeable,
+ *         which no production path can reach (that is the point of the guard).
+ */
 contract ReentrancyGuardHarness is ReentrancyGuardUpgradeable {
     uint256 public counter;
 
-    /// @dev `initializer` modifier is enforced by OZ's `Initializable` base;
-    ///      calling `init` twice will revert (validating our wire compatibility).
-    function init() external initializer {
+    /// @dev `__ReentrancyGuard_init` is `onlyInitializing`, so it must run inside
+    ///      an initializer rather than a plain constructor.
+    function initialize() external initializer {
         __ReentrancyGuard_init();
     }
 
-    /// @notice Increment a counter under nonReentrant. If `reenter` is true,
-    ///         re-call the same function — must revert with
-    ///         `ReentrancyGuardReentrantCall`.
-    function enter(bool reenter) external nonReentrant {
-        counter += 1;
-        if (reenter) {
-            // Re-enter via `this.enter(false)`: external call routes through
-            // the function dispatcher and re-acquires the guard.
-            this.enter(false);
-        }
+    function safeCall() external nonReentrant {
+        counter++;
     }
 
-    /// @notice Plain entry that does not re-enter — used to verify the guard
-    ///         releases between calls.
-    function noReenter() external nonReentrant {
-        counter += 1;
+    /// @dev Re-enters itself through the guard; the second entry must revert.
+    function reenter() external nonReentrant {
+        ReentrancyGuardHarness(address(this)).reenter();
     }
 
     function entered() external view returns (bool) {

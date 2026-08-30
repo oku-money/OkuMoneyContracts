@@ -7,9 +7,10 @@
  *                     ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER,
  *                     RESERVE_MANAGER
  *   Warm Multisig   → all PAUSER, all BLACKLISTER
- *   Orchestrator    → OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR
+ *   Orchestrator    → OKUM_RATE_SETTER, VAULT_RATE_SETTER, PSM_GATEKEEPER, BUFFER_DEPOSITOR
  *
- * QUEUE_PSM is intentionally NOT in this list — it must remain on the LitePSM
+ * Contract-to-contract grants (OKUM_MINTER/OKUM_BURNER on the PSM) are NOT in this
+ * list — they are set at deploy time and must remain on the LitePSM
  * proxy address (set at deploy time via configureRoles).
  *
  * OKUM_MINTER and OKUM_BURNER (cycle 4 / EVM-15) are likewise intentionally
@@ -88,8 +89,11 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
   warm: Map<string, RoleName[]>;
   orch: Map<string, RoleName[]>;
 } {
+  // COLD: everything that can change the shape of the system, plus every
+  // "un-" action. A compromised warm key can stop the protocol but cannot restart
+  // it, and cannot widen a cap or an allowance.
   const coldRoles = new Map<string, RoleName[]>([
-    ["OkuMoney", [
+    ["OkuM", [
       "DEFAULT_ADMIN_ROLE",
       "OKUM_UPGRADER",
       "OKUM_UNPAUSER",
@@ -97,12 +101,11 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
       "OKUM_CAP_MANAGER",
       "OKUM_ALLOWANCE_MANAGER",
     ]],
-    ["OkuDollar", [
+    ["USDOku", [
       "DEFAULT_ADMIN_ROLE",
       "VAULT_UPGRADER",
       "VAULT_UNPAUSER",
       "VAULT_RESERVE_MANAGER",
-      "VAULT_ADMIN",
       "OKUM_UNBLACKLISTER",
     ]],
     ["LitePSM", [
@@ -111,25 +114,26 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
       "PSM_UNPAUSER",
       "PSM_BUFFER_WITHDRAWER",
     ]],
-    ["RedemptionQueue", [
-      "DEFAULT_ADMIN_ROLE",
-      "QUEUE_UPGRADER",
-      "QUEUE_RESCUER",
-    ]],
   ]);
 
+  // WARM: halt-only. Fast to reach under time pressure, useless for extraction.
   const warmRoles = new Map<string, RoleName[]>([
-    ["OkuMoney", ["OKUM_PAUSER", "OKUM_BLACKLISTER"]],
-    ["OkuDollar", ["VAULT_PAUSER", "OKUM_BLACKLISTER"]],
+    ["OkuM", ["OKUM_PAUSER", "OKUM_BLACKLISTER"]],
+    ["USDOku", ["VAULT_PAUSER", "OKUM_BLACKLISTER"]],
     ["LitePSM", ["PSM_PAUSER"]],
-    ["RedemptionQueue", []],
   ]);
 
+  // ORCHESTRATOR (KMS back-end): the routine loop — close the window, publish the
+  // segment, reopen. Plus buffer top-ups.
+  //
+  // NOTE the deliberate separation: the orchestrator holds OKUM_RATE_SETTER (it can
+  // misprice) and PSM_GATEKEEPER (it can open the window), but NOT
+  // PSM_BUFFER_WITHDRAWER (it cannot remove the funds) and NOT OKUM_MINTER outside
+  // the PSM's own grant. Mispricing and extraction stay in different key custodies.
   const orchRoles = new Map<string, RoleName[]>([
-    ["OkuMoney", ["OKUM_REBASER"]],
-    ["OkuDollar", ["VAULT_REBASER"]],
-    ["LitePSM", ["PSM_QUEUE_PROCESSOR", "PSM_BUFFER_DEPOSITOR"]],
-    ["RedemptionQueue", []],
+    ["OkuM", ["OKUM_RATE_SETTER"]],
+    ["USDOku", ["VAULT_RATE_SETTER"]],
+    ["LitePSM", ["PSM_GATEKEEPER", "PSM_BUFFER_DEPOSITOR"]],
   ]);
 
   return { cold: coldRoles, warm: warmRoles, orch: orchRoles };
@@ -231,7 +235,7 @@ async function main() {
   const { cold: coldMap, warm: warmMap, orch: orchMap } = buildRoleMap(cold, warm, orch);
 
   const contracts: Record<string, Contract> = {};
-  for (const name of ["OkuMoney", "OkuDollar", "LitePSM", "RedemptionQueue"]) {
+  for (const name of ["OkuM", "USDOku", "LitePSM", "RedemptionQueue"]) {
     let addr: string;
     try {
       addr = loadAddress(bookKey, name);
@@ -247,8 +251,8 @@ async function main() {
   // proxies, not on EOAs. They are granted in scripts/deploy/index.ts and must
   // be present before this script runs. Missing grants here mean a fresh
   // deploy is broken — fail loudly before we touch any role state.
-  if (contracts.OkuMoney && contracts.LitePSM && contracts.RedemptionQueue) {
-    const okuMoney = contracts.OkuMoney;
+  if (contracts.OkuM && contracts.LitePSM && contracts.RedemptionQueue) {
+    const okuM = contracts.OkuM;
     const psmAddr = await contracts.LitePSM.getAddress();
     const queueAddr = await contracts.RedemptionQueue.getAddress();
     const checks: Array<[string, string, string]> = [
@@ -258,7 +262,7 @@ async function main() {
       ["OKUM_BURNER on RedemptionQueue", ROLES.OKUM_BURNER, queueAddr],
     ];
     for (const [label, role, account] of checks) {
-      const has = await okuMoney.hasRole(role, account);
+      const has = await okuM.hasRole(role, account);
       if (!has) {
         throw new Error(
           `Deploy-time proxy grant missing: ${label}. ` +

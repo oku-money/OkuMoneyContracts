@@ -21,8 +21,8 @@ export interface EvmNetworkEntry {
   rpcUrl: string;
   explorer?: string;
   contracts: {
-    okuMoney?: string;
-    okuDollar?: string;
+    okuM?: string;
+    usdOku?: string;
     litePSM?: string;
     redemptionQueue?: string;
     mockUSDC?: string;

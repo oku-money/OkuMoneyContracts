@@ -3,72 +3,162 @@ pragma solidity 0.8.28;
 
 /**
  * @title Constants
- * @notice Shared constants for all OkuMoney contracts.
+ * @notice Shared constants for the Oku Money contract suite.
  *
  * ============ TERMINOLOGY LEGEND ============
  *
  * NAMING:
- *   - OkuMoney  / OkuM   : Non-rebasing base token (program/contract name + ticker)
- *   - OkuDollar / UsdOku : Rebasing $1-pegged stablecoin (program/contract name + ticker)
+ *   - Oku Money / OkuM   : Non-rebasing base token (contract name + ticker)
+ *   - Oku Dollar / USDOku: Rebasing $1-denominated token (contract name + ticker)
  *
- * MULTIPLIERS (Dollar Value Per Token):
- *   - okuMMultiplier: Dollar value of 1 OkuM (starts at 1e18 = $1.00, grows with yield)
- *   - usdMultiplier:  Dollar value of 1 UsdOku share (starts at 1e18 = $1.00, grows with yield)
+ * THE TWO INDICES:
+ *   - M_oku (`uiMultiplier`): dollars per OkuM. Continuous, REAR-FACING — its rate is
+ *     derived from yield the issuer has ALREADY banked, then delivered smoothly over
+ *     the following window. This single number serves three roles simultaneously:
+ *       1. ERC-8056 `uiMultiplier()`   (what wallets display)
+ *       2. LitePSM mint/redeem price   (what USDC converts at)
+ *       3. OkuM <-> USDOku conversion  (what wrap/unwrap convert at)
+ *     They MUST be the same number. A display price that differs from the redemption
+ *     price is two prices for one token.
+ *
+ *   - M_usd (`usdMultiplier`): USDOku's share -> dollar index. Continuous,
+ *     FORWARD-LOOKING — a declared steady headline rate. It does NOT participate in
+ *     the OkuM <-> USDOku exchange rate; it cancels algebraically out of `wrap`
+ *     (shares are minted at `M_oku/M_usd` then valued back at `M_usd`) and does not
+ *     appear in `unwrap`'s payout at all. Its only job is to make USDOku rebase.
+ *
+ * WHY M_oku IS CONTINUOUS RATHER THAN STEPPED:
+ *   A discrete step is a free round-trip for anyone holding across it, and — more
+ *   importantly for this deployment — it cannot be synchronised across chains. A
+ *   continuous segment anchored to ABSOLUTE wall-clock time is a pure function of
+ *   `block.timestamp`, so identical segment parameters yield an identical index on
+ *   every chain at every instant, with no messaging, oracle, or sync window. See
+ *   {IOkuM.setOkuMRate}.
  *
  * TOKEN AMOUNTS:
- *   - okuMAmount: Raw OkuM token count (18 decimals, non-rebasing)
- *   - usdAmount:  UsdOku amount in dollar terms (18 decimals, rebasing via usdMultiplier)
- *   - usdcAmount: USDC amount in its native decimals (per-deployment via IERC20Metadata.decimals())
- *
- * INTERNAL ACCOUNTING:
- *   - shares:  Internal accounting units for the rebasing OkuDollar (usdShares)
- *   - dollars: 18-decimal dollar-denominated value (intermediate calculation unit)
+ *   - okuMAmount: raw OkuM token count (18dp, non-rebasing)
+ *   - usdAmount:  USDOku amount in dollar terms (18dp, rebasing via M_usd)
+ *   - usdcAmount: USDC in its native decimals (resolved per-deployment)
  *
  * KEY FORMULAS:
- *   USDC -> OkuM:           okuMAmount = (usdcAmount * decimalMultiplier) * PRECISION / okuMMultiplier
- *   OkuM -> USDC:           usdcAmount = (okuMAmount * okuMMultiplier / PRECISION) / decimalMultiplier
- *   OkuM -> UsdOku shares:  shares     = okuMAmount * okuMMultiplier / usdMultiplier
- *   UsdOku -> OkuM:         okuMAmount = usdAmount * PRECISION / okuMMultiplier
+ *   USDC   -> OkuM:          okuMAmount = (usdcAmount * decimalMultiplier) * PRECISION / M_oku
+ *   OkuM   -> USDC:          usdcAmount = (okuMAmount * M_oku / PRECISION) / decimalMultiplier
+ *   OkuM   -> USDOku shares: shares     = okuMAmount * M_oku / M_usd
+ *   USDOku -> OkuM:          okuMAmount = usdAmount * PRECISION / M_oku
  *
  * ============================================
  */
 library Constants {
-    /// @notice Standard precision for price and multiplier calculations (1e18 = $1.00)
+    /// @notice Fixed-point base for multipliers, rates and shares (1e18 = 1.0 = $1.00).
     uint256 public constant PRECISION = 1e18;
 
-    /// @notice Maximum yield rate: PRECISION + 1e11 ≈ 3700% APY safety cap.
-    /// @dev Far above any plausible T-Bill rate; bounds the per-second compounding
-    ///      input to {MathLib.rpow} away from overflow regions. NOTE: this caps
-    ///      the *per-second compounding rate*, NOT the cumulative multiplier
-    ///      value reached after many seconds of compounding — use
-    ///      `MAX_MULTIPLIER` for that.
-    uint256 public constant MAX_RATE = PRECISION + 1e11;
-
-    /// @notice Absolute ceiling for any cumulative multiplier (OkuMoney's
-    ///         `okuMMultiplier` and OkuDollar's `usdMultiplier`).
-    /// @dev `1e24` = $1,000,000 of dollar value per token (since
-    ///      `PRECISION = 1e18` represents $1.00). Far above any realistic
-    ///      yield trajectory and keeps downstream `uint256 * uint256`
-    ///      multiplications away from the overflow region. Mirrors the SVM
-    ///      `MAX_MULTIPLIER` guard (`oku-shared::constants::MAX_MULTIPLIER`,
-    ///      scaled for SVM's 1e9 precision) — math sanity bound that bounds
-    ///      the rpow / mulDiv input space, not a constraint on the trusted
-    ///      operator. Note SVM's `lite-psm` has no separate OkuDollar-equivalent
-    ///      vault program, so this constant governs only the OkuM-side price cap.
-    uint256 public constant MAX_MULTIPLIER = 1e24;
-
-    /// @notice Basis points denominator (10000 = 100%)
+    /// @notice Basis points denominator (10_000 = 100%).
     uint256 public constant BASIS_POINTS = 10_000;
 
-    // ============ Vault / Collateralization ============
+    /// @notice Annualization base for APR conversions.
+    uint256 public constant SECONDS_PER_YEAR = 365 days;
 
-    /// @notice Hard floor for OkuDollar minimum collateral ratio (90% of PRECISION).
-    /// @dev Mirrors the SVM-side floor so cross-chain accounting stays consistent.
-    uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = 9e17;
+    // ============ Accrual bounds ============
+    //
+    // These three constants are the ONLY on-chain guarantee that OkuM does not pay
+    // out yield the issuer has not realized. That guarantee cannot be proven on-chain
+    // — OkuM's backing is off-chain RWA and no contract can inspect it — so it is
+    // procedural, and these bound the blast radius if the procedure fails or a key is
+    // compromised:
+    //
+    //   worst-case unrealized accrual <= MAX_IMPLIED_APR_BPS applied for
+    //                                    MAX_RATE_DURATION, after which accrual
+    //                                    FLATLINES until a fresh operator action.
+    //
+    // Bounded and self-healing. Anything stronger requires an independent attester
+    // (RWA custodian signature or a Proof-of-Reserve feed) — see TRACKER.md.
+
+    /// @notice Nominal (simple) annualized cap on a declared rate's implied APR, in bps.
+    /// @dev At the cap, delivered APY via per-second compounding is ~10.52%, and the
+    ///      worst-case over-accrual from a compromised key is ~0.82% per 30-day
+    ///      segment. PLACEHOLDER pending treasury sign-off — tracked in TRACKER.md.
+    uint256 public constant MAX_IMPLIED_APR_BPS = 1000;
+
+    /// @notice Per-second compounding-rate ceiling implied by {MAX_IMPLIED_APR_BPS}.
+    /// @dev `PRECISION + (PRECISION * MAX_IMPLIED_APR_BPS / BASIS_POINTS) / SECONDS_PER_YEAR`
+    ///      = `PRECISION + 3_170_979_198`, precomputed because Solidity cannot fold
+    ///      this into a `constant` cheaply. Verified: compounded over
+    ///      `SECONDS_PER_YEAR` this yields ~10.517% APY, over 30 days ~0.8253%.
+    uint256 public constant MAX_RATE_PER_SECOND = PRECISION + 3_170_979_198;
+
+    /// @notice Maximum span of a single rate segment.
+    /// @dev A missed renewal freezes accrual rather than compounding unboundedly. The
+    ///      cap also binds catch-up, so a long outage cannot be fully compensated in
+    ///      one segment — deliberate.
+    uint256 public constant MAX_RATE_DURATION = 30 days;
+
+    /// @notice How far ahead of `block.timestamp` a segment may be scheduled to start.
+    /// @dev Forward scheduling is what makes multichain synchronisation work: publish
+    ///      the same segment on every chain BEFORE `startTime`, and all chains switch
+    ///      simultaneously by wall clock regardless of when each transaction landed.
+    ///      This is also exactly ERC-8056's `effectiveAt` semantics — the pending
+    ///      segment IS the pending multiplier. Bounded so a scheduled segment cannot
+    ///      be parked indefinitely far out where it is easy to forget.
+    uint256 public constant MAX_SCHEDULE_LEAD = 30 days;
+
+    /// @notice Largest instantaneous jump permitted when installing a new segment, in bps.
+    /// @dev Normally ZERO is used: an on-time declaration supplies a `baseIndex` exactly
+    ///      equal to the index the live segment already reaches at `startTime`, so the
+    ///      curve is continuous and there is no jump at all.
+    ///
+    ///      The tolerance exists solely for CATCH-UP. Because `baseIndex` is supplied as
+    ///      an absolute value (which is what lets a chain that missed a segment self-heal
+    ///      rather than diverge permanently), a late chain installs a base slightly above
+    ///      its locally-computed index. At 10 bps that permits roughly a week of catch-up
+    ///      at a 5% APR while capping any single step at 0.1%.
+    ///
+    ///      This is what makes "no step arbitrage" a CONTRACT-ENFORCED property rather
+    ///      than a procedural one: even a fully compromised `OKUM_RATE_SETTER` cannot
+    ///      manufacture a step larger than this.
+    uint256 public constant MAX_REANCHOR_BPS = 10;
+
+    /// @notice Absolute ceiling for any cumulative multiplier (`M_oku` and `M_usd`).
+    /// @dev `1e24` = $1,000,000 per token. Keeps downstream `uint256 * uint256`
+    ///      products away from the overflow region. Mirrors the SVM-side
+    ///      `MAX_MULTIPLIER` guard (scaled for SVM's 1e9 precision).
+    uint256 public constant MAX_MULTIPLIER = 1e24;
+
+    /// @notice Absolute ceiling on `maxSupply`, so `supply * multiplier` cannot overflow.
+    /// @dev `MAX_TOTAL_SUPPLY * MAX_MULTIPLIER < type(uint256).max` — asserted as a
+    ///      static invariant in the test suite.
+    uint256 public constant MAX_TOTAL_SUPPLY = 1e33;
+
+    // ============ Vault / solvency ============
+
+    /// @notice How far USDOku's declared liability may outrun the OkuM backing it.
+    /// @dev **ZERO: the forward rate must be PRE-FUNDED.** `setUsdOkuRate` requires the
+    ///      liability projected to `rateEnd` to be already covered by OkuM held in the
+    ///      vault, so the issuer funds the smoothing wedge BEFORE declaring a rate that
+    ///      pays it.
+    ///
+    ///      This is what makes `backing >= liability` a MAINTAINED invariant rather
+    ///      than a monitoring threshold, and it closes the defect where a grown USDOku
+    ///      balance was not fully redeemable: earlier exiters were paid in full and the
+    ///      last one out was stranded.
+    ///
+    ///      Rounding favours the invariant in both directions: `wrap` FLOORS the share
+    ///      credit (building surplus) and `unwrap` CEILS the share burn (so liability
+    ///      falls at least as fast as backing).
+    uint256 public constant MAX_SOLVENCY_GAP_BPS = 0;
 
     /// @notice Maximum supported USDC decimal count.
-    /// @dev USDC implementations on EVM chains use 6 decimals; allowing up to 18 keeps
-    ///      the protocol forward-compatible with non-Circle stablecoin variants while
-    ///      preventing misconfiguration with absurd values.
+    /// @dev Circle USDC is 6dp on every EVM chain; 18 is the ERC-20 upper bound.
+    ///      Capping rather than hardcoding 6 is deliberate forward-compatibility.
     uint8 public constant MAX_USDC_DECIMALS = 18;
+
+    // ============ ERC-165 interface IDs ============
+    //
+    // Verified against the published ERC-8056 draft. Asserted against
+    // `type(I).interfaceId` in the test suite so a drifting interface fails the build
+    // rather than silently breaking wallet detection.
+
+    bytes4 public constant IID_SCALED_UI_AMOUNT = 0xa60bf13d;
+    bytes4 public constant IID_SCALED_UI_NEW_MULTIPLIER = 0x4bd27648;
+    bytes4 public constant IID_SCALED_UI_CONVERSION = 0x57854fc3;
+    bytes4 public constant IID_SCALED_UI_BALANCES = 0xd890fd71;
 }

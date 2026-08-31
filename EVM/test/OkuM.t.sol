@@ -11,7 +11,6 @@ import {OkuM} from "../src/token/OkuM.sol";
 import {Constants} from "../src/lib/Constants.sol";
 import {Errors} from "../src/lib/Errors.sol";
 import {Roles} from "../src/lib/Roles.sol";
-import {MathLib} from "../src/lib/MathLib.sol";
 import {IScaledUIAmount} from "../src/interfaces/erc8056/IScaledUIAmount.sol";
 import {
     IScaledUIAmountNewUIMultiplier
@@ -67,8 +66,6 @@ contract OkuMTest is BaseTest {
         uint64 start = uint64(block.timestamp + 1 days);
         uint256 base = okuM.uiMultiplier();
 
-        vm.prank(gatekeeper);
-        psm.closeWindow();
         vm.prank(rateSetter);
         okuM.setOkuMRate(base, _rateFor(500), start, start + uint64(30 days), 0);
 
@@ -108,8 +105,6 @@ contract OkuMTest is BaseTest {
 
     function test_rateSetterIsRoleGated() public {
         uint256 base = okuM.uiMultiplier();
-        vm.prank(gatekeeper);
-        psm.closeWindow();
 
         vm.prank(alice);
         vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
@@ -122,8 +117,6 @@ contract OkuMTest is BaseTest {
         uint256 base = okuM.uiMultiplier();
         uint256 tooHigh = Constants.MAX_RATE_PER_SECOND + 1;
         uint64 s = uint64(block.timestamp);
-        vm.prank(gatekeeper);
-        psm.closeWindow();
 
         vm.prank(rateSetter);
         vm.expectRevert(OkuM.RateOutOfBounds.selector);
@@ -135,8 +128,6 @@ contract OkuMTest is BaseTest {
         uint256 rate = _rateFor(500);
         uint64 s = uint64(block.timestamp);
         uint64 tooLong = s + uint64(Constants.MAX_RATE_DURATION) + 1;
-        vm.prank(gatekeeper);
-        psm.closeWindow();
 
         vm.prank(rateSetter);
         vm.expectRevert(OkuM.InvalidRateWindow.selector);
@@ -147,8 +138,6 @@ contract OkuMTest is BaseTest {
         uint256 base = okuM.uiMultiplier();
         uint256 rate = _rateFor(500);
         uint64 s = uint64(block.timestamp + Constants.MAX_SCHEDULE_LEAD + 1);
-        vm.prank(gatekeeper);
-        psm.closeWindow();
 
         vm.prank(rateSetter);
         vm.expectRevert(OkuM.ScheduledTooFarAhead.selector);
@@ -162,8 +151,6 @@ contract OkuMTest is BaseTest {
         uint256 live = okuM.uiMultiplier();
         uint256 rate = _rateFor(500);
         uint64 s = uint64(block.timestamp);
-        vm.prank(gatekeeper);
-        psm.closeWindow();
 
         vm.prank(rateSetter);
         vm.expectRevert(OkuM.MultiplierCannotDecrease.selector);
@@ -182,9 +169,6 @@ contract OkuMTest is BaseTest {
         uint64 s = uint64(block.timestamp);
         uint256 maxAllowed = live + (live * Constants.MAX_REANCHOR_BPS) / Constants.BASIS_POINTS;
 
-        vm.prank(gatekeeper);
-        psm.closeWindow();
-
         // A doubling attempt is refused.
         vm.prank(rateSetter);
         vm.expectPartialRevert(OkuM.ReanchorTooLarge.selector);
@@ -196,6 +180,30 @@ contract OkuMTest is BaseTest {
         assertEq(okuM.uiMultiplier(), maxAllowed);
     }
 
+    /// @dev REGRESSION for a real bypass found before `StartTimeInThePast` existed:
+    ///      the re-anchor check compared `baseIndex` against `indexAt(startTime)` —
+    ///      the CALLER'S OWN parameter — with no floor on `startTime`. Backdating let
+    ///      the rate setter pick a historical point where the live index was low,
+    ///      declare `baseIndex` exactly equal to it (passing "no re-anchor" trivially),
+    ///      and let a long `elapsed` compound the EFFECTIVE index at `block.timestamp`
+    ///      to roughly the 30-day APR cap (~0.82%) — about 8x the 10bps re-anchor
+    ///      bound this bypassed, and repeatable per call.
+    function test_backdatingNoLongerBypassesTheReanchorBound() public {
+        _setOkuMRate(500, 30 days);
+        vm.warp(block.timestamp + 10 days);
+
+        uint64 backdatedStart = uint64(block.timestamp - 40 days);
+        uint64 backdatedEnd = backdatedStart + uint64(Constants.MAX_RATE_DURATION);
+        uint256 liveAtBackdatedStart = okuM.indexAt(backdatedStart);
+        assertEq(liveAtBackdatedStart, Constants.PRECISION, "fixture: resolves to the flat base");
+
+        vm.prank(rateSetter);
+        vm.expectRevert(OkuM.StartTimeInThePast.selector);
+        okuM.setOkuMRate(
+            liveAtBackdatedStart, Constants.MAX_RATE_PER_SECOND, backdatedStart, backdatedEnd, 0
+        );
+    }
+
     /// @dev Stopping accrual must never be blocked by the checks that bound raising
     ///      it — otherwise the contract can lock itself out of the one action needed
     ///      to recover.
@@ -205,8 +213,6 @@ contract OkuMTest is BaseTest {
 
         uint256 live = okuM.uiMultiplier();
         uint64 s = uint64(block.timestamp);
-        vm.prank(gatekeeper);
-        psm.closeWindow();
 
         vm.prank(rateSetter);
         okuM.setOkuMRate(live, Constants.PRECISION, s, s + uint64(30 days), 0);
@@ -215,47 +221,91 @@ contract OkuMTest is BaseTest {
         assertEq(okuM.uiMultiplier(), live, "a flat segment stops accrual dead");
     }
 
-    // ============ The closed-window precondition ============
-
-    function test_rateCannotBePublishedWhileTheWindowIsOpen() public {
-        assertTrue(psm.conversionsOpen(), "fixture: window is open");
+    /// @dev `setOkuMRate` no longer gates on the PSM window at all — a routine
+    ///      declaration moves slope, not level, so an open window exposes nothing.
+    ///      Publication must succeed with the window open, closed, or paused alike.
+    function test_ratePublicationDoesNotDependOnPsmWindowState() public {
         uint256 base = okuM.uiMultiplier();
         uint256 rate = _rateFor(500);
         uint64 s = uint64(block.timestamp);
 
+        assertTrue(psm.conversionsOpen(), "fixture: window is open");
         vm.prank(rateSetter);
-        vm.expectRevert(OkuM.ConversionsStillOpen.selector);
-        okuM.setOkuMRate(base, rate, s, s + 1 days, 0);
+        okuM.setOkuMRate(base, rate, s, s + uint64(1 days), 0);
 
+        vm.warp(block.timestamp + 1 days);
         vm.prank(gatekeeper);
         psm.closeWindow();
-
+        base = okuM.uiMultiplier();
+        s = uint64(block.timestamp);
         vm.prank(rateSetter);
         okuM.setOkuMRate(base, rate, s, s + uint64(1 days), 0);
-    }
 
-    /// @dev A paused PSM is a closed window — pausing must not block rate publication.
-    function test_pausedPsmCountsAsClosed() public {
+        vm.warp(block.timestamp + 1 days);
         vm.prank(admin);
         psm.pause();
-        assertFalse(psm.conversionsOpen());
-
-        uint256 base = okuM.uiMultiplier();
-        uint256 rate = _rateFor(500);
-        uint64 s = uint64(block.timestamp);
+        base = okuM.uiMultiplier();
+        s = uint64(block.timestamp);
         vm.prank(rateSetter);
         okuM.setOkuMRate(base, rate, s, s + uint64(1 days), 0);
     }
 
-    function test_gateUnsetSkipsTheCheck() public {
-        vm.prank(admin);
-        okuM.setConversionGate(address(0));
+    // ============ Backdating and immediate re-anchor ============
 
-        uint256 base = okuM.uiMultiplier();
-        uint256 rate = _rateFor(500);
-        uint64 s = uint64(block.timestamp);
+    /// @dev The bug this replaces: `startTime` must never be permitted in the past.
+    ///      Without this floor, `indexAt(startTime)` resolves against arbitrary
+    ///      history and admits a jump far larger than `MAX_REANCHOR_BPS`.
+    function test_backdatedStartTimeIsRejected() public {
+        _setOkuMRate(500, 30 days);
+        vm.warp(block.timestamp + 10 days);
+
+        uint64 backdated = uint64(block.timestamp - 40 days);
+        uint256 liveAtBackdated = okuM.indexAt(backdated);
+
         vm.prank(rateSetter);
-        okuM.setOkuMRate(base, rate, s, s + uint64(1 days), 0);
+        vm.expectRevert(OkuM.StartTimeInThePast.selector);
+        okuM.setOkuMRate(
+            liveAtBackdated,
+            Constants.MAX_RATE_PER_SECOND,
+            backdated,
+            backdated + uint64(Constants.MAX_RATE_DURATION),
+            0
+        );
+    }
+
+    /// @dev `startTime == 0` is a sentinel for "now" — the operator cannot predict
+    ///      the exact mined timestamp, so exact equality must be resolvable on-chain.
+    function test_zeroStartTimeSentinelMeansNow() public {
+        _setOkuMRate(500, 30 days);
+        vm.warp(block.timestamp + 5 days);
+
+        uint256 live = okuM.uiMultiplier();
+        uint256 rate = _rateFor(500);
+
+        vm.prank(rateSetter);
+        okuM.setOkuMRate(live, rate, 0, uint64(block.timestamp + 1 days), 0);
+
+        assertEq(okuM.activeSegment().startTime, block.timestamp, "sentinel resolved to now");
+    }
+
+    /// @dev A genuine re-anchor (a level step above the live curve) may only take
+    ///      effect immediately. Scheduling one ahead would let it land unattended at
+    ///      `startTime` — exactly the arbitrage window `MAX_REANCHOR_BPS` exists to
+    ///      close.
+    function test_reanchorCannotBeScheduledAhead() public {
+        _setOkuMRate(500, 30 days);
+        vm.warp(block.timestamp + 5 days);
+
+        uint256 live = okuM.uiMultiplier();
+        uint256 rate = _rateFor(500);
+        uint256 maxAllowed = live + (live * Constants.MAX_REANCHOR_BPS) / Constants.BASIS_POINTS;
+        uint64 future = uint64(block.timestamp + 1 days);
+
+        // The declared base is a re-anchor relative to indexAt(future) (the curve is
+        // flat before the next segment takes effect, so this is still > live-at-future).
+        vm.prank(rateSetter);
+        vm.expectRevert(OkuM.ReanchorMustBeImmediate.selector);
+        okuM.setOkuMRate(maxAllowed, rate, future, future + uint64(1 days), 0);
     }
 
     // ============ Halt ============

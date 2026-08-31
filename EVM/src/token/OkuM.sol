@@ -20,14 +20,8 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
-import {MathLib} from "../lib/MathLib.sol";
 import {ScaledUIAmountUpgradeable} from "../lib/ScaledUIAmountUpgradeable.sol";
 import {IOkuM} from "../interfaces/IOkuM.sol";
-
-/// @dev Minimal view the PSM exposes so `setOkuMRate` can require a closed window.
-interface IConversionGate {
-    function conversionsOpen() external view returns (bool);
-}
 
 /**
  * @title OkuM
@@ -94,10 +88,6 @@ contract OkuM is
         mapping(address => uint256) minterAllowance;
         uint256 maxSupply;
         mapping(address => bool) isBlacklisted;
-        /// @dev LitePSM. When set, `setOkuMRate` requires its conversion window
-        ///      closed. Zero-address disables the check, which is required at deploy
-        ///      because the PSM does not exist when OkuM initializes.
-        address conversionGate;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuM")) - 1)) & ~bytes32(uint256(0xff))
@@ -135,7 +125,6 @@ contract OkuM is
 
     event AccrualHalted(address indexed guardian);
     event AccrualResumed(address indexed resumer);
-    event ConversionGateSet(address indexed oldGate, address indexed newGate);
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
     );
@@ -163,13 +152,21 @@ contract OkuM is
     error InvalidRateWindow();
     /// @dev `startTime` further ahead than `MAX_SCHEDULE_LEAD`.
     error ScheduledTooFarAhead();
+    /// @dev `startTime` (after sentinel resolution) is in the past. Backdating is
+    ///      never legal: it would let `indexAt(startTime)` resolve against stale
+    ///      history and admit a jump far larger than `MAX_REANCHOR_BPS` in one call.
+    error StartTimeInThePast();
     /// @dev The declared `baseIndex` would move the index DOWN at `startTime`.
     error MultiplierCannotDecrease();
     /// @dev The declared `baseIndex` would jump more than `MAX_REANCHOR_BPS` above
     ///      the value the live segment already reaches at `startTime`.
     error ReanchorTooLarge(uint256 declared, uint256 maxAllowed);
-    /// @dev The PSM's permissionless conversion window is still open.
-    error ConversionsStillOpen();
+    /// @dev A re-anchor (`baseIndex > indexAt(startTime)`) was scheduled for the
+    ///      future instead of taking effect immediately. Forward-scheduling a LEVEL
+    ///      step would let it land unattended at `startTime`, exactly the window the
+    ///      re-anchor bound exists to close. Catch-up must happen now — pass
+    ///      `startTime == 0` to mean "now".
+    error ReanchorMustBeImmediate();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -265,11 +262,6 @@ contract OkuM is
         return _getOkuMStorage().isBlacklisted[account];
     }
 
-    /// @notice The PSM whose conversion window must be closed to declare a rate.
-    function conversionGate() external view returns (address) {
-        return _getOkuMStorage().conversionGate;
-    }
-
     /// @notice Allowance in DOLLAR terms, saturating at `type(uint256).max`.
     /// @dev A bounded OkuM approval is denominated in RAW units, so its dollar value
     ///      GROWS as the multiplier rises — the opposite drift to a USDOku approval.
@@ -296,18 +288,37 @@ contract OkuM is
     ///      chain that missed a segment entirely is restored by the next one, whereas
     ///      deriving the base locally would make that divergence permanent.
     ///
-    ///      Schedule `startTime` in the FUTURE for a clean multichain switchover: all
-    ///      chains then flip simultaneously by wall clock. This is exactly ERC-8056's
-    ///      `effectiveAt` semantics — the pending segment IS the pending multiplier.
+    ///      ## Two disjoint shapes, not one tolerance band
     ///
-    ///      Re-declaring before the current segment ends is expected and cheap: the
-    ///      index level is continuous, only the slope changes. There is no lock-in for
-    ///      the period, which is where the flexibility to respond to a variable real
-    ///      rate comes from.
+    ///      This function used to accept ANY `baseIndex` within `MAX_REANCHOR_BPS` of
+    ///      `indexAt(startTime)`, for any `startTime` (past or future). That is unsafe:
+    ///      `startTime` had no lower bound, so a caller could pick an arbitrary point
+    ///      in the past where `indexAt` resolves low, declare `baseIndex` EQUAL to it
+    ///      (passing the "no re-anchor" path trivially), and let the resulting
+    ///      `elapsed` at `block.timestamp` compound far past what the re-anchor bound
+    ///      was meant to be the only way to exceed. Continuity at `startTime` said
+    ///      nothing about the jump actually delivered at `block.timestamp`.
+    ///
+    ///      The fix separates two shapes that were incorrectly treated as one:
+    ///
+    ///      - ROUTINE (`baseIndex == indexAt(startTime)`, exactly): the curve is
+    ///        seamless, so `startTime` MAY be scheduled in the future — this is what
+    ///        makes multichain switchover work, and is the normal path.
+    ///      - CATCH-UP (`baseIndex` up to `MAX_REANCHOR_BPS` ABOVE `indexAt(startTime)`):
+    ///        a genuine level step, bounded at 0.1%. This may ONLY take effect
+    ///        immediately (`startTime == block.timestamp`) — never scheduled ahead,
+    ///        because a scheduled step would land unattended at `startTime`, which is
+    ///        exactly the arbitrage window the bound exists to close. Pass
+    ///        `startTime == 0` as a sentinel for "now": an operator cannot predict the
+    ///        exact mined timestamp, so exact equality must be resolvable on-chain.
+    ///
+    ///      `startTime` in the past is rejected outright in both shapes — see
+    ///      {StartTimeInThePast}.
     ///
     /// @param baseIndex Index value at `startTime`, 18dp. Absolute.
     /// @param ratePerSecond Per-second compounding rate; `PRECISION` means no accrual.
-    /// @param startTime Absolute wall-clock anchor. May be past (catch-up) or future.
+    /// @param startTime Absolute wall-clock anchor, or `0` to mean "now". Future is
+    ///        allowed only for a routine (non-re-anchoring) declaration.
     /// @param endTime Accrual flatlines past this.
     /// @param realizedYieldBacking Already-realized yield backing this segment, 18dp.
     ///        Logged for audit reconciliation; see {OkuMRateSet}.
@@ -323,6 +334,11 @@ contract OkuM is
     {
         if (accrualHalted()) revert AccrualIsHalted();
 
+        // Sentinel resolved FIRST: every downstream check, the stored segment, and
+        // the emitted event must all see the real timestamp. Resolving later would
+        // let endTime - 0 pass the duration check trivially.
+        if (startTime == 0) startTime = uint64(block.timestamp);
+
         // Rate bounds. `PRECISION` (a flat segment) is always legal: stopping accrual
         // must never be blocked by the same checks that bound raising it.
         if (ratePerSecond < Constants.PRECISION || ratePerSecond > Constants.MAX_RATE_PER_SECOND) {
@@ -331,6 +347,9 @@ contract OkuM is
         if (endTime < startTime || endTime - startTime > Constants.MAX_RATE_DURATION) {
             revert InvalidRateWindow();
         }
+        // Backdating is never legal. Without this, `indexAt(startTime)` below
+        // resolves against arbitrary history instead of the live curve.
+        if (startTime < block.timestamp) revert StartTimeInThePast();
         if (startTime > block.timestamp + Constants.MAX_SCHEDULE_LEAD) {
             revert ScheduledTooFarAhead();
         }
@@ -346,13 +365,11 @@ contract OkuM is
             + Math.mulDiv(liveAtStart, Constants.MAX_REANCHOR_BPS, Constants.BASIS_POINTS);
         if (baseIndex > maxAllowed) revert ReanchorTooLarge(baseIndex, maxAllowed);
 
-        // The window must be shut. Rate changes are routine and safe here — a
-        // continuous segment moves slope, not level — but closing the window is the
-        // operational discipline that keeps publication and trading disjoint, and it
-        // costs three lines instead of an on-chain calendar with DST and holidays.
-        address gate = _getOkuMStorage().conversionGate;
-        if (gate != address(0) && IConversionGate(gate).conversionsOpen()) {
-            revert ConversionsStillOpen();
+        // A genuine re-anchor (level step) may only take effect NOW. Scheduling it
+        // ahead would let it land autonomously at `startTime` with nobody watching —
+        // the same arbitrage window this bound exists to close.
+        if (baseIndex > liveAtStart && startTime != block.timestamp) {
+            revert ReanchorMustBeImmediate();
         }
 
         _installSegment(
@@ -383,14 +400,6 @@ contract OkuM is
         if (!accrualHalted()) revert NotHalted();
         _setAccrualHalted(false);
         emit AccrualResumed(msg.sender);
-    }
-
-    /// @notice Point the rate setter's closed-window check at the PSM.
-    /// @dev Necessarily post-deploy: the PSM does not exist when OkuM initializes.
-    function setConversionGate(address gate) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        OkuMStorage storage $ = _getOkuMStorage();
-        emit ConversionGateSet($.conversionGate, gate);
-        $.conversionGate = gate;
     }
 
     // ============ ERC20Permit override (blacklist) ============

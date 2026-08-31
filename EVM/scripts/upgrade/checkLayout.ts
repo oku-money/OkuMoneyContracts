@@ -17,7 +17,6 @@ import { logger } from "../utils/logger";
 const TARGETS: Record<string, string> = {
   OkuM: "OkuM",
   USDOku: "USDOku",
-  RedemptionQueue: "RedemptionQueue",
   LitePSM: "LitePSM",
 };
 

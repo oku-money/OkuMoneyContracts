@@ -27,33 +27,31 @@ export type StateSnapshot = Record<string, string>;
 // ============================================================================
 //
 // Invariants exercised on upgrade:
-//   - Wired addresses (okuM, usdOku, usdc, redemptionQueue) preserved.
+//   - Wired addresses (okuM, usdc) preserved.
 //   - usdcDecimalMultiplier preserved (resolved once at init from IERC20Metadata).
-//   - Pause state preserved.
+//   - Window state (mintEnabled, redeemEnabled) and pause state preserved.
+//
+// NOTE: there is no `redemptionQueue` or `usdOku` field on LitePSM — the PSM
+// only ever wires okuM + usdc. USDOku is reached in two steps by callers
+// (mintOkuM then wrap), never referenced from LitePSM itself.
 
 export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
-  const [
-    okuM,
-    usdOku,
-    usdc,
-    redemptionQueue,
-    usdcDecimalMultiplier,
-    paused,
-  ] = await Promise.all([
-    c.okuM(),
-    c.usdOku(),
-    c.usdc(),
-    c.redemptionQueue(),
-    c.usdcDecimalMultiplier(),
-    c.paused(),
-  ]);
+  const [okuM, usdc, usdcDecimalMultiplier, mintEnabled, redeemEnabled, paused] =
+    await Promise.all([
+      c.okuM(),
+      c.usdc(),
+      c.usdcDecimalMultiplier(),
+      c.mintEnabled(),
+      c.redeemEnabled(),
+      c.paused(),
+    ]);
 
   return {
     okuM: String(okuM),
-    usdOku: String(usdOku),
     usdc: String(usdc),
-    redemptionQueue: String(redemptionQueue),
     usdcDecimalMultiplier: usdcDecimalMultiplier.toString(),
+    mintEnabled: String(mintEnabled),
+    redeemEnabled: String(redeemEnabled),
     paused: String(paused),
   };
 }
@@ -64,47 +62,31 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
 //
 // Invariants exercised on upgrade:
 //   - Wired okuM preserved.
-//   - Rate-and-share storage (usdBaseMultiplier, usdRatePerSecond, usdLastAccrualTime,
-//     usdRateEnd, usdPendingRatePerSecond, totalUsdShares, minCollateralRatio) preserved.
-//   - Pause state preserved.
+//   - Share ledger total (totalShares) and rate-window bound (rateEnd) preserved.
+//   - Pause and accrual-halt state preserved.
 //
-// We deliberately *do not* snapshot `usdOkuIndex()` because it is computed from
-// (base, rate, elapsed) at read time — if rate > PRECISION it will drift between
-// the pre- and post-snapshot reads even with zero storage change. The underlying
-// storage fields above are the right things to pin.
+// We deliberately *do not* snapshot `usdOkuIndex()` (or `totalSupply()`, which is
+// derived from it) because it is computed from (base, rate, elapsed) at read time
+// — if rate > PRECISION it will drift between the pre- and post-snapshot reads
+// even with zero storage change. `totalShares` is the underlying storage field
+// that upgrade must not touch; the index computation is the same before and after
+// as long as the segment fields (opaque behind `activeSegment()`/`pendingSegment()`
+// on OkuM's ERC-8056 layer, not exposed as flat getters here) are untouched.
 
 export async function readUSDOkuState(c: Contract): Promise<StateSnapshot> {
-  const [
-    okuM,
-    usdBaseMultiplier,
-    usdRatePerSecond,
-    usdLastAccrualTime,
-    usdRateEnd,
-    usdPendingRatePerSecond,
-    totalUsdShares,
-    minCollateralRatio,
-    paused,
-  ] = await Promise.all([
+  const [okuM, totalShares, rateEnd, accrualHalted, paused] = await Promise.all([
     c.okuM(),
-    c.usdBaseMultiplier(),
-    c.usdRatePerSecond(),
-    c.usdLastAccrualTime(),
-    c.usdRateEnd(),
-    c.usdPendingRatePerSecond(),
-    c.totalUsdShares(),
-    c.minCollateralRatio(),
+    c.totalShares(),
+    c.rateEnd(),
+    c.accrualHalted(),
     c.paused(),
   ]);
 
   return {
     okuM: String(okuM),
-    usdBaseMultiplier: usdBaseMultiplier.toString(),
-    usdRatePerSecond: usdRatePerSecond.toString(),
-    usdLastAccrualTime: usdLastAccrualTime.toString(),
-    usdRateEnd: usdRateEnd.toString(),
-    usdPendingRatePerSecond: usdPendingRatePerSecond.toString(),
-    totalUsdShares: totalUsdShares.toString(),
-    minCollateralRatio: minCollateralRatio.toString(),
+    totalShares: totalShares.toString(),
+    rateEnd: rateEnd.toString(),
+    accrualHalted: String(accrualHalted),
     paused: String(paused),
   };
 }
@@ -148,47 +130,14 @@ export async function readOkuMState(c: Contract): Promise<StateSnapshot> {
 }
 
 // ============================================================================
-// RedemptionQueue
+// Removed contracts
 // ============================================================================
 //
-// Invariants exercised on upgrade:
-//   - Wired addresses (okuM, usdc) preserved.
-//   - usdcDecimalMultiplier preserved (resolved once at init from IERC20Metadata).
-//   - Queue head/tail counters and totalQueuedOkuM preserved (an impl upgrade
-//     must not advance or reset the queue cursor).
-//
-// RedemptionQueue does NOT inherit PausableUpgradeable — confirmed against
-// src/psm/RedemptionQueue.sol. No paused() field is snapshotted.
-
-export async function readRedemptionQueueState(c: Contract): Promise<StateSnapshot> {
-  const [okuM, usdc, usdcDecimalMultiplier, queueHead, queueTail, totalQueuedOkuM] =
-    await Promise.all([
-      c.okuM(),
-      c.usdc(),
-      c.usdcDecimalMultiplier(),
-      c.queueHead(),
-      c.queueTail(),
-      c.totalQueuedOkuM(),
-    ]);
-
-  return {
-    okuM: String(okuM),
-    usdc: String(usdc),
-    usdcDecimalMultiplier: usdcDecimalMultiplier.toString(),
-    queueHead: queueHead.toString(),
-    queueTail: queueTail.toString(),
-    totalQueuedOkuM: totalQueuedOkuM.toString(),
-  };
-}
-
-// ============================================================================
-// OkuBridge / OkuBridgeRouter
-// ============================================================================
-//
-// State readers for OkuBridge and OkuBridgeRouter were removed in the noBridge
-// refactor. If a live deployment still has those proxies on-chain and an
-// upgrade is required, re-add the readers (and the corresponding STATE_READERS
-// entries) referencing the master-branch implementations.
+// State readers for RedemptionQueue, OkuBridge, and OkuBridgeRouter were removed
+// — none exist in this design (see TRACKER.md and EVM/README.md "Deleted from
+// the predecessor design"). If a live deployment still has one of those proxies
+// on-chain and an upgrade is required, restore the reader from git history
+// referencing the master-branch implementation.
 
 // ============================================================================
 // Registry
@@ -202,7 +151,6 @@ export async function readRedemptionQueueState(c: Contract): Promise<StateSnapsh
 export const STATE_READERS: Record<string, (c: Contract) => Promise<StateSnapshot>> = {
   OkuM: readOkuMState,
   USDOku: readUSDOkuState,
-  RedemptionQueue: readRedemptionQueueState,
   LitePSM: readLitePSMState,
 };
 

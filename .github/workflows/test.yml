@@ -120,7 +120,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # SVM: Anchor build + bankrun tests + cargo unit tests
   #
-  # Uses Solana v3.1.10 + Anchor CLI v1.0.0 to match Anchor.toml [toolchain].
+  # Uses Solana v3.1.10 + Anchor CLI v1.0.2 to match Anchor.toml [toolchain].
   # The bankrun suite (litesvm, in-process) does NOT require a running validator.
   # ---------------------------------------------------------------------------
   svm-tests:
@@ -174,11 +174,11 @@ jobs:
         id: anchor-cache
         with:
           path: ~/.cargo/bin/anchor
-          key: anchor-1.0.0
+          key: anchor-1.0.2
 
       - name: Install Anchor CLI
         if: steps.anchor-cache.outputs.cache-hit != 'true'
-        run: cargo install --git https://github.com/coral-xyz/anchor --tag v1.0.0 anchor-cli --locked --force
+        run: cargo install --git https://github.com/coral-xyz/anchor --tag v1.0.2 anchor-cli --locked --force
 
       - name: Show tool versions
         run: |
@@ -194,6 +194,15 @@ jobs:
 
       - name: Build Anchor programs
         run: anchor build --ignore-keys
+
+      - name: TypeScript type-check (non-blocking)
+        # `continue-on-error` deliberately: this step was never wired into CI
+        # before, so the true error count against a FRESH IDL (this step runs
+        # after `anchor build`, unlike a locally stale target/) is currently
+        # unknown. Land it non-blocking first to get a real baseline, then
+        # promote to blocking once that baseline is triaged. See TRACKER.md.
+        run: npx tsc --noEmit
+        continue-on-error: true
 
       - name: Run bankrun test suite
         run: npm run test:bankrun

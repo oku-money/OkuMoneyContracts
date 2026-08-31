@@ -108,6 +108,21 @@ what makes "no step arbitrage" a **contract-enforced** property rather than a
 procedural one. Even a fully compromised `OKUM_RATE_SETTER` cannot manufacture a
 larger step.
 
+Two rules make that hold in practice, not just at a single instant:
+
+- **`startTime` may never be backdated.** A declaration with `startTime` in the
+  past would let the continuity check resolve against arbitrary history instead
+  of the live curve — `indexAt(startTime)` for a far-past `startTime` can be far
+  below today's index, so "continuity at `startTime`" says nothing about the jump
+  actually delivered at `block.timestamp`. Pass `startTime == 0` as a sentinel for
+  "now" — useful because an operator cannot predict the exact mined timestamp, and
+  a catch-up re-anchor requires exact equality (see next point).
+- **A re-anchor (`baseIndex` above the live curve) may only take effect
+  immediately**, never scheduled ahead. Forward scheduling is for *routine*
+  declarations only — those never move the level, so there is nothing to protect
+  by making them immediate. A scheduled re-anchor would land unattended at
+  `startTime`, exactly the arbitrage window this bound exists to close.
+
 ### The ERC-8056 fit
 
 A segment scheduled to begin in the future **is** the pending multiplier:
@@ -148,20 +163,27 @@ pausing to stop an outflow *also* froze payouts to everyone already queued.
 With continuous accrual a round-trip earns exactly the elapsed-time yield — what a
 legitimate holder earns — so the fee has nothing left to defend.
 
-### Two gates, not one
+### Two independent levers, and no coupling to rate publication
 
 | | Role | Purpose |
 |---|---|---|
-| `mintEnabled` / `redeemEnabled` | `PSM_GATEKEEPER` | The KMS back-end's routine lever |
+| `mintEnabled` / `redeemEnabled` | `PSM_GATEKEEPER` | The KMS back-end's routine lever — market hours, by policy |
 | `pause()` | `PSM_PAUSER` | Incident response |
 
-Closing the window is an everyday operation because **`setOkuMRate` requires it** —
-which keeps rate publication and trading disjoint without an on-chain calendar, DST
-handling, or a holiday table. The back-end defines its own market hours by closing
-and reopening.
+`setOkuMRate` does **not** require this window closed. A previous design coupled
+the two — every publication had to close the window, publish, then reopen it — on
+the theory that this kept rate publication and trading disjoint. That coupling was
+removed: a *routine* declaration only ever moves slope, not level, so an open
+window exposes nothing to sandwich, and the coupling created a genuine hazard of
+its own — the check ran at publication time while a forward-scheduled segment's
+level step (a re-anchor) actually lands at `startTime`, potentially far later and
+unattended. The re-anchor case is now bounded and fenced on `OkuM` itself instead:
+see [Why continuous instead of stepped](#why-continuous-instead-of-stepped) and
+TRACKER.md.
 
-A fresh deployment starts **closed**, so the first segment can be published before
-anyone can trade against the default 1.0 multiplier.
+A fresh deployment starts **closed**, from `LitePSM.initialize` — so the first
+segment can be published before anyone can trade against the default 1.0
+multiplier. `mintEnabled`/`redeemEnabled` remain available for market-hours policy.
 
 ### Pre-funding is a maintained invariant
 
@@ -181,6 +203,18 @@ fuzzing, not inspection.
 Rounding favours the invariant in both directions — `wrap` floors the share credit
 (building surplus), `unwrap` ceils the share burn (liability falls at least as fast
 as backing).
+
+**`M_usd` re-anchoring is bounded, like `M_oku`'s.** `setUsdOkuRate`'s `baseIndex`
+may exceed the live index at `startTime` by at most `MAX_USD_REANCHOR_BPS` — the
+`M_usd`-side analogue of `MAX_REANCHOR_BPS`. Without this, an unbounded jump would
+instantly reallocate value to whoever holds USDOku shares at the moment of
+declaration, backed only by `backingCoversLiability` (a vault-solvency check, not a
+step-size one) — a real gap found and closed after the OkuM-side re-anchor fix.
+`startTime` may never be backdated, for the same reason it may not on the OkuM
+side. Unlike OkuM's re-anchor, a USDOku re-anchor is **not** required to take
+effect immediately: `M_usd` is a declared forward rate that legitimately schedules
+ahead as routine practice, so forcing immediacy would break the normal use case
+rather than close an arbitrage window. Pass `--start=0` (or omit it) for "now".
 
 ---
 
@@ -290,13 +324,15 @@ Deploy order is enforced: **OkuM → USDOku → LitePSM**. CREATE2-deterministic
 the Arachnid factory, salt
 `keccak256("okumoney." + DEPLOYMENT_VERSION + "." + name)`.
 
-Three post-deploy steps have no on-chain default:
+Two post-deploy steps have no on-chain default:
 
-1. `OkuM.setConversionGate(psm)` — without it the closed-window check is **inert**
-   and rates could be published mid-trading. The deploy script does this and
-   `verifyDeployment` warns if it is missing.
-2. `configureMinterAllowance(psm, ...)` — mint reverts otherwise.
-3. Publish the first segment, **then** `openWindow()`.
+1. `configureMinterAllowance(psm, ...)` — mint reverts otherwise.
+2. Publish the first segment, **then** `openWindow()`. Order is a convention, not
+   an enforced precondition: `setOkuMRate` no longer requires the window closed
+   (see [Two independent levers](#two-independent-levers-and-no-coupling-to-rate-publication)),
+   but a fresh deployment starts with both windows closed regardless, so the
+   first segment is naturally published before anyone can trade against the
+   default 1.0 multiplier.
 
 ### Multichain rate publication
 
@@ -312,6 +348,15 @@ NETWORK=optimism npm run operator:setOkuMRate -- --base=… --rate=… --start=�
 **Do not re-derive `--base` per chain** — passing the identical absolute value is
 what makes the chains agree. Use a `--start` in the future so all chains flip
 simultaneously by wall clock.
+
+**Catch-up (a single diverged chain) is a separate operation, not a variant of
+the above.** Omit `--start`, or pass `--start=0`, to mean "now" — the contract
+resolves the sentinel on-chain since an operator cannot predict the exact mined
+timestamp, and a catch-up re-anchor requires exact equality with
+`block.timestamp`. **Never reuse a sentinel-resolved run's parameters across
+chains**: each chain would resolve a different local timestamp, silently
+breaking sync. `setOkuMRate.ts` refuses to print multichain-reuse parameters
+when the sentinel was used.
 
 ---
 

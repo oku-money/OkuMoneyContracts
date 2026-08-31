@@ -30,7 +30,6 @@ contract CoverageTest is BaseTest {
         assertEq(address(psm.usdc()), address(usdc));
         assertEq(address(usdOku.okuM()), address(okuM));
         assertEq(okuM.maxSupply(), INITIAL_MAX_SUPPLY);
-        assertEq(okuM.conversionGate(), address(psm));
         assertFalse(usdOku.isBlacklisted(alice));
         assertFalse(usdOku.accrualHalted());
         assertEq(usdOku.rateEnd(), block.timestamp);
@@ -58,8 +57,6 @@ contract CoverageTest is BaseTest {
         uint64 future = uint64(block.timestamp + 10 days);
         uint256 base = okuM.indexAt(future);
         assertGt(base, okuM.uiMultiplier(), "the anchor value is ahead of today's");
-        vm.prank(gatekeeper);
-        psm.closeWindow();
         vm.prank(rateSetter);
         okuM.setOkuMRate(base, _rateFor(800), future, future + uint64(20 days), 0);
 

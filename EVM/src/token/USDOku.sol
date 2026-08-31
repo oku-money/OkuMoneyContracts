@@ -150,8 +150,16 @@ contract USDOku is
     error RateOutOfBounds();
     error InvalidRateWindow();
     error ScheduledTooFarAhead();
+    /// @dev `startTime` (after sentinel resolution) is in the past. Backdating is
+    ///      never legal: it would let `indexAt(startTime)` resolve against stale
+    ///      history and admit a jump far larger than `MAX_USD_REANCHOR_BPS` in one
+    ///      call — the same class of bypass fixed on OkuM's `setOkuMRate`.
+    error StartTimeInThePast();
     error IndexCannotDecrease();
     error IndexTooHigh();
+    /// @dev The declared `baseIndex` would jump more than `MAX_USD_REANCHOR_BPS`
+    ///      above the value the live segment already reaches at `startTime`.
+    error UsdReanchorTooLarge(uint256 declared, uint256 maxAllowed);
     error AccrualIsHalted();
     error AlreadyHalted();
     error NotHalted();
@@ -487,6 +495,17 @@ contract USDOku is
     ///      into breach would be unable to stop accruing, which is precisely the
     ///      action needed to recover. An escape hatch that only ever reduces liability
     ///      cannot itself cause harm.
+    ///
+    ///      `startTime` may never be backdated (mirrors the fix on OkuM's
+    ///      `setOkuMRate`), and `baseIndex` may exceed the live index at `startTime`
+    ///      by at most `MAX_USD_REANCHOR_BPS` — bounding the instantaneous value
+    ///      transfer to whoever holds USDOku shares at the moment of declaration.
+    ///      Unlike OkuM's re-anchor, a USDOku jump is NOT required to take effect
+    ///      immediately: `M_usd` is a declared forward rate that legitimately
+    ///      schedules ahead as routine practice, so forbidding that would break the
+    ///      normal use case rather than close an arbitrage window. Pass
+    ///      `startTime == 0` to mean "now" — an operator cannot predict the exact
+    ///      mined timestamp, so the sentinel is accepted on both paths.
     function setUsdOkuRate(
         uint256 baseIndex,
         uint256 ratePerSecond,
@@ -499,17 +518,27 @@ contract USDOku is
         USDOkuStorage storage $ = _getUSDOkuStorage();
         if ($.accrualHalted) revert AccrualIsHalted();
 
+        if (startTime == 0) startTime = uint64(block.timestamp);
+
         if (ratePerSecond < Constants.PRECISION || ratePerSecond > Constants.MAX_RATE_PER_SECOND) {
             revert RateOutOfBounds();
         }
         if (endTime < startTime || endTime - startTime > Constants.MAX_RATE_DURATION) {
             revert InvalidRateWindow();
         }
+        // Backdating is never legal — see {StartTimeInThePast}.
+        if (startTime < block.timestamp) revert StartTimeInThePast();
         if (startTime > block.timestamp + Constants.MAX_SCHEDULE_LEAD) {
             revert ScheduledTooFarAhead();
         }
-        if (baseIndex < indexAt(startTime)) revert IndexCannotDecrease();
         if (baseIndex > Constants.MAX_MULTIPLIER) revert IndexTooHigh();
+
+        uint256 liveAtStart = indexAt(startTime);
+        if (baseIndex < liveAtStart) revert IndexCannotDecrease();
+
+        uint256 maxAllowed = liveAtStart
+            + Math.mulDiv(liveAtStart, Constants.MAX_USD_REANCHOR_BPS, Constants.BASIS_POINTS);
+        if (baseIndex > maxAllowed) revert UsdReanchorTooLarge(baseIndex, maxAllowed);
 
         $.baseIndex = baseIndex;
         $.ratePerSecond = ratePerSecond;

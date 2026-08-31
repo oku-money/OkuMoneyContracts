@@ -564,10 +564,6 @@ async function configureRoles(
   await sendAndWait("Grant OKUM_BURNER to LitePSM", () => okuM.grantRole(ROLES.OKUM_BURNER, litePSMAddress));
   await sendAndWait("Set LitePSM minter allowance", () => okuM.configureMinterAllowance(litePSMAddress, config.minterAllowance));
 
-  // --- The closed-window precondition. Without this the rate setter cannot enforce
-  //     that publication and trading stay disjoint. ---
-  await sendAndWait("Point OkuM's conversion gate at LitePSM", () => okuM.setConversionGate(litePSMAddress));
-
   // --- Operational roles (testnet: all to deployer). Production runs
   //     grantRolesMainnet.ts to split these across cold/warm multisigs + KMS. ---
   await sendAndWait("Grant OKUM_RATE_SETTER to Admin", () => okuM.grantRole(ROLES.OKUM_RATE_SETTER, deployerAddress));
@@ -612,14 +608,6 @@ async function verifyDeployment(
   logger.info(`  LitePSM has OKUM_BURNER: ${hasBurner}`);
   if (!hasMinter || !hasBurner) {
     logger.warning("  Missing supply grants - conversion paths will revert!");
-  }
-
-  // The gate must point at the PSM or the closed-window precondition is inert and
-  // rates could be published mid-trading.
-  const gate = (await okuM.conversionGate()).toString();
-  logger.info(`  OkuM conversion gate: ${gate}`);
-  if (gate.toLowerCase() !== litePSMAddress.toLowerCase()) {
-    logger.warning("  Conversion gate is NOT the PSM - the closed-window check is inert!");
   }
 
   // A live multiplier. A zero here would mean the token is bricked from deployment.
@@ -740,7 +728,7 @@ async function main() {
     usdcAddress
   );
 
-  // Step 4: Configure roles and wire the conversion gate
+  // Step 4: Configure roles
   await configureRoles(deployerAddress, okuM, usdOku, litePSM, config);
 
   // Step 6: Verify deployment state

@@ -428,10 +428,26 @@ async function stepWrap(ctx: TestCtx): Promise<bigint> {
       await new Promise((r) => setTimeout(r, 2000));
     }
   }
-  await waitForTx(
-    await ctx.usdOku.wrap(half, ctx.user.address, 0n),
-    `usdOku.wrap(${ethers.formatUnits(half, 18)} OkuM)`
-  );
+  try {
+    await waitForTx(
+      await ctx.usdOku.wrap(half, ctx.user.address, 0n),
+      `usdOku.wrap(${ethers.formatUnits(half, 18)} OkuM)`
+    );
+  } catch (e: any) {
+    // `wrap` is permissionless but can revert for reasons that are the ISSUER's
+    // fault, not the caller's: the forward solvency projection at `rateEnd` isn't
+    // funded for a new entrant's shares (see TRACKER.md "wrap can revert because
+    // of issuer behaviour"). Decode that specific case so the failure is
+    // actionable rather than a raw revert string.
+    if (String(e?.message ?? e).includes("WouldBreachBacking")) {
+      logger.error(
+        "wrap reverted WouldBreachBacking - the vault has not been funded to " +
+          "cover this entrant's forward liability. Run `depositReserves` (fund " +
+          "the vault) before onboarding more USDOku wrap volume; do not retry as-is."
+      );
+    }
+    throw e;
+  }
 
   const usdoAfter: bigint = await ctx.usdOku.balanceOf(ctx.user.address);
   const minted = usdoAfter - usdoBefore;

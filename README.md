@@ -8,6 +8,12 @@ SVM in parallel, off-chain orchestrator coordinating both.
 > [`SVM/README.md`](SVM/README.md)), each with an "Accepted Risks" section
 > covering known design decisions. Open items live in [`TRACKER.md`](TRACKER.md).
 
+> **`master` is retired — do not deploy from it.** It is the pre-`8056` EVM
+> generation and carries three known live defects (no step-arbitrage defence, no
+> cross-chain sync, one coarse pause lever) that this branch exists to fix. Tagged
+> `master-retired-v1`. See TRACKER.md's "`master` should be marked retired" entry
+> for the full defect list.
+
 ---
 
 ## Design philosophy
@@ -171,24 +177,22 @@ segment is self-healed by the next one.
 
 ## Yield distribution & sandwich prevention
 
-The multiplier is updated discretely by the orchestrator:
+**EVM** declares a *continuous accrual segment* rather than stepping the
+multiplier: `setOkuMRate(baseIndex, ratePerSecond, startTime, endTime,
+realizedYieldBacking)` on OkuM installs `(baseIndex, ratePerSecond, startTime,
+endTime)`, and `uiMultiplier()` is a pure function of `block.timestamp` from
+then on. A *routine* declaration only ever changes slope, not level — the curve
+is seamless at the moment it takes effect, so there is nothing to sandwich and
+no same-block lock is needed. The one level-moving case, a re-anchor (catch-up
+for a chain that missed a segment), is bounded to `MAX_REANCHOR_BPS` (0.1%) and
+must take effect immediately rather than land at a scheduled future time — see
+[`EVM/README.md`](EVM/README.md) and [`TRACKER.md`](TRACKER.md).
 
-- **EVM:** `setOkuMRate(baseIndex, ratePerSecond, startTime, endTime, realizedYieldBacking)` on OkuM. Requires the PSM window CLOSED.
-- **SVM:** `set_multiplier()` or `distribute_yield()` on lite-psm.
-
-To prevent sandwich attacks around discrete updates, a single-block
-lock is enforced:
-
-- Both write functions set `lastYieldDistributionBlock` (EVM) /
-  `last_yield_distribution_slot` (SVM).
-- PSM and vault operations revert if executed in the same block/slot
-  as a multiplier update.
-- The lock auto-releases in subsequent blocks/slots — no backend
-  changes needed.
-
-On EVM, USDOku uses the same fence on its own `usdOkuIndex`
-updates (cycle 4 / OKUD-06). SVM has no separate OkuDollar — the
-single multiplier fence on lite-psm covers all operations.
+**SVM** still updates the multiplier discretely via `set_multiplier()` /
+`distribute_yield()` on lite-psm, and still needs the single-block/slot lock
+(`last_yield_distribution_slot`) to prevent sandwiching a real step. Bringing
+SVM onto the segment model is tracked in [`TRACKER.md`](TRACKER.md) as the
+largest open item.
 
 ---
 
@@ -201,9 +205,8 @@ mintOkuM:      okuMAmount = usdcValue × PRECISION / uiMultiplier()
 redeemOkuM:    usdcAmount = okuMAmount × uiMultiplier() / PRECISION
 ```
 
-LitePSM ships convenience functions that route through the vault for
-USDOku is reached in two steps (the PSM no longer ships wrap/unwrap convenience
-flows — one contract, one job):
+USDOku is reached in two steps — the PSM no longer ships wrap/unwrap convenience
+flows; one contract, one job:
 
 ```
 to USDOku:     psm.mintOkuM(usdc)  then  usdOku.wrap(okuM, receiver, minOut)
@@ -270,12 +273,15 @@ model and the single-token SVM model:
 - **EVM → SVM:** redeem OkuM for USDC on EVM, then `mint_oku_m`
   on SVM (USDC-funded).
 - **SVM → EVM:** `burn_oku_m_direct` on SVM, then `mintOkuM` on
-  EVM (orchestrator supplies USDC). If the user wants usdOku on EVM,
-  the convenience `mintUsdOku` flow wraps through the vault.
+  EVM (orchestrator supplies USDC). If the user wants USDOku on EVM,
+  follow with `usdOku.wrap(okuM, receiver, minOut)` — there is no
+  privileged one-call convenience mint; wrap is the permissionless path.
 
-Tested by `EVM/test/hardhat/scenarios/RealWorldUsage.ts`
-(cross-chain bridge scenarios) and
-`SVM/oku-programs/tests/bankrun/crossChainBridging.ts`.
+Cross-chain bridge scenarios are covered by
+`SVM/oku-programs/tests/bankrun/crossChainBridging.ts`. The EVM side of a
+bridge is exercised through the ordinary `LitePSM`/`USDOku` Foundry suites
+(`EVM/test/`) — there is no dedicated cross-chain scenario harness on the EVM
+side yet.
 
 ### Future bridging
 
@@ -323,6 +329,27 @@ If capacity is short, call `depositBuffer` first. SVM-to-SVM bridges bypass the
 USDC buffer entirely, using direct `burn_oku_m_direct` / `mint_oku_m_direct` to
 conserve raw OkuM amounts 1:1.
 
+#### Fund the vault before marketing USDOku (EVM)
+
+`USDOku.wrap` is permissionless but reverts `WouldBreachBacking` when the vault's
+funded surplus cannot cover a new entrant's forward liability to `rateEnd` — a
+revert caused by the ISSUER not having pre-funded, not by anything the caller did
+wrong. This is expected behaviour under the pre-funding invariant
+(`MAX_SOLVENCY_GAP_BPS == 0`), not a bug, but it means driving retail traffic to
+`wrap` without checking headroom first produces a wave of confusing failures.
+
+Before any USDOku marketing push or onboarding batch:
+
+```
+EVM: usdOku.withdrawableSurplus()  → 0 means no headroom for new entrants
+     usdOku.realizedBacking() vs usdOku.projectedLiabilityAtRateEnd()
+```
+
+If headroom is thin, call `depositReserves` (fund the vault with OkuM) before
+increasing wrap volume — do not lower the declared rate to "fix" a funding gap
+that funding, not de-scoping, is meant to solve. `scripts/operator/solvencyStatus.ts`
+reports this read-only, with no role required.
+
 #### Mid-flight failure recovery
 
 | Failure mode | Recovery |
@@ -349,12 +376,14 @@ Two rules for the orchestrator:
    misses a segment entirely is restored by the next one, within
    `MAX_REANCHOR_BPS` (0.1%, roughly a week of catch-up at 5% APR).
 
+3. **On SVM only, wait one slot after a price tick before bridging**, to avoid
+   `YieldDistributionInProgress`. EVM has no equivalent lock — a routine segment
+   declaration changes slope, not level, so there is nothing to wait out.
+
 > **SVM still uses a discrete multiplier** and therefore still needs same-batch
 > sequencing, with the old caveat: if sequencing diverges, per-bridge dollar value
 > is still conserved but the recipient may receive a slightly different raw amount.
 > Bringing SVM onto segments is tracked in [`TRACKER.md`](TRACKER.md).
-3. After a price tick, wait one slot (SVM) / one block (EVM) before
-   bridging to avoid `YieldDistributionInProgress`.
 
 #### Minter allowance rotation policy
 
@@ -761,9 +790,13 @@ Refuses IDs currently in `Anchor.toml [programs.<network>]` unless
 
 ```bash
 cd EVM
-npx hardhat test                              # in-process happy-path
-NETWORK=sepolia npm run test:flow:live        # live round-trip + balance check
+forge test                                    # the real suite: 104 tests, Foundry
+NETWORK=sepolia npm run test:onchain:sepolia  # live round-trip against a testnet
 ```
+
+There is no hardhat/mocha test suite (`npx hardhat test` compiles but finds
+zero tests) — all EVM contract tests are Foundry (`test/*.t.sol`), per
+[`EVM/README.md`](EVM/README.md).
 
 **SVM:**
 
@@ -782,9 +815,10 @@ NETWORK=devnet npm run test:onchain -- --step=redeem   # single step (mint/trans
 3. Treasury periodically tops up PSM USDC buffers per chain (on SVM there is no queue to drain — see [`SVM/README.md`](SVM/README.md)).
 ```
 
-EVM cross-chain accounting covered by
-`EVM/test/hardhat/scenarios/RealWorldUsage.ts`. Full EVM↔SVM
-roundtrip bridge test:
+EVM-side accounting for a bridge leg is covered indirectly by the ordinary
+`LitePSM`/`OkuM` Foundry suites (`EVM/test/`) — there is no dedicated
+cross-chain scenario harness on the EVM side. Full EVM↔SVM roundtrip bridge
+test:
 
 ```bash
 cd SVM/oku-programs

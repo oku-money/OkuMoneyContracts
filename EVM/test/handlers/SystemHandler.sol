@@ -120,38 +120,47 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
 
     // ============ Operator actions ============
 
-    function setOkuMRate(uint256 aprBps, uint256 duration) external {
+    /// @dev `setOkuMRate` no longer gates on the PSM window, so this no longer needs
+    ///      to close/reopen around the call — which also lets the fuzzer exercise
+    ///      publication with the window in whatever state `toggleWindow` left it.
+    ///      `startTimeOffset` explores all three shapes the contract now
+    ///      distinguishes: backdated (must revert), immediate (routine or catch-up,
+    ///      both legal), and scheduled ahead (routine only — a re-anchor there must
+    ///      revert, which the `try/catch` swallows like any other legitimate revert).
+    function setOkuMRate(uint256 aprBps, uint256 duration, int256 startTimeOffset) external {
         aprBps = _bound(aprBps, 0, Constants.MAX_IMPLIED_APR_BPS);
         duration = _bound(duration, 1 hours, Constants.MAX_RATE_DURATION);
+        startTimeOffset = _bound(startTimeOffset, -1, int256(Constants.MAX_SCHEDULE_LEAD));
 
-        uint256 base = okuM.uiMultiplier();
+        uint64 startTime = startTimeOffset < 0
+            ? uint64(block.timestamp - 1)  // exercises StartTimeInThePast
+            : uint64(block.timestamp) + uint64(uint256(startTimeOffset));
+        uint256 base = okuM.indexAt(startTime);
         uint256 rate = Constants.PRECISION + (Constants.PRECISION * aprBps / Constants.BASIS_POINTS)
             / Constants.SECONDS_PER_YEAR;
 
-        vm.prank(gatekeeper);
-        psm.closeWindow();
         vm.prank(rateSetter);
-        try okuM.setOkuMRate(
-            base, rate, uint64(block.timestamp), uint64(block.timestamp + duration), 0
-        ) {}
-            catch {}
-        vm.prank(gatekeeper);
-        psm.openWindow();
+        try okuM.setOkuMRate(base, rate, startTime, startTime + uint64(duration), 0) {} catch {}
     }
 
-    function setUsdOkuRate(uint256 aprBps, uint256 duration) external {
+    /// @dev `startTimeOffset` mirrors `setOkuMRate`'s fuzzing above: explores
+    ///      backdated (must revert), immediate, and future `startTime`s so the
+    ///      fuzzer can actually reach `StartTimeInThePast` / `UsdReanchorTooLarge`,
+    ///      not just the always-on-time path.
+    function setUsdOkuRate(uint256 aprBps, uint256 duration, int256 startTimeOffset) external {
         aprBps = _bound(aprBps, 0, Constants.MAX_IMPLIED_APR_BPS);
         duration = _bound(duration, 1 hours, Constants.MAX_RATE_DURATION);
+        startTimeOffset = _bound(startTimeOffset, -1, int256(Constants.MAX_SCHEDULE_LEAD));
 
-        uint256 base = usdOku.usdOkuIndex();
+        uint64 startTime = startTimeOffset < 0
+            ? uint64(block.timestamp - 1)
+            : uint64(block.timestamp) + uint64(uint256(startTimeOffset));
+        uint256 base = usdOku.indexAt(startTime);
         uint256 rate = Constants.PRECISION + (Constants.PRECISION * aprBps / Constants.BASIS_POINTS)
             / Constants.SECONDS_PER_YEAR;
 
         vm.prank(rateSetter);
-        try usdOku.setUsdOkuRate(
-            base, rate, uint64(block.timestamp), uint64(block.timestamp + duration)
-        ) {}
-            catch {}
+        try usdOku.setUsdOkuRate(base, rate, startTime, startTime + uint64(duration)) {} catch {}
     }
 
     function toggleWindow(uint256 seed) external {

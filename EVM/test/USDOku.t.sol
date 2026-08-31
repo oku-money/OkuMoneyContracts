@@ -72,6 +72,97 @@ contract USDOkuTest is BaseTest {
         assertTrue(usdOku.backingCoversLiability());
     }
 
+    /// @dev REGRESSION for a real gap: unlike OkuM's `setOkuMRate`, `setUsdOkuRate`
+    ///      used to have no `MAX_REANCHOR_BPS`-equivalent cap on an instantaneous
+    ///      `baseIndex` jump — only `IndexCannotDecrease`, `IndexTooHigh` (the
+    ///      generous `MAX_MULTIPLIER` ceiling), and `backingCoversLiability` (which
+    ///      protects the VAULT's solvency, not the size of a single step). A single
+    ///      call could jump `M_usd` by orders of magnitude more than OkuM's analogous
+    ///      10bps bound, instantly reallocating value to whoever held USDOku shares
+    ///      at that moment. Fixed by `MAX_USD_REANCHOR_BPS`.
+    function test_usdOkuReanchorIsNowBoundedLikeOkuM() public {
+        _fundBuffer(500_000 * USDC_UNIT);
+        _fundVault(300_000 * USDC_UNIT);
+
+        uint256 rawAlice = _mint(alice, 100_000 * USDC_UNIT);
+        _wrap(alice, rawAlice);
+        assertGt(usdOku.balanceOf(alice), 0, "fixture: alice holds a USDOku balance");
+
+        uint256 live = usdOku.usdOkuIndex();
+        uint256 maxAllowed = live + (live * Constants.MAX_USD_REANCHOR_BPS) / Constants.BASIS_POINTS;
+        uint64 s = uint64(block.timestamp);
+
+        // A +50% jump attempt is refused.
+        vm.prank(rateSetter);
+        vm.expectPartialRevert(USDOku.UsdReanchorTooLarge.selector);
+        usdOku.setUsdOkuRate(live + live / 2, Constants.PRECISION, s, s + uint64(1 days));
+
+        // Exactly at the bound is allowed — the analogous catch-up path.
+        vm.prank(rateSetter);
+        usdOku.setUsdOkuRate(maxAllowed, Constants.PRECISION, s, s + uint64(1 days));
+        assertEq(usdOku.usdOkuIndex(), maxAllowed);
+    }
+
+    /// @dev REGRESSION: `setUsdOkuRate` had the SAME missing `startTime` lower bound
+    ///      the OkuM side had before this cycle's fix (see OkuM.t.sol's
+    ///      `test_backdatingNoLongerBypassesTheReanchorBound`). A backdated
+    ///      `startTime` resolves `indexAt(startTime)` against stale history, which
+    ///      would have made the jump cap above bypassable the same way. Fixed
+    ///      alongside it, not separately — a jump cap without a backdating floor is
+    ///      not a fix.
+    function test_usdOkuBackdatingNoLongerBypassesTheReanchorBound() public {
+        _fundBuffer(500_000 * USDC_UNIT);
+        _fundVault(300_000 * USDC_UNIT);
+        _setUsdOkuRate(500, 30 days);
+        vm.warp(block.timestamp + 10 days);
+
+        uint64 backdated = uint64(block.timestamp - 40 days);
+        uint256 liveAtBackdated = usdOku.indexAt(backdated);
+
+        vm.prank(rateSetter);
+        vm.expectRevert(USDOku.StartTimeInThePast.selector);
+        usdOku.setUsdOkuRate(
+            liveAtBackdated,
+            Constants.MAX_RATE_PER_SECOND,
+            backdated,
+            backdated + uint64(Constants.MAX_RATE_DURATION)
+        );
+    }
+
+    /// @dev Unlike OkuM's re-anchor, a USDOku jump is NOT required to take effect
+    ///      immediately — `M_usd` is a declared forward rate that legitimately
+    ///      schedules ahead as routine practice. Confirms the fix didn't
+    ///      overcorrect into breaking the normal forward-scheduling use case.
+    function test_usdOkuReanchorMayBeScheduledAheadUnlikeOkuM() public {
+        _fundBuffer(500_000 * USDC_UNIT);
+        _fundVault(300_000 * USDC_UNIT);
+
+        uint256 live = usdOku.usdOkuIndex();
+        uint256 maxAllowed = live + (live * Constants.MAX_USD_REANCHOR_BPS) / Constants.BASIS_POINTS;
+        uint64 future = uint64(block.timestamp + 1 days);
+
+        vm.prank(rateSetter);
+        usdOku.setUsdOkuRate(maxAllowed, Constants.PRECISION, future, future + uint64(1 days));
+        assertEq(usdOku.rateEnd(), future + 1 days);
+    }
+
+    /// @dev `startTime == 0` is a sentinel for "now" — the operator cannot predict
+    ///      the exact mined timestamp, so exact equality must be resolvable on-chain.
+    ///      Mirrors OkuM's sentinel handling.
+    function test_usdOkuZeroStartTimeSentinelMeansNow() public {
+        _fundBuffer(500_000 * USDC_UNIT);
+        _setUsdOkuRate(500, 30 days);
+        vm.warp(block.timestamp + 5 days);
+
+        uint256 live = usdOku.usdOkuIndex();
+        uint256 rate = _rateFor(500);
+
+        vm.prank(rateSetter);
+        usdOku.setUsdOkuRate(live, rate, 0, uint64(block.timestamp + 1 days));
+
+        assertEq(usdOku.rateEnd(), block.timestamp + 1 days, "sentinel resolved to now");
+    }
+
     /// @dev A grown balance must be redeemable IN FULL, including the last holder out.
     function test_grownBalanceIsFullyRedeemableForEveryHolder() public {
         _fundBuffer(500_000 * USDC_UNIT);

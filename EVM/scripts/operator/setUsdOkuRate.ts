@@ -15,6 +15,14 @@
  * only ever reduces liability must never be blocked by a coverage failure, or the
  * contract can lock itself out of the one lever that recovers it.
  *
+ * `--base` above the live index at `--start` is a RE-ANCHOR (a step, not a
+ * continuation) and is capped at `MAX_USD_REANCHOR_BPS`. Unlike OkuM's re-anchor,
+ * a USDOku re-anchor MAY be scheduled ahead - `--start` in the future is fine even
+ * for a step, since `M_usd` is a declared rate that legitimately changes on a
+ * schedule. Omit `--start` (or pass `--start=0`) to mean "now"; the contract
+ * resolves the sentinel on-chain since an operator cannot predict the exact mined
+ * timestamp. Backdating `--start` into the past is always rejected.
+ *
  * Usage:
  *   NETWORK=base npx hardhat run scripts/operator/setUsdOkuRate.ts --network base \
  *       --apr-bps=450 --duration=2592000
@@ -48,7 +56,17 @@ async function main() {
   const block = await ethers.provider.getBlock("latest");
   const now = BigInt(block!.timestamp);
 
-  const start = parseArg("start") ? BigInt(parseArg("start")!) : now;
+  // Locally computing `start = now` and submitting that literal value is fragile:
+  // if the transaction lands even one second later than expected, the on-chain
+  // `startTime < block.timestamp` check now rejects it as backdated. Passing the
+  // `0` sentinel instead defers "what does now mean" to the contract, which
+  // resolves it against the ACTUAL mined `block.timestamp`. `now` below is used
+  // only for local validation/display, never submitted directly when --start is
+  // omitted.
+  const startArg = parseArg("start");
+  const startExplicit = startArg !== undefined;
+  const start = startExplicit ? BigInt(startArg!) : now;
+  const onChainStart = startExplicit ? start : 0n;
   const durationArg = parseArg("duration");
   const end = parseArg("end")
     ? BigInt(parseArg("end")!)
@@ -108,7 +126,7 @@ async function main() {
     return;
   }
 
-  const tx = await ctx.usdOku.setUsdOkuRate(base, rate, start, end);
+  const tx = await ctx.usdOku.setUsdOkuRate(base, rate, onChainStart, end);
   const receipt = await tx.wait();
   logger.success(`setUsdOkuRate tx: ${receipt.hash}`);
 }

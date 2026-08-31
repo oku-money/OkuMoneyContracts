@@ -80,7 +80,6 @@ abstract contract BaseTest is Test {
         okuM.grantRole(Roles.OKUM_MINTER, address(psm));
         okuM.grantRole(Roles.OKUM_BURNER, address(psm));
         okuM.configureMinterAllowance(address(psm), INITIAL_MAX_SUPPLY);
-        okuM.setConversionGate(address(psm));
 
         okuM.grantRole(Roles.OKUM_MINTER, address(usdOku));
         okuM.configureMinterAllowance(address(usdOku), INITIAL_MAX_SUPPLY);
@@ -103,26 +102,16 @@ abstract contract BaseTest is Test {
     }
 
     /// @dev Declare an OkuM segment starting now for `duration` at `aprBps`.
-    ///
-    ///      Closes the PSM window first and reopens after, because `setOkuMRate`
-    ///      requires a closed window. Reads are hoisted above the pranks.
+    ///      `setOkuMRate` does not gate on the PSM window — a routine declaration
+    ///      moves slope, not level — so this is a plain single-prank call.
     function _setOkuMRate(uint256 aprBps, uint256 duration) internal {
         uint256 base = okuM.uiMultiplier();
         uint256 rate = _rateFor(aprBps);
         uint64 start = uint64(block.timestamp);
         uint64 end = uint64(block.timestamp + duration);
-        bool wasOpen = psm.conversionsOpen();
 
-        if (wasOpen) {
-            vm.prank(gatekeeper);
-            psm.closeWindow();
-        }
         vm.prank(rateSetter);
         okuM.setOkuMRate(base, rate, start, end, 0);
-        if (wasOpen) {
-            vm.prank(gatekeeper);
-            psm.openWindow();
-        }
     }
 
     /// @dev Declare a USDOku segment starting now for `duration` at `aprBps`.

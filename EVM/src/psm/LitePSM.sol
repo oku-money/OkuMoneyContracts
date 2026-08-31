@@ -51,9 +51,12 @@ import {MathLib} from "../lib/MathLib.sol";
  *
  *      `mintEnabled` / `redeemEnabled` (PSM_GATEKEEPER) are the KMS back-end's routine
  *      levers, deliberately separate from `pause()` (PSM_PAUSER, an incident
- *      response). Closing the window is an everyday operation: `OkuM.setOkuMRate`
- *      requires it, which keeps rate publication and trading disjoint without an
- *      on-chain calendar, DST table, or holiday list.
+ *      response). `OkuM.setOkuMRate` does NOT require this window closed: a routine
+ *      declaration moves slope, not level, so there is nothing for an open window to
+ *      expose. The only level-moving case (a re-anchor) is bounded on OkuM's side by
+ *      `MAX_REANCHOR_BPS` and forced to take effect immediately rather than land
+ *      unattended — see {IOkuM.setOkuMRate}. `mintEnabled`/`redeemEnabled` remain
+ *      available for market-hours policy, but are no longer load-bearing for that.
  */
 contract LitePSM is
     Initializable,

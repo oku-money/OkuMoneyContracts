@@ -4,7 +4,17 @@
  * THE highest-consequence operator action: it sets the price every permissionless
  * conversion executes at, on every chain.
  *
- * ## Multichain
+ * ## Two disjoint shapes
+ *
+ * The contract distinguishes ROUTINE declarations (`base == indexAt(start)` exactly)
+ * from CATCH-UP re-anchors (`base` up to `MAX_REANCHOR_BPS` above it). Routine
+ * declarations may schedule `--start` in the future, for multichain switchover.
+ * Catch-up may ONLY take effect immediately - pass `--start=0` (or omit it) to mean
+ * "now"; the contract resolves the sentinel on-chain since an operator cannot
+ * predict the exact mined timestamp. Backdating `--start` into the past is always
+ * rejected.
+ *
+ * ## Multichain (routine path)
  *
  * A segment is anchored to ABSOLUTE wall-clock time, so publishing the identical
  * four parameters on every chain yields an identical multiplier everywhere at every
@@ -14,6 +24,10 @@
  *
  * Print the exact parameters once with --dry-run, then reuse them verbatim per
  * chain. Do NOT re-derive `--base` per chain: that is what makes the chains agree.
+ * NEVER reuse a `--start=0` (or a resolved "now") run's parameters across chains -
+ * each chain would resolve a DIFFERENT local timestamp, silently breaking sync. The
+ * sentinel is for single-chain catch-up only; this script refuses to print
+ * multichain-reuse parameters when it was used.
  *
  * ## Rear-facing discipline
  *
@@ -56,7 +70,15 @@ async function main() {
   const block = await ethers.provider.getBlock("latest");
   const now = BigInt(block!.timestamp);
 
-  const start = parseArg("start") ? BigInt(parseArg("start")!) : now;
+  // Explicit --start is required for a routine, multichain-reusable declaration.
+  // Omitting it means "now" - submitted on-chain as the `0` sentinel (NOT a
+  // locally-computed timestamp), since the contract requires EXACT equality with
+  // `block.timestamp` for a catch-up re-anchor and an operator cannot predict the
+  // mined timestamp. `now` below is used only for local validation/display.
+  const startArg = parseArg("start");
+  const startExplicit = startArg !== undefined;
+  const start = startExplicit ? BigInt(startArg!) : now;
+  const onChainStart = startExplicit ? start : 0n;
   const durationArg = parseArg("duration");
   const end = parseArg("end")
     ? BigInt(parseArg("end")!)
@@ -117,28 +139,40 @@ async function main() {
     logger.warning("  record the figure so an auditor can reconcile it later.");
   }
 
-  // The window must be shut. Report it rather than letting the revert explain.
+  // `setOkuMRate` does not gate on the PSM window - a routine declaration moves
+  // slope, not level, so an open window exposes nothing. Informational only.
   const open: boolean = await ctx.litePSM.conversionsOpen();
-  if (open) {
-    logger.error("  Conversion window is OPEN - setOkuMRate will revert.");
-    logger.error("  Run `closeWindow.ts`, publish, then `openWindow.ts`.");
-    if (!DRY_RUN) throw new Error("conversion window is open");
-  }
+  logger.info(`  Conversion window open: ${open} (no longer a precondition)`);
+
+  // The sentinel resolves to a DIFFERENT local timestamp on every chain, which
+  // silently breaks multichain sync if reused verbatim. It is for single-chain
+  // catch-up only, so never print it as a reusable parameter set.
+  const reusableAcrossChains = startExplicit;
 
   if (DRY_RUN) {
     logger.warning("DRY_RUN - not submitting.");
     logger.info("");
-    logger.info("  Reuse these EXACT parameters on every other chain:");
-    logger.info(`    --base=${base} --rate=${rate} --start=${start} --end=${end}`);
+    if (reusableAcrossChains) {
+      logger.info("  Reuse these EXACT parameters on every other chain:");
+      logger.info(`    --base=${base} --rate=${rate} --start=${start} --end=${end}`);
+    } else {
+      logger.warning("  --start was omitted (sentinel 0 = \"now\"). This run is for a");
+      logger.warning("  SINGLE-CHAIN catch-up only - do NOT reuse these parameters on");
+      logger.warning("  other chains; each would resolve a different local timestamp.");
+    }
     return;
   }
 
-  const tx = await ctx.okuM.setOkuMRate(base, rate, start, end, realized);
+  const tx = await ctx.okuM.setOkuMRate(base, rate, onChainStart, end, realized);
   const receipt = await tx.wait();
   logger.success(`setOkuMRate tx: ${receipt.hash}`);
   logger.info("");
-  logger.info("  Same parameters for the remaining chains:");
-  logger.info(`    --base=${base} --rate=${rate} --start=${start} --end=${end}`);
+  if (reusableAcrossChains) {
+    logger.info("  Same parameters for the remaining chains:");
+    logger.info(`    --base=${base} --rate=${rate} --start=${start} --end=${end}`);
+  } else {
+    logger.warning("  Single-chain catch-up (sentinel start) - not reusable on other chains.");
+  }
 }
 
 main().catch((e) => {

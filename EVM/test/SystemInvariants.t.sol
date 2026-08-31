@@ -5,6 +5,7 @@ import {BaseTest} from "./Base.t.sol";
 import {SystemHandler} from "./handlers/SystemHandler.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Constants} from "../src/lib/Constants.sol";
+import {ScaledUIAmountUpgradeable} from "../src/lib/ScaledUIAmountUpgradeable.sol";
 
 /**
  * @title SystemInvariantsTest
@@ -94,12 +95,24 @@ contract SystemInvariantsTest is BaseTest {
         assertLe(usdOku.usdOkuIndex(), Constants.MAX_MULTIPLIER, "M_usd exceeded its ceiling");
     }
 
-    /// @dev Accrual must flatline past `rateEnd`, so a missed renewal freezes yield
-    ///      rather than compounding unboundedly.
+    /// @dev Accrual must flatline past `rateEnd` ABSENT A FRESH DECLARATION, so a
+    ///      missed renewal freezes yield rather than compounding unboundedly.
+    /// @dev `okuM.rateEnd()` alone is not a safe probe anchor: routine declarations
+    ///      may now legitimately be scheduled ahead (forward `startTime`, for
+    ///      multichain switchover), so a PENDING segment can already exist whose
+    ///      window extends past — or starts before — whatever `rateEnd()` reports for
+    ///      the currently-active one. The true horizon beyond which NEITHER installed
+    ///      segment can still be growing is `max(active.endTime, pending.endTime)`;
+    ///      this holds regardless of whether pending has taken effect yet (in which
+    ///      case `activeSegment() == pendingSegment()` and the two ends coincide).
     function invariant_indexIsFlatPastRateEnd() public view {
-        uint256 end = okuM.rateEnd();
+        ScaledUIAmountUpgradeable.Segment memory active = okuM.activeSegment();
+        ScaledUIAmountUpgradeable.Segment memory pending = okuM.pendingSegment();
+        uint256 finalEnd = active.endTime > pending.endTime ? active.endTime : pending.endTime;
         assertEq(
-            okuM.indexAt(end), okuM.indexAt(end + 365 days), "M_oku kept accruing past rateEnd"
+            okuM.indexAt(finalEnd),
+            okuM.indexAt(finalEnd + 365 days),
+            "M_oku kept accruing past its final installed segment's end"
         );
     }
 

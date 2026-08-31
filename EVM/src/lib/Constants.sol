@@ -80,11 +80,16 @@ library Constants {
     uint256 public constant MAX_IMPLIED_APR_BPS = 1000;
 
     /// @notice Per-second compounding-rate ceiling implied by {MAX_IMPLIED_APR_BPS}.
-    /// @dev `PRECISION + (PRECISION * MAX_IMPLIED_APR_BPS / BASIS_POINTS) / SECONDS_PER_YEAR`
-    ///      = `PRECISION + 3_170_979_198`, precomputed because Solidity cannot fold
-    ///      this into a `constant` cheaply. Verified: compounded over
-    ///      `SECONDS_PER_YEAR` this yields ~10.517% APY, over 30 days ~0.8253%.
-    uint256 public constant MAX_RATE_PER_SECOND = PRECISION + 3_170_979_198;
+    /// @dev DERIVED, not independently set: this expression is the single source of
+    ///      truth for the per-second cap {OkuM.setOkuMRate} actually enforces.
+    ///      Previously this was a hand-precomputed literal (`PRECISION +
+    ///      3_170_979_198`) that had no on-chain link back to `MAX_IMPLIED_APR_BPS` —
+    ///      changing that constant silently left the enforced cap untouched. Solidity
+    ///      folds this at compile time, so there is no runtime cost to deriving it.
+    ///      Verified: compounded over `SECONDS_PER_YEAR` this yields ~10.517% APY,
+    ///      over 30 days ~0.8253%.
+    uint256 public constant MAX_RATE_PER_SECOND =
+        PRECISION + (PRECISION * MAX_IMPLIED_APR_BPS / BASIS_POINTS) / SECONDS_PER_YEAR;
 
     /// @notice Maximum span of a single rate segment.
     /// @dev A missed renewal freezes accrual rather than compounding unboundedly. The
@@ -116,6 +121,20 @@ library Constants {
     ///      than a procedural one: even a fully compromised `OKUM_RATE_SETTER` cannot
     ///      manufacture a step larger than this.
     uint256 public constant MAX_REANCHOR_BPS = 10;
+
+    /// @notice Largest instantaneous jump permitted when installing a new USDOku
+    ///         segment, in bps. The `M_usd`-side analogue of {MAX_REANCHOR_BPS}.
+    /// @dev Unlike OkuM's re-anchor, this does NOT also require immediate effect:
+    ///      `M_usd` is a declared FORWARD rate that legitimately schedules ahead of
+    ///      time as a matter of course (that is its whole purpose), unlike an OkuM
+    ///      re-anchor, which is specifically a one-off catch-up for a chain that fell
+    ///      behind. Only the JUMP MAGNITUDE needs bounding here — an unbounded jump
+    ///      would let a rate setter (or the same compromised key) instantly reallocate
+    ///      value to whoever holds USDOku shares at the moment of declaration, backed
+    ///      only by `backingCoversLiability` (a vault-solvency check, not a step-size
+    ///      one). Same numeric placeholder as {MAX_REANCHOR_BPS} pending calibration —
+    ///      tracked in TRACKER.md alongside the other rate constants.
+    uint256 public constant MAX_USD_REANCHOR_BPS = 10;
 
     /// @notice Absolute ceiling for any cumulative multiplier (`M_oku` and `M_usd`).
     /// @dev `1e24` = $1,000,000 per token. Keeps downstream `uint256 * uint256`

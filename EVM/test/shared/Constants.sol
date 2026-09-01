@@ -29,6 +29,30 @@ library TestConstants {
     /// @notice OkuDollar minimum collateral ratio floor (re-exported for tests)
     uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = SrcConstants.MIN_COLLATERAL_RATIO_FLOOR;
 
+    /// @notice Absolute ceiling on any cumulative multiplier.
+    uint256 public constant MAX_MULTIPLIER = SrcConstants.MAX_MULTIPLIER;
+
+    // ============ Yield Epoch Bounds (re-exported) ============
+
+    /// @notice Cap on a single epoch's annualized implied rate (2000 bps = 20% APR).
+    uint256 public constant MAX_IMPLIED_APR_BPS = SrcConstants.MAX_IMPLIED_APR_BPS;
+
+    /// @notice Shortest permitted epoch duration (1 hour).
+    uint256 public constant MIN_EPOCH_DURATION = SrcConstants.MIN_EPOCH_DURATION;
+
+    /// @notice Longest permitted epoch duration (365 days).
+    uint256 public constant MAX_EPOCH_DURATION = SrcConstants.MAX_EPOCH_DURATION;
+
+    /// @notice Seconds in a 365-day year (annualization basis).
+    uint256 public constant SECONDS_PER_YEAR = SrcConstants.SECONDS_PER_YEAR;
+
+    // ============ ERC-8056 Interface IDs (re-exported) ============
+
+    bytes4 public constant IID_SCALED_UI_AMOUNT = SrcConstants.IID_SCALED_UI_AMOUNT;
+    bytes4 public constant IID_SCALED_UI_NEW_MULTIPLIER = SrcConstants.IID_SCALED_UI_NEW_MULTIPLIER;
+    bytes4 public constant IID_SCALED_UI_CONVERSION = SrcConstants.IID_SCALED_UI_CONVERSION;
+    bytes4 public constant IID_SCALED_UI_BALANCES = SrcConstants.IID_SCALED_UI_BALANCES;
+
     // ============ Test-Only Constants ============
 
     /// @notice Default max supply for test deployments (1 billion tokens)

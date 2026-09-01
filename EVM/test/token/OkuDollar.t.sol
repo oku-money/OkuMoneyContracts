@@ -7,7 +7,6 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {OkuDollarEvents} from "../../src/lib/events/OkuDollarEvents.sol";
-import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 
 /**
  * @title OkuDollarTest
@@ -462,8 +461,7 @@ contract OkuDollarTest is BaseTest {
         assertEq(vaultBalBefore, 100e18);
 
         // Increase okuMMultiplier — vault token balance is unchanged (non-rebasing)
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
 
         uint256 vaultBalAfter = okuMoney.balanceOf(address(okuDollar));
         assertEq(vaultBalAfter, vaultBalBefore, "Note rebase should not change vault token count");
@@ -1053,8 +1051,7 @@ contract OkuDollarTest is BaseTest {
         // Increase okuMMultiplier to 1.5e18 — vault still has 100 note tokens
         // Dollar value of reserves: 100 * $1.50 = $150, obligations: 100 OkuDollar
         // ratio = $150 / $100 = 150%
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier((PRECISION * 3) / 2);
+        _setOkuMMultiplierAndRoll((PRECISION * 3) / 2);
 
         assertEq(okuDollar.collateralizationRatio(), (PRECISION * 3) / 2);
     }
@@ -1093,8 +1090,7 @@ contract OkuDollarTest is BaseTest {
         // Reserves: 100 notes * $1.50 = $150, obligations: 100 OkuDollar
         // Dollar surplus: $150 - $100 = $50
         // Surplus in note tokens: $50 * 1e18 / $1.50 ≈ 33.33e18
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier((PRECISION * 3) / 2);
+        _setOkuMMultiplierAndRoll((PRECISION * 3) / 2);
 
         uint256 expectedSurplus =
             Math.mulDiv(50e18, PRECISION, (PRECISION * 3) / 2, Math.Rounding.Floor);
@@ -1545,8 +1541,7 @@ contract OkuDollarTest is BaseTest {
         // Set OkuM price discretely; set USD rate separately
         uint256 usdRate = PRECISION + 634e6; // ~2% APY
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 1045 / 1000); // simulate ~4.5% multiplier appreciation
+        _setOkuMMultiplierAndRoll(PRECISION * 1045 / 1000); // simulate ~4.5% multiplier appreciation
 
         vm.prank(usdRebaser);
         okuDollar.setUsdYieldRate(usdRate, 0);
@@ -1791,19 +1786,31 @@ contract OkuDollarTest is BaseTest {
 
     // ============ Yield Distribution Lock Tests (Sandwich Attack Prevention) ============
 
-    function test_Wrap_RevertsInYieldDistributionBlock() public {
-        // Setup: user1 has OkuMoney
+    /// @notice Starting a yield epoch in the same block as a wrap is harmless.
+    /// @dev Supersedes the old `test_Wrap_RevertsInYieldDistributionBlock`. That test
+    ///      asserted a same-block fence which existed because `distributeYield` moved
+    ///      `okuMMultiplier` instantaneously. An epoch introduces no discontinuity —
+    ///      it begins AT the current multiplier — so a wrap in the same block converts
+    ///      at exactly the same rate it would have a moment earlier. Nothing to fence.
+    function test_Wrap_UnaffectedByEpochStartInSameBlock() public {
         _mintOkuMoney(user1, 100e18);
         _approveOkuMoney(user1, address(okuDollar), 100e18);
 
-        // Distribute yield to set lastYieldDistributionBlock
-        vm.prank(rebaser);
-        okuMoney.distributeYield(10e18);
+        uint256 multBefore = okuMoney.okuMMultiplier();
 
-        // Same block — wrap should revert
+        // NOTE: compute the duration BEFORE `vm.prank` — an inline call in the
+        // argument list consumes the prank. See Base.t.sol.
+        uint256 epochDuration = _minLegalDuration(10e18);
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(10e18, epochDuration);
+
+        // The epoch starts at the prevailing multiplier: no jump.
+        assertEq(okuMoney.okuMMultiplier(), multBefore, "epoch must not step the multiplier");
+
+        // Wrap in the very same block succeeds and prices at the unchanged multiplier.
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
         okuDollar.wrap(50e18, user1, 0);
+        assertEq(okuDollar.balanceOf(user1), 50e18, "wrap priced at the pre-epoch multiplier");
     }
 
     function test_Wrap_SucceedsInNextBlock() public {
@@ -1812,8 +1819,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(okuDollar), 100e18);
 
         // Distribute yield
-        vm.prank(rebaser);
-        okuMoney.distributeYield(10e18);
+        _distributeYield(10e18);
 
         // Roll to next block
         vm.roll(block.number + 1);
@@ -1825,18 +1831,23 @@ contract OkuDollarTest is BaseTest {
         assertGt(okuDollar.balanceOf(user1), 0);
     }
 
-    function test_Unwrap_RevertsInYieldDistributionBlock() public {
-        // Setup: user1 has okuDollar
+    /// @notice Unwrapping in the same block as an epoch start is likewise unaffected.
+    function test_Unwrap_UnaffectedByEpochStartInSameBlock() public {
         _mintUsdOku(user1, 100e18);
 
-        // Distribute yield to set lastYieldDistributionBlock
-        vm.prank(rebaser);
-        okuMoney.distributeYield(10e18);
+        uint256 multBefore = okuMoney.okuMMultiplier();
+        uint256 okuMBefore = okuMoney.balanceOf(user1);
 
-        // Same block — unwrap should revert
+        // NOTE: compute the duration BEFORE `vm.prank` — an inline call in the
+        // argument list consumes the prank. See Base.t.sol.
+        uint256 epochDuration = _minLegalDuration(10e18);
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(10e18, epochDuration);
+        assertEq(okuMoney.okuMMultiplier(), multBefore, "epoch must not step the multiplier");
+
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
         okuDollar.unwrap(50e18, user1);
+        assertGt(okuMoney.balanceOf(user1), okuMBefore);
     }
 
     function test_Unwrap_SucceedsInNextBlock() public {
@@ -1844,8 +1855,7 @@ contract OkuDollarTest is BaseTest {
         _mintUsdOku(user1, 100e18);
 
         // Distribute yield
-        vm.prank(rebaser);
-        okuMoney.distributeYield(10e18);
+        _distributeYield(10e18);
 
         // Roll to next block
         vm.roll(block.number + 1);
@@ -1856,50 +1866,6 @@ contract OkuDollarTest is BaseTest {
         okuDollar.unwrap(50e18, user1);
 
         assertGt(okuMoney.balanceOf(user1), okuMBefore);
-    }
-
-    function test_SetOkuMPrice_AlsoBlocksWrapUnwrap() public {
-        // Setup: user1 has OkuMoney
-        _mintOkuMoney(user1, 100e18);
-        _approveOkuMoney(user1, address(okuDollar), 100e18);
-
-        // setOkuMMultiplier also sets lastYieldDistributionBlock
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
-
-        // Same block — wrap should revert
-        vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
-        okuDollar.wrap(50e18, user1, 0);
-    }
-
-    function test_YieldLock_NoEffectBeforeFirstDistribution() public {
-        // Before any yield distribution, lastYieldDistributionBlock is 0
-        // Operations should work normally
-        assertEq(okuMoney.lastYieldDistributionBlock(), 0);
-
-        _mintOkuMoney(user1, 100e18);
-        _approveOkuMoney(user1, address(okuDollar), 100e18);
-
-        vm.prank(user1);
-        okuDollar.wrap(100e18, user1, 0);
-
-        assertGt(okuDollar.balanceOf(user1), 0);
-    }
-
-    function test_YieldLock_TransfersStillWorkDuringLock() public {
-        // Setup: user1 has okuDollar
-        _mintUsdOku(user1, 100e18);
-
-        // Distribute yield
-        vm.prank(rebaser);
-        okuMoney.distributeYield(10e18);
-
-        // Same block — transfers should still work (only wrap/unwrap are blocked)
-        vm.prank(user1);
-        okuDollar.transfer(user2, 50e18);
-
-        assertGt(okuDollar.balanceOf(user2), 0);
     }
 
     // ============ WS3 Additional Tests ============
@@ -2099,22 +2065,38 @@ contract OkuDollarTest is BaseTest {
         okuDollar.unblacklist(user1);
     }
 
-    // ---- WS3.1.j: withdrawSurplus yield-lock guard (new from WS1.3) ----
+    // ---- withdrawSurplus under continuous accrual ----
 
-    function test_WithdrawSurplus_BlockedDuringYieldDistribution() public {
-        // Setup surplus: deposit reserves without minting shares
+    /// @notice Starting an epoch in the same block as `withdrawSurplus` cannot inflate
+    ///         the reserve valuation.
+    /// @dev Supersedes `test_WithdrawSurplus_BlockedDuringYieldDistribution`. The old
+    ///      fence stopped a privileged operator from stepping `okuMMultiplier` and
+    ///      withdrawing against the inflated collateral ratio in one block. With
+    ///      continuous accrual the epoch starts at the prevailing multiplier, so the
+    ///      ratio is identical either side of the call and there is nothing to extract.
+    function test_WithdrawSurplus_UnaffectedByEpochStartInSameBlock() public {
         _mintOkuMoney(reserveManager, 200e18);
         _approveOkuMoney(reserveManager, address(okuDollar), 200e18);
         vm.prank(reserveManager);
         okuDollar.depositReserves(200e18);
 
-        // Distribute yield to stamp lastYieldDistributionBlock
         _mintOkuMoney(user1, 100e18);
-        vm.prank(rebaser);
-        okuMoney.distributeYield(10e18);
 
-        // Same block: withdrawSurplus should be blocked by yield lock
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        uint256 ratioBefore = okuDollar.collateralizationRatio();
+
+        // NOTE: compute the duration BEFORE `vm.prank` — an inline call in the
+        // argument list consumes the prank. See Base.t.sol.
+        uint256 epochDuration = _minLegalDuration(10e18);
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(10e18, epochDuration);
+
+        assertEq(
+            okuDollar.collateralizationRatio(),
+            ratioBefore,
+            "epoch start must not move the collateral ratio"
+        );
+
+        // The withdrawal proceeds on its own merits, bounded by the unchanged ratio.
         vm.prank(reserveManager);
         okuDollar.withdrawSurplus(10e18);
     }

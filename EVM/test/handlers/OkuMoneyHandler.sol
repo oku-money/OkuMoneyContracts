@@ -27,6 +27,8 @@ contract OkuMoneyHandler is Test {
     uint256 public constant MAX_SUPPLY = TestConstants.MAX_SUPPLY;
     uint256 public constant PRECISION = TestConstants.PRECISION;
     uint256 public constant MAX_FUZZ_PRICE = TestConstants.MAX_FUZZ_PRICE;
+    uint256 public constant MIN_EPOCH_DURATION = TestConstants.MIN_EPOCH_DURATION;
+    uint256 public constant MAX_EPOCH_DURATION = TestConstants.MAX_EPOCH_DURATION;
 
     // Ghost variables for tracking
     uint256 public ghostMintedTotal;
@@ -144,29 +146,38 @@ contract OkuMoneyHandler is Test {
         }
     }
 
-    /// @notice Update OkuM price (rebase). Per-call cap raised from 2% to 10% so
-    ///         invariant runs reach the 5x global price cap quickly enough to stress
-    ///         the truncation/dust branches.
-    function rebase(uint256 priceIncrease) external {
+    /// @notice Run a yield epoch, moving the multiplier continuously.
+    /// @dev Amount and duration are fuzzed across the full valid range and allowed to
+    ///      exceed the APR cap, so the guard boundary is explored rather than assumed.
+    function rebase(uint256 yieldAmount, uint256 durationSeed, bool warpToEnd) external {
         ghostRebaseCallCount++;
-        uint256 currentPrice = okuMoney.okuMMultiplier();
-        if (currentPrice >= MAX_FUZZ_PRICE) return;
+        if (okuMoney.totalSupply() == 0) return;
+        if (okuMoney.okuMMultiplier() >= MAX_FUZZ_PRICE) return;
 
-        uint256 minIncrease = currentPrice / 10_000; // 0.01%
-        uint256 maxIncrease = currentPrice / 10; // 10%
-        uint256 increase = bound(priceIncrease, minIncrease, maxIncrease);
-
-        uint256 newPrice = currentPrice + increase;
-        if (newPrice > MAX_FUZZ_PRICE) newPrice = MAX_FUZZ_PRICE;
+        uint256 duration = bound(durationSeed, MIN_EPOCH_DURATION, MAX_EPOCH_DURATION);
+        uint256 ceiling = _maxYieldForDuration(duration);
+        if (ceiling == 0) return;
+        yieldAmount = bound(yieldAmount, 1, ceiling * 2);
 
         vm.prank(rebaser);
-        try okuMoney.setOkuMMultiplier(newPrice) {
+        try okuMoney.startYieldEpoch(yieldAmount, duration) {
+            vm.warp(block.timestamp + (warpToEnd ? duration : duration / 2));
             ghostLastWasRebase = true;
-            ghostLastOkuMMultiplier = newPrice;
+            ghostLastOkuMMultiplier = okuMoney.okuMMultiplier();
             vm.roll(block.number + 1);
         } catch {
             ghostRebaseRevertCount++;
         }
+    }
+
+    /// @dev Largest yield distributable over `duration` without breaching the APR cap.
+    function _maxYieldForDuration(uint256 duration) internal view returns (uint256) {
+        uint256 current = okuMoney.okuMMultiplier();
+        uint256 supply = okuMoney.totalSupply();
+        if (supply == 0) return 0;
+        uint256 maxDelta = (current * TestConstants.MAX_IMPLIED_APR_BPS * duration)
+            / (TestConstants.BASIS_POINTS * TestConstants.SECONDS_PER_YEAR);
+        return (maxDelta * supply) / PRECISION;
     }
 
     /// @notice Observe okuMMultiplier from outside the handler (e.g. from

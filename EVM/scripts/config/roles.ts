@@ -17,7 +17,6 @@ export const ROLES = {
   OKUM_UNPAUSER: keccak256(toUtf8Bytes("OKUM_UNPAUSER")),
   OKUM_MINTER: keccak256(toUtf8Bytes("OKUM_MINTER")),
   // Cycle 4 (EVM-15): OKUM_BURNER was split out of OKUM_MINTER. Both LitePSM
-  // and RedemptionQueue must hold OKUM_BURNER to call `OkuMoney.burn(...)`.
   OKUM_BURNER: keccak256(toUtf8Bytes("OKUM_BURNER")),
   OKUM_REBASER: keccak256(toUtf8Bytes("OKUM_REBASER")),
   OKUM_BLACKLISTER: keccak256(toUtf8Bytes("OKUM_BLACKLISTER")),
@@ -39,14 +38,9 @@ export const ROLES = {
   PSM_UPGRADER: keccak256(toUtf8Bytes("PSM_UPGRADER")),
   PSM_PAUSER: keccak256(toUtf8Bytes("PSM_PAUSER")),
   PSM_UNPAUSER: keccak256(toUtf8Bytes("PSM_UNPAUSER")),
-  PSM_QUEUE_PROCESSOR: keccak256(toUtf8Bytes("PSM_QUEUE_PROCESSOR")),
   PSM_BUFFER_DEPOSITOR: keccak256(toUtf8Bytes("PSM_BUFFER_DEPOSITOR")),
   PSM_BUFFER_WITHDRAWER: keccak256(toUtf8Bytes("PSM_BUFFER_WITHDRAWER")),
 
-  // ============ RedemptionQueue Roles ============
-  QUEUE_UPGRADER: keccak256(toUtf8Bytes("QUEUE_UPGRADER")),
-  QUEUE_PSM: keccak256(toUtf8Bytes("QUEUE_PSM")),
-  QUEUE_RESCUER: keccak256(toUtf8Bytes("QUEUE_RESCUER")),
 };
 
 /**

@@ -134,8 +134,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 balanceBefore = okuMoney.balanceOf(user1);
         uint256 totalSupplyBefore = okuMoney.totalSupply();
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newPrice);
+        _setOkuMMultiplierAndRoll(newPrice);
 
         // Balances must be completely unaffected
         assertEq(
@@ -168,8 +167,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 balance1Before = okuMoney.balanceOf(user1);
         uint256 balance2Before = okuMoney.balanceOf(user2);
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newPrice);
+        _setOkuMMultiplierAndRoll(newPrice);
 
         assertEq(okuMoney.balanceOf(user1), balance1Before, "User1 balance unchanged");
         assertEq(okuMoney.balanceOf(user2), balance2Before, "User2 balance unchanged");
@@ -193,8 +191,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 ratio1Before = (okuMoney.balanceOf(user1) * PRECISION) / okuMoney.totalSupply();
         uint256 ratio2Before = (okuMoney.balanceOf(user2) * PRECISION) / okuMoney.totalSupply();
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newPrice);
+        _setOkuMMultiplierAndRoll(newPrice);
 
         uint256 ratio1After = (okuMoney.balanceOf(user1) * PRECISION) / okuMoney.totalSupply();
         uint256 ratio2After = (okuMoney.balanceOf(user2) * PRECISION) / okuMoney.totalSupply();
@@ -204,114 +201,152 @@ contract OkuMoneyFuzzTest is BaseTest {
         assertEq(ratio2After, ratio2Before, "User2 ratio exactly preserved");
     }
 
-    // ============ okuMMultiplier Monotonicity Tests ============
+    // ============ Yield Epoch Fuzz Tests ============
 
-    /// @notice okuMMultiplier can only increase via setOkuMMultiplier
-    function testFuzz_NotePriceNeverDecreases(uint256 newPrice) public {
-        uint256 currentPrice = okuMoney.okuMMultiplier();
-        newPrice = _boundOkuMMultiplier(newPrice);
+    /// @notice The multiplier never decreases, whatever epoch is run.
+    function testFuzz_MultiplierNeverDecreases(uint256 yieldAmount, uint256 durationSeed) public {
+        _mintOkuMoney(user1, 10_000e18);
+        uint256 before = okuMoney.okuMMultiplier();
+
+        uint256 duration = bound(durationSeed, MIN_EPOCH_DURATION, MAX_EPOCH_DURATION);
+        uint256 ceiling = _maxYieldForDuration(duration);
+        vm.assume(ceiling > 0);
+        yieldAmount = bound(yieldAmount, 1, ceiling);
 
         vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newPrice);
-
-        assertGe(okuMoney.okuMMultiplier(), currentPrice, "okuMMultiplier must never decrease");
+        try okuMoney.startYieldEpoch(yieldAmount, duration) {
+            vm.warp(block.timestamp + duration);
+            assertGe(okuMoney.okuMMultiplier(), before, "multiplier must never decrease");
+        } catch {
+            assertEq(okuMoney.okuMMultiplier(), before, "failed epoch must not move it");
+        }
     }
 
-    /// @notice Sequential okuMMultiplier updates accumulate correctly
-    function testFuzz_SequentialNotePriceUpdates(uint256 increase1, uint256 increase2) public {
-        increase1 = _boundOkuMMultiplierIncrease(increase1);
-        increase2 = _boundOkuMMultiplierIncrease(increase2);
-
-        uint256 priceBefore = okuMoney.okuMMultiplier();
-
-        // First price update
-        uint256 price1 = priceBefore + increase1;
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(price1);
-
-        assertEq(okuMoney.okuMMultiplier(), price1, "Price after first update");
-
-        // Second price update
-        uint256 price2 = price1 + increase2;
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(price2);
-
-        assertEq(okuMoney.okuMMultiplier(), price2, "Price after second update");
-        assertGt(okuMoney.okuMMultiplier(), priceBefore, "Final price greater than initial");
-    }
-
-    /// @notice okuMMultiplier reverts if new price is less than current
-    function testFuzz_NoteMultiplierCannotDecrease(uint256 increase, uint256 decrease) public {
-        increase = _boundOkuMMultiplierIncrease(increase);
-
-        uint256 currentPrice = okuMoney.okuMMultiplier();
-        uint256 higherPrice = currentPrice + increase;
-
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(higherPrice);
-
-        // Try to set a lower price (any amount below current)
-        decrease = bound(decrease, 1, higherPrice);
-        uint256 lowerPrice = higherPrice - decrease;
-
-        vm.prank(rebaser);
-        vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
-        okuMoney.setOkuMMultiplier(lowerPrice);
-    }
-
-    // ============ distributeYield Fuzz Tests ============
-
-    /// @notice distributeYield increases the multiplier monotonically and matches the
-    ///         exact arithmetic formula across a realistic range of yield sizes.
-    /// @dev distributeYield itself has no rate cap (only setOkuMMultiplier does).
-    ///      Bound the yield to up to 10x the existing supply (1000% jump per call) —
-    ///      a wildly aggressive but mathematically valid distribution that still
-    ///      exercises the truncation/dust branches near MAX_SUPPLY without overflowing.
-    function testFuzz_DistributeYield(uint256 supply, uint256 yieldAmount) public {
-        // Keep room for `supply * 10` in the bounded yieldAmount without overflowing
-        // (MAX_SUPPLY = 1e27, so supply * 10 stays well below 2^256).
-        supply = bound(supply, 1e18, MAX_SUPPLY / 100);
-
-        // Lower bound: yieldAmount must produce a non-zero per-token increment
-        // (yieldAmount * PRECISION / supply >= 1), so yieldAmount >= ceil(supply / PRECISION).
-        // Since PRECISION = 1e18 and supply <= MAX_SUPPLY / 100 = 1e25, the min yieldAmount
-        // is at most 1e7 — never more than the supply itself.
-        uint256 minYield = supply / PRECISION + 1;
-        // Realistic upper bound: 10x current supply per single distribution.
-        yieldAmount = bound(yieldAmount, minYield, supply * 10);
-
+    /// @notice Accrual is exactly linear: the multiplier at any point in an epoch is
+    ///         `base + rate * elapsed`, and never overshoots the endpoint.
+    function testFuzz_AccrualIsLinear(uint256 yieldAmount, uint256 elapsedSeed) public {
+        uint256 supply = 10_000e18;
         _mintOkuMoney(user1, supply);
 
-        uint256 priceBefore = okuMoney.okuMMultiplier();
+        uint256 duration = 30 days;
+        uint256 ceiling = _maxYieldForDuration(duration);
+        // Lower bound must guarantee a non-zero per-second rate, else the epoch is
+        // rejected with YieldTooSmall: need yieldAmount * 1e18 / supply >= duration.
+        uint256 minYield = (duration * supply) / PRECISION + 1;
+        vm.assume(ceiling > minYield);
+        yieldAmount = bound(yieldAmount, minYield, ceiling);
+
+        uint256 start = okuMoney.okuMMultiplier();
+        uint256 t0 = block.timestamp;
 
         vm.prank(rebaser);
-        okuMoney.distributeYield(yieldAmount);
+        okuMoney.startYieldEpoch(yieldAmount, duration);
 
-        uint256 priceAfter = okuMoney.okuMMultiplier();
-        uint256 expectedIncrease = Math.mulDiv(yieldAmount, PRECISION, supply, Math.Rounding.Floor);
-        assertEq(priceAfter, priceBefore + expectedIncrease, "price increase equals yield/supply");
-        assertGe(priceAfter, priceBefore, "multiplier must never decrease");
+        uint256 ratePerSecond = ((yieldAmount * PRECISION) / supply) / duration;
 
-        // lastYieldDistributionBlock advanced.
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+        uint256 elapsed = bound(elapsedSeed, 0, duration);
+        vm.warp(t0 + elapsed);
+
+        assertEq(
+            okuMoney.okuMMultiplier(),
+            start + ratePerSecond * elapsed,
+            "multiplier must equal base + rate * elapsed"
+        );
     }
 
-    /// @notice Confirm that distributeYield reverts with YieldTooSmall when the yield
-    ///         amount would truncate to zero per token (yieldAmount * PRECISION / supply == 0).
-    function testFuzz_DistributeYield_RevertWhenYieldTooSmall(uint256 supply) public {
-        // Need supply > PRECISION so that there exist yieldAmounts < supply/PRECISION that
-        // still truncate to zero. E.g. supply=2e18, tinyYield=1 -> 1*1e18/2e18 = 0.
+    /// @notice Total delivered yield never exceeds the requested amount.
+    /// @dev Truncation must always favour the protocol, never the holder.
+    function testFuzz_DeliveredYieldNeverExceedsRequested(
+        uint256 supply,
+        uint256 yieldAmount
+    )
+        public
+    {
+        supply = bound(supply, 1e18, MAX_SUPPLY / 100);
+        _mintOkuMoney(user1, supply);
+
+        uint256 duration = 30 days;
+        uint256 ceiling = _maxYieldForDuration(duration);
+        vm.assume(ceiling > supply / PRECISION + 1);
+        yieldAmount = bound(yieldAmount, supply / PRECISION + 1, ceiling);
+
+        uint256 before = okuMoney.okuMMultiplier();
+
+        vm.prank(rebaser);
+        try okuMoney.startYieldEpoch(yieldAmount, duration) {
+            vm.warp(block.timestamp + duration);
+            uint256 delivered = ((okuMoney.okuMMultiplier() - before) * supply) / PRECISION;
+            assertLe(delivered, yieldAmount, "delivered must never exceed requested");
+        } catch {}
+    }
+
+    /// @notice Any epoch the contract accepts implies an APR within the cap.
+    function testFuzz_AcceptedEpochsRespectAprCap(
+        uint256 yieldAmount,
+        uint256 durationSeed
+    )
+        public
+    {
+        uint256 supply = 10_000e18;
+        _mintOkuMoney(user1, supply);
+
+        uint256 duration = bound(durationSeed, MIN_EPOCH_DURATION, MAX_EPOCH_DURATION);
+        // Deliberately allow well past the cap so the guard is exercised.
+        yieldAmount = bound(yieldAmount, 1, supply);
+
+        uint256 start = okuMoney.okuMMultiplier();
+
+        vm.prank(rebaser);
+        try okuMoney.startYieldEpoch(yieldAmount, duration) {
+            vm.warp(block.timestamp + duration);
+            uint256 delta = okuMoney.okuMMultiplier() - start;
+            uint256 impliedAprBps = (delta * BASIS_POINTS * SECONDS_PER_YEAR) / (start * duration);
+            assertLe(impliedAprBps, MAX_IMPLIED_APR_BPS, "accepted epoch must respect the APR cap");
+        } catch {}
+    }
+
+    /// @notice Multiplier flatlines past `endTime` for any epoch shape.
+    function testFuzz_FlatlinesPastEndTime(uint256 durationSeed, uint256 overshoot) public {
+        _mintOkuMoney(user1, 10_000e18);
+
+        uint256 duration = bound(durationSeed, MIN_EPOCH_DURATION, MAX_EPOCH_DURATION);
+        uint256 ceiling = _maxYieldForDuration(duration);
+        vm.assume(ceiling > 0);
+
+        vm.prank(rebaser);
+        try okuMoney.startYieldEpoch(ceiling, duration) {
+            vm.warp(block.timestamp + duration);
+            uint256 atEnd = okuMoney.okuMMultiplier();
+
+            vm.warp(block.timestamp + bound(overshoot, 1, 365 days));
+            assertEq(okuMoney.okuMMultiplier(), atEnd, "must flatline past endTime");
+        } catch {}
+    }
+
+    /// @notice `okuMMultiplierAt` agrees with `okuMMultiplier` at every timestamp.
+    function testFuzz_MultiplierAtMatchesRealisedValue(uint256 elapsedSeed) public {
+        _mintOkuMoney(user1, 10_000e18);
+        uint256 duration = 30 days;
+        uint256 t0 = block.timestamp;
+
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(100e18, duration);
+
+        uint256 elapsed = bound(elapsedSeed, 0, duration * 2);
+        uint256 projected = okuMoney.okuMMultiplierAt(t0 + elapsed);
+
+        vm.warp(t0 + elapsed);
+        assertEq(okuMoney.okuMMultiplier(), projected, "projection must match realised value");
+    }
+
+    /// @notice An epoch too small to produce a non-zero per-second rate is rejected.
+    function testFuzz_RevertWhenYieldTooSmall(uint256 supply) public {
         supply = bound(supply, PRECISION * 2, MAX_SUPPLY / 100);
         _mintOkuMoney(user1, supply);
 
-        // Choose a yieldAmount that definitely truncates: anything strictly less than
-        // ceil(supply / PRECISION) = supply / PRECISION + 1.  Use 1 as the simplest case:
-        // 1 * PRECISION / supply = 0 whenever supply > PRECISION.
-        uint256 tinyYield = 1;
-
         vm.prank(rebaser);
         vm.expectRevert(OkuMoney.YieldTooSmall.selector);
-        okuMoney.distributeYield(tinyYield);
+        okuMoney.startYieldEpoch(1, MAX_EPOCH_DURATION);
     }
 
     // ============ Minter Allowance Tests ============
@@ -417,8 +452,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         _mintOkuMoney(user1, mintAmount);
 
         // Update okuMMultiplier (should not affect balances)
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newPrice);
+        _setOkuMMultiplierAndRoll(newPrice);
 
         // Transfer some tokens
         transfer1 = bound(transfer1, 1, mintAmount / 2);
@@ -454,8 +488,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         _mintOkuMoney(user1, MAX_SUPPLY / 2);
 
         // Update okuMMultiplier
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newPrice);
+        _setOkuMMultiplierAndRoll(newPrice);
 
         // Should still be able to mint up to the cap (totalSupply is unaffected by okuMMultiplier)
         uint256 remaining = MAX_SUPPLY - okuMoney.totalSupply();
@@ -488,8 +521,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         assertEq(okuMoney.balanceOf(user1), firstMint, "User1 gets exact first mint");
 
         // Update okuMMultiplier
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newPrice);
+        _setOkuMMultiplierAndRoll(newPrice);
 
         // Second mint at new price — user still gets exact token amount
         _mintOkuMoney(user2, secondMint);
@@ -528,8 +560,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         _mintOkuMoney(user1, mintAmount);
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newPrice);
+        _setOkuMMultiplierAndRoll(newPrice);
 
         // Balance unchanged (standard ERC-20)
         assertEq(okuMoney.balanceOf(user1), mintAmount, "Balance exact after okuMMultiplier update");

@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 /**
  * @title Roles
  * @notice Centralized role constants for all OkuMoney contracts
- * @dev All roles use contract-specific prefixes (OKUM_, VAULT_, PSM_, QUEUE_)
+ * @dev All roles use contract-specific prefixes (OKUM_, VAULT_, PSM_)
  *      to prevent accidental role collisions across contracts.
  */
 library Roles {
@@ -41,12 +41,6 @@ library Roles {
     bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");
     bytes32 public constant PSM_PAUSER = keccak256("PSM_PAUSER");
     bytes32 public constant PSM_UNPAUSER = keccak256("PSM_UNPAUSER");
-    bytes32 public constant PSM_QUEUE_PROCESSOR = keccak256("PSM_QUEUE_PROCESSOR");
     bytes32 public constant PSM_BUFFER_DEPOSITOR = keccak256("PSM_BUFFER_DEPOSITOR");
     bytes32 public constant PSM_BUFFER_WITHDRAWER = keccak256("PSM_BUFFER_WITHDRAWER");
-
-    // ============ RedemptionQueue Roles ============
-    bytes32 public constant QUEUE_UPGRADER = keccak256("QUEUE_UPGRADER");
-    bytes32 public constant QUEUE_PSM = keccak256("QUEUE_PSM");
-    bytes32 public constant QUEUE_RESCUER = keccak256("QUEUE_RESCUER");
 }

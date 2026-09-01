@@ -27,16 +27,16 @@ Each file has the shape:
 }
 ```
 
-Exported contracts (5):
+Exported contracts (4):
 
 | File | Purpose |
 |------|---------|
 | `OkuMoney.json` | Non-rebasing base token (OkuM) |
 | `OkuDollar.json` | Rebasing $1-pegged stablecoin (usdOku) |
-| `LitePSM.json` | USDC ↔ OkuM peg stability module (sole user-facing mint/burn surface in v1) |
-| `RedemptionQueue.json` | FIFO queue for PSM-buffer-depleted redemptions |
+| `LitePSM.json` | USDC ↔ OkuM peg stability module, buffer-only (sole user-facing mint/burn surface in v1) |
 | `MockUSDC.json` | 6-decimal ERC-20 used on testnets |
 
+> `RedemptionQueue.json` was removed when redemption became buffer-only.
 > `OkuBridge.json`, `OkuBridgeRouter.json`, and `NttAdapter.json` were removed
 > in the noBridge refactor. v1 cross-chain transfers are PSM-mediated
 > mint/burn orchestrated off-chain. See `contracts/README.md` for the design.

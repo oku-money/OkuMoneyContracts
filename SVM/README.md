@@ -746,7 +746,7 @@ EVM groups protocol-wide invariants into `EVM/src/lib/`:
 |---|---|
 | `lib/Constants.sol` | `crates/oku-shared/src/constants.rs` |
 | `lib/MathLib.sol` | `crates/oku-shared/src/math.rs` |
-| `lib/YieldSandwichGuard.sol` | `crates/oku-shared/src/yield_lock.rs` + `lite-psm/src/helpers/yield_lock.rs` wrapper |
+| `lib/YieldSandwichGuard.sol` | **removed on EVM** (see "Rebasing model" below); SVM retains `crates/oku-shared/src/yield_lock.rs` + `lite-psm/src/helpers/yield_lock.rs` |
 | `lib/Roles.sol` | `programs/lite-psm/src/roles.rs` (single program owns all RBAC) |
 | `lib/Errors.sol` | `programs/lite-psm/src/errors.rs` |
 | `lib/events/*.sol` | `programs/lite-psm/src/events.rs` |
@@ -764,42 +764,60 @@ dollar values scale with the multiplier (like EVM OkuDollar).
 This eliminates the need for wrap/unwrap, the vault program, dead
 shares, collateral ratios, and the two-program CPI chain.
 
-### ScaledUiAmount vs stored price
+### ScaledUiAmount vs derived multiplier
 
-EVM stores `okumPrice` as a `uint256` in the PSM contract storage.
-SVM stores the multiplier as an `f64` in the Token-2022
-`ScaledUiAmountConfig` extension on the mint itself. There is no
-PsmConfig field for the price — the mint extension is the single
-source of truth. `read_multiplier()` reads it; `set_multiplier()`
-and `distribute_yield()` write it via CPI to the Token-2022 program.
+EVM derives `okuMMultiplier()` from a stored `YieldEpoch`
+(`baseMultiplier`, `ratePerSecond`, `startTime`, `endTime`) — it is a
+computed view, not a stored scalar. SVM stores the multiplier as an
+`f64` in the Token-2022 `ScaledUiAmountConfig` extension on the mint
+itself, which is the single source of truth. `read_multiplier()` reads
+it; `set_multiplier()` and `distribute_yield()` write it via CPI.
 
-### Rebasing model
+### Rebasing model — **known divergence, tracked**
 
-EVM `OkuMoney` accrues USD yield continuously between calls via
-`MathLib._rpow`. SVM uses discrete `set_multiplier` updates driven
-by the orchestrator. Solana's Token-2022 `ScaledUiAmount` extension
-stores a flat scalar (no per-second compounding), so wallets cannot
-show continuously-growing balances. Discrete updates are
-economically identical between orchestrator calls.
+EVM `OkuMoney` now accrues **continuously** over operator-defined
+yield epochs, and `OkuDollar` already did so via `MathLib.rpow`.
+SVM still uses **discrete** `set_multiplier` / `distribute_yield`
+updates.
 
-### `distributeYield` zero-yield guard
+This is no longer a cosmetic difference. On EVM the discrete step was
+found to be riskless arbitrage against the PSM: the multiplier is the
+settlement price for instant two-way convertibility, so a holder who
+straddles the step captures the whole increment with no holding
+period. The same-slot yield lock does **not** close it — it blocks the
+atomic round trip, but the profitable version positions before the
+update slot and exits after. SVM therefore retains an exposure that
+scales linearly with SVM-side TVL.
 
-Both EVM and SVM reject a `yieldAmount` / `yield_amount` that
-truncates to zero per token. Without this guard, a sub-threshold
-yield call would stamp `lastYieldDistributionBlock` /
-`last_yield_distribution_slot` without actually moving the
-multiplier, wasting the sandwich-lock window for the entire
-block/slot.
+Porting the epoch model is not a direct copy: Token-2022's
+`ScaledUiAmountConfig` is a two-point step (`multiplier`,
+`new_multiplier`, `new_multiplier_effective_timestamp`) with **no rate
+field**, so a continuous segment cannot live in the extension. The
+likely shape is a hybrid — an integer settlement segment in
+`PsmConfig` that all `read_multiplier` call sites resolve against,
+with the extension refreshed periodically for display only.
 
-- EVM: `OkuMoney.distributeYield` reverts `YieldTooSmall()`.
-- SVM: `distribute_yield` reverts `LitePsmError::YieldTooSmall`.
+See [`../TRACKER.md`](../TRACKER.md) and
+[`../EVM/README.md` § Continuous yield epochs](../EVM/README.md).
+
+### Zero-yield guard
+
+Both sides reject a yield amount that truncates to zero per token,
+though for different reasons now.
+
+- EVM: `OkuMoney.startYieldEpoch` reverts `YieldTooSmall()` when the
+  derived `ratePerSecond` floors to zero — a flat epoch would silently
+  replace a live one while appearing to succeed.
+- SVM: `distribute_yield` reverts `LitePsmError::YieldTooSmall` — a
+  sub-threshold call would stamp `last_yield_distribution_slot`
+  without moving the multiplier, wasting the lock window for the slot.
 
 ### Pause-bypass deltas
 
 | Operation | EVM | SVM |
 |---|---|---|
 | `freeze_account` / `thaw_account` | bypasses pause (Token-2022 freeze authority independent of `Pausable`) | bypasses pause (Token-2022 freeze CPI signed by config PDA; pause check intentionally omitted) |
-| `processQueue` when paused | proceeds — pause must not lock users in the queue | N/A — SVM has no queue |
+| Yield accrual when paused | `startYieldEpoch` is pause-gated; `haltAccrual` deliberately is not (reducing yield must always be possible) | `set_multiplier` / `distribute_yield` pause-gated |
 
 ### Bridging model asymmetry
 
@@ -811,18 +829,18 @@ block/slot.
 
 The orchestrator handles this asymmetry transparently.
 
-### Redemption model — queue (EVM) vs buffer-only (SVM)
+### Redemption model — buffer-only on both sides (converged)
 
-EVM keeps a `RedemptionQueue` to escrow a redeem when the buffer is
-insufficient; SVM has no queue at all (`redeem_oku_m` reverts
-`InsufficientBuffer` instead). See "Why no redemption queue" above —
-this is a deliberate SVM-specific simplification, not a parity gap.
+Both chains are now buffer-only: a redemption the buffer cannot cover
+reverts with `InsufficientBuffer`, escrowing nothing. EVM's
+`RedemptionQueue` was deleted, adopting the SVM posture described in
+"Why no redemption queue" above. This is no longer a divergence.
 
 ### DeFi compatibility
 
 | Aspect | EVM | SVM |
 |---|---|---|
-| AMM integration | rebasing tokens require wrapper or custom pool logic | raw amounts static — standard AMM pools work natively |
+| AMM integration | `OkuMoney` raw balances are static (ERC-8056 multiplier is a pricing/display layer); `OkuDollar` rebases and requires wrapper or custom pool logic | raw amounts static — standard AMM pools work natively |
 | Raydium | n/a | CPMM/CLMM explicitly allow `ScaledUiAmount` tokens |
 | Jupiter | n/a | routes through `ScaledUiAmount` tokens natively |
 | Lending protocols | must account for rebasing | raw collateral amounts are stable; no rebasing risk |
@@ -863,7 +881,7 @@ nonces, no refund flow — all cross-chain coordination is off-chain.
 | `OkuDollar` (rebasing vault) | yes (separate contract) | no | SVM uses `ScaledUiAmount` instead |
 | `OkuM` (Token-2022 + ScaledUiAmount) | no | yes | SVM-only single token |
 | `LitePSM` | yes (`EVM/src/psm/LitePSM.sol`) | yes (`programs/lite-psm`) | parity (different token model) |
-| `RedemptionQueue` | yes (`EVM/src/psm/RedemptionQueue.sol`) | no — buffer-only PSM | SVM-only deliberate simplification |
+| `RedemptionQueue` | no — deleted; buffer-only PSM | no — buffer-only PSM | converged (EVM adopted the SVM posture) |
 | On-chain bridge | none | none | both sides are off-chain orchestrator-mediated |
 
 ### Events

@@ -7,13 +7,12 @@
  *                     ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER,
  *                     RESERVE_MANAGER
  *   Warm Multisig   → all PAUSER, all BLACKLISTER
- *   Orchestrator    → OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR
+ *   Orchestrator    → OKUM_REBASER, VAULT_REBASER, BUFFER_DEPOSITOR
  *
- * QUEUE_PSM is intentionally NOT in this list — it must remain on the LitePSM
  * proxy address (set at deploy time via configureRoles).
  *
  * OKUM_MINTER and OKUM_BURNER (cycle 4 / EVM-15) are likewise intentionally
- * NOT in this list — they must remain on the LitePSM and RedemptionQueue
+ * NOT in this list — they must remain on the LitePSM
  * proxy addresses (granted at deploy time via configureRoles). This script
  * verifies those grants exist before proceeding; missing grants are fatal.
  *
@@ -111,25 +110,18 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
       "PSM_UNPAUSER",
       "PSM_BUFFER_WITHDRAWER",
     ]],
-    ["RedemptionQueue", [
-      "DEFAULT_ADMIN_ROLE",
-      "QUEUE_UPGRADER",
-      "QUEUE_RESCUER",
-    ]],
   ]);
 
   const warmRoles = new Map<string, RoleName[]>([
     ["OkuMoney", ["OKUM_PAUSER", "OKUM_BLACKLISTER"]],
     ["OkuDollar", ["VAULT_PAUSER", "OKUM_BLACKLISTER"]],
     ["LitePSM", ["PSM_PAUSER"]],
-    ["RedemptionQueue", []],
   ]);
 
   const orchRoles = new Map<string, RoleName[]>([
     ["OkuMoney", ["OKUM_REBASER"]],
     ["OkuDollar", ["VAULT_REBASER"]],
-    ["LitePSM", ["PSM_QUEUE_PROCESSOR", "PSM_BUFFER_DEPOSITOR"]],
-    ["RedemptionQueue", []],
+    ["LitePSM", ["PSM_BUFFER_DEPOSITOR"]],
   ]);
 
   return { cold: coldRoles, warm: warmRoles, orch: orchRoles };
@@ -231,7 +223,7 @@ async function main() {
   const { cold: coldMap, warm: warmMap, orch: orchMap } = buildRoleMap(cold, warm, orch);
 
   const contracts: Record<string, Contract> = {};
-  for (const name of ["OkuMoney", "OkuDollar", "LitePSM", "RedemptionQueue"]) {
+  for (const name of ["OkuMoney", "OkuDollar", "LitePSM"]) {
     let addr: string;
     try {
       addr = loadAddress(bookKey, name);
@@ -243,19 +235,23 @@ async function main() {
   }
 
   // -------- Sanity check: deploy-time proxy grants must already exist --------
-  // EVM-A1: OKUM_MINTER and OKUM_BURNER live on the LitePSM/RedemptionQueue
+  // EVM-A1: OKUM_MINTER and OKUM_BURNER live on the LitePSM
   // proxies, not on EOAs. They are granted in scripts/deploy/index.ts and must
   // be present before this script runs. Missing grants here mean a fresh
   // deploy is broken — fail loudly before we touch any role state.
-  if (contracts.OkuMoney && contracts.LitePSM && contracts.RedemptionQueue) {
+  // NOTE: this check must NOT be conditional on the contracts being present —
+  // a missing proxy would silently skip the verification it exists to perform.
+  if (!contracts.OkuMoney || !contracts.LitePSM) {
+    throw new Error(
+      "OkuMoney and LitePSM must both be in the address book before granting roles."
+    );
+  }
+  {
     const okuMoney = contracts.OkuMoney;
     const psmAddr = await contracts.LitePSM.getAddress();
-    const queueAddr = await contracts.RedemptionQueue.getAddress();
     const checks: Array<[string, string, string]> = [
       ["OKUM_MINTER on LitePSM", ROLES.OKUM_MINTER, psmAddr],
-      ["OKUM_MINTER on RedemptionQueue", ROLES.OKUM_MINTER, queueAddr],
       ["OKUM_BURNER on LitePSM", ROLES.OKUM_BURNER, psmAddr],
-      ["OKUM_BURNER on RedemptionQueue", ROLES.OKUM_BURNER, queueAddr],
     ];
     for (const [label, role, account] of checks) {
       const has = await okuMoney.hasRole(role, account);

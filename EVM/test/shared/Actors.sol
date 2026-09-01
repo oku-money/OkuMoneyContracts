@@ -36,13 +36,8 @@ abstract contract Actors is Test {
 
     // ============ LitePSM Roles ============
 
-    address public queueProcessor = makeAddr("queueProcessor");
     address public bufferDepositor = makeAddr("bufferDepositor");
     address public bufferWithdrawer = makeAddr("bufferWithdrawer");
-
-    // ============ RedemptionQueue Roles ============
-
-    address public queueRescuer = makeAddr("queueRescuer");
 
     // OkuBridge / OkuBridgeRouter actor aliases were removed in the noBridge
     // refactor. If those contracts return, restore the named actors from the
@@ -50,6 +45,10 @@ abstract contract Actors is Test {
 
     // ============ Generic Test Users ============
 
+    /// @dev Dust holder used by `BaseTest._runYieldEpochTo` when a test moves the
+    ///      multiplier before minting any supply. A yield epoch derives its per-token
+    ///      increment from `totalSupply`, so it requires a non-zero supply to exist.
+    address public epochSeedHolder = makeAddr("epochSeedHolder");
     address public user1 = makeAddr("user1");
     address public user2 = makeAddr("user2");
     address public user3 = makeAddr("user3");

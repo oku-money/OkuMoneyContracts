@@ -42,13 +42,6 @@ library TestRoles {
     bytes32 public constant PSM_UPGRADER = SrcRoles.PSM_UPGRADER;
     bytes32 public constant PSM_PAUSER = SrcRoles.PSM_PAUSER;
     bytes32 public constant PSM_UNPAUSER = SrcRoles.PSM_UNPAUSER;
-    bytes32 public constant PSM_QUEUE_PROCESSOR = SrcRoles.PSM_QUEUE_PROCESSOR;
     bytes32 public constant PSM_BUFFER_DEPOSITOR = SrcRoles.PSM_BUFFER_DEPOSITOR;
     bytes32 public constant PSM_BUFFER_WITHDRAWER = SrcRoles.PSM_BUFFER_WITHDRAWER;
-
-    // ============ RedemptionQueue Roles (QUEUE_ prefix) ============
-
-    bytes32 public constant QUEUE_UPGRADER = SrcRoles.QUEUE_UPGRADER;
-    bytes32 public constant QUEUE_PSM = SrcRoles.QUEUE_PSM;
-    bytes32 public constant QUEUE_RESCUER = SrcRoles.QUEUE_RESCUER;
 }

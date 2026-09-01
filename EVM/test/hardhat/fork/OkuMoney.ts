@@ -5,14 +5,13 @@ import {
     OkuMoney__factory,
     OkuDollar,
     OkuDollar__factory,
-    RedemptionQueue,
-    RedemptionQueue__factory,
     IERC20__factory
 } from "../../../typechain-types"
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, network, upgrades } from "hardhat"
 import { expect } from "chai"
 import { getTokenAddress, getWhaleAddress } from "../../../scripts/config/chains"
+import { setMultiplierTo } from "../helpers/yieldEpoch"
 
 const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
 const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
@@ -24,7 +23,6 @@ describe("OkuMoney Scenarios", () => {
     let Charlie: Signer
 
     let psm: LitePSM
-    let queue: RedemptionQueue
     let okuMoney: OkuMoney
     let okuUsd: OkuDollar
 
@@ -32,7 +30,6 @@ describe("OkuMoney Scenarios", () => {
 
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
     const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
-    const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
     const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
     const OKUM_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_PAUSER"))
@@ -41,7 +38,6 @@ describe("OkuMoney Scenarios", () => {
     const OKUM_UNBLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_UNBLACKLISTER"))
     const OKUM_CAP_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_CAP_MANAGER"))
     const PSM_BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("PSM_BUFFER_WITHDRAWER"))
-    const PSM_QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("PSM_QUEUE_PROCESSOR"))
 
     async function fundWithUSDC(user: Signer, amount: bigint) {
         await network.provider.request({
@@ -125,22 +121,13 @@ describe("OkuMoney Scenarios", () => {
         ) as unknown as OkuDollar
         await okuUsd.waitForDeployment()
 
-        queue = await upgrades.deployProxy(
-            new RedemptionQueue__factory(Frank),
-            // initialize(_okuMoney, _usdc, admin) — see fork/LitePSM.ts for context.
-            [await okuMoney.getAddress(), USDC_MAINNET, frankAddr],
-            { kind: "uups" }
-        ) as unknown as RedemptionQueue
-        await queue.waitForDeployment()
-
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            // initialize(_okuMoney, _okuDollar, _usdc, _redemptionQueue, admin)
+            // initialize(_okuMoney, _okuDollar, _usdc, admin)
             [
                 await okuMoney.getAddress(),
                 await okuUsd.getAddress(),
                 USDC_MAINNET,
-                await queue.getAddress(),
                 frankAddr
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
@@ -164,15 +151,11 @@ describe("OkuMoney Scenarios", () => {
 
         // Grant PSM-specific roles to Frank
         await psm.connect(Frank).grantRole(PSM_BUFFER_WITHDRAWER, frankAddr)
-        await psm.connect(Frank).grantRole(PSM_QUEUE_PROCESSOR, frankAddr)
 
         await okuMoney.connect(Frank).configureMinterAllowance(
             await psm.getAddress(),
             parseEther("1000000000")
         )
-        await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
-        await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await queue.getAddress())
-        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 
     describe("User-to-User Transfers", () => {
@@ -208,7 +191,7 @@ describe("OkuMoney Scenarios", () => {
             // Admin performs 10% notePrice increase (non-rebasing: balances do NOT change)
             const priceBefore = await okuMoney.okuMMultiplier()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
+            await setMultiplierTo(okuMoney, Frank, Frank, newPrice)
 
             // Verify notePrice increased
             expect(await okuMoney.okuMMultiplier()).to.equal(newPrice)
@@ -311,20 +294,12 @@ describe("OkuMoney Scenarios", () => {
             ) as unknown as OkuDollar
             await freshOkuUsd.waitForDeployment()
 
-            const freshQueue = await upgrades.deployProxy(
-                new RedemptionQueue__factory(Frank),
-                [await freshOkuMoney.getAddress(), USDC_MAINNET, frankAddr],
-                { kind: "uups" }
-            ) as unknown as RedemptionQueue
-            await freshQueue.waitForDeployment()
-
             const freshPSM = await upgrades.deployProxy(
                 new LitePSM__factory(Frank),
                 [
                     await freshOkuMoney.getAddress(),
                     await freshOkuUsd.getAddress(),
                     USDC_MAINNET,
-                    await freshQueue.getAddress(),
                     frankAddr
                 ],
                 { kind: "uups", unsafeAllow: ["constructor"] }
@@ -343,7 +318,6 @@ describe("OkuMoney Scenarios", () => {
                 await freshPSM.getAddress(),
                 parseEther("1000000000")
             )
-            await freshQueue.connect(Frank).grantRole(QUEUE_PSM, await freshPSM.getAddress())
 
             // Alice swaps 80,000 USDC (should succeed - under 100k cap, receives 80,000 OkuMoney)
             const firstSwap = parseUnits("80000", 6) // USDC amount

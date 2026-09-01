@@ -112,10 +112,9 @@ multiplier to a value that already accounts for the protocol take).
 
 | Component | Function |
 |---|---|
-| **OkuMoney** | Non-rebasing base token — static balance, price appreciates via stored `okuMMultiplier`. |
+| **OkuMoney** | Non-rebasing base token — static balance, price appreciates via `okuMMultiplier()`, which accrues continuously over yield epochs. Implements ERC-8056. |
 | **OkuDollar** | Rebasing $1-pegged stablecoin — balance grows, backed by OkuMoney reserves. |
-| **LitePSM** | Peg Stability Module — price-aware USDC ↔ OkuM. Sole user-facing mint/burn surface. Ships `mintUsdOku` / `redeemUsdOku` convenience flows that route through the vault. |
-| **RedemptionQueue** | FIFO queue when PSM buffer is insufficient. |
+| **LitePSM** | Peg Stability Module — price-aware USDC ↔ OkuM, buffer-only (no redemption queue). Sole user-facing mint/burn surface. Ships `mintUsdOku` / `redeemUsdOku` convenience flows that route through the vault. |
 
 ### SVM
 
@@ -150,26 +149,72 @@ multiplier to a value that already accounts for the protocol take).
 
 ---
 
-## Yield distribution & sandwich prevention
+## Yield distribution
 
-The multiplier is updated discretely by the orchestrator:
+Yield is **discovered off-chain in chunks** (T-Bills settle
+periodically) and is strictly **rear-facing** — only ever distributing
+returns already realized. The two sides differ in how it is
+*delivered*.
 
-- **EVM:** `distributeYield()` or `setOkuMMultiplier()` on OkuMoney.
-- **SVM:** `set_multiplier()` or `distribute_yield()` on lite-psm.
+### EVM — continuous epochs
 
-To prevent sandwich attacks around discrete updates, a single-block
-lock is enforced:
+`OkuMoney.startYieldEpoch(yieldAmount, duration)` streams a realized
+dollar amount linearly over an operator-chosen window:
 
-- Both write functions set `lastYieldDistributionBlock` (EVM) /
-  `last_yield_distribution_slot` (SVM).
-- PSM and vault operations revert if executed in the same block/slot
-  as a multiplier update.
-- The lock auto-releases in subsequent blocks/slots — no backend
-  changes needed.
+```
+M(t) = baseMultiplier + ratePerSecond × (min(t, endTime) − startTime)
+```
 
-On EVM, OkuDollar uses the same fence on its own `usd_multiplier`
-updates (cycle 4 / OKUD-06). SVM has no separate OkuDollar — the
-single multiplier fence on lite-psm covers all operations.
+Still **one transaction per distribution window**; the cadence is
+unchanged. An epoch begins at the *current* multiplier, so publishing
+never moves the price.
+
+**Why streaming rather than stepping.** `okuMMultiplier` is the
+settlement price for instant, two-way convertibility at the PSM. A
+discrete jump in a settlement price is riskless arbitrage: mint
+immediately before the step, redeem immediately after, and capture the
+whole increment with no holding period — funded from the PSM buffer
+and diluting honest holders. At $1M TVL / 5% APR / 30-day steps that
+was worth ~$2,055 per event (~$25k/yr, up to half of all yield).
+
+A same-block fence does **not** fix this. The old
+`YieldSandwichGuard` compared `block.number` against a flag written
+*inside* `distributeYield`, so a mint ordered *before* the step in the
+same block passed, and the redeem simply waited for the next block —
+a backrun guard, not a frontrun guard. Streaming removes the instant
+entirely, so a holder earns strictly in proportion to time held.
+Measured effect: the same attack now nets **$0.0095** instead of
+$2,055, and that residual is exactly the honest 12-second pro-rata
+share.
+
+Operator surface (all `OKUM_REBASER`): `startYieldEpoch`,
+`scheduleYieldEpoch`, `cancelPendingYieldEpoch`, `haltAccrual`,
+`resumeAccrual`. Bounded on-chain by `MAX_IMPLIED_APR_BPS` (20% APR),
+`MIN_EPOCH_DURATION` (1 h) and `MAX_EPOCH_DURATION` (365 d).
+
+Two operational cautions: accrual **flatlines silently** past
+`endTime` with no successor scheduled (monitor `yieldEpochEndsAt()`),
+and yield that has already accrued **cannot be reversed** — only a
+*pending* epoch can be cancelled cleanly.
+
+`OkuDollar.usdMultiplier` already accrued continuously via `_rpow`;
+both EVM multipliers now share that property, and neither can be
+sandwiched.
+
+See [`EVM/README.md` § Continuous yield epochs](EVM/README.md) for the
+full rationale.
+
+### SVM — discrete steps (unchanged)
+
+`set_multiplier()` / `distribute_yield()` on lite-psm still write the
+multiplier discretely, protected by the single-slot fence
+(`last_yield_distribution_slot`): PSM operations revert if executed in
+the same slot as a multiplier update, auto-releasing on the next slot.
+
+> **Divergence — tracked.** SVM therefore still carries the
+> step-arbitrage exposure that EVM has eliminated, subject to the same
+> caveat that a single-slot fence only blocks the atomic case. Porting
+> the epoch model to SVM is tracked in [`TRACKER.md`](TRACKER.md).
 
 ---
 
@@ -290,51 +335,48 @@ Verify on **both source and destination chains** before submitting:
 | Source buffer for instant path | `usdc.balanceOf(psm) > expectedUsdcOut` | `getAccount(vaultUsdc).amount > expected_usdc_out` (EVM↔SVM only; SVM↔SVM uses direct burn/mint) |
 | Recipient ATA not frozen | `OkuMoney.isBlacklisted(recipient) == false` | `getAccount(recipientAta).state != AccountState::Frozen` |
 
-If the EVM source PSM buffer is insufficient, the redeem succeeds but
-the OkuM is escrowed in EVM's redemption queue. **The orchestrator
-must wait for `processQueue` to pay out USDC before completing the
-destination mint leg.** Poll queue state to detect (EVM only — SVM
-has no redemption queue, see below):
+**Both chains are now buffer-only.** If the source PSM buffer cannot
+cover a redemption the call reverts with `InsufficientBuffer` —
+nothing is escrowed and the user keeps their OkuM. The orchestrator
+must top the buffer up with `depositBuffer` and retry; there is no
+queue to poll or drain on either side.
 
-```
-EVM:  queue.queueHead() < queue.queueTail()  → entries pending
-```
-
-The orchestrator can accelerate payment by calling `depositBuffer`
-to fund the queue, then `processQueue`.
-
-> **Note:** SVM has no redemption queue at all (deliberately removed
-> — see [`SVM/README.md` § Why no redemption queue](SVM/README.md)).
-> `redeem_oku_m` on SVM is buffer-only: it reverts with
-> `InsufficientBuffer` if the vault can't cover it — there is nothing
-> to drain or poll. SVM-to-SVM bridges additionally bypass the USDC
-> buffer entirely, using direct `burn_oku_m_direct` /
-> `mint_oku_m_direct` to conserve raw OkuM amounts 1:1.
+> SVM-to-SVM bridges additionally bypass the USDC buffer entirely,
+> using direct `burn_oku_m_direct` / `mint_oku_m_direct` to conserve
+> raw OkuM amounts 1:1.
 
 #### Mid-flight failure recovery
 
 | Failure mode | Recovery |
 |---|---|
 | Source redeem succeeded, destination mint failed | Diagnose the revert reason (pause / cap), wait for the blocking condition to clear, retry `mintOkuM` with the same USDC amount. If unrecoverable inside SLA, hold the destination USDC and file an incident — the user's source-chain OkuM is already burned. |
-| Source redeem was queued | Don't mint on destination until USDC is in hand. Poll queue state every ~30 s; call `depositBuffer` + `processQueue` to accelerate. |
+| Source redeem reverted with `InsufficientBuffer` | Nothing moved — the user still holds their OkuM. Top the buffer up with `depositBuffer` and retry the redeem before starting the destination leg. |
 | Orchestrator process crashes between legs | On restart, inspect orchestrator USDC + OkuM balances on both chains. Source USDC > expected float → leg-2 (dest mint) didn't run. Destination OkuM > 0 → leg-3 (forward to recipient) didn't run. All zero → verify on-chain event logs. **Orchestrator OkuM float must be zero between completed bridges**; non-zero for > 1 batch cycle indicates a stuck bridge. |
 
-#### Multiplier-tick sequencing across chains
+#### Multiplier sequencing across chains
 
-The multiplier (`okuMMultiplier` EVM / `multiplier` SVM) is updated
-discretely by `OKUM_REBASER`. To prevent chain divergence from
-causing accounting errors:
+Yield is published per-chain by `OKUM_REBASER`. To prevent chain
+divergence from causing accounting errors:
 
-1. Fire `setOkuMMultiplier` (EVM) / `set_multiplier` (SVM) on **all
-   chains in the same off-chain batch**, within one slot/block of
-   each other.
+1. Publish on **all chains in the same off-chain batch** — EVM
+   `startYieldEpoch(amount, duration)`, SVM `set_multiplier`. On EVM,
+   use identical `duration` values across chains so the per-second
+   rates stay comparable.
 2. If sequencing diverges, **per-bridge dollar value is still
    conserved** — the PSM uses the current multiplier at redemption
-   time on source and at mint time on destination. The recipient
-   may receive a slightly different raw token amount; dollar value
-   is equivalent.
-3. After a price tick, wait one slot (SVM) / one block (EVM) before
-   bridging to avoid `YieldDistributionInProgress`.
+   time on source and at mint time on destination. The recipient may
+   receive a slightly different raw token amount; dollar value is
+   equivalent.
+3. **EVM needs no cooldown.** An epoch begins at the prevailing
+   multiplier, so publication moves no price and bridging may proceed
+   in the same block. **SVM still steps**, so wait one slot after
+   `set_multiplier` before bridging to avoid the yield lock.
+
+> EVM chains drift apart *continuously* rather than in steps, so a
+> chain that misses a publication falls behind smoothly instead of
+> jumping when it catches up. There is no cross-chain synchronisation
+> mechanism in v1 (deliberately out of scope) — chains are kept
+> aligned by the orchestrator publishing the same parameters to each.
 
 #### Minter allowance rotation policy
 
@@ -387,10 +429,9 @@ All metrics on a 1-min cadence. PagerDuty for "token float" and
   On SVM, the orchestrator may hold `direct_minter` / `direct_burner`
   roles for cross-chain bridge operations (direct OkuM mint/burn).
 - **EVM roles:** `OKUM_REBASER`, `VAULT_REBASER`,
-  `PSM_QUEUE_PROCESSOR`, `PSM_BUFFER_DEPOSITOR`.
+  `PSM_BUFFER_DEPOSITOR`.
 - **SVM roles:** `rebaser`, `buffer_depositor`, `direct_minter`,
-  `direct_burner`. (No `VAULT_REBASER` or queue-processor equivalent
-  on SVM — no vault, no redemption queue.)
+  `direct_burner`. (No `VAULT_REBASER` equivalent on SVM — no vault.)
 - Compromise allows multiplier manipulation and buffer drain —
   material but bounded. On EVM, compromise also allows skipping
   ahead in the redemption queue. On SVM, compromise allows direct
@@ -413,9 +454,8 @@ One role per action. No role performs more than one function.
 |---|---|---|
 | Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, RESERVE_MANAGER | role_admin, unpauser, cap_manager, allowance_manager, buffer_withdrawer |
 | Warm Multisig | all PAUSER, all BLACKLISTER | pauser, freezer |
-| Orchestrator | OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR | rebaser, buffer_depositor, direct_minter, direct_burner |
+| Orchestrator | OKUM_REBASER, VAULT_REBASER, BUFFER_DEPOSITOR | rebaser, buffer_depositor, direct_minter, direct_burner |
 | LitePSM | OKUM_MINTER, OKUM_BURNER (cycle 4: split on EVM) | Mint authority on OkuM Token-2022 mint |
-| RedemptionQueue | OKUM_BURNER (cycle 4) | no SVM equivalent — redemption queue removed entirely, buffer-only PSM |
 
 The `BRIDGE_*`, `ROUTER_*`, and `NTT_*` roles defined in
 `EVM/src/lib/Roles.sol` are reserved for future re-introduction of
@@ -495,18 +535,18 @@ the company*, not protection *against* the company.
   `direct_burner` roles).
 
 **Cannot:**
-- Mint OkuM directly on EVM. `OKUM_MINTER` is held by the PSM /
-  RedemptionQueue contracts.
+- Mint OkuM directly on EVM. `OKUM_MINTER` is held by the PSM
+  contract.
 - Access admin parameters, role grants, upgrades.
 - Drain the USDC buffer (cold-multisig BUFFER_WITHDRAWER only).
 
-#### Protocol contracts (LitePSM, RedemptionQueue)
+#### Protocol contracts (LitePSM)
 
 **EVM:** Hold `OKUM_MINTER` / `OKUM_BURNER`. Mint via
-`OkuMoney.mint()` only during `mintOkuM` / `processQueue`, gated by
+`OkuMoney.mint()` only during `mintOkuM`, gated by
 per-minter `minterAllowance` and the global `maxSupply` cap. Burn
 (cycle-4 split role) only via `OkuMoney.burn()` from inside
-`redeemOkuM` / `processQueue`.
+`redeemOkuM`.
 
 **SVM:** lite-psm holds mint authority on the OkuM Token-2022 mint.
 Minting via `mint_oku_m` / `mint_oku_m_direct` is gated by
@@ -537,7 +577,7 @@ requirement is itself the delay mechanism. **Timelocks are not pursued.**
 | Decimals | 18 | 6 |
 | Proxy pattern | TransparentUpgradeable / UUPS | Solana program upgrades (Squads authority) |
 | Convenience functions | On LitePSM contract | Direct OkuM mint/redeem on the PSM; no wrapping needed |
-| Redemption when buffer insufficient | Escrowed in `RedemptionQueue`, drained via `processQueue` | Reverts `InsufficientBuffer` — no queue (deliberately removed) |
+| Redemption when buffer insufficient | Reverts `InsufficientBuffer` — no queue | Reverts `InsufficientBuffer` — no queue |
 | Cross-chain transfers (v1) | Off-chain orchestrator + LitePSM mint/burn (USDC-mediated) | Off-chain orchestrator + direct burn/mint of OkuM (`burn_oku_m_direct` / `mint_oku_m_direct`) |
 
 **Full cross-chain parity matrix** — constants, roles, pause
@@ -557,7 +597,7 @@ contracts/
 │   ├── README.md        # EVM-specific deployment, contracts, runbook
 │   ├── src/
 │   │   ├── token/       # OkuMoney.sol, OkuDollar.sol
-│   │   ├── psm/         # LitePSM.sol, RedemptionQueue.sol
+│   │   ├── psm/         # LitePSM.sol
 │   │   ├── interfaces/  # IOkuMoney.sol, IOkuDollar.sol, IOkuBridgeNative.sol (reserved)
 │   │   └── lib/         # Roles, Constants, MathLib, events
 │   ├── test/            # Foundry + Hardhat suites
@@ -643,9 +683,9 @@ hh run scripts/deploy/index.ts --network localhost
 hh run scripts/test/test-onchain.ts --network localhost
 ```
 
-Deploys MockUSDC, OkuMoney, OkuDollar, RedemptionQueue, LitePSM;
-configures all roles + minter allowances (LitePSM + RedemptionQueue
-hold `OKUM_MINTER` / `OKUM_BURNER`); verifies deployment state.
+Deploys MockUSDC, OkuMoney, OkuDollar, LitePSM; configures all roles
++ minter allowances (LitePSM holds `OKUM_MINTER` / `OKUM_BURNER`);
+verifies deployment state.
 Fork-deployed addresses land under `addresses.json["fork:<chain>"]`
 so they never collide with live entries.
 

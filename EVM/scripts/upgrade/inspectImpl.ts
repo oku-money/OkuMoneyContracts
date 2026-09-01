@@ -7,7 +7,7 @@ import { ethers, upgrades } from "hardhat";
 import { loadAddress, hasAddress } from "../utils/addressBook";
 import { resolveNetworkContext } from "../utils/networkContext";
 
-const TARGETS = ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
+const TARGETS = ["OkuMoney", "OkuDollar", "LitePSM"];
 
 async function main() {
   const { networkName } = await resolveNetworkContext();

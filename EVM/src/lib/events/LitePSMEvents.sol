@@ -13,8 +13,9 @@ abstract contract LitePSMEvents {
     );
 
     /// @notice Emitted when OkuMoney is redeemed for USDC from the PSM buffer.
-    /// @dev Not emitted on queued redemptions — the `RedemptionQueued` event in
-    ///      `RedemptionQueue` carries that information.
+    /// @dev Redemption is buffer-only: a redemption the buffer cannot cover
+    ///      reverts with `InsufficientBuffer`, so every successful redeem emits
+    ///      this exactly once.
     event OkuMRedeemed(
         address indexed user, uint256 okuMIn, uint256 usdcOut, uint256 okuMMultiplier
     );

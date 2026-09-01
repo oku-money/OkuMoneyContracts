@@ -23,20 +23,75 @@ import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {OkuMoneyEvents} from "../lib/events/OkuMoneyEvents.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
+import {IScaledUIAmount} from "../interfaces/erc8056/IScaledUIAmount.sol";
+import {
+    IScaledUIAmountNewUIMultiplier
+} from "../interfaces/erc8056/IScaledUIAmountNewUIMultiplier.sol";
+import {IScaledUIAmountConversion} from "../interfaces/erc8056/IScaledUIAmountConversion.sol";
+import {IScaledUIAmountBalances} from "../interfaces/erc8056/IScaledUIAmountBalances.sol";
 
 /**
  * @title OkuMoney
  * @notice Non-rebasing base token (ticker `OkuM`) backed by US T-Bills with rear-facing yield
- * @dev Standard ERC-20 balances (static). Yield is expressed through multiplier appreciation
- *      tracked by a stored `okuMMultiplier` written discretely by an orchestrator via
- *      `setOkuMMultiplier()` or `distributeYield()`.
+ * @dev Standard ERC-20 balances (static). Yield is expressed through appreciation of
+ *      `okuMMultiplier()` — the dollar value of one OkuM — which is the pricing input
+ *      for the PSM, the OkuDollar vault, and the fiat off-ramp.
  *
  *      Key distinction: balanceOf() returns raw token count (standard ERC-20).
- *      okuMMultiplier() is a separate view function for pricing — used by PSM and vault.
+ *      okuMMultiplier() is a separate view function for pricing.
+ *
+ *      ## Why yield streams instead of stepping
+ *
+ *      Yield is discovered off-chain in chunks (T-Bills settle periodically), but it is
+ *      DELIVERED on-chain continuously, over an operator-defined epoch. Those two things
+ *      are independent, and conflating them is a vulnerability:
+ *
+ *      `okuMMultiplier` is the settlement price for instant, two-way convertibility at
+ *      the PSM. A discrete jump in a settlement price is riskless arbitrage — mint
+ *      immediately before the jump, redeem immediately after, and capture the entire
+ *      increment with no price risk and no holding period, funded out of the PSM buffer
+ *      and diluting every honest holder. Yield is compensation for holding across TIME;
+ *      a step converts it into compensation for holding across an INSTANT.
+ *
+ *      A same-block fence cannot fix this. The profitable round-trip spans two blocks
+ *      (mint in N, step in N, redeem in N+1), and only requires seeing the update
+ *      transaction in the mempool. Streaming removes the instant entirely: there is no
+ *      discontinuity to straddle, so a holder earns strictly in proportion to time held.
+ *
+ *      This mirrors the continuous accrual OkuDollar already uses for `usdMultiplier`,
+ *      and follows the same realized-lump-streamed-forward pattern as Synthetix
+ *      `StakingRewards.notifyRewardAmount` and Yearn v2's `lockedProfitDegradation`.
+ *
+ *      ## The epoch model
+ *
+ *      One epoch fully describes the multiplier for all time within it:
+ *
+ *          M(t) = baseMultiplier + ratePerSecond * (min(t, endTime) - startTime)
+ *
+ *      Accrual is LINEAR, not exponential. The operator supplies a realized dollar
+ *      amount and a duration; the contract derives the per-second increment. Linear
+ *      delivery of a known lump is both the honest shape for "distribute exactly this
+ *      much over exactly this long" and avoids the D-th root that deriving an
+ *      exponential rate from a target amount would require. Over epoch lengths in the
+ *      day-to-month range the curvature difference is negligible.
+ *
+ *      The multiplier is a pure function of time — no keeper, no per-block writes.
+ *      It FLATLINES past `endTime`: a missed renewal freezes yield rather than
+ *      extrapolating unearned accrual. That is the safe default, but it is silent,
+ *      so operators must monitor {yieldEpochEndsAt}.
+ *
+ *      Rear-facing discipline is preserved: an epoch only ever distributes yield that
+ *      has already been realized off-chain. Monotonicity means a negative period
+ *      cannot be passed through — the operator distributes nothing instead.
  *
  *      The minter-allowance design (per-minter cap in `minterAllowance`, decremented on
  *      `mint`) is modeled on Circle's FiatToken minter-controller pattern.
  *      Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2.sol
+ *
+ *      Implements ERC-8056 (Scaled UI Amount) so wallets can render dollar values
+ *      natively. Note the standard was designed for value-neutral stock splits, whereas
+ *      `okuMMultiplier` is a value-additive settlement price; only the interface is
+ *      borrowed. See `EVM/README.md § ERC-8056 on OkuMoney`.
  *
  *      See Constants.sol for terminology legend.
  *
@@ -51,24 +106,45 @@ contract OkuMoney is
     PausableUpgradeable,
     UUPSUpgradeable,
     OkuMoneyEvents,
-    IOkuMoney
+    IOkuMoney,
+    IScaledUIAmount,
+    IScaledUIAmountNewUIMultiplier,
+    IScaledUIAmountConversion,
+    IScaledUIAmountBalances
 {
     // ============ ERC-7201 Namespaced Storage ============
 
+    /// @notice A linear yield-accrual epoch. Fully describes the multiplier within it.
+    /// @dev Packs into three slots: two `uint256` + (`uint64`, `uint64`).
+    struct YieldEpoch {
+        /// @dev Multiplier value at exactly `startTime`.
+        uint256 baseMultiplier;
+        /// @dev Per-second multiplier increment. Zero means flat (no accrual).
+        uint256 ratePerSecond;
+        /// @dev Accrual start. Set from `block.timestamp` at write time, never backdated.
+        uint64 startTime;
+        /// @dev Accrual end. The multiplier FLATLINES past this rather than
+        ///      extrapolating — a missed renewal freezes yield, which is the safe
+        ///      default. `startTime == endTime` is a valid flat epoch.
+        uint64 endTime;
+    }
+
     /// @custom:storage-location erc7201:okumoney.storage.OkuMoney
     struct OkuMoneyStorage {
-        // Dollar value per token multiplier (starts at 1e18 = $1.00, written by OKUM_REBASER)
-        uint256 okuMMultiplier;
         // Minter allowance system (Circle FiatToken pattern; see contract NatSpec for source)
         mapping(address => uint256) minterAllowance;
         // Supply cap in token units
         uint256 maxSupply;
         // Blacklist
         mapping(address => bool) isBlacklisted;
-        // Block number of last yield distribution. Used by YieldSandwichGuard consumers
-        // (OkuDollar, LitePSM) to block PSM/vault operations in the same block as a
-        // distribution and prevent sandwich attacks on the multiplier write.
-        uint256 lastYieldDistributionBlock;
+        // Active accrual epoch. `okuMMultiplier()` is derived from this, not stored.
+        YieldEpoch currentEpoch;
+        // Scheduled successor, activating at `currentEpoch.endTime`. A zero `endTime`
+        // means none is scheduled.
+        YieldEpoch pendingEpoch;
+        // Guardian latch. Blocks new epochs and freezes the multiplier at its
+        // value when the halt landed. Independent of `Pausable` — see {haltAccrual}.
+        bool accrualHalted;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuMoney")) - 1)) & ~bytes32(uint256(0xff))
@@ -101,10 +177,30 @@ contract OkuMoney is
     ///      operator. Mirrors the explicit `MAX_MULTIPLIER` guard on the SVM side
     ///      (`oku-shared::constants::MAX_MULTIPLIER`, scaled for SVM's 1e9 precision).
     error MultiplierTooHigh();
-    /// @dev Mirrors SVM `LitePsmError::YieldTooSmall`. Prevents a tiny yieldAmount
-    ///      that truncates to zero per-token from stamping `lastYieldDistributionBlock`
-    ///      without actually moving the multiplier (wasting the sandwich-lock window).
+    /// @dev Mirrors SVM `LitePsmError::YieldTooSmall`. The yield amount is too small
+    ///      to produce a non-zero per-second increment at the current supply and
+    ///      duration, so the epoch would be indistinguishable from a flat one.
+    ///      Reverting keeps a no-op call from silently replacing a live epoch.
     error YieldTooSmall();
+    /// @dev Epoch duration outside [MIN_EPOCH_DURATION, MAX_EPOCH_DURATION].
+    error InvalidEpochDuration();
+    /// @dev The epoch's annualized implied rate exceeds `MAX_IMPLIED_APR_BPS`.
+    ///      Guards against a mispriced or malicious distribution, and rejects
+    ///      durations so short the epoch is effectively a discrete step.
+    error ImpliedAprTooHigh(uint256 impliedAprBps, uint256 maxAprBps);
+    /// @dev Accrual is latched off; new epochs are rejected until {resumeAccrual}.
+    error AccrualIsHalted();
+    /// @dev {resumeAccrual} called when accrual was not halted.
+    error AccrualNotHalted();
+    /// @dev {haltAccrual} called when accrual was already halted.
+    error AccrualAlreadyHalted();
+    /// @dev {scheduleYieldEpoch} requires a live (non-flatlined) current epoch to
+    ///      chain onto. Without one the successor's start time would be in the past.
+    error NoActiveEpoch();
+    /// @dev {cancelPendingYieldEpoch} called with nothing scheduled.
+    error NoPendingEpoch();
+    /// @dev A successor is already scheduled. Cancel it before scheduling another.
+    error PendingEpochExists();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -137,8 +233,18 @@ contract OkuMoney is
         __Pausable_init();
 
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        $.okuMMultiplier = Constants.PRECISION;
         $.maxSupply = initialMaxSupply;
+
+        // Seed a flat epoch at PRECISION starting now. `ratePerSecond` is zero and
+        // `startTime == endTime`, so `okuMMultiplier()` returns exactly $1.00 until
+        // the first epoch is started. Seeding matters: an unseeded epoch would leave
+        // `baseMultiplier` at zero and every conversion would divide by zero.
+        $.currentEpoch = YieldEpoch({
+            baseMultiplier: Constants.PRECISION,
+            ratePerSecond: 0,
+            startTime: uint64(block.timestamp),
+            endTime: uint64(block.timestamp)
+        });
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(Roles.OKUM_UPGRADER, _admin);
@@ -200,87 +306,379 @@ contract OkuMoney is
         return _getOkuMoneyStorage().isBlacklisted[account];
     }
 
-    /// @notice Block number of the last yield distribution (used by YieldSandwichGuard,
-    ///         0 if no distribution has occurred).
-    function lastYieldDistributionBlock() external view returns (uint256) {
-        return _getOkuMoneyStorage().lastYieldDistributionBlock;
+    /// @notice Whether accrual is latched off.
+    function accrualHalted() external view returns (bool) {
+        return _getOkuMoneyStorage().accrualHalted;
     }
 
-    // ============ Multiplier Logic ============
-
-    /// @notice Stored OkuM multiplier (dollar value per token, 1e18 = $1.00)
-    /// @dev Written by OKUM_REBASER via {setOkuMMultiplier} or {distributeYield}.
-    ///      Never decreases. balanceOf() is unaffected; the multiplier is consumed by
-    ///      the PSM and vault for pricing.
-    function okuMMultiplier() external view returns (uint256) {
-        return _getOkuMoneyStorage().okuMMultiplier;
+    /// @notice The epoch currently governing accrual.
+    function currentYieldEpoch() external view returns (YieldEpoch memory) {
+        return _resolveEpoch(_getOkuMoneyStorage(), block.timestamp);
     }
 
-    /// @notice Directly override the stored multiplier
-    /// @param newMultiplier New multiplier value (must be > current and <= MAX_MULTIPLIER)
-    /// @dev The `<= Constants.MAX_MULTIPLIER` ceiling is a math sanity bound that
-    ///      keeps downstream `uint256` multiplications in the PSM and vault
-    ///      paths away from the overflow region. Mirrors the explicit
-    ///      `MAX_MULTIPLIER` guard on the SVM side (`oku-shared::constants::MAX_MULTIPLIER`,
-    ///      scaled for SVM's 1e9 precision).
-    ///
-    ///      Rejects `newMultiplier == currentMultiplier` so a no-op call cannot
-    ///      stamp `lastYieldDistributionBlock` without actually moving the
-    ///      multiplier (which would waste the sandwich-lock slot). Mirrors the
-    ///      `YieldTooSmall` guard on `distributeYield`.
-    ///
-    ///      Pause-gated: while paused, the rebaser cannot move the multiplier.
-    ///      Yield is a state-effect and must be frozen alongside user-facing
-    ///      transfers during an incident response. The rate-config setters on
-    ///      `OkuDollar` (`setUsdYieldRate`, `setNextUsdYieldRate`) intentionally
-    ///      remain available while paused so operators can zero accrual mid-pause.
-    function setOkuMMultiplier(uint256 newMultiplier)
-        external
-        onlyRole(Roles.OKUM_REBASER)
-        whenNotPaused
-    {
+    /// @notice The scheduled successor epoch, if any. All-zero when none is scheduled.
+    function pendingYieldEpoch() external view returns (YieldEpoch memory) {
+        return _getOkuMoneyStorage().pendingEpoch;
+    }
+
+    /// @notice Timestamp at which accrual stops absent a new epoch.
+    /// @dev Operators MUST monitor this. Past it the multiplier silently flatlines —
+    ///      safe (no unearned yield) but invisible without an alert.
+    function yieldEpochEndsAt() external view returns (uint256) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        uint256 currentMultiplier = $.okuMMultiplier;
-        if (newMultiplier <= currentMultiplier) revert Errors.MultiplierCannotDecrease();
-        if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
-        $.lastYieldDistributionBlock = block.number;
-        $.okuMMultiplier = newMultiplier;
-        emit OkuMMultiplierUpdated(currentMultiplier, newMultiplier, totalSupply(), block.number);
+        YieldEpoch storage pending = $.pendingEpoch;
+        if (pending.endTime != 0) return pending.endTime;
+        return $.currentEpoch.endTime;
     }
 
-    /// @notice Distribute realized dollar yield across all token holders
-    /// @dev Increases okuMMultiplier by yieldAmount / totalSupply.
-    ///      yieldAmount is dollar-denominated (18 decimals).
-    ///      E.g., $1000 yield on 10000 tokens -> +$0.10/token.
-    ///
-    ///      Enforces the same `MAX_MULTIPLIER` ceiling as `setOkuMMultiplier`.
-    ///      The check runs against the freshly-computed `newMultiplier`, so a
-    ///      single huge `yieldAmount` cannot bypass it.
-    ///
-    ///      Pause-gated for the same reason as `setOkuMMultiplier`: yield is a
-    ///      state-effect that must freeze with user-facing transfers during
-    ///      pause. See `setOkuMMultiplier` NatSpec.
-    /// @param yieldAmount Dollar yield to distribute (18 decimals)
-    function distributeYield(uint256 yieldAmount)
-        external
-        onlyRole(Roles.OKUM_REBASER)
-        whenNotPaused
+    // ============ Multiplier Logic (Continuous Linear Accrual) ============
+
+    /// @dev Selects the epoch governing time `t`, crystallising the pending epoch
+    ///      when `t` has reached its start. Single source of truth for epoch
+    ///      selection — every read path routes through here so the view and the
+    ///      mutators can never disagree about which epoch is active.
+    function _resolveEpoch(
+        OkuMoneyStorage storage $,
+        uint256 t
+    )
+        private
+        view
+        returns (YieldEpoch memory)
     {
-        uint256 supply = totalSupply();
+        YieldEpoch memory pending = $.pendingEpoch;
+        if (pending.endTime != 0 && t >= pending.startTime) return pending;
+        return $.currentEpoch;
+    }
+
+    /// @dev Evaluates an epoch at time `t`, flatlining past `endTime`.
+    ///      Linear: `base + rate * elapsed`. Capped at `MAX_MULTIPLIER`.
+    function _multiplierAt(YieldEpoch memory e, uint256 t) private pure returns (uint256) {
+        if (t <= e.startTime) return e.baseMultiplier;
+        uint256 until = t < e.endTime ? t : e.endTime;
+        uint256 grown = e.baseMultiplier + e.ratePerSecond * (until - e.startTime);
+        return grown > Constants.MAX_MULTIPLIER ? Constants.MAX_MULTIPLIER : grown;
+    }
+
+    /// @notice OkuM multiplier at an arbitrary timestamp (dollar value per token).
+    /// @param t Unix timestamp to evaluate at.
+    /// @dev Public because the vault's solvency projection and operator tooling need
+    ///      to evaluate the multiplier at a time other than now. Determinism here is
+    ///      the point: the multiplier is a pure function of time, so anyone can
+    ///      independently verify past and future values without trusting an indexer.
+    function okuMMultiplierAt(uint256 t) public view returns (uint256) {
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        return _multiplierAt(_resolveEpoch($, t), t);
+    }
+
+    /// @notice Current OkuM multiplier (dollar value per token, 1e18 = $1.00).
+    /// @dev Derived from the active epoch, not stored — it advances every second
+    ///      while an epoch is live and is flat outside one. Monotonically
+    ///      non-decreasing. `balanceOf()` is unaffected; this is consumed by the
+    ///      PSM and vault for pricing.
+    function okuMMultiplier() public view returns (uint256) {
+        return okuMMultiplierAt(block.timestamp);
+    }
+
+    /// @dev Shared validation + rate derivation for both epoch mutators.
+    ///      Converts a realized dollar amount into a per-second multiplier increment
+    ///      and enforces every bound. Reverts rather than clamping so a mispriced
+    ///      distribution is never silently accepted at a different value.
+    /// @param startMultiplier Multiplier the epoch starts from (for the APR check).
+    /// @param yieldAmount     Realized dollar yield (18 decimals).
+    /// @param duration        Epoch length in seconds.
+    /// @return ratePerSecond  Per-second multiplier increment.
+    /// @return supply         Supply snapshot used to derive the increment.
+    function _deriveEpochRate(
+        uint256 startMultiplier,
+        uint256 yieldAmount,
+        uint256 duration
+    )
+        private
+        view
+        returns (uint256 ratePerSecond, uint256 supply)
+    {
+        if (yieldAmount == 0) revert Errors.ZeroAmount();
+        if (duration < Constants.MIN_EPOCH_DURATION || duration > Constants.MAX_EPOCH_DURATION) {
+            revert InvalidEpochDuration();
+        }
+
+        supply = totalSupply();
         if (supply == 0) revert ZeroSupply();
-        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        uint256 oldMultiplier = $.okuMMultiplier;
+
+        // Per-token dollar increment across the whole epoch, then per second.
+        // Both floor, so the delivered total is <= `yieldAmount` — truncation
+        // favours the protocol, never the holder.
         uint256 yieldPerToken =
             Math.mulDiv(yieldAmount, Constants.PRECISION, supply, Math.Rounding.Floor);
-        // Reject yields that truncate to zero per token. A zero increment would stamp
-        // `lastYieldDistributionBlock` without moving the multiplier, wasting the
-        // sandwich-lock slot. Mirrors SVM `LitePsmError::YieldTooSmall`.
-        if (yieldPerToken == 0) revert YieldTooSmall();
-        uint256 newMultiplier = oldMultiplier + yieldPerToken;
-        if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
-        $.lastYieldDistributionBlock = block.number;
-        $.okuMMultiplier = newMultiplier;
-        emit YieldDistributed(yieldAmount, oldMultiplier, newMultiplier, supply, block.number);
+        ratePerSecond = yieldPerToken / duration;
+        // A zero rate is a flat epoch: it would replace a live epoch with nothing
+        // while appearing to succeed. Reject instead.
+        if (ratePerSecond == 0) revert YieldTooSmall();
+
+        // Recompute the delta from the (truncated) rate so the APR check measures
+        // what will ACTUALLY be delivered, not the requested amount.
+        uint256 actualDelta = ratePerSecond * duration;
+
+        // impliedApr = (delta / start) * (year / duration), in bps.
+        uint256 impliedAprBps = Math.mulDiv(
+            actualDelta * Constants.BASIS_POINTS,
+            Constants.SECONDS_PER_YEAR,
+            startMultiplier * duration,
+            Math.Rounding.Floor
+        );
+        if (impliedAprBps > Constants.MAX_IMPLIED_APR_BPS) {
+            revert ImpliedAprTooHigh(impliedAprBps, Constants.MAX_IMPLIED_APR_BPS);
+        }
+
+        if (startMultiplier + actualDelta > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
+    }
+
+    /// @notice Begin streaming realized yield over `duration`, starting now.
+    /// @param yieldAmount Realized dollar yield to distribute (18 decimals).
+    /// @param duration    Seconds over which to stream it.
+    /// @dev The epoch starts at the CURRENT multiplier, so there is never a
+    ///      discontinuity — this is the property that makes the multiplier
+    ///      unsandwichable. Calling mid-epoch replaces the active epoch, rebasing
+    ///      from `okuMMultiplier()` at that instant; yield already accrued is kept
+    ///      and undelivered yield from the replaced epoch is forgone.
+    ///
+    ///      Any scheduled successor is discarded: it was chained onto the epoch
+    ///      being replaced, so its start time is no longer meaningful. Schedule a
+    ///      new one afterwards.
+    ///
+    ///      `startTime` is always `block.timestamp` — never operator-supplied.
+    ///      Backdating would resolve accrual against elapsed time and land a jump,
+    ///      reintroducing exactly the discontinuity this design removes.
+    ///
+    ///      Pause-gated: yield is a state-effect and freezes with user-facing
+    ///      transfers during an incident. To stop accrual WITHOUT pausing transfers
+    ///      (or vice versa) use {haltAccrual} — the two levers are independent.
+    function startYieldEpoch(
+        uint256 yieldAmount,
+        uint256 duration
+    )
+        external
+        onlyRole(Roles.OKUM_REBASER)
+        whenNotPaused
+    {
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        if ($.accrualHalted) revert AccrualIsHalted();
+
+        uint256 startMultiplier = okuMMultiplier();
+        (uint256 ratePerSecond, uint256 supply) =
+            _deriveEpochRate(startMultiplier, yieldAmount, duration);
+
+        uint64 startTime = uint64(block.timestamp);
+        uint64 endTime = uint64(block.timestamp + duration);
+
+        $.currentEpoch = YieldEpoch({
+            baseMultiplier: startMultiplier,
+            ratePerSecond: ratePerSecond,
+            startTime: startTime,
+            endTime: endTime
+        });
+        delete $.pendingEpoch;
+
+        uint256 endMultiplier = startMultiplier + ratePerSecond * duration;
+        emit YieldEpochStarted(
+            yieldAmount, startMultiplier, endMultiplier, ratePerSecond, supply, startTime, endTime
+        );
+        // ERC-8056: the multiplier's trajectory changed as of now.
+        emit UIMultiplierUpdated(startMultiplier, endMultiplier, startTime);
+    }
+
+    /// @notice Schedule a successor epoch beginning when the current one ends.
+    /// @param yieldAmount Realized dollar yield the successor distributes (18 decimals).
+    /// @param duration    Successor length in seconds.
+    /// @dev Lets operators queue the next period ahead of time so accrual is
+    ///      continuous across the boundary with no flat gap. The successor starts at
+    ///      the multiplier the current epoch terminates at, so the handover is
+    ///      seamless.
+    ///
+    ///      Requires a live current epoch — chaining onto one that has already
+    ///      flatlined would put the successor's start in the past, and it would
+    ///      immediately jump to catch up. Restart with {startYieldEpoch} instead.
+    ///
+    ///      Revocable via {cancelPendingYieldEpoch} at any point before it activates.
+    ///      This is the ONLY fully-clean rollback in the design: once yield has
+    ///      accrued, monotonicity makes it permanent.
+    function scheduleYieldEpoch(
+        uint256 yieldAmount,
+        uint256 duration
+    )
+        external
+        onlyRole(Roles.OKUM_REBASER)
+        whenNotPaused
+    {
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        if ($.accrualHalted) revert AccrualIsHalted();
+        if ($.pendingEpoch.endTime != 0) revert PendingEpochExists();
+
+        YieldEpoch memory active = $.currentEpoch;
+        // Must be strictly in the future: `>=` would allow scheduling against an
+        // epoch ending this very second, which is the flatlined case.
+        if (active.endTime <= block.timestamp) revert NoActiveEpoch();
+
+        // The successor begins where the current epoch terminates.
+        uint256 startMultiplier = _multiplierAt(active, active.endTime);
+        (uint256 ratePerSecond, uint256 supply) =
+            _deriveEpochRate(startMultiplier, yieldAmount, duration);
+
+        uint64 startTime = active.endTime;
+        uint64 endTime = uint64(uint256(active.endTime) + duration);
+
+        $.pendingEpoch = YieldEpoch({
+            baseMultiplier: startMultiplier,
+            ratePerSecond: ratePerSecond,
+            startTime: startTime,
+            endTime: endTime
+        });
+
+        emit YieldEpochScheduled(yieldAmount, ratePerSecond, supply, startTime, endTime);
+        emit UIMultiplierUpdated(
+            startMultiplier, startMultiplier + ratePerSecond * duration, startTime
+        );
+    }
+
+    /// @notice Revoke a scheduled successor epoch before it takes effect.
+    /// @dev Clean rollback with zero economic impact — the successor never accrued.
+    ///      Reverts once it has activated; use {haltAccrual} to stop a live epoch.
+    ///      Deliberately NOT pause-gated: revoking a bad scheduled rate must remain
+    ///      possible during an incident, and it can only ever reduce future yield.
+    function cancelPendingYieldEpoch() external onlyRole(Roles.OKUM_REBASER) {
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        YieldEpoch memory pending = $.pendingEpoch;
+        if (pending.endTime == 0) revert NoPendingEpoch();
+        // Once active it is no longer "pending" — cancelling would retroactively
+        // remove yield that holders have already accrued.
+        if (block.timestamp >= pending.startTime) revert NoPendingEpoch();
+
+        delete $.pendingEpoch;
+        emit YieldEpochCancelled(pending.startTime, pending.endTime);
+    }
+
+    /// @notice Freeze the multiplier and block new epochs.
+    /// @dev Crystallises `okuMMultiplier()` into a flat epoch at its current value,
+    ///      discards any scheduled successor, and latches until {resumeAccrual}.
+    ///
+    ///      Independent of {pause} by design. The two address different incidents:
+    ///        - Bug found, backing intact -> `pause()` only. Holders keep earning
+    ///          yield the protocol genuinely owes them.
+    ///        - Backing impaired -> `haltAccrual()`. Stop growing obligations while
+    ///          transfers continue normally.
+    ///        - Both -> call both.
+    ///      Coupling them would force one response onto both situations.
+    ///
+    ///      Not pause-gated: halting accrual must work during an incident, and it
+    ///      can only ever reduce yield.
+    function haltAccrual() external onlyRole(Roles.OKUM_REBASER) {
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        if ($.accrualHalted) revert AccrualAlreadyHalted();
+
+        uint256 frozen = okuMMultiplier();
+        bool hadPending = $.pendingEpoch.endTime != 0;
+
+        $.currentEpoch = YieldEpoch({
+            baseMultiplier: frozen,
+            ratePerSecond: 0,
+            startTime: uint64(block.timestamp),
+            endTime: uint64(block.timestamp)
+        });
+        delete $.pendingEpoch;
+        $.accrualHalted = true;
+
+        emit AccrualHalted(frozen, hadPending);
+        emit UIMultiplierUpdated(frozen, frozen, block.timestamp);
+    }
+
+    /// @notice Lift the accrual halt, permitting new epochs.
+    /// @dev Does NOT resume accrual on its own — the multiplier stays flat until
+    ///      {startYieldEpoch} is called. Yield for the halted interval cannot be
+    ///      backdated; if the operator chooses to make it up, that is a fresh
+    ///      forward-looking epoch subject to the same APR cap.
+    function resumeAccrual() external onlyRole(Roles.OKUM_REBASER) {
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        if (!$.accrualHalted) revert AccrualNotHalted();
+        $.accrualHalted = false;
+        emit AccrualResumed(okuMMultiplier());
+    }
+
+    // ============ ERC-8056 (Scaled UI Amount) ============
+    // The standard was written for value-neutral stock splits, where the multiplier
+    // is cosmetic. Here it is the settlement price — value-additive — which is why
+    // it must move continuously rather than in steps. Only the interface is borrowed;
+    // see the contract NatSpec and `EVM/README.md § ERC-8056 on OkuMoney`.
+    //
+    // Conformance note: `UIMultiplierUpdated` is emitted whenever the multiplier's
+    // TRAJECTORY changes (epoch start/schedule/halt), not on every per-second
+    // increment, which would be impossible. A consumer caching on the event alone
+    // will under-report; because the multiplier is monotonically non-decreasing,
+    // staleness always understates and never overstates. Read `uiMultiplier()` for
+    // a live value.
+
+    /// @inheritdoc IScaledUIAmount
+    function uiMultiplier() external view returns (uint256) {
+        return okuMMultiplier();
+    }
+
+    /// @inheritdoc IScaledUIAmountNewUIMultiplier
+    /// @dev The multiplier at which the scheduled successor begins. With no successor
+    ///      scheduled this is the value the active epoch terminates at — i.e. the next
+    ///      value the multiplier is committed to reach.
+    function newUIMultiplier() external view returns (uint256) {
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        YieldEpoch memory pending = $.pendingEpoch;
+        if (pending.endTime != 0) return pending.baseMultiplier;
+        YieldEpoch memory active = $.currentEpoch;
+        return _multiplierAt(active, active.endTime);
+    }
+
+    /// @inheritdoc IScaledUIAmountNewUIMultiplier
+    /// @dev Start of the scheduled successor, or the active epoch's end when none is
+    ///      scheduled. Always the timestamp at which {newUIMultiplier} is reached.
+    function effectiveAt() external view returns (uint256) {
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        YieldEpoch memory pending = $.pendingEpoch;
+        if (pending.endTime != 0) return pending.startTime;
+        return $.currentEpoch.endTime;
+    }
+
+    /// @inheritdoc IScaledUIAmountConversion
+    function toUIAmount(uint256 rawAmount) public view returns (uint256) {
+        return MathLib.okuMToDollars(rawAmount, okuMMultiplier());
+    }
+
+    /// @inheritdoc IScaledUIAmountConversion
+    function fromUIAmount(uint256 uiAmount) public view returns (uint256) {
+        return MathLib.dollarsToOkuM(uiAmount, okuMMultiplier());
+    }
+
+    /// @inheritdoc IScaledUIAmountBalances
+    function balanceOfUI(address account) external view returns (uint256) {
+        return toUIAmount(balanceOf(account));
+    }
+
+    /// @inheritdoc IScaledUIAmountBalances
+    function totalSupplyUI() external view returns (uint256) {
+        return toUIAmount(totalSupply());
+    }
+
+    /// @notice ERC-165 interface detection.
+    /// @dev Combines the four ERC-8056 IDs with `AccessControlUpgradeable`'s own
+    ///      ERC-165 surface. IDs are pinned in `Constants` and asserted against
+    ///      `type(I...).interfaceId` in the test suite.
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        virtual
+        override(AccessControlUpgradeable)
+        returns (bool)
+    {
+        return interfaceId == Constants.IID_SCALED_UI_AMOUNT
+            || interfaceId == Constants.IID_SCALED_UI_NEW_MULTIPLIER
+            || interfaceId == Constants.IID_SCALED_UI_CONVERSION
+            || interfaceId == Constants.IID_SCALED_UI_BALANCES
+            || super.supportsInterface(interfaceId);
     }
 
     // ============ ERC20Permit Override (Blacklist Check) ============
@@ -322,7 +720,11 @@ contract OkuMoney is
 
         super._update(from, to, amount);
 
-        uint256 dollarValue = MathLib.okuMToDollars(amount, $.okuMMultiplier);
+        // `TransferValue` carries the same information as ERC-8056's OPTIONAL
+        // `TransferWithUIAmount`; it predates the standard and is kept as the single
+        // event so transfers do not pay for two identical logs. Conformance is
+        // unaffected — that event is optional.
+        uint256 dollarValue = MathLib.okuMToDollars(amount, okuMMultiplier());
         emit TransferValue(from, to, amount, dollarValue);
     }
 

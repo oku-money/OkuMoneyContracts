@@ -17,8 +17,9 @@ library Errors {
     /// @notice The caller's balance is below the requested amount.
     error InsufficientBalance();
     /// @notice A monotonic multiplier value did not strictly increase.
-    /// @dev Reverts on both backward moves and no-op (equal-value) updates so a
-    ///      no-op call cannot stamp the sandwich-lock block without moving the
-    ///      multiplier. See {OkuMoney.setOkuMMultiplier}.
+    /// @dev Retained for `OkuDollar`'s rate paths. `OkuMoney`'s multiplier is
+    ///      monotonic by construction — it is derived from a yield epoch whose
+    ///      `ratePerSecond` is non-negative — so it has no equivalent setter to
+    ///      guard.
     error MultiplierCannotDecrease();
 }

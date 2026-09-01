@@ -5,17 +5,17 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
-import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../../src/interfaces/IOkuDollar.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
+import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {TestConstants} from "../shared/Constants.sol";
 
 /**
  * @title LitePSMHandler
  * @notice Stateful handler for LitePSM invariants. Exercises the full public surface
  *         (mintOkuM, redeemOkuM, mintUsdOku, redeemUsdOku, depositBuffer,
- *         withdrawUsdc, processQueue, rescueQueueEntry) and tracks
+ *         withdrawUsdc) and tracks
  *         exact USDC flow + multiplier-observation ghost state.
  * @dev The PSM is granted the admin role at the test level; this handler invokes
  *      role-gated functions via `vm.prank(bridgeAdmin)` (where bridgeAdmin is the
@@ -27,7 +27,6 @@ contract LitePSMHandler is Test {
     IOkuMoney public okuMoney;
     IOkuDollar public okuDollar;
     IERC20 public usdc;
-    RedemptionQueue public queue;
     address public rebaser;
     address public minter;
     /// @notice Address holding VAULT_REBASER on the OkuDollar instance. Allowed to be
@@ -41,6 +40,11 @@ contract LitePSMHandler is Test {
     uint256 public constant MAX_FUZZ_PRICE = TestConstants.MAX_FUZZ_PRICE;
     uint256 public constant DECIMAL_MULTIPLIER = TestConstants.DECIMAL_MULTIPLIER;
     uint256 public constant MAX_RATE = TestConstants.MAX_RATE;
+    uint256 public constant BASIS_POINTS = TestConstants.BASIS_POINTS;
+    uint256 public constant MIN_EPOCH_DURATION = TestConstants.MIN_EPOCH_DURATION;
+    uint256 public constant MAX_EPOCH_DURATION = TestConstants.MAX_EPOCH_DURATION;
+    uint256 public constant MAX_IMPLIED_APR_BPS = TestConstants.MAX_IMPLIED_APR_BPS;
+    uint256 public constant SECONDS_PER_YEAR = TestConstants.SECONDS_PER_YEAR;
 
     // ============ USDC flow ghost state ============
     uint256 public ghostUsdcDeposited;
@@ -51,9 +55,6 @@ contract LitePSMHandler is Test {
     uint256 public ghostOkuMBurned;
     uint256 public ghostUsdOkuMinted;
     uint256 public ghostOkuDollarBurned;
-    uint256 public ghostQueuedCount;
-    uint256 public ghostProcessedCount;
-    uint256 public ghostRescuedCount;
 
     // Per-handler success counters (for HandlerSanity)
     uint256 public ghostMintOkuMCalls;
@@ -65,14 +66,15 @@ contract LitePSMHandler is Test {
     uint256 public ghostRedeemOkuDollarCalls;
     uint256 public ghostRedeemOkuDollarReverts;
     uint256 public ghostRebaseCalls;
+    uint256 public ghostRebaseReverts;
+    uint256 public ghostScheduleCalls;
+    uint256 public ghostScheduleReverts;
+    uint256 public ghostHaltCalls;
+    uint256 public ghostHaltReverts;
     uint256 public ghostDepositBufferCalls;
     uint256 public ghostDepositBufferReverts;
     uint256 public ghostWithdrawUsdcCalls;
     uint256 public ghostWithdrawUsdcReverts;
-    uint256 public ghostProcessQueueCalls;
-    uint256 public ghostProcessQueueReverts;
-    uint256 public ghostRescueCalls;
-    uint256 public ghostRescueReverts;
 
     // ============ Multiplier observation ============
 
@@ -86,7 +88,6 @@ contract LitePSMHandler is Test {
         IOkuMoney _okuMoney,
         IOkuDollar _okuDollar,
         IERC20 _usdc,
-        RedemptionQueue _queue,
         address _rebaser,
         address _minter
     ) {
@@ -94,7 +95,6 @@ contract LitePSMHandler is Test {
         okuMoney = _okuMoney;
         okuDollar = _okuDollar;
         usdc = _usdc;
-        queue = _queue;
         rebaser = _rebaser;
         minter = _minter;
         // usdRebaser defaults to zero; PSMInvariants sets it via setUsdRebaser
@@ -174,12 +174,9 @@ contract LitePSMHandler is Test {
 
         vm.prank(actor);
         try psm.redeemOkuM(okuMAmount) {
-            if (psmUsdcBalance >= expectedUsdc) {
-                ghostUsdcWithdrawn += expectedUsdc;
-                ghostOkuMBurned += okuMAmount;
-            } else {
-                ghostQueuedCount++;
-            }
+            // Buffer-only: a successful redemption always paid out.
+            ghostUsdcWithdrawn += expectedUsdc;
+            ghostOkuMBurned += okuMAmount;
         } catch {
             ghostRedeemOkuMReverts++;
         }
@@ -214,42 +211,85 @@ contract LitePSMHandler is Test {
         vm.prank(actor);
         IERC20(address(okuDollar)).approve(address(psm), usdAmount);
 
-        // Compare PSM USDC balance pre/post to update ghostUsdcWithdrawn on the
-        // instant-redemption path; if balance unchanged the redemption was queued.
+        // Buffer-only: any successful redemption moved USDC out of the PSM.
         uint256 psmUsdcBefore = usdc.balanceOf(address(psm));
 
         vm.prank(actor);
         try psm.redeemUsdOku(usdAmount) {
             ghostOkuDollarBurned += usdAmount;
-            uint256 psmUsdcAfter = usdc.balanceOf(address(psm));
-            if (psmUsdcAfter < psmUsdcBefore) {
-                ghostUsdcWithdrawn += (psmUsdcBefore - psmUsdcAfter);
-            } else {
-                ghostQueuedCount++;
-            }
+            ghostUsdcWithdrawn += (psmUsdcBefore - usdc.balanceOf(address(psm)));
         } catch {
             ghostRedeemOkuDollarReverts++;
         }
     }
 
-    /// @notice Trigger a multiplier change. Allowed range raised to allow occasional
-    ///         large jumps so PSM truncation/dust branches surface in invariant runs.
-    function rebase(uint256 priceIncrease, bool largeJump) external {
+    /// @notice Start a yield epoch and warp into or through it.
+    /// @dev The multiplier can no longer be written directly. Amount and duration are
+    ///      fuzzed across the full valid range and deliberately allowed to exceed the
+    ///      APR cap, so roughly half the draws are rejected — the handler explores the
+    ///      guard boundary rather than assuming where it sits.
+    function rebase(uint256 yieldAmount, uint256 durationSeed, bool warpToEnd) external {
         ghostRebaseCalls++;
-        uint256 currentPrice = okuMoney.okuMMultiplier();
-        if (currentPrice >= MAX_FUZZ_PRICE) return;
+        if (okuMoney.totalSupply() == 0) return;
+        if (okuMoney.okuMMultiplier() >= MAX_FUZZ_PRICE) return;
 
-        uint256 maxIncrease = largeJump ? currentPrice / 2 : currentPrice / 50; // 50% or 2%
-        uint256 minIncrease = currentPrice / 10_000;
-        uint256 increase = bound(priceIncrease, minIncrease, maxIncrease);
-
-        uint256 newPrice = currentPrice + increase;
-        if (newPrice > MAX_FUZZ_PRICE) newPrice = MAX_FUZZ_PRICE;
+        uint256 duration = bound(durationSeed, MIN_EPOCH_DURATION, MAX_EPOCH_DURATION);
+        uint256 ceiling = _maxYieldForDuration(duration);
+        if (ceiling == 0) return;
+        yieldAmount = bound(yieldAmount, 1, ceiling * 2);
 
         vm.prank(rebaser);
-        try okuMoney.setOkuMMultiplier(newPrice) {
+        try okuMoney.startYieldEpoch(yieldAmount, duration) {
+            vm.warp(block.timestamp + (warpToEnd ? duration : duration / 2));
             vm.roll(block.number + 1);
-        } catch {}
+        } catch {
+            ghostRebaseReverts++;
+        }
+    }
+
+    /// @notice Schedule a successor epoch, optionally cancelling it again.
+    function scheduleEpoch(uint256 yieldAmount, uint256 durationSeed, bool cancel) external {
+        ghostScheduleCalls++;
+        if (okuMoney.totalSupply() == 0) return;
+
+        uint256 duration = bound(durationSeed, MIN_EPOCH_DURATION, MAX_EPOCH_DURATION);
+        uint256 ceiling = _maxYieldForDuration(duration);
+        if (ceiling == 0) return;
+        yieldAmount = bound(yieldAmount, 1, ceiling * 2);
+
+        vm.prank(rebaser);
+        try OkuMoney(address(okuMoney)).scheduleYieldEpoch(yieldAmount, duration) {
+            if (cancel) {
+                vm.prank(rebaser);
+                try OkuMoney(address(okuMoney)).cancelPendingYieldEpoch() {} catch {}
+            }
+        } catch {
+            ghostScheduleReverts++;
+        }
+    }
+
+    /// @notice Halt accrual then immediately resume.
+    /// @dev Paired deliberately: leaving the latch engaged would wedge every later
+    ///      `rebase` call and silently collapse coverage of the accrual paths.
+    function haltAndResumeAccrual() external {
+        ghostHaltCalls++;
+        vm.prank(rebaser);
+        try OkuMoney(address(okuMoney)).haltAccrual() {
+            vm.prank(rebaser);
+            OkuMoney(address(okuMoney)).resumeAccrual();
+        } catch {
+            ghostHaltReverts++;
+        }
+    }
+
+    /// @dev Largest yield distributable over `duration` without breaching the APR cap.
+    function _maxYieldForDuration(uint256 duration) internal view returns (uint256) {
+        uint256 current = okuMoney.okuMMultiplier();
+        uint256 supply = okuMoney.totalSupply();
+        if (supply == 0) return 0;
+        uint256 maxDelta =
+            (current * MAX_IMPLIED_APR_BPS * duration) / (BASIS_POINTS * SECONDS_PER_YEAR);
+        return (maxDelta * supply) / PRECISION;
     }
 
     // ============ Admin / Operator surface (newly added) ============
@@ -282,54 +322,17 @@ contract LitePSMHandler is Test {
         address recipient = actors[actorSeed % actors.length];
 
         uint256 psmBalance = usdc.balanceOf(address(psm));
-        uint256 obligation = queue.totalQueuedUsdc();
-        if (psmBalance <= obligation) {
+        if (psmBalance == 0) {
             ghostWithdrawUsdcReverts++;
             return;
         }
-        uint256 maxWithdraw = psmBalance - obligation;
-        amount = bound(amount, 1, maxWithdraw);
+        amount = bound(amount, 1, psmBalance);
 
         // Same role-grant note as depositBuffer: handler must hold PSM_BUFFER_WITHDRAWER.
         try psm.withdrawUsdc(recipient, amount) {
             ghostUsdcWithdrawn += amount;
         } catch {
             ghostWithdrawUsdcReverts++;
-        }
-    }
-
-    function processQueue(uint256 maxApprove) external {
-        ghostProcessQueueCalls++;
-
-        uint256 head = queue.queueHead();
-        uint256 tail = queue.queueTail();
-        if (head >= tail) return;
-
-        // Process at most 5 entries per call.
-        uint256 endIdx = head + 5 < tail ? head + 5 : tail;
-        maxApprove = bound(maxApprove, 0, usdc.balanceOf(address(psm)));
-
-        try psm.processQueue(head, endIdx, maxApprove) {
-            ghostProcessedCount++;
-        } catch {
-            ghostProcessQueueReverts++;
-        }
-    }
-
-    function rescueQueueEntry(uint256 indexSeed, uint256 actorSeed) external {
-        ghostRescueCalls++;
-
-        uint256 head = queue.queueHead();
-        uint256 tail = queue.queueTail();
-        if (head >= tail) return;
-
-        uint256 idx = head + (indexSeed % (tail - head));
-        address recipient = actors[actorSeed % actors.length];
-
-        try psm.redemptionQueue().rescueQueueEntry(idx, recipient) {
-            ghostRescuedCount++;
-        } catch {
-            ghostRescueReverts++;
         }
     }
 
@@ -383,12 +386,12 @@ contract LitePSMHandler is Test {
     function ghostTotalCalls() external view returns (uint256) {
         return ghostMintOkuMCalls + ghostRedeemOkuMCalls + ghostMintOkuDollarCalls
             + ghostRedeemOkuDollarCalls + ghostRebaseCalls + ghostDepositBufferCalls
-            + ghostWithdrawUsdcCalls + ghostProcessQueueCalls + ghostRescueCalls + ghostWarpCalls;
+            + ghostWithdrawUsdcCalls + ghostWarpCalls + ghostScheduleCalls + ghostHaltCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
         return ghostMintOkuMReverts + ghostRedeemOkuMReverts + ghostMintOkuDollarReverts
             + ghostRedeemOkuDollarReverts + ghostDepositBufferReverts + ghostWithdrawUsdcReverts
-            + ghostProcessQueueReverts + ghostRescueReverts;
+            + ghostRebaseReverts + ghostScheduleReverts + ghostHaltReverts;
     }
 }

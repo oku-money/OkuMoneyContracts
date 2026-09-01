@@ -9,7 +9,7 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 - **Language**: Solidity 0.8.28 / EVM Cancun
 - **Framework**: Foundry (Forge, Cast, Anvil) for unit + invariant tests; Hardhat for fork + gas-regression tests
 - **Dependencies**: OpenZeppelin Contracts v5 (Upgradeable)
-- **Proxy pattern**: UUPS (all upgradeable contracts: `OkuMoney`, `OkuDollar`, `LitePSM`, `RedemptionQueue`)
+- **Proxy pattern**: UUPS (all upgradeable contracts: `OkuMoney`, `OkuDollar`, `LitePSM`)
 - **Storage**: ERC-7201 namespaced storage across every upgradeable contract (canonical slots — see any `*_STORAGE_LOCATION` literal)
 
 ## Contracts
@@ -19,8 +19,7 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 | `src/token/OkuMoney.sol` | Non-rebasing base token (OkuM) — static balance, discrete multiplier appreciation via stored `okuMMultiplier` |
 | `src/token/OkuDollar.sol` | Rebasing $1-pegged stablecoin (usdOku) — growing balance via continuous `_rpow` USD multiplier |
 | `src/psm/LitePSM.sol` | Peg Stability Module — multiplier-aware USDC ↔ OkuM + usdOku convenience functions |
-| `src/psm/RedemptionQueue.sol` | FIFO queue for OkuMoney redemptions when the PSM buffer is depleted |
-| `src/lib/YieldSandwichGuard.sol` | Shared abstract enforcing per-block sandwich protection around yield distribution |
+| `src/interfaces/erc8056/` | ERC-8056 (Scaled UI Amount) core + three extensions |
 | `src/lib/MathLib.sol` | Multiplier conversion helpers (`okuMToDollars`, `dollarsToOkuM`, `usdcToDollars`, `dollarsToUsdc`, `rpow`) |
 | `src/lib/Constants.sol` | Shared constants + canonical terminology legend |
 | `src/lib/Roles.sol` | Shared RBAC role constants (namespaced by contract prefix) |
@@ -67,7 +66,7 @@ Caveats:
 - **Per-chain variance:** differing constructor args (real Circle USDC on
   mainnet vs. `MockUSDC` on testnets) still produce different addresses
   where they apply. Testnets all use `MockUSDC` deterministically, so
-  `RedemptionQueue`/`LitePSM` match across testnets; mainnet (real USDC)
+  `LitePSM` matches across testnets; mainnet (real USDC)
   diverges — handled post-audit.
 
 ### Where deployed addresses live
@@ -152,6 +151,20 @@ the dev wallet on a fork), and retry helpers, and adds:
   DEFAULT_ADMIN on a fork; aborts on live with a clear error).
 - **Storage-layout safety** — runs OZ's `prepareUpgrade` so any layout-breaking
   change aborts the run before any upgrade tx is broadcast.
+
+> ⚠️ **The layout check cannot see ERC-7201 struct changes.** All contracts here
+> keep their state inside namespaced structs reached via `assembly`, so the
+> declared layout is empty and OZ's validator reports `COMPATIBLE` no matter how
+> the struct's fields are reordered or re-typed. `checkLayout.ts` is therefore
+> only meaningful for *declared* variables — it is not a safety net for
+> namespaced storage. Changes inside a `*Storage` struct must be reviewed by
+> hand, and append-only, or the deployment must be replaced.
+>
+> **The continuous-yield-epoch change is layout-breaking on `OkuMoney`.**
+> `OkuMoneyStorage` dropped `okuMMultiplier` and `lastYieldDistributionBlock`
+> and added `currentEpoch` / `pendingEpoch` / `accrualHalted`; `LitePSMStorage`
+> dropped `redemptionQueue`. Existing proxies **cannot** be upgraded in place —
+> a fresh deploy (bump `DEPLOYMENT_VERSION`) is required.
 - **Pre/post state diff** — snapshots invariant fields per target (see
   `scripts/upgrade/preState.ts`) and fails the run if anything diverges.
 - **Audit trail** — appends each upgrade to `addresses.json -> upgrades.<bookKey>`
@@ -211,6 +224,48 @@ shipped deployments.
 > The `npm run bridge:*` scripts were removed in the noBridge refactor.
 > Cross-chain transfers are now PSM-mediated mint/burn coordinated off-chain.
 
+### Yield-epoch operator scripts
+
+| Script | Purpose |
+|---|---|
+| `scripts/operator/startYieldEpoch.ts` | Publish a yield epoch. Replaces the former `distributeYield.ts`. |
+| `scripts/operator/manageYieldEpoch.ts` | `--action status \| schedule \| cancel \| halt \| resume` |
+
+```bash
+# Publish $4,110 of realized yield streamed over 30 days
+NETWORK=base npx hardhat run scripts/operator/startYieldEpoch.ts --network base \
+    --amount 4110000000000000000000 --duration 2592000 --yes-mainnet
+
+# Preview first (no broadcast) — validates the implied APR before you commit
+DRY_RUN=true AMOUNT=4110000000000000000000 DURATION=2592000 NETWORK=base \
+    npx hardhat run scripts/operator/startYieldEpoch.ts --network base
+
+# Inspect epoch state; warns loudly if accrual has flatlined
+NETWORK=base npx hardhat run scripts/operator/manageYieldEpoch.ts --network base \
+    --action status
+
+# Queue the next period so accrual is continuous across the boundary
+NETWORK=base npx hardhat run scripts/operator/manageYieldEpoch.ts --network base \
+    --action schedule --amount 4110000000000000000000 --duration 2592000 --yes-mainnet
+```
+
+`startYieldEpoch.ts` mirrors the contract's rate derivation locally and
+refuses to broadcast if the implied APR would exceed
+`MAX_IMPLIED_APR_BPS`, reporting the minimum legal duration instead. It
+also asserts post-transaction that the multiplier did **not** move on
+publication — the property that makes it unsandwichable.
+
+**Runbook notes:**
+
+- If a distribution is rejected for APR, **stream it over longer** —
+  do not shrink the amount.
+- Accrual flatlines silently past `endTime`. Either schedule the
+  successor ahead of time or alert on `yieldEpochEndsAt()`.
+- `--action cancel` is the only clean rollback, and only before the
+  scheduled successor activates.
+- `--action halt` is independent of `pause()`: use it when *backing*
+  is impaired, `pause()` when the *code* is suspect, both when both.
+
 For chains without a pre-baked npm alias (`base`, `bsc`, `arbitrum`, `optimism`,
 `mainnet`):
 
@@ -228,7 +283,6 @@ src/
     OkuDollar.sol           # Rebasing stablecoin vault (continuous _rpow usdMultiplier)
   psm/
     LitePSM.sol             # USDC ↔ OkuM (multiplier-aware) + usdOku convenience functions
-    RedemptionQueue.sol     # Queue for when PSM USDC buffer is insufficient
   interfaces/
     IOkuMoney.sol           # OkuMoney interface (used by PSM, vault, mocks)
     IOkuDollar.sol          # OkuDollar vault interface
@@ -239,12 +293,10 @@ src/
     SafeApprove.sol         # USDT-safe approve helpers (setExactAllowance, revokeAllowance)
     MathLib.sol             # Multiplier math + rpow
     ReentrancyGuardUpgradeable.sol  # OZ-5.x-compatible upgradeable reentrancy guard
-    YieldSandwichGuard.sol  # Shared whenYieldNotDistributing modifier (OkuDollar + LitePSM)
     events/
       OkuMoneyEvents.sol    # Event declarations for OkuMoney
       OkuDollarEvents.sol   # Event declarations for OkuDollar (incl. Blacklisted/Unblacklisted)
       LitePSMEvents.sol     # Event declarations for LitePSM
-      RedemptionQueueEvents.sol  # Event declarations for RedemptionQueue (incl. TransferFailed skip)
 
 test/
   mocks/                    # Test-only mocks (live under test/, never compiled into production artifacts)
@@ -332,46 +384,169 @@ OkuMoney is the solvency anchor (rear-facing, always backed). OkuDollar is the p
 
 ## OkuMoney.sol
 
-**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `UUPSUpgradeable`.
+**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `UUPSUpgradeable`, plus the four ERC-8056 interfaces.
 
-**Concept**: Non-rebasing base token with rear-facing yield. Standard ERC-20 balances (static). Yield is expressed through multiplier appreciation tracked by a stored `okuMMultiplier` value, updated discretely by the orchestrator.
+**Concept**: Non-rebasing base token with rear-facing yield. Standard ERC-20 balances (static). Yield is expressed through appreciation of `okuMMultiplier()` — the dollar value of one OkuM — which accrues **continuously** over an operator-defined epoch.
+
+---
+
+### Continuous yield epochs
+
+#### Why yield streams instead of stepping
+
+This is the single most important design decision in the contract, so it is documented at length.
+
+`okuMMultiplier` is not a cosmetic display value. It is the **settlement price** for instant, two-way convertibility at the PSM, for `wrap`/`unwrap` at the vault, and for the vault's own solvency check. Every economic surface in the protocol reads it.
+
+A discrete jump in a settlement price is riskless arbitrage:
+
+```
+block N-1:  attacker mints OkuM at M = 1.0000        (cheap)
+block N:    operator steps M to 1.0500
+block N+1:  attacker redeems OkuM at M = 1.0500      (dear)
+```
+
+The attacker captures the entire increment with **no price risk and no holding period**, funded out of the PSM buffer and diluting every honest holder. Yield is compensation for holding across *time*; a step converts it into compensation for holding across an *instant*.
+
+Concretely, at $1M TVL / 5% APR / 30-day distribution, an attacker matching TVL took **~$2,055 per event (~$25k/yr)** — up to half of all yield — for roughly 12 seconds of capital at risk.
+
+#### Why the old same-block fence was not enough
+
+A previous `YieldSandwichGuard` compared `block.number` against `lastYieldDistributionBlock`. That flag was only written *inside* `distributeYield`, so within a single block:
+
+| Order in block N | Passed the fence? |
+|---|---|
+| mint → **then** step | **yes** — flag still held the old block number |
+| step → **then** redeem | no — this is what the fence caught |
+
+The fence was a **backrun guard, not a frontrun guard**. It stopped the fully-atomic same-block round trip, but the profitable version spans two blocks and needed nothing more than mempool visibility of the update transaction. On a chain with a public mempool (BSC) that is commodity sandwich MEV.
+
+Mitigations like private transaction submission, randomised timing and tight minter allowances are *compensating controls*, not fixes — they are operational assumptions an auditor will (correctly) discount. The fence has been removed along with the step it was defending.
+
+#### The epoch model
+
+Yield is still **discovered off-chain in chunks** — T-Bills settle periodically — and is still strictly **rear-facing**: an epoch only ever distributes what has already been realized. What changed is *delivery*.
+
+One epoch fully describes the multiplier for all time within it:
+
+```solidity
+struct YieldEpoch {
+    uint256 baseMultiplier;  // multiplier at startTime
+    uint256 ratePerSecond;   // linear increment per second
+    uint64  startTime;
+    uint64  endTime;         // accrual FLATLINES past this
+}
+```
+
+```
+M(t) = baseMultiplier + ratePerSecond × (min(t, endTime) − startTime)
+```
+
+The multiplier is a **pure function of time** — no keeper, no per-block writes, and anyone can independently verify past or future values via `okuMMultiplierAt(t)`.
+
+Accrual is **linear, not exponential**. The operator supplies a realized dollar amount and a duration; the contract derives the per-second increment. Linear is the honest shape for "distribute exactly this much over exactly this long", and it avoids the D-th root that deriving an exponential rate from a target amount would require. Over day-to-month epochs the curvature difference is negligible.
+
+This is the same realized-lump-streamed-forward pattern as Synthetix `StakingRewards.notifyRewardAmount` and Yearn v2's `lockedProfitDegradation` (adopted there for precisely this attack), and it matches the continuous accrual `OkuDollar.usdMultiplier` already used.
+
+#### What this fixes
+
+Measured in `test/token/YieldSandwich.t.sol`, running the identical attack sequence:
+
+| | Discrete step (before) | Continuous epoch (now) |
+|---|---|---|
+| Attacker gain, 12s round trip | **$2,055** | **$0.0095** |
+| Honest holder's yield | halved by dilution | unaffected |
+
+The residual $0.0095 is not an exploit — it matches the legitimate 12-second pro-rata share (predicted $0.009514, actual $0.009513). The attacker is simply paid correctly for twelve seconds of capital. **A 216,000× reduction.**
+
+#### Operator API
+
+| Function | Role | Notes |
+|---|---|---|
+| `startYieldEpoch(yieldAmount, duration)` | `OKUM_REBASER` | Streams `yieldAmount` over `duration`. Starts at the **current** multiplier — publishing never moves the price. Calling mid-epoch replaces the active epoch (rebasing from the current value) and discards any scheduled successor. Pause-gated. |
+| `scheduleYieldEpoch(yieldAmount, duration)` | `OKUM_REBASER` | Queues a successor starting exactly when the active epoch ends, so accrual is continuous across the boundary. Requires a live (non-flatlined) epoch. Pause-gated. |
+| `cancelPendingYieldEpoch()` | `OKUM_REBASER` | Revokes a scheduled successor. **The only fully clean rollback in the design.** Not pause-gated. |
+| `haltAccrual()` | `OKUM_REBASER` | Freezes the multiplier at its current value and blocks new epochs. Not pause-gated. |
+| `resumeAccrual()` | `OKUM_REBASER` | Lifts the halt. Does **not** restart accrual or backdate the halted interval. |
+
+Views: `okuMMultiplier()`, `okuMMultiplierAt(t)`, `currentYieldEpoch()`, `pendingYieldEpoch()`, `yieldEpochEndsAt()`, `accrualHalted()`.
+
+`startYieldEpoch` is still **one transaction per distribution window** — the operational cadence is unchanged.
+
+#### Bounds
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `MAX_IMPLIED_APR_BPS` | `2000` (20% APR) | Caps `(Δmultiplier / startMultiplier) × (year / duration)`. |
+| `MIN_EPOCH_DURATION` | `1 hour` | Defence-in-depth: a very short epoch approximates a step. |
+| `MAX_EPOCH_DURATION` | `365 days` | Bounds forward commitment and keeps `rate × duration` far inside the safe region. |
+
+`MAX_IMPLIED_APR_BPS` is the **primary on-chain defence against a mispriced or compromised rate**, because the multiplier is monotonic: yield that has already accrued cannot be clawed back. It also rejects the degenerate "stream a month's yield over an hour" case (~360,000 bps), which is arithmetically a step again — so one cap enforces both bounds.
+
+Sizing: 4× headroom over a ~5% T-Bill trajectory. A tighter 1000 bps would reject a legitimate catch-up (two periods' yield over one period lands at ~1000 bps) on a knife edge.
+
+> **If `startYieldEpoch` reverts with `ImpliedAprTooHigh`, stream the same amount over a LONGER duration — do not reduce the amount.** `startYieldEpoch.ts` computes the minimum legal duration for you.
+
+#### Operational cautions
+
+- **Flatlining is silent.** Past `endTime` with no successor scheduled, the multiplier simply stops. This is the safe default (never extrapolate unearned yield) but produces no event. **Monitor `yieldEpochEndsAt()`** — `manageYieldEpoch.ts --action status` warns when accrual has flatlined.
+- **Rollback is limited.** Only a *pending* epoch can be cancelled cleanly. Once yield has accrued, monotonicity makes it permanent and `haltAccrual()` (forward-only) is the sole remaining lever.
+- **`haltAccrual` is independent of `pause()`.** Bug found but backing intact → `pause()` only, so holders keep yield genuinely owed. Backing impaired → `haltAccrual()`, so obligations stop growing while transfers continue. Both → call both.
+- **Supply drift.** The per-token increment is derived from `totalSupply` at publication. If supply grows during the epoch, delivered dollars slightly exceed `yieldAmount` (~$200 on a $4,110 pot at 10% growth). This is rear-facing, so it self-corrects in the next period's figure; `YieldEpochStarted` emits the supply snapshot for reconciliation.
+- **No loss pass-through.** The multiplier is strictly monotonic, so a negative realized period cannot be reflected — the operator distributes nothing instead. A decrease would retroactively undercollateralize the vault and strand anyone who had already redeemed.
+
+---
+
+### ERC-8056 (Scaled UI Amount)
+
+OkuMoney implements [ERC-8056](https://eips.ethereum.org/EIPS/eip-8056) core plus all three extensions, so wallets can render dollar values natively.
+
+**Scope note — a deliberate extension beyond the standard's stated purpose.** ERC-8056 was written for *stock splits*; its abstract calls the multiplier "a cosmetic layer ... while maintaining the underlying token economics". A 2-for-1 split is value-neutral and cannot be arbitraged. Oku uses the same multiplier as a *settlement price*, which is value-additive. That is outside the standard's design intent, and it is exactly why the multiplier must move continuously rather than in the discrete steps the EIP's own reference implementation uses. Only the interface is borrowed.
+
+| Interface | ID | Surface |
+|---|---|---|
+| `IScaledUIAmount` | `0xa60bf13d` | `uiMultiplier()`, `UIMultiplierUpdated` |
+| `IScaledUIAmountNewUIMultiplier` (required) | `0x4bd27648` | `newUIMultiplier()`, `effectiveAt()` |
+| `IScaledUIAmountConversion` | `0x57854fc3` | `toUIAmount()`, `fromUIAmount()` |
+| `IScaledUIAmountBalances` | `0xd890fd71` | `balanceOfUI()`, `totalSupplyUI()` |
+
+All four IDs are asserted against `type(I…).interfaceId` in `test/token/ERC8056Conformance.t.sol`, so a spec revision surfaces as a test failure rather than silent non-conformance.
+
+**Pending-multiplier mapping.** The required extension maps onto the scheduled successor epoch: `effectiveAt()` is its start time and `newUIMultiplier()` the multiplier it begins at. With no successor scheduled, both resolve to the active epoch's terminal state — the next value the multiplier is committed to reach.
+
+**Conformance notes for integrators:**
+
+1. `UIMultiplierUpdated` fires when the multiplier's *trajectory* changes (epoch start / schedule / halt), not on every per-second increment, which is impossible. A consumer caching on the event alone will under-report. Because the multiplier is monotonically non-decreasing, **staleness always understates and never overstates**. Read `uiMultiplier()` for a live value.
+2. `TransferWithUIAmount` (OPTIONAL in the spec) is **not** emitted. `TransferValue(from, to, amount, dollarValue)` carries identical information and predates the standard; emitting both would double-log every transfer.
+3. `fromUIAmount(toUIAmount(x))` can return `x - 1` — both directions floor. **A max-send MUST be computed from the raw `balanceOf`, never by round-tripping.**
+
+---
 
 ### Storage (ERC-7201 Namespaced)
 
 ```solidity
 struct OkuMoneyStorage {
-    uint256 okuMMultiplier;                     // Stored dollar value per token (starts 1e18, only increases)
     mapping(address => uint256) minterAllowance;
     uint256 maxSupply;
     mapping(address => bool) isBlacklisted;
-    uint256 lastYieldDistributionBlock;         // Sandwich attack prevention
+    YieldEpoch currentEpoch;   // active accrual segment
+    YieldEpoch pendingEpoch;   // scheduled successor (endTime == 0 => none)
+    bool accrualHalted;        // guardian latch, independent of Pausable
 }
 ```
 
-### Multiplier Model
-
-`okuMMultiplier()` is a **stored value** — not a computed view. There is no `_rpow`, no `ratePerSecond`, no rate scheduling on OkuMoney. The multiplier is written discretely by the orchestrator via two functions:
-
-- `setOkuMMultiplier(newMultiplier)` — OKUM_REBASER. Direct override, enforces `newMultiplier >= current`.
-- `distributeYield(yieldAmount)` — OKUM_REBASER. Dollar-denominated: `newMultiplier = oldMultiplier + (yieldAmount × PRECISION / totalSupply)`. E.g., $1000 yield on 10000 tokens → +$0.10/token.
-
-Both set `lastYieldDistributionBlock = block.number` (sandwich prevention — see [YieldSandwichGuard](#yieldsandwichguard)).
-
-**Rear-facing yield**: The orchestrator feeds realized T-Bill returns. January's actual yield gets distributed in February via `distributeYield()`. OkuMoney only ever distributes what was already earned — the multiplier reflects reality, never a projection.
+`okuMMultiplier` is no longer stored — it is derived from `currentEpoch` / `pendingEpoch`.
 
 ### IOkuMoney Interface
 
 ```solidity
-interface IOkuMoney {
+interface IOkuMoney is IERC20 {
     function mint(address to, uint256 amount) external;
     function burn(uint256 amount) external;
-    function transfer(address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-    function totalSupply() external view returns (uint256);
     function okuMMultiplier() external view returns (uint256);
-    function setOkuMMultiplier(uint256 newMultiplier) external;
-    function distributeYield(uint256 yieldAmount) external;
-    function lastYieldDistributionBlock() external view returns (uint256);
+    function okuMMultiplierAt(uint256 t) external view returns (uint256);
+    function startYieldEpoch(uint256 yieldAmount, uint256 duration) external;
+    function yieldEpochEndsAt() external view returns (uint256);
 }
 ```
 
@@ -379,10 +554,9 @@ interface IOkuMoney {
 
 - `balanceOf()` returns standard ERC-20 balance (raw token count, not multiplier-adjusted).
 - `transfer()` and `transferFrom()` are standard ERC-20 (no share conversion).
-- `okuMMultiplier()` is a stored value for pricing — used by PSM and vault, not by `balanceOf`.
+- `okuMMultiplier()` is a **computed view** advancing every second while an epoch is live; it is consumed by the PSM and vault for pricing, never by `balanceOf`.
 - `mint()` creates raw tokens; minting 100 tokens when `okuMMultiplier = $1.05` creates $105 of value.
-- The PSM handles USDC ↔ OkuMoney conversion using `okuMMultiplier()` (dollar-value aware).
-- `TransferValue` event emitted alongside the standard `Transfer` with the dollar-denominated amount.
+- `TransferValue` is emitted alongside the standard `Transfer` with the dollar-denominated amount.
 - Blacklist and pause checks apply to transfers; self-burn works while paused.
 
 ### Events
@@ -391,8 +565,12 @@ interface IOkuMoney {
 |---|---|
 | `Transfer(from, to, amount)` | Standard ERC-20; emitted on mint/burn/transfer. |
 | `TransferValue(from, to, amount, dollarValue)` | Alongside `Transfer`; `dollarValue = amount × okuMMultiplier / PRECISION`. |
-| `OkuMMultiplierUpdated(oldMultiplier, newMultiplier, totalSupply)` | Emitted by `setOkuMMultiplier` and `distributeYield`. |
-| `YieldDistributed(yieldAmount, oldMultiplier, newMultiplier, totalSupply)` | Emitted by `distributeYield` only; `yieldAmount` is the dollar input. |
+| `YieldEpochStarted(yieldAmount, startMultiplier, endMultiplier, ratePerSecond, totalSupply, startTime, endTime)` | Emitted by `startYieldEpoch`. `totalSupply` is the snapshot used to derive the per-token increment. |
+| `YieldEpochScheduled(yieldAmount, ratePerSecond, totalSupply, startTime, endTime)` | Emitted by `scheduleYieldEpoch`. |
+| `YieldEpochCancelled(startTime, endTime)` | Emitted by `cancelPendingYieldEpoch`. |
+| `AccrualHalted(frozenMultiplier, hadPendingEpoch)` | Emitted by `haltAccrual`. |
+| `AccrualResumed(currentMultiplier)` | Emitted by `resumeAccrual`. |
+| `UIMultiplierUpdated(oldMultiplier, newMultiplier, effectiveAtTimestamp)` | ERC-8056; emitted on every trajectory change. |
 | `MinterAllowanceUpdated(minter, oldAllowance, newAllowance)` | Emitted by `configureMinterAllowance`. |
 | `MaxSupplyUpdated(oldMaxSupply, newMaxSupply)` | Emitted by `setMaxSupply`. |
 | `Blacklisted(account)` / `Unblacklisted(account)` | Blacklist state changes. |
@@ -422,7 +600,7 @@ See [Role Grants Policy](#role-grants-policy) below for how roles are distribute
 
 ## OkuDollar.sol
 
-**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `ReentrancyGuardUpgradeable`, `YieldSandwichGuard`, `UUPSUpgradeable`.
+**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `ReentrancyGuardUpgradeable`, `UUPSUpgradeable`.
 
 **Concept**: Rebasing $1-pegged stablecoin with an independent yield rate. Holds OkuMoney as reserves. Has its own USD shares mapping and its own **continuous** `_rpow` multiplier, decoupled from OkuMoney's multiplier. NOT an ERC-4626 vault — a custom rebasing token with reserve management.
 
@@ -466,7 +644,7 @@ function unwrap(uint256 usdAmount, address receiver)
     external returns (uint256 okuMReturned);
 ```
 
-Both are protected by `whenYieldNotDistributing` (via `YieldSandwichGuard`) and `whenNotPaused` (full freeze). `unwrap` reverts with `InsufficientBalance` if the caller's share balance is below `sharesToBurn`, or `InsufficientReserves` if the vault's OkuMoney reserves are below `okuMReturned`. These two errors are intentionally distinct — the first is a user balance check, the second is a vault-collateralization check.
+Both are protected by `whenNotPaused` (full freeze) and `nonReentrant`. `unwrap` reverts with `InsufficientBalance` if the caller's share balance is below `sharesToBurn`, or `InsufficientReserves` if the vault's OkuMoney reserves are below `okuMReturned`. These two errors are intentionally distinct — the first is a user balance check, the second is a vault-collateralization check.
 
 ### Reserve Management (`VAULT_RESERVE_MANAGER`)
 
@@ -489,7 +667,7 @@ Pause is a **full freeze**. The following are gated behind `whenNotPaused`:
 
 - OkuMoney: peer-to-peer `transfer` / `transferFrom` (mint also; burn is NOT gated — self-burn works while paused to support the pause-to-blacklist protocol).
 - OkuDollar: `transfer` / `transferFrom`, `wrap`, `unwrap`, `depositReserves`, `withdrawSurplus`.
-- LitePSM: `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku`, `processQueue`.
+- LitePSM: `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku`.
 
 **Intentionally NOT pause-gated**: the vault's yield-rate setters (`setUsdYieldRate`, `setNextUsdYieldRate`) and `setMinCollateralRatio` — these are admin emergency levers that must remain callable during a pause.
 
@@ -532,16 +710,17 @@ function mintUsdOku(uint256 usdcAmount) external;           // USDC → mint Oku
 function redeemUsdOku(uint256 usdAmount) external;          // usdOku → unwrap → redeem → USDC to user
 ```
 
-`redeemUsdOku` has two distinct failure modes: (a) vault undercollateralized → `unwrap` reverts with `InsufficientReserves` → entire tx reverts; (b) vault has OkuM but PSM buffer insufficient → OkuM goes to the redemption queue.
+**Redemption is buffer-only.** If the USDC buffer cannot cover a redemption the call reverts with `InsufficientBuffer` — nothing is escrowed and the user keeps their OkuM. There is no redemption queue; operators keep the buffer topped up via `depositBuffer`. This mirrors the SVM side (see `SVM/README.md § Why no redemption queue`) and how stablecoin issuers generally operate, and it removes the queue-management roles, capacity SLAs and stuck-entry rescue path from the operational surface.
 
-Every user-facing PSM function is protected by `whenYieldNotDistributing` + `whenNotPaused`.
+`redeemUsdOku` therefore has two distinct failure modes: (a) vault undercollateralized → `unwrap` reverts with `InsufficientReserves`; (b) buffer insufficient → `InsufficientBuffer`. Both revert the whole transaction.
+
+Every user-facing PSM function is protected by `whenNotPaused` + `nonReentrant`. There is **no** same-block yield fence: `okuMMultiplier()` accrues continuously and never steps, so there is no discontinuity for a same-block transaction to straddle. See [Continuous yield epochs](#continuous-yield-epochs).
 
 ### Admin / Operator Surface
 
 ```solidity
 function depositBuffer(uint256 amount) external;                           // PSM_BUFFER_DEPOSITOR
-function withdrawUsdc(address to, uint256 amount) external;                // PSM_BUFFER_WITHDRAWER — reverts with ZeroAddress on to == 0; WouldStrandQueue protection
-function processQueue(uint256 startIndex, uint256 endIndex, uint256 approveAmount) external;  // PSM_QUEUE_PROCESSOR. whenNotPaused + nonReentrant.
+function withdrawUsdc(address to, uint256 amount) external;                // PSM_BUFFER_WITHDRAWER — reverts with ZeroAddress on to == 0
 function pause() / unpause() external;                                     // PSM_PAUSER / PSM_UNPAUSER
 ```
 
@@ -550,32 +729,11 @@ function pause() / unpause() external;                                     // PS
 | Event | Parameters |
 |---|---|
 | `OkuMMinted(user, usdcAmount, okuMAmount, okuMMultiplier)` | `mintOkuM` success. |
-| `OkuMRedeemed(user, okuMIn, usdcOut, okuMMultiplier)` | `redeemOkuM` instant path only. Queued path emits `RedemptionQueued` instead. |
+| `OkuMRedeemed(user, okuMIn, usdcOut, okuMMultiplier)` | `redeemOkuM` success. |
 | `UsdOkuMinted(user, usdcAmount, usdAmount, okuMMultiplier)` | `mintUsdOku` success. |
 | `UsdOkuRedeemed(user, usdIn, usdcOut, okuMMultiplier)` | `redeemUsdOku` — sole event for this path; no inner `OkuMRedeemed` is emitted. |
-| `BufferRefilled(newBufferBalance, processedStart, processedEnd)` | After `processQueue`. |
 | `BufferDeposited(depositor, amount, newBufferBalance)` | After `depositBuffer`. |
 | `BufferWithdrawn(to, amount, newBufferBalance)` | After `withdrawUsdc`. |
-
----
-
-## RedemptionQueue.sol
-
-Stores raw OkuMoney token amounts. Since OkuMoney is non-rebasing, queued tokens don't grow in balance — but they appreciate in dollar value via `okuMMultiplier()`. At processing time, `usdcAmount = okuMAmount × okuMMultiplier() / PRECISION` (scaled to 6 decimals). The multiplier is cached once per batch for gas efficiency and cross-entry consistency.
-
-`enqueue(user, okuMTokenAmount)` is record-only — the PSM transfers OkuMoney into the queue before calling. `processQueue(startIndex, endIndex)` (called by the PSM via `QUEUE_PSM`) burns OkuMoney, pulls USDC from the PSM, and pays users. `rescueQueueEntry(index, alternateRecipient)` returns OkuMoney to a stuck entry (e.g., USDC-blacklisted recipient) — called by `QUEUE_RESCUER`.
-
-`processQueue` and `rescueQueueEntry` do NOT auto-advance `queueHead`. Operators (or anyone — the call is permissionless) call `advanceHead(maxSlots)` after a batch to amortize the head walk into a separate, gas-bounded transaction. `queueLength()` is an upper bound on live entries until `advanceHead` runs; redemption correctness is independent of the cursor.
-
-### Events
-
-| Event | Parameters |
-|---|---|
-| `RedemptionQueued(user, okuMAmount, dollarValue, position, queueLength)` | `enqueue`. |
-| `RedemptionProcessed(user, okuMAmount, dollarValue, usdcAmount, waitTime)` | `processQueue` success. |
-| `RedemptionSkipped(index, reason)` | `reason` is `AlreadyCleared`, `InsufficientFunds`, or `TransferFailed`. |
-| `RedemptionRescued(index, originalUser, recipient, okuMAmount, dollarValue)` | `rescueQueueEntry`. |
-| `QueueHeadAdvanced(newHead, slotsAdvanced)` | `advanceHead` (only when slots were actually skipped). |
 
 ---
 
@@ -607,36 +765,23 @@ no scaffolding left in the current tree to build on top of.
 When OkuBridge / NTT / CCIP return, the upgrade is additive: reintroduce the
 interfaces/roles from history, deploy the new proxy, grant it `OKUM_MINTER`,
 configure its minter allowance. No changes to the existing `OkuMoney` /
-`OkuDollar` / `LitePSM` / `RedemptionQueue` contracts are required.
+`OkuDollar` / `LitePSM` contracts are required.
 
 ---
 
-## YieldSandwichGuard
+## Yield-sandwich defence (historical: `YieldSandwichGuard`)
 
-Shared abstract at `src/lib/YieldSandwichGuard.sol`, inherited by both `OkuDollar` and `LitePSM`. Exposes the `whenYieldNotDistributing` modifier and the `YieldDistributionInProgress` error.
+`src/lib/YieldSandwichGuard.sol` **has been removed**, along with `OkuMoney.lastYieldDistributionBlock`, `setOkuMMultiplier` and `distributeYield`.
 
-```solidity
-abstract contract YieldSandwichGuard {
-    error YieldDistributionInProgress();
+**Why it existed.** `okuMMultiplier` used to be written as a discrete step. The guard reverted any PSM mint/redeem or vault wrap/unwrap landing in the same block as that write.
 
-    modifier whenYieldNotDistributing() {
-        if (block.number == _yieldSandwichOkuMoney().lastYieldDistributionBlock()) {
-            revert YieldDistributionInProgress();
-        }
-        _;
-    }
+**Why it was insufficient.** It compared `block.number` against `lastYieldDistributionBlock`, a flag written *inside* `distributeYield`. A mint ordered *before* the step in the same block read the stale value and passed; the redeem then simply waited for the next block. It was a **backrun guard, not a frontrun guard**, and the profitable round trip spans two blocks.
 
-    function _yieldSandwichOkuMoney() internal view virtual returns (IOkuMoney);
-}
-```
+**Why it is now unnecessary.** `okuMMultiplier()` accrues continuously over an epoch and starts each epoch *at the prevailing value*. There is no discontinuity anywhere on the timeline, so there is nothing for any transaction — same-block or otherwise — to straddle. Keeping the guard would have cost an external call on every PSM operation to protect against an instant that no longer exists.
 
-OkuMoney records `lastYieldDistributionBlock = block.number` inside `setOkuMMultiplier` and `distributeYield`. OkuDollar and LitePSM inherit the guard and override `_yieldSandwichOkuMoney()` to return their stored `okuMoney` reference. Result: **any** PSM mint/redeem or vault wrap/unwrap that lands in the same block as a yield distribution reverts with `YieldDistributionInProgress`. The lock releases automatically on the next block.
+This also retires the guard's second consumer, `OkuDollar.withdrawSurplus`. That was a *privileged-operator* protection: a rebaser could step the multiplier and withdraw against the inflated collateral ratio in the same block. With continuous accrual the ratio drifts smoothly and yield timing cannot move it measurably within one block.
 
-**Protected operations**:
-- `LitePSM.mintOkuM` / `redeemOkuM` / `mintUsdOku` / `redeemUsdOku` (+ permit variants)
-- `OkuDollar.wrap` / `unwrap`
-
-**Unaffected**: OkuMoney transfers, OkuDollar transfers, operations in subsequent blocks.
+See [Continuous yield epochs](#continuous-yield-epochs) for the full argument, and `test/token/YieldSandwich.t.sol` for the regression suite that runs the original attack and shows it is no longer profitable.
 
 ---
 
@@ -645,7 +790,6 @@ OkuMoney records `lastYieldDistributionBlock = block.number` inside `setOkuMMult
 Every contract's `initialize` grants its **full** role set to `admin`. Admin is expected to redistribute operational roles (minters, rebasers, reserve managers, etc.) to other parties (multisigs, bots) post-deployment via `grantRoles.ts` or `grantRolesMainnet.ts`. This removes contract-specific role plumbing from deployment scripts.
 
 One intentional exception:
-- `RedemptionQueue.QUEUE_PSM` is NOT granted at init — it is granted post-deploy to the `LitePSM` proxy address. This avoids a circular deployment dependency AND keeps admin from being able to call `enqueue` / `processQueue` directly (bypassing the PSM).
 
 ### Per-role trust and blast radius
 
@@ -664,10 +808,10 @@ both EVM and SVM. EVM-specific notes:
 | `VAULT_ADMIN` | Cold Multisig | Set `minCollateralRatio` | Cannot set below `MIN_COLLATERAL_RATIO_FLOOR` (90%); live-health gate rejects if existing positions would breach the new floor |
 | `PSM_PAUSER` / `VAULT_PAUSER` / `OKUM_PAUSER` | Warm Multisig | Halt minting, redemption, wrapping, transfers | Cannot unpause — that requires cold multisig (`*_UNPAUSER`) |
 | `OKUM_BLACKLISTER` | Warm Multisig | Block any address from OkuMoney and OkuDollar operations | Cannot unblacklist (cold only); cannot access funds |
-| `OKUM_REBASER` / `VAULT_REBASER` | Orchestrator | Bump `okuMMultiplier` and `usdMultiplier` | Cannot decrease either multiplier; hard capped at `MAX_MULTIPLIER` (1e24) |
-| `PSM_QUEUE_PROCESSOR` | Orchestrator | Process queue entries — burns OkuM, pays USDC to users | Payment destination is fixed to the queue entry's `user` address; cannot reroute |
+| `OKUM_REBASER` | Orchestrator | Publish/schedule yield epochs; halt or resume accrual | Cannot decrease the multiplier; each epoch bounded by `MAX_IMPLIED_APR_BPS` (20% APR) and `MIN`/`MAX_EPOCH_DURATION`; hard capped at `MAX_MULTIPLIER` (1e24) |
+| `VAULT_REBASER` | Orchestrator | Set the `usdMultiplier` accrual rate | Cannot decrease the multiplier; bounded by `MAX_RATE` and `MAX_MULTIPLIER` |
 | `PSM_BUFFER_DEPOSITOR` | Orchestrator | Deposit USDC to buffer from caller's wallet | Caller must hold the USDC; no damage possible |
-| `OKUM_MINTER` | LitePSM + RedemptionQueue (contracts) | Call `OkuMoney.mint()` inside swap/processQueue paths | Bounded by per-minter `minterAllowance` and global `maxSupply`; never callable by EOA |
+| `OKUM_MINTER` | LitePSM (contract) | Call `OkuMoney.mint()` inside swap paths | Bounded by per-minter `minterAllowance` and global `maxSupply`; never callable by EOA |
 
 ---
 
@@ -721,16 +865,16 @@ contract.
 
 **Scope of operator powers:**
 
-- `OKUM_REBASER`: writes `okuMMultiplier` and `lastYieldDistributionBlock`. Bounded by `MAX_MULTIPLIER` and monotonic-increase invariants.
+- `OKUM_REBASER`: publishes yield epochs (`startYieldEpoch` / `scheduleYieldEpoch`) and can freeze accrual (`haltAccrual`). Bounded by `MAX_IMPLIED_APR_BPS` (20% APR), `MIN`/`MAX_EPOCH_DURATION`, `MAX_MULTIPLIER`, and monotonicity.
 - `VAULT_REBASER`: writes USD yield rate. Bounded by `MAX_RATE` and `MAX_MULTIPLIER`.
-- `VAULT_RESERVE_MANAGER`: deposits / withdraws OkuMoney from vault reserves. Withdrawals gated by `minCollateralRatio` post-condition and `whenYieldNotDistributing`.
-- `OKUM_MINTER` / `OKUM_BURNER`: bounded by per-minter allowance + global `maxSupply`. PSM and Queue are the only intended holders.
-- `PSM_*` roles: queue processing, buffer custody.
+- `VAULT_RESERVE_MANAGER`: deposits / withdraws OkuMoney from vault reserves. Withdrawals gated by a `minCollateralRatio` post-condition.
+- `OKUM_MINTER` / `OKUM_BURNER`: bounded by per-minter allowance + global `maxSupply`. The PSM is the only intended holder.
+- `PSM_*` roles: buffer custody and pause control.
 - `OKUM_BLACKLISTER` / `OKUM_UNBLACKLISTER`: shared blacklist for OkuMoney + OkuDollar.
 
 **On-chain mitigations:**
 
-- All multiplier-write operations stamp `lastYieldDistributionBlock`; the `whenYieldNotDistributing` modifier prevents same-block sandwich attacks on every PSM + vault op that reads the multiplier.
+- `okuMMultiplier()` is monotonically non-decreasing and moves continuously — never in steps — so no PSM or vault operation can be sandwiched around a yield update.
 - Defense-in-depth ceilings (`MAX_MULTIPLIER = 1e24`, `MAX_RATE = PRECISION + 1e11`) cap the blast radius of a single-call compromise.
 - Monotonic guards (`MultiplierCannotDecrease`, `RateAlreadyExpired`) prevent backward writes.
 
@@ -742,14 +886,18 @@ multisig before mainnet launch. `VAULT_REBASER` and
 ### 2. `VAULT_REBASER` + `VAULT_RESERVE_MANAGER` cross-block opsec
 
 **Issue:** if both roles are held by the same key, that key can
-sequence `setUsdYieldRate` (or `distributeYield`) in block N followed
-by `withdrawSurplus` in block N + 1 to extract value just added to
-the apparent reserve dollar valuation.
+sequence `setUsdYieldRate` (or a yield epoch) in block N followed by
+`withdrawSurplus` in block N + 1 to extract value just added to the
+apparent reserve dollar valuation.
 
-**On-chain mitigation:** `whenYieldNotDistributing` prevents the
-same-block attack. Cross-block manipulation is NOT mitigated
-on-chain — closing it would require either a timelock (rejected, see
-Risk 1) or stale-multiplier checks that themselves depend on the same
+**On-chain mitigation:** both multipliers now move continuously, so
+neither can be jumped immediately before a withdrawal — the
+collateral ratio drifts smoothly and yield timing cannot move it
+measurably within a block. The `MAX_IMPLIED_APR_BPS` cap additionally
+bounds how fast `okuMMultiplier` can be driven at all. Slow
+cross-block manipulation is still NOT fully mitigated on-chain —
+closing it would require either a timelock (rejected, see Risk 1) or
+stale-multiplier checks that themselves depend on the same
 compromised key.
 
 **Off-chain mitigation:** the two roles MUST be held by separate
@@ -760,10 +908,9 @@ Documented in NatSpec on `OkuDollar.withdrawSurplus`.
 
 Both EVM and SVM handle USDC peg monitoring entirely off-chain. EVM
 previously had an on-chain `OracleRelay` circuit-breaker (Chainlink
-USDC/USD aggregator, gating every mint/redeem/`processQueue` path) —
-this was fully removed, including the storage slots that referenced
-it (`LitePSM` and `RedemptionQueue` storage layouts were compacted,
-not `__gap`-padded). SVM's `lite-psm` similarly removed its Pyth
+USDC/USD aggregator, gating every mint/redeem path) — this was fully
+removed, including the storage slots that referenced it (the
+`LitePSM` storage layout was compacted, not `__gap`-padded). SVM's `lite-psm` similarly removed its Pyth
 oracle relay. Both chains now converge on the same model: the
 off-chain orchestrator monitors the peg and pauses the PSM on a
 detected depeg.
@@ -796,15 +943,35 @@ are not called anywhere in `OkuDollar` today. The reverts exist only
 to catch a future bug where an upgrade accidentally routes through
 `_update`.
 
-### 6. `RedemptionQueue.advanceHead` is permissionless
+### 6. Yield already accrued cannot be reversed
 
-The cursor-advance maintenance function is callable by anyone. No
-privileged effect — `queueHead` can only move forward, and only past
-slots that are already cleared (`user == address(0)`). Visible effect
-is purely on `queueLength()` accuracy. A privileged version (e.g.
-`onlyRole(QUEUE_RESCUER)`) adds no security and complicates the
-operator runbook; the function is gas-bounded by `maxSlots` and emits
-`QueueHeadAdvanced` on any non-zero advance.
+`okuMMultiplier` is strictly monotonic, so a mispriced yield epoch can
+only be stopped going forward, never unwound. The recovery ladder is:
+
+| Situation | Recovery |
+|---|---|
+| Epoch scheduled, not yet started | `cancelPendingYieldEpoch()` — fully clean, zero economic impact |
+| Epoch currently streaming | `haltAccrual()` — stops forward accrual only |
+| Yield already accrued | **Not recoverable** |
+
+Reversing accrued yield would retroactively undercollateralize the
+vault and strand anyone who had already redeemed at the higher value,
+so the exposure from a bad rate is bounded by
+`badRate × timeToDetect × supply`.
+
+**On-chain mitigation:** `MAX_IMPLIED_APR_BPS` (20% APR) caps how far
+a single epoch can move the multiplier, making it the primary defence
+against a mispriced or compromised rate. `MIN_EPOCH_DURATION`
+prevents an epoch so short it is effectively a step.
+
+**Operational expectation:** monitor `yieldEpochEndsAt()` and alert on
+unexpected `YieldEpochStarted` events; the shorter the detection
+window, the smaller the unrecoverable amount.
+
+A related consequence: **losses cannot be passed through.** A negative
+realized period is handled by distributing nothing, not by lowering
+the multiplier. Genuine principal impairment is an off-chain solvency
+event.
 
 ### 7. Deprecated bridge feature
 
@@ -819,7 +986,7 @@ remains in `src/`, `test/`, or `scripts/`.
 ## Testing
 
 ```bash
-forge test                                         # All unit + invariant tests (564 total)
+forge test                                         # All unit + invariant tests (503 total)
 forge test --match-path "test/invariants/*"        # Invariant suite (256 runs × 500 depth by default)
 forge test --match-contract OkuMoneyTest -vv       # OkuMoney unit tests
 forge test --match-contract VaultInvariants        # OkuDollar backing invariants
@@ -841,24 +1008,33 @@ Any new unit or invariant test should be added to the Foundry suite; Hardhat is 
 
 ## Forge coverage notes
 
-**Post-OracleRelay-removal baseline:** **564 / 564 forge tests passing**
-plus **27 / 27 hardhat tests** (fork + happy-path + scenarios). Per-file
-coverage:
+**Current baseline:** **503 / 503 forge tests passing** plus **27 / 27
+hardhat tests** (fork + happy-path + scenarios). Per-file coverage:
 
 | File | Lines | Statements | Branches | Funcs |
 |---|---|---|---|---|
-| `src/lib/MathLib.sol` | **100 %** | 96 % | 40 % | 100 % |
+| `src/lib/MathLib.sol` | **100 %** | 96.00 % | 40.00 % | 100 % |
 | `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** | 100 % | 100 % | 100 % |
 | `src/lib/SafeApprove.sol` | **100 %** | 100 % | 100 % | 100 % |
-| `src/lib/YieldSandwichGuard.sol` | **100 %** | 100 % | 100 % | 100 % |
-| `src/psm/LitePSM.sol` | **97.95 %** | 96.05 % | 73.08 % | 100 % |
-| `src/psm/RedemptionQueue.sol` | **100 %** | 99.25 % | 93.33 % | 100 % |
-| `src/token/OkuDollar.sol` | **98.34 %** | 97.26 % | 90.00 % | 97.50 % |
-| `src/token/OkuMoney.sol` | **100 %** | 100 % | 100 % | 100 % |
-| **Total** | **98.95 %** | 97.73 % | 86.32 % | 99.17 % |
+| `src/psm/LitePSM.sol` | **97.56 %** | 95.48 % | 69.57 % | 100 % |
+| `src/token/OkuDollar.sol` | **98.33 %** | 97.25 % | 90.00 % | 97.44 % |
+| `src/token/OkuMoney.sol` | **97.51 %** | 97.51 % | 90.91 % | 95.24 % |
+| **Total** | **98.06 %** | 96.93 % | 83.93 % | 97.39 % |
 
 A CI gate in `.github/workflows/test.yml` fails the build if any `src/` file
 or the overall total drops below **95 % line coverage**.
+
+The test count fell from 564 because the redemption-queue suites
+(~1,900 LOC) were deleted with the contract, and the same-block
+yield-fence tests were replaced by continuity assertions. Two new
+suites were added in their place:
+
+- `test/token/YieldSandwich.t.sol` — runs the original cross-block
+  sandwich attack and demonstrates it is no longer profitable
+  (216,000× reduction; see [Continuous yield epochs](#continuous-yield-epochs)).
+- `test/token/ERC8056Conformance.t.sol` — asserts all four interface
+  IDs against the published EIP literals, plus precision, ERC-165
+  detection, raw-amount ERC-20 semantics and event emission.
 
 ### Uncovered lines (intentional)
 
@@ -871,7 +1047,7 @@ judged not worth the maintenance cost.
 
 | Location | Code | Why unreachable today |
 |---|---|---|
-| `LitePSM.sol` `mintOkuM` | `revert RoundTripDriftTooLarge` | The round-trip check is mathematically bounded above by `usdcAmount` for any well-behaved `okuMMultiplier()`. Defends against an OkuMoney variant whose multiplier mutates between reads inside one transaction — impossible under the current `setOkuMMultiplier` + yield-distribution-guard policy. |
+| `LitePSM.sol` `mintOkuM` | `revert RoundTripDriftTooLarge` | The round-trip check is mathematically bounded above by `usdcAmount` for any well-behaved `okuMMultiplier()`. Defends against an OkuMoney variant whose multiplier mutates between reads inside one transaction — impossible under the current epoch model, where `okuMMultiplier()` is a monotonic function of `block.timestamp` and therefore constant within a transaction. |
 | `LitePSM.sol` `_redeemOkuMShared` | `revert OutputBelowMinimum` | `usdcAmount` is computed once. The floor `okuMFloor = (okuMAmount / dm) * dm` then `minUsdcExpected` is bounded above by `usdcAmount` by construction. Defends against an OkuMoney whose multiplier shifts during the same call. |
 | `LitePSM.sol` `mintUsdOku` | `revert RoundTripDriftTooLarge` | Mirror of the `mintOkuM` case for the wrap path. |
 | `OkuDollar.sol` `_update` | `UseWrapInstead` / `UseUnwrapInstead` / `OkuDollarDoesNotUseInternalUpdate` guards | `OkuDollar` overrides `transfer` / `transferFrom` to use share-based accounting; all supply changes go through `wrap()` / `unwrap()`, which manage `usdShares` directly and never call the inherited `_mint` / `_burn`. Since nothing in the contract invokes `_mint` or `_burn`, this `pure`, unconditionally-reverting override is unreachable today — it exists purely to halt any future refactor that accidentally routes through the inherited ERC-20 `_update` hook. |
@@ -886,14 +1062,16 @@ judged not worth the maintenance cost.
 
 2. **`LitePSM._redeemOkuMShared(okuMAtPsm=true)` branch**
    - `test_RedeemUsdOku_OkuMAtPsmInstant_NoOkuMRedeemedEvent` — buffer-covered redemption suppresses `OkuMRedeemed`.
-   - `test_RedeemUsdOku_OkuMAtPsmQueued_OkuMRoutedToQueue` — buffer-drained redemption routes OkuM to the queue without pulling from user.
+   - Buffer-only: a redemption the buffer cannot cover reverts with `InsufficientBuffer`, so this is the only success path through the branch.
 
-3. **`RedemptionQueue.processQueue` TransferFailed soft-skip path**
-   - `test_ProcessQueue_TransferFailed_SoftSkipEmitsEvent` — blocked recipient → `RedemptionSkipped(idx, TransferFailed)`, OkuM stays in escrow, `totalQueuedOkuM` unchanged.
-   - `test_ProcessQueue_TransferFailed_NextEntryStillProcesses` — interleaved blocked + clean users.
-   - `test_ProcessQueue_TransferFailed_ThenRescueClearsIt` — soft-skip + `rescueQueueEntry` round trip.
-   - `test_ProcessQueue_AlreadyCleared_SoftSkipEmitsEvent`, `test_ProcessQueue_InsufficientFunds_EmitsEventAndBreaks` — companion skip paths.
-   - Backed by `MockUSDC.setBlocked` (`test/mocks/MockUSDC.sol`) which mirrors Circle USDC's revert-on-blacklist semantics.
+3. **Yield epoch accrual and bounds** (`test/token/OkuMoney.t.sol`, `OkuMoney.fuzz.t.sol`)
+   - `test_StartYieldEpoch_DoesNotStepTheMultiplier` — the core anti-sandwich property.
+   - `test_StartYieldEpoch_AccruesLinearlyOverTime` — equal increments per quarter-epoch.
+   - `test_StartYieldEpoch_FlatlinesPastEndTime` — a missed renewal freezes rather than extrapolates.
+   - `testFuzz_AcceptedEpochsRespectAprCap` — any accepted epoch respects `MAX_IMPLIED_APR_BPS`.
+   - `testFuzz_DeliveredYieldNeverExceedsRequested` — truncation always favours the protocol.
+   - `test_CancelPendingYieldEpoch_RevertsOnceActive` — accrued yield cannot be retroactively removed.
+   - `test_HaltAccrual_WorksWhilePaused` / `test_ResumeAccrual_DoesNotBackdate` — the halt lever is independent of pause and cannot backdate.
 
 4. **`setNextUsdYieldRate` boundary conditions (`block.timestamp >= usdRateEnd`)**
    - `test_SetNextUsdYieldRate_RevertAtExactEndBoundary` — `block.timestamp == usdRateEnd` → `RateAlreadyExpired`.
@@ -913,23 +1091,6 @@ last-mile branches:
   directly.
 
 Neither is in any production import path.
-
-### Audit finding surfaced + remediated during coverage work
-
-While extending `MockUSDC` with `setBlocked` to drive the
-TransferFailed branch, `RedemptionQueue.processQueue` previously used
-the low-level `.call` pattern that treated a `transferFrom`
-returning `false` (without reverting) as success. Real Circle USDC's
-blacklist reverts, so production behaviour was safe, but a
-non-standard ERC-20 (or future USDC variant) that returns `false`
-would have silently drained queue entries without paying users.
-
-**Fix:** replaced the raw `.call` with `SafeERC20.trySafeTransferFrom`,
-which both (a) swallows reverts and (b) decodes the boolean return
-value. Tests now drive both shapes independently — revert (matches
-real USDC blacklist) and return-false (hypothetical non-standard
-USDC). The return-false test is the regression guard for this
-finding.
 
 ---
 

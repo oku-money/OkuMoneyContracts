@@ -60,6 +60,64 @@ library Constants {
     /// @notice Basis points denominator (10000 = 100%)
     uint256 public constant BASIS_POINTS = 10_000;
 
+    /// @notice Seconds in a 365-day year. Used to annualize an epoch's implied APR.
+    uint256 public constant SECONDS_PER_YEAR = 365 days;
+
+    // ============ OkuMoney Yield Epochs ============
+
+    /// @notice Upper bound on the annualized yield rate a single OkuMoney epoch may imply.
+    /// @dev `2000` bps = 20% APR, computed as
+    ///      `(deltaMultiplier / startMultiplier) * (SECONDS_PER_YEAR / duration)`.
+    ///
+    ///      This is the primary on-chain defence against a mispriced or malicious
+    ///      epoch. Because the multiplier is strictly monotonic, yield that has
+    ///      ALREADY accrued cannot be clawed back — `cancelPendingEpoch` and
+    ///      `haltAccrual` only stop future accrual. The cap therefore bounds the
+    ///      damage a bad rate can do between publication and detection.
+    ///
+    ///      Sizing: 4x headroom over a ~5% T-Bill trajectory. Chosen so that a
+    ///      catch-up distribution (e.g. two periods' realized yield streamed over
+    ///      one period) still passes — at 5% APR that implies ~1000 bps, which a
+    ///      tighter 1000 bps cap would reject on a knife edge. It simultaneously
+    ///      rejects the degenerate "stream a month's yield over an hour" case,
+    ///      which implies ~360000 bps and is arithmetically a discrete step —
+    ///      precisely the shape continuous accrual exists to eliminate. A single
+    ///      cap thus enforces both bounds without a separate minimum-duration rule.
+    uint256 public constant MAX_IMPLIED_APR_BPS = 2000;
+
+    /// @notice Shortest permitted epoch duration.
+    /// @dev Defence-in-depth alongside `MAX_IMPLIED_APR_BPS`. A very short epoch
+    ///      approximates an instantaneous step even when the implied APR is within
+    ///      bounds (a tiny yield amount over one second passes the APR check but
+    ///      still lands as a jump). One hour keeps the per-second rate meaningful
+    ///      relative to block times on every supported chain.
+    uint256 public constant MIN_EPOCH_DURATION = 1 hours;
+
+    /// @notice Longest permitted epoch duration.
+    /// @dev Bounds how far ahead the operator can commit yield, and keeps
+    ///      `rate * duration` far inside the overflow-safe region. Yield is
+    ///      rear-facing and realized off-chain, so committing beyond a year is
+    ///      never operationally required.
+    uint256 public constant MAX_EPOCH_DURATION = 365 days;
+
+    // ============ ERC-8056 Interface IDs ============
+    // Pinned literals from the published draft (created 2025-10-20):
+    // https://eips.ethereum.org/EIPS/eip-8056
+    // Asserted against `type(I...).interfaceId` in the test suite, so a spec
+    // revision surfaces as a test failure rather than silent non-conformance.
+
+    /// @notice ERC-165 ID of the core `IScaledUIAmount` interface.
+    bytes4 public constant IID_SCALED_UI_AMOUNT = 0xa60bf13d;
+
+    /// @notice ERC-165 ID of the required `IScaledUIAmountNewUIMultiplier` extension.
+    bytes4 public constant IID_SCALED_UI_NEW_MULTIPLIER = 0x4bd27648;
+
+    /// @notice ERC-165 ID of the optional `IScaledUIAmountConversion` extension.
+    bytes4 public constant IID_SCALED_UI_CONVERSION = 0x57854fc3;
+
+    /// @notice ERC-165 ID of the optional `IScaledUIAmountBalances` extension.
+    bytes4 public constant IID_SCALED_UI_BALANCES = 0xd890fd71;
+
     // ============ Vault / Collateralization ============
 
     /// @notice Hard floor for OkuDollar minimum collateral ratio (90% of PRECISION).

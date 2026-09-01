@@ -29,7 +29,6 @@ contract PSMInvariantsTest is BaseTest {
             IOkuMoney(address(okuMoney)),
             IOkuDollar(address(okuDollar)),
             usdc,
-            redemptionQueue,
             rebaser,
             minter
         );
@@ -38,8 +37,6 @@ contract PSMInvariantsTest is BaseTest {
         vm.startPrank(admin);
         litePsm.grantRole(PSM_BUFFER_DEPOSITOR, address(handler));
         litePsm.grantRole(PSM_BUFFER_WITHDRAWER, address(handler));
-        litePsm.grantRole(PSM_QUEUE_PROCESSOR, address(handler));
-        redemptionQueue.grantRole(QUEUE_RESCUER, address(handler));
         // VAULT_REBASER lets the handler drive `usdRatePerSecond`, which combined
         // with the handler's `warpTime` makes `usdMultiplier()` actually compound
         // during invariant runs. This is the systemic coverage gap that allowed
@@ -54,7 +51,6 @@ contract PSMInvariantsTest is BaseTest {
         excludeContract(address(okuMoney));
         excludeContract(address(okuDollar));
         excludeContract(address(litePsm));
-        excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
     }
 
@@ -63,16 +59,6 @@ contract PSMInvariantsTest is BaseTest {
         uint256 psmOkuMBalance = okuMoney.balanceOf(address(litePsm));
         // Allow up to 1 wei of rounding dust.
         assertLe(psmOkuMBalance, 1, "PSM should hold no OkuMoney (allow 1 wei dust)");
-    }
-
-    /// @notice The OkuMoney sitting in the queue must equal the queue's
-    ///         declared totalQueuedOkuM at all times.
-    function invariant_QueueBackedByOkuMoney() public view {
-        assertEq(
-            okuMoney.balanceOf(address(redemptionQueue)),
-            redemptionQueue.totalQueuedOkuM(),
-            "Queue OkuMoney balance must equal totalQueuedOkuM"
-        );
     }
 
     /// @notice The OkuMoney multiplier never decreases between observations.
@@ -94,15 +80,16 @@ contract PSMInvariantsTest is BaseTest {
 
     /// @notice The handler can never withdraw more USDC than was made available to
     ///         the PSM (seeded buffer + tracked deposits). Equality is too brittle
-    ///         given the multiple payout paths (instant redemption, queue
-    ///         processing, admin withdraw) and rounding inside multiplier math —
-    ///         this directional bound catches gross accounting errors without
-    ///         requiring a perfect handler-side simulator.
+    ///         given the multiple payout paths (redemption, admin withdraw) and
+    ///         rounding inside multiplier math — this directional bound catches
+    ///         gross accounting errors without requiring a perfect handler-side
+    ///         simulator.
     function invariant_NetUsdcOutflowBoundedByInflow() public view {
         uint256 deposited = handler.ghostUsdcDeposited();
         uint256 withdrawn = handler.ghostUsdcWithdrawn();
-        // Allow up to 1 wei of rounding per redemption (queue or instant).
-        uint256 tolerance = 2 * (handler.ghostQueuedCount() + 1);
+        // Allow up to 1 wei of rounding per redemption.
+        uint256 tolerance =
+            2 * (handler.ghostRedeemOkuMCalls() + handler.ghostRedeemOkuDollarCalls() + 1);
         assertLe(withdrawn, seededBuffer + deposited + tolerance, "USDC outflow exceeds inflow");
     }
 }

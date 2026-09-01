@@ -7,8 +7,8 @@
  * roles via DEFAULT_ADMIN_ROLE.
  *
  * Decisions baked in:
- *   - QUEUE_PSM is intentionally NOT granted to an EOA (must remain on the
- *     LitePSM proxy, otherwise an EOA could bypass LitePSM accounting).
+ *   - Roles that must live on a contract (not an EOA) are excluded from the map
+ *     below, so a dev wallet can never bypass LitePSM accounting.
  *
  * The signer used to send the grants must hold DEFAULT_ADMIN_ROLE on every
  * contract being touched. On testnet deployments that is the deployer / dev
@@ -134,8 +134,8 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "OKUM_PAUSER",
     "OKUM_UNPAUSER",
     "OKUM_MINTER",
-    // Cycle 4 (EVM-15): OKUM_BURNER required for redeem flows on both LitePSM
-    // and RedemptionQueue. Granting it to the master EOA is a no-op safety net
+    // Cycle 4 (EVM-15): OKUM_BURNER required for LitePSM redeem flows.
+    // Granting it to the master EOA is a no-op safety net
     // (the master EOA never calls OkuMoney.burn() directly) but keeps the role
     // surface complete for emergency operator action.
     "OKUM_BURNER",
@@ -164,15 +164,8 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "PSM_UPGRADER",
     "PSM_PAUSER",
     "PSM_UNPAUSER",
-    "PSM_QUEUE_PROCESSOR",
     "PSM_BUFFER_DEPOSITOR",
     "PSM_BUFFER_WITHDRAWER",
-  ],
-  // NOTE: QUEUE_PSM intentionally excluded — must stay on the LitePSM proxy.
-  RedemptionQueue: [
-    "DEFAULT_ADMIN_ROLE",
-    "QUEUE_UPGRADER",
-    "QUEUE_RESCUER",
   ],
   // OkuBridge / OkuBridgeRouter entries removed in the noBridge refactor.
   // Note: live deployments from prior to the refactor may still have these

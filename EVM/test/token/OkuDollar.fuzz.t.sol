@@ -304,8 +304,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Increase note price — vault note balance unchanged, but dollar value increases
         // No need to roll here since we're only checking collateralization, not wrapping/unwrapping
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newNotePrice);
+        _setOkuMMultiplierAndRoll(newNotePrice);
 
         uint256 ratio = okuDollar.collateralizationRatio();
         assertGe(ratio, PRECISION, "Note price increase should overcollateralize vault");
@@ -387,8 +386,7 @@ contract OkuDollarFuzzTest is BaseTest {
         // Strict increase required by setOkuMMultiplier.
         newNotePrice = bound(newNotePrice, currentNotePrice + 1, currentNotePrice * 5);
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newNotePrice);
+        _setOkuMMultiplierAndRoll(newNotePrice);
 
         uint256 reserves = okuDollar.totalOkuMReserves();
         uint256 obligations = okuDollar.totalUsdObligations();
@@ -529,8 +527,7 @@ contract OkuDollarFuzzTest is BaseTest {
             bound(newNotePrice, currentNotePrice + currentNotePrice / 10, currentNotePrice * 3);
 
         // okuMMultiplier increase → vault's reserve dollar value grows → surplus created
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newNotePrice);
+        _setOkuMMultiplierAndRoll(newNotePrice);
         // Roll forward one block so the yield-distribution lock (WS1.3 whenYieldNotDistributing
         // on withdrawSurplus) clears before we attempt the withdrawal.
         vm.roll(block.number + 1);
@@ -604,8 +601,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         newNotePrice = _boundOkuMMultiplier(newNotePrice);
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newNotePrice);
+        _setOkuMMultiplierAndRoll(newNotePrice);
 
         uint256 balanceAfter = okuDollar.balanceOf(user1);
         uint256 sharesAfter = okuDollar.usdSharesOf(user1);
@@ -929,8 +925,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         newNotePrice = _boundOkuMMultiplier(newNotePrice);
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newNotePrice);
+        _setOkuMMultiplierAndRoll(newNotePrice);
 
         uint256 balanceAfter = okuMoney.balanceOf(user1);
         assertEq(
@@ -955,8 +950,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         newNotePrice = _boundOkuMMultiplier(newNotePrice);
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newNotePrice);
+        _setOkuMMultiplierAndRoll(newNotePrice);
 
         uint256 vaultBalanceAfter = okuMoney.balanceOf(address(okuDollar));
         assertEq(

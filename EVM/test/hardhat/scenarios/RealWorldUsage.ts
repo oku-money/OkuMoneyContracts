@@ -3,7 +3,7 @@
  *
  * Simulates the full okuMoney noBridge lifecycle on a dual-chain (A+B) harness:
  *
- *   - 5 users (Alice … Eve) randomly mint, redeem (instant + queued), wrap OkuDollar, bridge
+ *   - 5 users (Alice … Eve) randomly mint, redeem, wrap OkuDollar, bridge
  *   - Orchestrator bridges OkuM between chain A and chain B, maintaining USDC custody balance
  *   - Admin periodically bumps OkuM price multiplier and adjusts yield rate
  *   - Pause / unpause events, blacklist windows, and cap exhaustion
@@ -21,7 +21,7 @@
  *
  * Edge-case suites (deterministic, separate describe blocks):
  *   E1. Multi-month round-trip A→B→A with yield accruing
- *   E2. Queued redeem blocks orchestrator
+ *   E2. Redeem beyond buffer reverts, blocking the orchestrator until refilled
  *   E3. Multiplier divergence between chains (A rebases, B does not)
  *   E4. Blacklisted recipient mid-bridge
  *   E5. Pause on one side during a multi-week run
@@ -36,14 +36,13 @@ import {
     OkuMoney__factory,
     OkuDollar,
     OkuDollar__factory,
-    RedemptionQueue,
-    RedemptionQueue__factory,
     MockUSDC,
     MockUSDC__factory,
 } from "../../../typechain-types"
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, upgrades, network } from "hardhat"
 import { expect } from "chai"
+import { setMultiplierTo } from "../helpers/yieldEpoch"
 
 // ---------------------------------------------------------------------------
 // Seeded PRNG (mulberry32)
@@ -77,10 +76,8 @@ const OKUM_BLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BLACKLISTER")
 const OKUM_UNBLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_UNBLACKLISTER"))
 const PSM_BUFFER_DEPOSITOR = ethers.keccak256(ethers.toUtf8Bytes("PSM_BUFFER_DEPOSITOR"))
 const PSM_BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("PSM_BUFFER_WITHDRAWER"))
-const PSM_QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("PSM_QUEUE_PROCESSOR"))
 const PSM_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("PSM_PAUSER"))
 const PSM_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("PSM_UNPAUSER"))
-const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
 
 const MAX_SUPPLY = parseEther("1000000000")
 const MINTER_ALLOWANCE = parseEther("1000000000")
@@ -97,7 +94,6 @@ type Chain = {
     usdc: MockUSDC
     okuMoney: OkuMoney
     okuDollar: OkuDollar
-    queue: RedemptionQueue
     psm: LitePSM
     label: string
 }
@@ -128,12 +124,6 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     )) as unknown as OkuDollar
     await okuDollar.waitForDeployment()
 
-    const queue = (await upgrades.deployProxy(
-        new RedemptionQueue__factory(admin),
-        [await okuMoney.getAddress(), await usdc.getAddress(), adminAddr],
-        { kind: "uups" }
-    )) as unknown as RedemptionQueue
-    await queue.waitForDeployment()
 
     const psm = (await upgrades.deployProxy(
         new LitePSM__factory(admin),
@@ -141,7 +131,6 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
             await okuMoney.getAddress(),
             await okuDollar.getAddress(),
             await usdc.getAddress(),
-            await queue.getAddress(),
             adminAddr,
         ],
         { kind: "uups", unsafeAllow: ["constructor"] }
@@ -151,18 +140,13 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     // Roles
     await okuMoney.connect(admin).grantRole(OKUM_MINTER, await psm.getAddress())
     await okuMoney.connect(admin).grantRole(OKUM_BURNER, await psm.getAddress())
-    await okuMoney.connect(admin).grantRole(OKUM_MINTER, await queue.getAddress())
-    await okuMoney.connect(admin).grantRole(OKUM_BURNER, await queue.getAddress())
     await okuMoney.connect(admin).grantRole(OKUM_REBASER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_ALLOWANCE_MANAGER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_BLACKLISTER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_UNBLACKLISTER, adminAddr)
     await okuMoney.connect(admin).configureMinterAllowance(await psm.getAddress(), MINTER_ALLOWANCE)
-    await okuMoney.connect(admin).configureMinterAllowance(await queue.getAddress(), MINTER_ALLOWANCE)
-    await queue.connect(admin).grantRole(QUEUE_PSM, await psm.getAddress())
     await psm.connect(admin).grantRole(PSM_BUFFER_DEPOSITOR, adminAddr)
     await psm.connect(admin).grantRole(PSM_BUFFER_WITHDRAWER, adminAddr)
-    await psm.connect(admin).grantRole(PSM_QUEUE_PROCESSOR, adminAddr)
     await psm.connect(admin).grantRole(PSM_PAUSER, adminAddr)
     await psm.connect(admin).grantRole(PSM_UNPAUSER, adminAddr)
 
@@ -170,7 +154,7 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     await okuDollar.connect(admin).grantRole(OKUM_BLACKLISTER, adminAddr)
     await okuDollar.connect(admin).grantRole(OKUM_UNBLACKLISTER, adminAddr)
 
-    return { usdc, okuMoney, okuDollar, queue, psm, label }
+    return { usdc, okuMoney, okuDollar, psm, label }
 }
 
 async function warpDays(days: number) {
@@ -178,9 +162,6 @@ async function warpDays(days: number) {
     await network.provider.send("evm_mine", [])
 }
 
-async function warpBlock() {
-    await network.provider.send("evm_mine", [])
-}
 
 /** Seed a chain's USDC buffer so instant redeems can succeed. */
 async function seedBuffer(chain: Chain, admin: Signer, usdcAmount: bigint) {
@@ -223,22 +204,13 @@ async function orchestratorBridge(
     return { usdcOut, usdcIn: usdcOut }
 }
 
-/** Drain the redemption queue on a chain. */
-async function drainQueue(chain: Chain, admin: Signer) {
-    for (let i = 0; i < 10; i++) {
-        const [head, tail] = await Promise.all([
-            chain.queue.queueHead(),
-            chain.queue.queueTail(),
-        ])
-        if (head >= tail) break
-        const batchEnd = tail - head > 50n ? head + 50n : tail
-        // Approve the full vault USDC balance as the upper bound
-        const psmBalance = await chain.usdc.balanceOf(await chain.psm.getAddress())
-        await chain.psm.connect(admin).processQueue(head, batchEnd, psmBalance)
-        // processQueue no longer auto-advances queueHead. Drive it forward so
-        // the next iteration's [head, tail) range reflects unprocessed entries.
-        await chain.queue.advanceHead(batchEnd - head)
-    }
+/** Top the PSM buffer back up on a chain. */
+async function refillBuffer(chain: Chain, admin: Signer, amount: bigint) {
+    // Redemption is buffer-only (no queue), so the operational lever is keeping
+    // the buffer funded rather than draining a backlog.
+    await chain.usdc.mint(await admin.getAddress(), amount)
+    await chain.usdc.connect(admin).approve(await chain.psm.getAddress(), amount)
+    await chain.psm.connect(admin).depositBuffer(amount)
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +283,7 @@ describe(`RealWorldUsage — ${DURATION_DAYS}-day stochastic simulation (seed 0x
         }
     }
 
-    /** Redeem a random fraction of user's OkuM. Buffer may trigger queue path. */
+    /** Redeem a random fraction of user's OkuM. Reverts if the buffer cannot cover it. */
     async function userRedeem(chain: Chain, user: Signer) {
         const userAddr = await user.getAddress()
         const bal = await chain.okuMoney.balanceOf(userAddr)
@@ -372,7 +344,7 @@ describe(`RealWorldUsage — ${DURATION_DAYS}-day stochastic simulation (seed 0x
         const bumpBps = BigInt(Math.floor(rng() * 50 + 1)) // 1-50 bps
         const newMult = current + (current * bumpBps) / 10000n
         try {
-            await chain.okuMoney.connect(user).setOkuMMultiplier(newMult)
+            await setMultiplierTo(chain.okuMoney, user, user, newMult)
         } catch {
             // May fail if same-block yield lock fires — safe to skip
         }
@@ -443,11 +415,11 @@ describe(`RealWorldUsage — ${DURATION_DAYS}-day stochastic simulation (seed 0x
                     await doBridge(chainB, chainA)
                 }
             } else if (r < 0.75) {
-                // 10%: drain queue on one chain
+                // 10%: top the buffer back up on one chain
                 const chain = rng() < 0.5 ? chainA : chainB
-                try { await drainQueue(chain, admin) } catch { /* soft */ }
+                try { await refillBuffer(chain, admin, parseUnits("50000", 6)) } catch { /* soft */ }
             } else if (r < 0.80) {
-                // 5%: orchestrator depositBuffer on queue-stressed chain
+                // 5%: orchestrator depositBuffer on a buffer-stressed chain
                 const chain = rng() < 0.5 ? chainA : chainB
                 await seedBuffer(chain, admin, parseUnits("10000", 6))
             } else if (r < 0.85) {
@@ -541,7 +513,7 @@ describe("RealWorldUsage edge cases", () => {
             for (let i = 0; i < 3; i++) {
                 await warpDays(30)
                 const current = await chainB.okuMoney.okuMMultiplier()
-                await chainB.okuMoney.connect(admin).setOkuMMultiplier(current + current / 100n) // +1%
+                await setMultiplierTo(chainB.okuMoney, admin, admin, current + current / 100n) // +1%
             }
 
             // Bob bridges back B→A
@@ -556,10 +528,10 @@ describe("RealWorldUsage edge cases", () => {
     })
 
     // -------------------------------------------------------------------------
-    // E2. Queued redeem blocks orchestrator until processQueue
+    // E2. Redeem beyond the buffer reverts, blocking the orchestrator
     // -------------------------------------------------------------------------
-    describe("E2: queued redeem blocks orchestrator", () => {
-        it("src redeem queued when buffer empty; orchestrator must processQueue before dst mint", async () => {
+    describe("E2: redeem beyond buffer blocks orchestrator", () => {
+        it("src redeem reverts when buffer empty; orchestrator must refill before dst mint", async () => {
             const { chainA, chainB } = await freshChains()
             const adminAddr = await admin.getAddress()
             const aliceAddr = await alice.getAddress()
@@ -578,25 +550,27 @@ describe("RealWorldUsage edge cases", () => {
                 await chainA.psm.connect(admin).withdrawUsdc(adminAddr, bufferBal)
             }
 
-            // Alice approves orchestrator, orchestrator pulls OkuM and redeems — goes to queue
+            // Orchestrator takes custody of the OkuM and attempts the redemption.
             await chainA.okuMoney.connect(alice).approve(orchAddr, aliceOkuM)
             await chainA.okuMoney.connect(orchestrator).transferFrom(aliceAddr, orchAddr, aliceOkuM)
             await chainA.okuMoney.connect(orchestrator).approve(await chainA.psm.getAddress(), aliceOkuM)
-            await chainA.psm.connect(orchestrator).redeemOkuM(aliceOkuM) // → queue path
 
-            // Verify entry is in queue
-            const queueHead = await chainA.queue.queueHead()
-            const queueTail = await chainA.queue.queueTail()
-            expect(queueTail - queueHead, "should have 1 queued entry").to.equal(1n)
+            // Buffer-only: this reverts rather than escrowing. Nothing is taken.
+            await expect(
+                chainA.psm.connect(orchestrator).redeemOkuM(aliceOkuM)
+            ).to.be.revertedWithCustomError(chainA.psm, "InsufficientBuffer")
 
-            // Orchestrator cannot complete the bridge until USDC is available.
-            // Refill buffer, then drain queue.
-            await seedBuffer(chainA, admin, parseUnits("200", 6))
-            await drainQueue(chainA, admin)
+            expect(
+                await chainA.okuMoney.balanceOf(orchAddr),
+                "orchestrator keeps the OkuM when redemption reverts"
+            ).to.equal(aliceOkuM)
 
-            // Queue drained — orchestrator receives USDC from queue payout
+            // Refill the buffer, then the same redemption succeeds.
+            await refillBuffer(chainA, admin, parseUnits("200", 6))
+            await chainA.psm.connect(orchestrator).redeemOkuM(aliceOkuM)
+
             const orchUsdc = await chainA.usdc.balanceOf(orchAddr)
-            expect(orchUsdc, "orchestrator should hold USDC after queue drain").to.be.gt(0n)
+            expect(orchUsdc, "orchestrator should hold USDC after redemption").to.be.gt(0n)
 
             // Now orchestrator mints on B
             await chainB.usdc.mint(orchAddr, orchUsdc)
@@ -628,7 +602,7 @@ describe("RealWorldUsage edge cases", () => {
             // Bump A's multiplier 5× by +2% each, B not touched
             for (let i = 0; i < 5; i++) {
                 const cur = await chainA.okuMoney.okuMMultiplier()
-                await chainA.okuMoney.connect(admin).setOkuMMultiplier(cur + cur / 50n) // +2%
+                await setMultiplierTo(chainA.okuMoney, admin, admin, cur + cur / 50n) // +2%
             }
 
             const multA = await chainA.okuMoney.okuMMultiplier()
@@ -748,43 +722,61 @@ describe("RealWorldUsage edge cases", () => {
     })
 
     // -------------------------------------------------------------------------
-    // E7. Yield-lock vs bridge: same-block setOkuMMultiplier + mintOkuM
+    // E7. Epoch publication is invisible to same-block conversions
     // -------------------------------------------------------------------------
-    describe("E7: yield-lock prevents bridge in same block as multiplier bump", () => {
-        it("mintOkuM reverts in same block as setOkuMMultiplier; next block succeeds", async () => {
+    describe("E7: epoch publication does not disturb same-block bridge activity", () => {
+        it("mintOkuM in the same block as startYieldEpoch prices at the unchanged multiplier", async () => {
             const { chainA } = await freshChains()
             const aliceAddr = await alice.getAddress()
 
-            // Disable automining so we can batch txs in same block
+            // Give the epoch a supply base to derive its per-token rate from.
+            const seed = parseUnits("1000", 6)
+            await chainA.usdc.mint(aliceAddr, seed)
+            await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), seed)
+            await chainA.psm.connect(alice).mintOkuM(seed)
+
+            // This scenario previously asserted a same-block yield FENCE. That fence
+            // existed because the multiplier stepped, and it was only ever a partial
+            // defence: it blocked the backrun leg but not the frontrun leg, so the
+            // profitable two-block round trip walked straight through it. Continuous
+            // accrual removes the discontinuity entirely, so there is nothing left to
+            // fence and same-block activity is simply unaffected.
+            const multBefore = await chainA.okuMoney.okuMMultiplier()
+
             await network.provider.send("evm_setAutomine", [false])
             try {
-                // Send both transactions in the same block
-                const curMult = await chainA.okuMoney.okuMMultiplier()
-                const bumpTx = chainA.okuMoney.connect(admin).setOkuMMultiplier(curMult + 1000n)
+                const supply = await chainA.okuMoney.totalSupply()
+                const epochTx = chainA.okuMoney
+                    .connect(admin)
+                    .startYieldEpoch(supply / 10000n, 30n * 24n * 60n * 60n)
+
                 const mintAmt = parseUnits("10", 6)
                 await chainA.usdc.mint(aliceAddr, mintAmt)
                 await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), mintAmt)
                 const mintTx = chainA.psm.connect(alice).mintOkuM(mintAmt)
 
-                // Mine the block with both transactions
-                await Promise.all([bumpTx, mintTx])
+                await Promise.all([epochTx, mintTx])
                 await network.provider.send("evm_mine", [])
-
-                // The mint may or may not revert depending on tx order in block.
-                // What we assert is that AFTER the block, on the NEXT block, mint succeeds.
-            } catch {
-                // Batch submission may throw - that's fine
             } finally {
                 await network.provider.send("evm_setAutomine", [true])
             }
 
-            // Next block: mint succeeds
-            await warpBlock()
-            const mintAmt = parseUnits("10", 6)
-            await chainA.usdc.mint(aliceAddr, mintAmt)
-            await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), mintAmt)
-            await chainA.psm.connect(alice).mintOkuM(mintAmt)
-            expect(await chainA.okuMoney.balanceOf(aliceAddr)).to.be.gt(0n, "mint succeeds on next block")
+            // Publication did not move the price, so the same-block mint priced
+            // exactly as it would have a moment earlier.
+            expect(
+                await chainA.okuMoney.okuMMultiplier(),
+                "epoch publication must not step the multiplier"
+            ).to.equal(multBefore)
+
+            // And the mint went through — no fence, no revert.
+            expect(await chainA.okuMoney.balanceOf(aliceAddr)).to.be.gt(0n, "same-block mint succeeds")
+
+            // Accrual then proceeds with time.
+            await warpDays(15)
+            expect(
+                await chainA.okuMoney.okuMMultiplier(),
+                "multiplier accrues once time passes"
+            ).to.be.gt(multBefore)
         })
     })
 

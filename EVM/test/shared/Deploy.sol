@@ -7,7 +7,6 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
-import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 
 import {TestConstants} from "./Constants.sol";
 
@@ -72,31 +71,10 @@ library Deploy {
         return deployOkuDollar(okuMoney_, admin_, TestConstants.MIN_COLLATERAL_RATIO);
     }
 
-    /// @notice Deploy RedemptionQueue with UUPS proxy
-    /// @param okuMoney_ OkuMoney token address
-    /// @param usdc_ USDC token address (used for decimal multiplier resolution)
-    /// @param admin_ Admin address
-    /// @return proxy The deployed proxy contract
-    /// @return impl The implementation contract
-    function deployRedemptionQueue(
-        address okuMoney_,
-        address usdc_,
-        address admin_
-    )
-        internal
-        returns (RedemptionQueue proxy, RedemptionQueue impl)
-    {
-        impl = new RedemptionQueue();
-        bytes memory initData =
-            abi.encodeCall(RedemptionQueue.initialize, (okuMoney_, usdc_, admin_));
-        proxy = RedemptionQueue(address(new ERC1967Proxy(address(impl), initData)));
-    }
-
     /// @notice Deploy LitePSM with UUPS proxy
     /// @param okuMoney_ OkuMoney token address
     /// @param okuDollar_ OkuDollar vault address
     /// @param usdc_ USDC token address
-    /// @param redemptionQueue_ RedemptionQueue address
     /// @param admin_ Admin address
     /// @return proxy The deployed proxy contract
     /// @return impl The implementation contract
@@ -104,16 +82,14 @@ library Deploy {
         address okuMoney_,
         address okuDollar_,
         address usdc_,
-        address redemptionQueue_,
         address admin_
     )
         internal
         returns (LitePSM proxy, LitePSM impl)
     {
         impl = new LitePSM();
-        bytes memory initData = abi.encodeCall(
-            LitePSM.initialize, (okuMoney_, okuDollar_, usdc_, redemptionQueue_, admin_)
-        );
+        bytes memory initData =
+            abi.encodeCall(LitePSM.initialize, (okuMoney_, okuDollar_, usdc_, admin_));
         proxy = LitePSM(address(new ERC1967Proxy(address(impl), initData)));
     }
 }

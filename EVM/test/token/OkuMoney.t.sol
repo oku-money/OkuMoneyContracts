@@ -20,19 +20,27 @@ contract OkuMoneyTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    // Cycle 4 (EVM-01): both events now include `indexed blockNumber`.
-    event OkuMMultiplierUpdated(
-        uint256 oldMultiplier,
-        uint256 newMultiplier,
-        uint256 totalSupply,
-        uint256 indexed blockNumber
-    );
-    event YieldDistributed(
+    event YieldEpochStarted(
         uint256 yieldAmount,
-        uint256 oldPrice,
-        uint256 newPrice,
+        uint256 startMultiplier,
+        uint256 endMultiplier,
+        uint256 ratePerSecond,
         uint256 totalSupply,
-        uint256 indexed blockNumber
+        uint256 indexed startTime,
+        uint256 endTime
+    );
+    event YieldEpochScheduled(
+        uint256 yieldAmount,
+        uint256 ratePerSecond,
+        uint256 totalSupply,
+        uint256 indexed startTime,
+        uint256 endTime
+    );
+    event YieldEpochCancelled(uint256 indexed startTime, uint256 endTime);
+    event AccrualHalted(uint256 frozenMultiplier, bool hadPendingEpoch);
+    event AccrualResumed(uint256 currentMultiplier);
+    event UIMultiplierUpdated(
+        uint256 oldMultiplier, uint256 newMultiplier, uint256 effectiveAtTimestamp
     );
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
@@ -92,8 +100,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_Mint_BalanceUnaffectedByNotePrice() public {
         // Set okuMMultiplier to 2x before minting
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
 
         uint256 amount = 100e18;
         _mintOkuMoney(user1, amount);
@@ -110,14 +117,16 @@ contract OkuMoneyTest is BaseTest {
 
     function test_Mint_TotalSupplyIsRawAmount() public {
         // Set okuMMultiplier to 2x before minting
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
 
         uint256 amount = 100e18;
         _mintOkuMoney(user1, amount);
 
-        // totalSupply returns raw token count, NOT multiplied by okuMMultiplier
-        assertEq(okuMoney.totalSupply(), amount);
+        // totalSupply returns raw token count, NOT multiplied by okuMMultiplier.
+        // `_setOkuMMultiplierAndRoll` seeds a dust holder (an epoch needs non-zero
+        // supply), so compare the delta attributable to this mint.
+        assertEq(okuMoney.balanceOf(user1), amount);
+        assertEq(okuMoney.totalSupply(), amount + okuMoney.balanceOf(epochSeedHolder));
     }
 
     function test_Mint_DecrementsMinterAllowance() public {
@@ -199,8 +208,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_Burn_RemovesExactAmount() public {
         // Set okuMMultiplier to 2x, then mint and burn
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
 
         _mintOkuMoney(minter, 100e18);
 
@@ -291,8 +299,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_Transfer_MovesExactAmount() public {
         // Set okuMMultiplier to 2x, then mint and transfer
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
 
         _mintOkuMoney(user1, 100e18);
 
@@ -428,274 +435,367 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.transferFrom(user1, user3, 30e18);
     }
 
-    // ============ setOkuMMultiplier Tests ============
+    // ============ Yield Epoch Tests ============
 
-    function test_SetOkuMMultiplier_OnlyRebaser() public {
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
-            )
-        );
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
-    }
-
-    function test_SetOkuMMultiplier_CannotDecrease() public {
-        vm.prank(rebaser);
-        vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
-        okuMoney.setOkuMMultiplier(PRECISION - 1);
-    }
-
-    function test_SetOkuMMultiplier_DoesNotAffectBalances() public {
-        _mintOkuMoney(user1, 100e18);
-        uint256 balanceBefore = okuMoney.balanceOf(user1);
-
-        // Double the note price
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
-
-        // balanceOf does NOT change with okuMMultiplier — standard ERC-20
-        uint256 balanceAfter = okuMoney.balanceOf(user1);
-        assertEq(balanceAfter, balanceBefore);
-    }
-
-    function test_SetOkuMMultiplier_DoesNotAffectTotalSupply() public {
-        _mintOkuMoney(user1, 100e18);
-        uint256 supplyBefore = okuMoney.totalSupply();
-
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
-
-        // totalSupply does NOT change with okuMMultiplier — standard ERC-20
-        assertEq(okuMoney.totalSupply(), supplyBefore);
-    }
-
-    function test_SetOkuMMultiplier_UpdatesPrice() public {
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
-
-        assertEq(okuMoney.okuMMultiplier(), PRECISION * 2);
-    }
-
-    function test_SetOkuMMultiplier_EmitsEvent() public {
-        // Cycle 4 (EVM-01): event payload now includes the indexed
-        // `blockNumber` field for subgraph sharding.
-        vm.expectEmit(true, false, false, true);
-        emit OkuMMultiplierUpdated(PRECISION, PRECISION * 2, okuMoney.totalSupply(), block.number);
-
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
-    }
-
-    function test_SetOkuMMultiplier_RevertsOnEqualValue() public {
-        // Setting the multiplier to its current value is a no-op for the value but
-        // would otherwise stamp `lastYieldDistributionBlock` and burn a sandwich-lock
-        // slot for nothing. {setOkuMMultiplier} requires strict increase.
-        uint256 currentPrice = okuMoney.okuMMultiplier();
-
-        vm.prank(rebaser);
-        vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
-        okuMoney.setOkuMMultiplier(currentPrice);
-    }
-
-    /// @dev Post-cycle-4: yield-state setters must freeze with the rest of the
-    ///      contract while paused. Rate-config setters on OkuDollar remain
-    ///      available while paused (operators need to be able to zero accrual
-    ///      mid-pause); rate-effect setters like this one must not run.
-    function test_SetOkuMMultiplier_RevertsWhenPaused() public {
-        vm.prank(pauser);
-        okuMoney.pause();
-
-        vm.prank(rebaser);
-        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
-    }
-
-    // ============ distributeYield Tests ============
-
-    function test_DistributeYield_OnlyRebaser() public {
+    function test_StartYieldEpoch_OnlyRebaser() public {
         _mintOkuMoney(user1, 10_000e18);
-
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
             )
         );
-        okuMoney.distributeYield(1000e18);
+        okuMoney.startYieldEpoch(1000e18, 30 days);
     }
 
-    function test_DistributeYield_CorrectPriceMath() public {
-        // $1000 yield on 10000 tokens → +$0.10/token
+    function test_StartYieldEpoch_DoesNotStepTheMultiplier() public {
+        _mintOkuMoney(user1, 10_000e18);
+        uint256 before = okuMoney.okuMMultiplier();
+
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(100e18, 30 days);
+
+        // THE core property: starting an epoch introduces no discontinuity. This is
+        // what makes the multiplier unsandwichable.
+        assertEq(okuMoney.okuMMultiplier(), before, "epoch start must not move the multiplier");
+    }
+
+    function test_StartYieldEpoch_AccruesLinearlyOverTime() public {
         uint256 supply = 10_000e18;
         _mintOkuMoney(user1, supply);
 
+        uint256 start = okuMoney.okuMMultiplier();
+        uint256 duration = 30 days;
+        uint256 yieldAmount = 100e18; // +0.01 per token over the epoch
+
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(yieldAmount, duration);
+
+        // Quarter, half, three-quarters, full.
+        vm.warp(block.timestamp + duration / 4);
+        uint256 q1 = okuMoney.okuMMultiplier();
+        vm.warp(block.timestamp + duration / 4);
+        uint256 q2 = okuMoney.okuMMultiplier();
+        vm.warp(block.timestamp + duration / 4);
+        uint256 q3 = okuMoney.okuMMultiplier();
+        vm.warp(block.timestamp + duration / 4);
+        uint256 q4 = okuMoney.okuMMultiplier();
+
+        // Equal increments => linear accrual.
+        assertEq(q2 - q1, q1 - start, "second quarter must match first");
+        assertEq(q3 - q2, q2 - q1, "third quarter must match second");
+        assertEq(q4 - q3, q3 - q2, "fourth quarter must match third");
+
+        // Total delivered matches the request up to the per-second rate truncation.
+        // `ratePerSecond` floors, so up to (duration - 1) wei of per-token yield is
+        // dropped — always in the protocol's favour, never the holder's.
+        uint256 deliveredDollars = ((q4 - start) * supply) / PRECISION;
+        assertLe(deliveredDollars, yieldAmount, "delivered must never exceed requested");
+        assertApproxEqRel(
+            deliveredDollars, yieldAmount, 1e12, "delivered within 0.0001% of requested"
+        );
+    }
+
+    function test_StartYieldEpoch_FlatlinesPastEndTime() public {
+        _mintOkuMoney(user1, 10_000e18);
+        uint256 duration = 30 days;
+
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(100e18, duration);
+
+        vm.warp(block.timestamp + duration);
+        uint256 atEnd = okuMoney.okuMMultiplier();
+
+        // A missed renewal freezes yield rather than extrapolating.
+        vm.warp(block.timestamp + 365 days);
+        assertEq(okuMoney.okuMMultiplier(), atEnd, "multiplier must flatline past endTime");
+    }
+
+    function test_StartYieldEpoch_MidEpochReplacementRebasesFromCurrent() public {
+        _mintOkuMoney(user1, 10_000e18);
+        uint256 duration = 30 days;
+
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(100e18, duration);
+
+        vm.warp(block.timestamp + duration / 2);
+        uint256 midpoint = okuMoney.okuMMultiplier();
+        assertGt(midpoint, PRECISION, "should have accrued by the midpoint");
+
+        // Replacing mid-epoch keeps accrued yield and continues from there.
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(50e18, duration);
+        assertEq(okuMoney.okuMMultiplier(), midpoint, "replacement must not step");
+    }
+
+    function test_StartYieldEpoch_DoesNotAffectBalancesOrSupply() public {
+        uint256 supply = 10_000e18;
+        _mintOkuMoney(user1, supply);
+        uint256 balanceBefore = okuMoney.balanceOf(user1);
+
+        _distributeYield(1000e18);
+
+        assertEq(okuMoney.balanceOf(user1), balanceBefore, "balanceOf unchanged");
+        assertEq(okuMoney.totalSupply(), supply, "totalSupply unchanged");
+    }
+
+    function test_StartYieldEpoch_CorrectPriceMath() public {
+        // $1000 yield on 10000 tokens -> +$0.10/token over the epoch.
+        _mintOkuMoney(user1, 10_000e18);
         uint256 priceBefore = okuMoney.okuMMultiplier();
 
-        vm.prank(rebaser);
-        okuMoney.distributeYield(1000e18);
+        _distributeYield(1000e18);
 
-        uint256 priceAfter = okuMoney.okuMMultiplier();
-        assertEq(priceAfter, priceBefore + 0.1e18);
+        // Floors in the rate derivation leave the result a hair under the exact
+        // +$0.10, always in the protocol's favour.
+        uint256 after_ = okuMoney.okuMMultiplier();
+        assertLe(after_, priceBefore + 0.1e18, "must not overshoot");
+        assertApproxEqRel(after_, priceBefore + 0.1e18, 1e12, "+$0.10 per token");
     }
 
-    function test_DistributeYield_ZeroSupplyReverts() public {
-        // No tokens minted
+    function test_StartYieldEpoch_ZeroSupplyReverts() public {
         vm.prank(rebaser);
         vm.expectRevert(OkuMoney.ZeroSupply.selector);
-        okuMoney.distributeYield(1000e18);
+        okuMoney.startYieldEpoch(1000e18, 30 days);
     }
 
-    /// @dev Sibling of test_SetOkuMMultiplier_RevertsWhenPaused. See that test's
-    ///      NatSpec for the rationale.
-    function test_DistributeYield_RevertsWhenPaused() public {
+    function test_StartYieldEpoch_ZeroAmountReverts() public {
         _mintOkuMoney(user1, 10_000e18);
+        vm.prank(rebaser);
+        vm.expectRevert(Errors.ZeroAmount.selector);
+        okuMoney.startYieldEpoch(0, 30 days);
+    }
 
+    /// @dev Yield is a state-effect and must freeze with transfers during an incident.
+    ///      Its counterpart {haltAccrual} is deliberately NOT pause-gated.
+    function test_StartYieldEpoch_RevertsWhenPaused() public {
+        _mintOkuMoney(user1, 10_000e18);
         vm.prank(pauser);
         okuMoney.pause();
 
         vm.prank(rebaser);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        okuMoney.distributeYield(1000e18);
+        okuMoney.startYieldEpoch(1000e18, 30 days);
     }
 
-    function test_DistributeYield_EmitsEvent() public {
+    function test_StartYieldEpoch_EmitsEvent() public {
         uint256 supply = 10_000e18;
         _mintOkuMoney(user1, supply);
 
-        uint256 yieldAmount = 1000e18;
-        uint256 expectedOldPrice = PRECISION;
-        uint256 expectedNewPrice = PRECISION + 0.1e18;
+        uint256 duration = 30 days;
+        uint256 yieldAmount = 100e18;
+        // Mirror the contract's derivation exactly: floor to per-token, then to
+        // per-second. `endMultiplier` is built from the truncated rate, not the
+        // requested amount.
+        uint256 ratePerSecond = ((yieldAmount * PRECISION) / supply) / duration;
+        uint256 endMultiplier = PRECISION + ratePerSecond * duration;
 
-        // Cycle 4 (EVM-01): event payload now includes the indexed
-        // `blockNumber` field.
         vm.expectEmit(true, false, false, true);
-        emit YieldDistributed(yieldAmount, expectedOldPrice, expectedNewPrice, supply, block.number);
+        emit YieldEpochStarted(
+            yieldAmount,
+            PRECISION,
+            endMultiplier,
+            ratePerSecond,
+            supply,
+            block.timestamp,
+            block.timestamp + duration
+        );
 
         vm.prank(rebaser);
-        okuMoney.distributeYield(yieldAmount);
+        okuMoney.startYieldEpoch(yieldAmount, duration);
     }
 
-    function test_DistributeYield_MonotonicallyIncreases() public {
+    function test_YieldEpoch_MonotonicallyIncreases() public {
         _mintOkuMoney(user1, 10_000e18);
 
-        uint256 price0 = okuMoney.okuMMultiplier();
+        uint256 p0 = okuMoney.okuMMultiplier();
+        _distributeYield(100e18);
+        uint256 p1 = okuMoney.okuMMultiplier();
+        assertGt(p1, p0);
 
-        vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
-        uint256 price1 = okuMoney.okuMMultiplier();
-        assertGt(price1, price0);
-
-        vm.prank(rebaser);
-        okuMoney.distributeYield(200e18);
-        uint256 price2 = okuMoney.okuMMultiplier();
-        assertGt(price2, price1);
+        _distributeYield(200e18);
+        uint256 p2 = okuMoney.okuMMultiplier();
+        assertGt(p2, p1);
     }
 
-    function test_DistributeYield_DoesNotAffectBalances() public {
-        uint256 supply = 10_000e18;
-        _mintOkuMoney(user1, supply);
+    // ============ Epoch Scheduling ============
 
-        uint256 balanceBefore = okuMoney.balanceOf(user1);
-        uint256 totalSupplyBefore = okuMoney.totalSupply();
+    function test_ScheduleYieldEpoch_ActivatesSeamlessly() public {
+        _mintOkuMoney(user1, 10_000e18);
+        uint256 duration = 30 days;
 
         vm.prank(rebaser);
-        okuMoney.distributeYield(1000e18);
+        okuMoney.startYieldEpoch(100e18, duration);
+        vm.prank(rebaser);
+        okuMoney.scheduleYieldEpoch(100e18, duration);
 
-        assertEq(okuMoney.balanceOf(user1), balanceBefore, "balanceOf unchanged after yield");
-        assertEq(okuMoney.totalSupply(), totalSupplyBefore, "totalSupply unchanged after yield");
+        // At the boundary the successor takes over from exactly where the first ended.
+        vm.warp(block.timestamp + duration);
+        uint256 atBoundary = okuMoney.okuMMultiplier();
+
+        vm.warp(block.timestamp + 1);
+        assertGt(okuMoney.okuMMultiplier(), atBoundary, "successor must accrue past boundary");
     }
 
-    // ============ okuMMultiplier Storage Tests ============
-
-    function test_OkuMPrice_ReturnsStoredValue() public {
-        // No time dependency — price is a stored value
-        assertEq(okuMoney.okuMMultiplier(), PRECISION);
-
+    function test_ScheduleYieldEpoch_RevertsWithoutActiveEpoch() public {
+        _mintOkuMoney(user1, 10_000e18);
+        // The seeded epoch is already flatlined, so there is nothing to chain onto.
         vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 3);
-
-        assertEq(okuMoney.okuMMultiplier(), PRECISION * 3);
+        vm.expectRevert(OkuMoney.NoActiveEpoch.selector);
+        okuMoney.scheduleYieldEpoch(100e18, 30 days);
     }
 
-    function test_OkuMMultiplierConstantBetweenUpdates() public {
-        // Price does not change without an explicit call
-        uint256 price0 = okuMoney.okuMMultiplier();
-
-        // No calls — price stays the same
-        assertEq(okuMoney.okuMMultiplier(), price0);
+    function test_ScheduleYieldEpoch_RevertsWhenPendingExists() public {
+        _mintOkuMoney(user1, 10_000e18);
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(100e18, 30 days);
+        vm.prank(rebaser);
+        okuMoney.scheduleYieldEpoch(100e18, 30 days);
 
         vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
-        uint256 price1 = okuMoney.okuMMultiplier();
-        assertEq(price1, PRECISION * 2);
-
-        // Still no automatic change
-        assertEq(okuMoney.okuMMultiplier(), price1);
+        vm.expectRevert(OkuMoney.PendingEpochExists.selector);
+        okuMoney.scheduleYieldEpoch(100e18, 30 days);
     }
 
-    // ============ Yield Distribution Block Tests (Sandwich Attack Prevention) ============
+    function test_CancelPendingYieldEpoch_IsACleanRollback() public {
+        _mintOkuMoney(user1, 10_000e18);
+        uint256 duration = 30 days;
 
-    function test_LastYieldDistributionBlock_InitiallyZero() public view {
-        assertEq(okuMoney.lastYieldDistributionBlock(), 0);
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(100e18, duration);
+        vm.prank(rebaser);
+        okuMoney.scheduleYieldEpoch(100e18, duration);
+
+        vm.prank(rebaser);
+        okuMoney.cancelPendingYieldEpoch();
+
+        // Current epoch runs to completion, then flatlines — the successor is gone.
+        vm.warp(block.timestamp + duration);
+        uint256 atEnd = okuMoney.okuMMultiplier();
+        vm.warp(block.timestamp + duration);
+        assertEq(okuMoney.okuMMultiplier(), atEnd, "cancelled successor must not accrue");
     }
 
-    function test_DistributeYield_SetsLastYieldDistributionBlock() public {
-        uint256 supply = 10_000e18;
-        _mintOkuMoney(user1, supply);
-
+    function test_CancelPendingYieldEpoch_RevertsWithNoPending() public {
         vm.prank(rebaser);
-        okuMoney.distributeYield(1000e18);
-
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+        vm.expectRevert(OkuMoney.NoPendingEpoch.selector);
+        okuMoney.cancelPendingYieldEpoch();
     }
 
-    function test_SetOkuMMultiplier_SetsLastYieldDistributionBlock() public {
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
+    /// @dev Once a successor has activated it is no longer "pending"; cancelling would
+    ///      retroactively strip yield holders have already accrued.
+    function test_CancelPendingYieldEpoch_RevertsOnceActive() public {
+        _mintOkuMoney(user1, 10_000e18);
+        uint256 duration = 30 days;
 
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(100e18, duration);
+        vm.prank(rebaser);
+        okuMoney.scheduleYieldEpoch(100e18, duration);
+
+        vm.warp(block.timestamp + duration + 1);
+
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.NoPendingEpoch.selector);
+        okuMoney.cancelPendingYieldEpoch();
     }
 
-    function test_DistributeYield_UpdatesLastYieldDistributionBlock() public {
-        uint256 supply = 10_000e18;
-        _mintOkuMoney(user1, supply);
+    // ============ Accrual Halt ============
 
-        uint256 blockBefore = okuMoney.lastYieldDistributionBlock();
-        assertEq(blockBefore, 0);
+    function test_HaltAccrual_FreezesMultiplier() public {
+        _mintOkuMoney(user1, 10_000e18);
+        uint256 duration = 30 days;
 
         vm.prank(rebaser);
-        okuMoney.distributeYield(1000e18);
+        okuMoney.startYieldEpoch(100e18, duration);
+        vm.warp(block.timestamp + duration / 2);
 
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+        uint256 frozen = okuMoney.okuMMultiplier();
+        vm.prank(rebaser);
+        okuMoney.haltAccrual();
+
+        assertTrue(okuMoney.accrualHalted());
+        assertEq(okuMoney.okuMMultiplier(), frozen, "halt must crystallise the current value");
+
+        vm.warp(block.timestamp + 365 days);
+        assertEq(okuMoney.okuMMultiplier(), frozen, "multiplier must stay frozen");
     }
 
-    function test_SetOkuMMultiplier_UpdatesLastYieldDistributionBlock() public {
-        uint256 blockBefore = okuMoney.lastYieldDistributionBlock();
-        assertEq(blockBefore, 0);
+    function test_HaltAccrual_BlocksNewEpochs() public {
+        _mintOkuMoney(user1, 10_000e18);
+        vm.prank(rebaser);
+        okuMoney.haltAccrual();
 
         vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
-
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+        vm.expectRevert(OkuMoney.AccrualIsHalted.selector);
+        okuMoney.startYieldEpoch(100e18, 30 days);
     }
 
-    function test_LastYieldDistributionBlock_UpdatesOnEachDistribution() public {
-        uint256 supply = 10_000e18;
-        _mintOkuMoney(user1, supply);
+    /// @dev Halting must remain possible during an incident, so it bypasses pause.
+    ///      It can only ever reduce yield.
+    function test_HaltAccrual_WorksWhilePaused() public {
+        _mintOkuMoney(user1, 10_000e18);
+        vm.prank(pauser);
+        okuMoney.pause();
 
         vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
-        uint256 block1 = okuMoney.lastYieldDistributionBlock();
+        okuMoney.haltAccrual();
+        assertTrue(okuMoney.accrualHalted());
+    }
 
-        // Roll forward and distribute again
-        vm.roll(block.number + 10);
+    function test_ResumeAccrual_DoesNotBackdate() public {
+        _mintOkuMoney(user1, 10_000e18);
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(100e18, 30 days);
+        vm.warp(block.timestamp + 1 days);
 
         vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
-        uint256 block2 = okuMoney.lastYieldDistributionBlock();
+        okuMoney.haltAccrual();
+        uint256 frozen = okuMoney.okuMMultiplier();
 
-        assertEq(block2, block1 + 10);
+        vm.warp(block.timestamp + 30 days);
+        vm.prank(rebaser);
+        okuMoney.resumeAccrual();
+
+        assertFalse(okuMoney.accrualHalted());
+        // Resuming does not restart accrual or make up the halted interval.
+        assertEq(okuMoney.okuMMultiplier(), frozen, "resume must not backdate yield");
+    }
+
+    function test_HaltAccrual_RevertsIfAlreadyHalted() public {
+        vm.prank(rebaser);
+        okuMoney.haltAccrual();
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.AccrualAlreadyHalted.selector);
+        okuMoney.haltAccrual();
+    }
+
+    function test_ResumeAccrual_RevertsIfNotHalted() public {
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.AccrualNotHalted.selector);
+        okuMoney.resumeAccrual();
+    }
+
+    // ============ okuMMultiplierAt (time projection) ============
+
+    function test_OkuMMultiplierAt_IsAPureFunctionOfTime() public {
+        _mintOkuMoney(user1, 10_000e18);
+        uint256 duration = 30 days;
+        uint256 t0 = block.timestamp;
+
+        vm.prank(rebaser);
+        okuMoney.startYieldEpoch(100e18, duration);
+
+        // Projected values must match what the multiplier actually becomes.
+        uint256 projectedMid = okuMoney.okuMMultiplierAt(t0 + duration / 2);
+        uint256 projectedEnd = okuMoney.okuMMultiplierAt(t0 + duration);
+        uint256 projectedPast = okuMoney.okuMMultiplierAt(t0 + duration * 2);
+
+        vm.warp(t0 + duration / 2);
+        assertEq(okuMoney.okuMMultiplier(), projectedMid, "midpoint projection");
+        vm.warp(t0 + duration);
+        assertEq(okuMoney.okuMMultiplier(), projectedEnd, "endpoint projection");
+        assertEq(projectedPast, projectedEnd, "projection past endTime flatlines");
     }
 
     // ============ Blacklisting Tests ============
@@ -969,8 +1069,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_OkuMMultiplier_AfterUpdate() public {
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
 
         assertEq(okuMoney.okuMMultiplier(), PRECISION * 2);
     }
@@ -1009,18 +1108,21 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.totalSupply(), MAX_SUPPLY);
     }
 
-    function test_MultipleOkuMMultiplierUpdates_SameBlock() public {
+    /// @notice Two epochs started in the same block: the second replaces the first,
+    ///         and neither steps the multiplier.
+    function test_MultipleEpochStarts_SameBlock() public {
         _mintOkuMoney(user1, 100e18);
+        uint256 before = okuMoney.okuMMultiplier();
 
         vm.startPrank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 2);
-        okuMoney.setOkuMMultiplier(PRECISION * 3);
+        okuMoney.startYieldEpoch(1e18, 30 days);
+        okuMoney.startYieldEpoch(2e18, 60 days);
         vm.stopPrank();
 
-        // okuMMultiplier should be updated to 3x
-        assertEq(okuMoney.okuMMultiplier(), PRECISION * 3);
-        // balanceOf should NOT change — standard ERC-20
-        assertEq(okuMoney.balanceOf(user1), 100e18);
+        // Still no discontinuity, and the live epoch is the second one.
+        assertEq(okuMoney.okuMMultiplier(), before, "no step from either call");
+        assertEq(okuMoney.yieldEpochEndsAt(), block.timestamp + 60 days, "second epoch is live");
+        assertEq(okuMoney.balanceOf(user1), 100e18, "balanceOf unaffected");
     }
 
     // ============ EIP-2612 Permit Tests ============

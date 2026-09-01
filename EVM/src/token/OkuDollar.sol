@@ -24,7 +24,6 @@ import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
-import {YieldSandwichGuard} from "../lib/YieldSandwichGuard.sol";
 import {OkuDollarEvents} from "../lib/events/OkuDollarEvents.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
 
@@ -51,7 +50,6 @@ contract OkuDollar is
     AccessControlUpgradeable,
     PausableUpgradeable,
     ReentrancyGuardUpgradeable,
-    YieldSandwichGuard,
     UUPSUpgradeable,
     OkuDollarEvents,
     IOkuDollar
@@ -92,7 +90,7 @@ contract OkuDollar is
     // ============ Custom Errors ============
 
     // Common errors (ZeroAddress, MultiplierCannotDecrease, ZeroAmount, InsufficientBalance)
-    // live in lib/Errors.sol. YieldDistributionInProgress is inherited from YieldSandwichGuard.
+    // live in lib/Errors.sol.
     error SenderBlacklisted();
     error RecipientBlacklisted();
     error AlreadyBlacklisted();
@@ -258,7 +256,7 @@ contract OkuDollar is
 
     /// @dev Compound `base` by `rate^elapsed`. Identity when `elapsed == 0`.
     ///      Caps the result at `Constants.MAX_MULTIPLIER` for symmetry with
-    ///      `OkuMoney.setOkuMMultiplier`. A long-running rate at `MAX_RATE`
+    ///      `OkuMoney`'s epoch accrual. A long-running rate at `MAX_RATE`
     ///      would otherwise push `usdMultiplier` beyond the overflow-safe region.
     function _compoundFor(
         uint256 base,
@@ -416,11 +414,6 @@ contract OkuDollar is
 
     // ============ Yield Distribution Lock ============
 
-    /// @inheritdoc YieldSandwichGuard
-    function _yieldSandwichOkuMoney() internal view override returns (IOkuMoney) {
-        return _getOkuDollarStorage().okuMoney;
-    }
-
     // ============ Wrap / Unwrap (Price-Aware) ============
 
     /// @notice Wrap OkuMoney into OkuDollar.
@@ -438,7 +431,6 @@ contract OkuDollar is
         external
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
         returns (uint256 usdMinted)
     {
         if (okuMAmount == 0) revert Errors.ZeroAmount();
@@ -488,7 +480,6 @@ contract OkuDollar is
         external
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
         returns (uint256 okuMReturned)
     {
         if (usdAmount == 0) revert Errors.ZeroAmount();
@@ -538,11 +529,9 @@ contract OkuDollar is
     /// @dev Used when USD rate > OkuM rate (vault undercollateralized). OkuMoney is
     ///      non-rebasing — token value depends on okuMMultiplier().
     ///
-    ///      No `whenYieldNotDistributing` guard needed: deposits only increase
-    ///      reserves, no downstream value depends on the multiplier read here
-    ///      (the multiplier appears only in the informational event field), and
-    ///      `withdrawSurplus` carries the cross-side guard that protects the
-    ///      collateralization invariant.
+    ///      Deposits only increase reserves, so no multiplier-timing guard is
+    ///      needed here — the multiplier appears only in the informational event
+    ///      field and cannot affect the collateralization invariant adversely.
     ///
     ///      No `nonReentrant` guard: the only external call is `safeTransferFrom`
     ///      on OkuMoney, which is a controlled, standard ERC-20 with no transfer
@@ -574,19 +563,24 @@ contract OkuDollar is
     ///      (ERC-777 / ERC-4337 callouts) a reentrant call back into
     ///      `wrap`/`unwrap` between the transfer and a post-check would
     ///      observe a temporarily-inflated reserve balance.
-    ///      `whenYieldNotDistributing` mirrors the guard on `wrap`/`unwrap` —
-    ///      a yield distribution in the same block changes `okuMMultiplier`, which
-    ///      is read inside `collateralizationRatio()` and `withdrawSurplus`'s own
-    ///      post-withdrawal ratio check. Without this guard a privileged operator
-    ///      could sandwich a yield distribution and a withdrawal in the same block.
-    ///      This guard only prevents the intra-block case; see
-    ///      `EVM/README.md § Accepted Risks (2)` for the cross-block trust
-    ///      assumption on `VAULT_REBASER` + `VAULT_RESERVE_MANAGER`.
+    ///
+    ///      This function previously carried a same-block yield fence, because a
+    ///      `distributeYield` call landing in the same block moved `okuMMultiplier`
+    ///      instantaneously — inflating the reserve valuation read by
+    ///      `collateralizationRatio()` and the post-withdrawal ratio check below,
+    ///      and letting a privileged operator extract more surplus than the vault
+    ///      actually held. That fence is gone because the discontinuity is gone:
+    ///      `okuMMultiplier()` now accrues continuously, so the ratio drifts
+    ///      smoothly and there is no instant to straddle. Yield timing can no
+    ///      longer move the ratio measurably within one block.
+    ///
+    ///      See `EVM/README.md § Accepted Risks (2)` for the residual cross-block
+    ///      trust assumption on `VAULT_REBASER` + `VAULT_RESERVE_MANAGER`, which
+    ///      is unchanged.
     function withdrawSurplus(uint256 okuMAmount)
         external
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
         onlyRole(Roles.VAULT_RESERVE_MANAGER)
     {
         if (okuMAmount == 0) revert Errors.ZeroAmount();
@@ -692,19 +686,20 @@ contract OkuDollar is
     /// @notice Set the USD multiplier accrual rate.
     /// @param newRate Per-second rate (1e18 = no yield). Must be in [PRECISION, MAX_RATE].
     /// @param endTimestamp Unix timestamp at which the rate expires (0 = open-ended).
-    /// @dev Does NOT stamp a separate
-    ///      `lastUsdRateUpdateBlock`. Rate changes manifest over time
-    ///      (the multiplier moves linearly per-second), not instantly,
-    ///      so the same-block sandwich attack vector that `OkuMoney`'s
-    ///      `distributeYield` carries does not apply: a tx landing in
-    ///      the same block as `setUsdYieldRate` reads the (just-
-    ///      recomputed) `usdBaseMultiplier` and `usdLastAccrualTime`,
-    ///      so its `usdMultiplier()` view returns the pre-jump value
-    ///      until at least one second has elapsed. The
-    ///      `whenYieldNotDistributing` modifier on user-facing paths
-    ///      (`wrap`, `unwrap`, `transfer`) still defends against
-    ///      OkuMoney-side `distributeYield` collisions, which is the
-    ///      attack class that does have instantaneous impact.
+    /// @dev Does NOT stamp a rate-update block. Rate changes manifest
+    ///      over time (the multiplier compounds per-second), not
+    ///      instantly, so there is no discontinuity to sandwich: a tx
+    ///      landing in the same block as `setUsdYieldRate` reads the
+    ///      just-recomputed `usdBaseMultiplier` and `usdLastAccrualTime`,
+    ///      so `usdMultiplier()` returns the pre-change value until at
+    ///      least one second has elapsed.
+    ///
+    ///      `OkuMoney.okuMMultiplier` now shares this property. It was
+    ///      previously a discrete step, which DID have instantaneous
+    ///      impact and required a same-block fence on the user-facing
+    ///      paths here (`wrap`, `unwrap`) and on `withdrawSurplus`. That
+    ///      fence has been removed along with the step — both multipliers
+    ///      are continuous, and neither can be straddled.
     ///
     ///      `endTimestamp == 0` is the "open-ended" sentinel: the rate
     ///      accrues indefinitely until the next `setUsdYieldRate` call.
@@ -715,10 +710,10 @@ contract OkuDollar is
     ///
     ///      Pause-bypass is intentional: operators may need to ZERO the
     ///      rate (pass `newRate = PRECISION`) during an incident response,
-    ///      and pausing this setter would defeat that. The companion
-    ///      rate-effect setters on `OkuMoney` (`setOkuMMultiplier`,
-    ///      `distributeYield`) ARE pause-gated — see those for the
-    ///      effect-vs-config split rationale.
+    ///      and pausing this setter would defeat that. `OkuMoney`'s
+    ///      `startYieldEpoch` IS pause-gated, but its accrual-stopping
+    ///      counterpart `haltAccrual` is deliberately not — the same
+    ///      principle, that reducing yield must always remain possible.
     function setUsdYieldRate(
         uint256 newRate,
         uint256 endTimestamp

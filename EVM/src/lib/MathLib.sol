@@ -24,9 +24,10 @@ library MathLib {
      * @notice Raise x to the power of n, modulo base b (exponentiation by squaring)
      * @dev Adapted verbatim from MakerDAO's `rpow` — battle-tested since 2017.
      *      Taken from https://github.com/makerdao/dss/blob/master/src/pot.sol
-     *      Used by OkuDollar for continuous yield accrual via usdMultiplier().
-     *      OkuMoney updates its multiplier discretely (setOkuMMultiplier /
-     *      distributeYield) and does NOT use rpow.
+     *      Used by OkuDollar for continuous exponential accrual via
+     *      usdMultiplier(). OkuMoney also accrues continuously but LINEARLY
+     *      (`base + rate * elapsed`), deriving its rate from a realized dollar
+     *      amount, so it does NOT use rpow. See {OkuMoney} NatSpec.
      * @param x Base value (typically ratePerSecond, scaled by PRECISION)
      * @param n Exponent (typically elapsed seconds)
      * @param b Precision base (typically 1e18)

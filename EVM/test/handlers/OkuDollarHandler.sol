@@ -29,6 +29,8 @@ contract OkuDollarHandler is Test {
     uint256 public constant MAX_SUPPLY = TestConstants.MAX_SUPPLY;
     uint256 public constant PRECISION = TestConstants.PRECISION;
     uint256 public constant MAX_FUZZ_PRICE = TestConstants.MAX_FUZZ_PRICE;
+    uint256 public constant MIN_EPOCH_DURATION = TestConstants.MIN_EPOCH_DURATION;
+    uint256 public constant MAX_EPOCH_DURATION = TestConstants.MAX_EPOCH_DURATION;
     uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = 9e17; // matches OkuDollar contract
 
     // Ghost variables
@@ -147,25 +149,44 @@ contract OkuDollarHandler is Test {
         }
     }
 
-    /// @notice OkuMoney multiplier rebase. Per-call cap raised to 10% to stress
-    ///         truncation/dust branches at non-trivial multipliers.
-    function rebase(uint256 priceIncrease) external {
+    /// @notice Run an OkuMoney yield epoch, moving `okuMMultiplier` continuously.
+    function rebase(uint256 yieldAmount, uint256 durationSeed, bool warpToEnd) external {
         ghostRebaseCalls++;
-        uint256 currentPrice = okuMoney.okuMMultiplier();
-        if (currentPrice >= MAX_FUZZ_PRICE) return;
+        if (okuMoney.totalSupply() == 0) return;
+        if (okuMoney.okuMMultiplier() >= MAX_FUZZ_PRICE) return;
 
-        uint256 minIncrease = currentPrice / 10_000;
-        uint256 maxIncrease = currentPrice / 10; // 10% per call (raised from 2%)
-        uint256 increase = bound(priceIncrease, minIncrease, maxIncrease);
-        uint256 newPrice = currentPrice + increase;
-        if (newPrice > MAX_FUZZ_PRICE) newPrice = MAX_FUZZ_PRICE;
+        uint256 duration = bound(durationSeed, MIN_EPOCH_DURATION, MAX_EPOCH_DURATION);
+        uint256 ceiling = _maxYieldForDuration(duration);
+        if (ceiling == 0) return;
+        yieldAmount = bound(yieldAmount, 1, ceiling * 2);
 
         vm.prank(rebaser);
-        try okuMoney.setOkuMMultiplier(newPrice) {
+        try okuMoney.startYieldEpoch(yieldAmount, duration) {
+            // Cap the advance at 30 days, matching `warpTime`. An epoch only delivers
+            // yield as time passes, so this action now moves the clock — and
+            // `usdMultiplier` compounds with it. Left uncapped (durations run to 365
+            // days) `usdOku` obligations compound past what OkuM `maxSupply` can back,
+            // so `_rebalanceReservesIfNeeded` hits the cap and the vault invariants
+            // fail for a harness reason rather than a contract one. Under the old
+            // discrete setter this action consumed no time at all.
+            uint256 advance = warpToEnd ? duration : duration / 2;
+            if (advance > 30 days) advance = 30 days;
+            vm.warp(block.timestamp + advance);
             vm.roll(block.number + 1);
+            _rebalanceReservesIfNeeded();
         } catch {
             ghostRebaseReverts++;
         }
+    }
+
+    /// @dev Largest yield distributable over `duration` without breaching the APR cap.
+    function _maxYieldForDuration(uint256 duration) internal view returns (uint256) {
+        uint256 current = okuMoney.okuMMultiplier();
+        uint256 supply = okuMoney.totalSupply();
+        if (supply == 0) return 0;
+        uint256 maxDelta = (current * TestConstants.MAX_IMPLIED_APR_BPS * duration)
+            / (TestConstants.BASIS_POINTS * TestConstants.SECONDS_PER_YEAR);
+        return (maxDelta * supply) / PRECISION;
     }
 
     // ============ Reserve Management ============

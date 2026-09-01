@@ -414,7 +414,7 @@ async function verifyAllContracts(networkName: string): Promise<void> {
   // Proxy contracts need special handling. OkuBridge/OkuBridgeRouter were removed
   // in the noBridge refactor; v1 cross-chain transfers are PSM-mediated mint/burn
   // orchestrated off-chain.
-  const proxyContracts = ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
+  const proxyContracts = ["OkuMoney", "OkuDollar", "LitePSM"];
   
   for (const contractName of Object.keys(addresses)) {
     const address = addresses[contractName];
@@ -513,46 +513,25 @@ async function deployCoreContracts(
   return { okuMoney, okuDollar };
 }
 
-async function deployRedemptionQueue(
-  deployer: Signer,
-  deployerAddress: string,
-  bookKey: string,
-  okuMoneyAddress: string,
-  usdcAddress: string
-): Promise<Contract> {
-  logger.info("  Deploying RedemptionQueue...");
-  // RedemptionQueue.initialize now takes (_okuMoney, _usdc, admin) so the queue can
-  // resolve the USDC decimal multiplier from IERC20Metadata at init time.
-  const redemptionQueue = await deployUUPSProxy(
-    "RedemptionQueue",
-    [okuMoneyAddress, usdcAddress, deployerAddress],
-    bookKey,
-    deployer
-  );
-  logger.success(`  RedemptionQueue: ${await redemptionQueue.getAddress()}`);
-  return redemptionQueue;
-}
-
 async function deployPSM(
   deployer: Signer,
   deployerAddress: string,
   bookKey: string,
   okuMoneyAddress: string,
   okuDollarAddress: string,
-  redemptionQueueAddress: string,
   usdcAddress: string,
   _config: DeploymentConfig
 ): Promise<Contract> {
   logger.step(3, "Deploying LitePSM");
 
-  // LitePSM.initialize(okuMoney, okuDollar, usdc, redemptionQueue, admin).
+  // LitePSM.initialize(okuMoney, okuDollar, usdc, admin). Redemption is
+  // buffer-only; there is no redemption queue (see LitePSM NatSpec).
   const litePSM = await deployUUPSProxy(
     "LitePSM",
     [
       okuMoneyAddress,                  // _okuMoney
       okuDollarAddress,                 // _okuDollar
       usdcAddress,                      // _usdc
-      redemptionQueueAddress,           // _redemptionQueue
       deployerAddress,                  // admin
     ],
     bookKey,
@@ -567,42 +546,22 @@ async function configureRoles(
   deployerAddress: string,
   okuMoney: Contract,
   okuDollar: Contract,
-  redemptionQueue: Contract,
   litePSM: Contract,
   config: DeploymentConfig
 ): Promise<void> {
   logger.step(4, "Configuring Roles");
 
   const litePSMAddress = await litePSM.getAddress();
-  const redemptionQueueAddress = await redemptionQueue.getAddress();
 
-  // EVM-J3: Fail-fast check that queue and PSM share the same USDC before
-  // we start granting roles. A mismatch here would leave the chain with a
-  // partially-roled deployment that the operator would have to manually
-  // un-grant from. Doing this first means a mismatch reverts with no state
-  // change on the proxies.
-  const psmUsdc = (await litePSM.usdc()).toString();
-  const queueUsdc = (await redemptionQueue.usdc()).toString();
-  if (psmUsdc.toLowerCase() !== queueUsdc.toLowerCase()) {
-    throw new Error(
-      `USDC mismatch: PSM=${psmUsdc} queue=${queueUsdc}. Aborting before role grants.`
-    );
-  }
-  logger.info(`  USDC match verified: ${psmUsdc}`);
-
-  // OkuMoney minter roles. LitePSM is the sole user-facing OKUM_MINTER in the
-  // noBridge model; RedemptionQueue mints rebase deltas; off-chain cross-chain
-  // mint/burn flows route through LitePSM via the orchestrator's USDC custody.
+  // OkuMoney minter roles. LitePSM is the sole user-facing OKUM_MINTER; off-chain
+  // cross-chain mint/burn flows route through it via the orchestrator's USDC custody.
   await sendAndWait("Grant OKUM_MINTER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_MINTER, litePSMAddress));
-  await sendAndWait("Grant OKUM_MINTER to RedemptionQueue", () => okuMoney.grantRole(ROLES.OKUM_MINTER, redemptionQueueAddress));
 
   // Cycle 4 (EVM-15): OKUM_BURNER was split out of OKUM_MINTER. Both consumers
   // of `OkuMoney.burn(...)` need the burner role:
   //   - LitePSM redeem flows (`_redeemOkuMShared`)
-  //   - RedemptionQueue.processQueue (per-entry burn after USDC payout)
-  // Without these grants every redeem reverts with AccessControlUnauthorizedAccount.
+  // Without this grant every redeem reverts with AccessControlUnauthorizedAccount.
   await sendAndWait("Grant OKUM_BURNER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_BURNER, litePSMAddress));
-  await sendAndWait("Grant OKUM_BURNER to RedemptionQueue", () => okuMoney.grantRole(ROLES.OKUM_BURNER, redemptionQueueAddress));
 
   // OkuMoney admin roles (testnet only)
   await sendAndWait("Grant OKUM_REBASER to Admin", () => okuMoney.grantRole(ROLES.OKUM_REBASER, deployerAddress));
@@ -610,19 +569,14 @@ async function configureRoles(
 
   // Minter allowances
   await sendAndWait("Set LitePSM minter allowance", () => okuMoney.configureMinterAllowance(litePSMAddress, config.minterAllowance));
-  await sendAndWait("Set RedemptionQueue minter allowance", () => okuMoney.configureMinterAllowance(redemptionQueueAddress, config.minterAllowance));
 
   // OkuDollar roles
   await sendAndWait("Grant VAULT_REBASER to Admin", () => okuDollar.grantRole(ROLES.VAULT_REBASER, deployerAddress));
-
-  // RedemptionQueue roles
-  await sendAndWait("Grant QUEUE_PSM to LitePSM", () => redemptionQueue.grantRole(ROLES.QUEUE_PSM, litePSMAddress));
 
   // LitePSM roles — full operational set for testnet (all to deployer; see
   // contracts/README.md § Deployment runbook for the production RBAC split).
   // Production: run grantRolesMainnet.ts to distribute roles to cold/warm multisig + orchestrator.
   await sendAndWait("Grant PSM_BUFFER_DEPOSITOR to Admin", () => litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployerAddress));
-  await sendAndWait("Grant PSM_QUEUE_PROCESSOR to Admin", () => litePSM.grantRole(ROLES.PSM_QUEUE_PROCESSOR, deployerAddress));
   await sendAndWait("Grant PSM_BUFFER_WITHDRAWER to Admin", () => litePSM.grantRole(ROLES.PSM_BUFFER_WITHDRAWER, deployerAddress));
 
   // OkuMoney additional admin roles
@@ -640,40 +594,31 @@ async function configureRoles(
   // OkuDollar blacklist roles (shared OKUM_ prefix — one grant covers both tokens)
   await sendAndWait("Grant OKUM_BLACKLISTER on OkuDollar to Admin", () => okuDollar.grantRole(ROLES.OKUM_BLACKLISTER, deployerAddress));
   await sendAndWait("Grant OKUM_UNBLACKLISTER on OkuDollar to Admin", () => okuDollar.grantRole(ROLES.OKUM_UNBLACKLISTER, deployerAddress));
-
-  // RedemptionQueue additional role
-  await sendAndWait("Grant QUEUE_RESCUER to Admin", () => redemptionQueue.grantRole(ROLES.QUEUE_RESCUER, deployerAddress));
 }
 
 async function verifyDeployment(
   bookKey: string,
   okuMoney: Contract,
-  litePSM: Contract,
-  redemptionQueue: Contract
+  litePSM: Contract
 ): Promise<void> {
   logger.step(6, "Verifying Deployment");
 
   // Check roles
   const litePSMAddress = await litePSM.getAddress();
-  const queueAddress = await redemptionQueue.getAddress();
   const hasLitePSMMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, litePSMAddress);
-  const hasQueueMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, queueAddress);
   // Cycle 4 (EVM-15): OKUM_BURNER is required for redeem paths.
   const hasLitePSMBurner = await okuMoney.hasRole(ROLES.OKUM_BURNER, litePSMAddress);
-  const hasQueueBurner = await okuMoney.hasRole(ROLES.OKUM_BURNER, queueAddress);
 
   logger.info(`  LitePSM has OKUM_MINTER: ${hasLitePSMMinter}`);
-  logger.info(`  RedemptionQueue has OKUM_MINTER: ${hasQueueMinter}`);
   logger.info(`  LitePSM has OKUM_BURNER: ${hasLitePSMBurner}`);
-  logger.info(`  RedemptionQueue has OKUM_BURNER: ${hasQueueBurner}`);
-  if (!hasLitePSMBurner || !hasQueueBurner) {
-    logger.warning("  Missing OKUM_BURNER grants — redeem paths will revert!");
+  if (!hasLitePSMBurner) {
+    logger.warning("  Missing OKUM_BURNER grant — redeem paths will revert!");
   }
 
   // Verify all addresses saved
   const book = loadAddressBook();
   const contracts = book[bookKey] || {};
-  const expectedContracts = ["MockUSDC", "OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
+  const expectedContracts = ["MockUSDC", "OkuMoney", "OkuDollar", "LitePSM"];
 
   const missing = expectedContracts.filter(c => !contracts[c]);
   if (missing.length > 0) {
@@ -764,16 +709,8 @@ async function main() {
     usdcAddress = await deployMockUSDC(bookKey, deployer);
   }
 
-  // Step 2: Deploy core contracts (RedemptionQueue is deployed separately because it now
-  // requires the USDC address for decimal-multiplier resolution at init time).
+  // Step 2: Deploy core contracts
   const { okuMoney, okuDollar } = await deployCoreContracts(deployer, deployerAddress, bookKey, config);
-  const redemptionQueue = await deployRedemptionQueue(
-    deployer,
-    deployerAddress,
-    bookKey,
-    await okuMoney.getAddress(),
-    usdcAddress
-  );
 
   // Step 3: Deploy PSM
   const litePSM = await deployPSM(
@@ -782,7 +719,6 @@ async function main() {
     bookKey,
     await okuMoney.getAddress(),
     await okuDollar.getAddress(),
-    await redemptionQueue.getAddress(),
     usdcAddress,
     config
   );
@@ -792,7 +728,6 @@ async function main() {
     deployerAddress,
     okuMoney,
     okuDollar,
-    redemptionQueue,
     litePSM,
     config
   );
@@ -800,12 +735,7 @@ async function main() {
   // Step 5: (was bridge configuration — removed in noBridge refactor)
 
   // Step 6: Verify deployment state
-  await verifyDeployment(
-    bookKey,
-    okuMoney,
-    litePSM,
-    redemptionQueue
-  );
+  await verifyDeployment(bookKey, okuMoney, litePSM);
 
   // Step 7: Etherscan verification (live networks only — never on a fork)
   if (!isFork) {
@@ -836,7 +766,6 @@ async function main() {
           okuMoney: addresses.OkuMoney,
           okuDollar: addresses.OkuDollar,
           litePSM: addresses.LitePSM,
-          redemptionQueue: addresses.RedemptionQueue,
           mockUSDC: addresses.MockUSDC,
         },
         deployer: deployerAddress,

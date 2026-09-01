@@ -21,10 +21,11 @@
  *    6. redeem                Operator depositBuffer (fork-only auto;
  *                             live: assumed already funded) + user redeem;
  *                             assert USDC delta.
- *    7. queueRedeem           Drain buffer to 0 -> redeem forces queue ->
- *                             refill -> processQueue drains -> queue empty.
- *    8. distributeYield       OkuMoney.distributeYield; assert multiplier
- *                             bump and signer balance grows.
+ *    7. insufficientBuffer    Drain buffer to 0 -> assert redeem reverts with
+ *                             InsufficientBuffer (buffer-only, no queue) ->
+ *                             restore buffer.
+ *    8. startYieldEpoch       OkuMoney.startYieldEpoch; assert the multiplier
+ *                             does NOT move on publication, then accrues.
  *    9. pause                 psm.pause -> assert mint reverts -> unpause ->
  *                             assert mint succeeds.
  *   10. configureMinterAllowance
@@ -496,132 +497,97 @@ async function pollBalanceDelta(
   return (await read()) - baseline;
 }
 
-async function stepQueueRedeem(ctx: TestCtx) {
-  logger.section("Step 7: queueRedeem (force queue + processQueue drain)");
+async function stepInsufficientBuffer(ctx: TestCtx) {
+  logger.section("Step 7: insufficientBuffer (buffer-only redemption boundary)");
 
   await ensurePsmRole(ctx, ROLES.PSM_BUFFER_DEPOSITOR, "PSM_BUFFER_DEPOSITOR");
   await ensurePsmRole(ctx, ROLES.PSM_BUFFER_WITHDRAWER, "PSM_BUFFER_WITHDRAWER");
-  await ensurePsmRole(ctx, ROLES.PSM_QUEUE_PROCESSOR, "PSM_QUEUE_PROCESSOR");
 
   const psmAddr = await ctx.litePSM.getAddress();
 
-  // We need (a) some OkuM on the signer to redeem and (b) the PSM USDC
-  // buffer to be empty when we call `redeemOkuM`. Order of operations:
-  //   1. If signer holds < 1 OkuM, mint 1 OkuM first (this puts 1 USDC into
-  //      the buffer as a side effect).
-  //   2. Drain the entire buffer via `withdrawUsdc` so it sits at 0.
-  //   3. Call `redeemOkuM(1 OkuM)` — the buffer is empty so the program
-  //      escrows the OkuM and pushes a queue entry.
-  const queueRedeemAmt = ethers.parseUnits("1", 18);
-  let signerOkuM: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
-  if (signerOkuM < queueRedeemAmt) {
-    const seedUsdc = ethers.parseUnits("1", 6);
-    await ensureUsdc(ctx, seedUsdc);
-    await waitForTx(
-      await ctx.usdc.approve(psmAddr, seedUsdc),
-      "usdc.approve(LitePSM) [queue seed]"
-    );
-    await waitForTx(
-      await ctx.litePSM.mintOkuM(seedUsdc),
-      "LitePSM.mintOkuM (queue seed)"
-    );
-  }
-
-  // Drain the buffer to zero — must happen AFTER any seeding mint that
-  // would re-fill it.
-  const buf: bigint = await ctx.usdc.balanceOf(psmAddr);
-  if (buf > 0n) {
-    await waitForTx(
-      await ctx.litePSM.withdrawUsdc(ctx.user.address, buf),
-      `LitePSM.withdrawUsdc(${ethers.formatUnits(buf, 6)} USDC)`
-    );
-  }
-
-  // Redeem with empty buffer -> queue path.
-  await waitForTx(
-    await ctx.okuMoney.approve(psmAddr, queueRedeemAmt),
-    "okuMoney.approve(LitePSM) [queue]"
-  );
-  await waitForTx(
-    await ctx.litePSM.redeemOkuM(queueRedeemAmt),
-    "LitePSM.redeemOkuM (queue path)"
-  );
-
-  const qTail: bigint = await ctx.queue.queueTail();
-  const qHead: bigint = await ctx.queue.queueHead();
-  const qPending: bigint = qTail - qHead;
-  if (qPending === 0n) {
-    logger.warning(
-      "Queue did not grow after empty-buffer redeem — possible that " +
-        "withdrawUsdc was blocked by an existing pending obligation. Skipping drain."
-    );
+  // Redemption is buffer-only: there is no queue. Drain the buffer and confirm
+  // a redemption that exceeds it reverts with InsufficientBuffer rather than
+  // being escrowed.
+  const signerAddr = ctx.user.address;
+  const okuMBal = await (ctx.okuMoney as any).balanceOf(signerAddr);
+  if (okuMBal === 0n) {
+    logger.info("  Signer holds no OkuM — skipping (run the mint step first)");
     return;
   }
-  logger.info(`Queue pending after forced redeem: ${qPending}`);
 
-  // Refill the buffer with exactly the queued USDC obligation + a small margin.
-  const obligation: bigint = await ctx.queue.totalQueuedUsdc();
-  const refill = obligation + ethers.parseUnits("0.1", 6);
-  await ensureUsdc(ctx, refill);
-  await waitForTx(await ctx.usdc.approve(psmAddr, refill), "usdc.approve(LitePSM) [refill]");
-  await waitForTx(
-    await ctx.litePSM.depositBuffer(refill),
-    `LitePSM.depositBuffer(${ethers.formatUnits(refill, 6)} USDC)`
-  );
+  const bufferBefore = await (ctx.usdc as any).balanceOf(psmAddr);
+  if (bufferBefore > 0n) {
+    logger.info(`  Draining buffer: ${bufferBefore} USDC units`);
+    const drainTx = await (ctx.litePSM as any).withdrawUsdc(signerAddr, bufferBefore);
+    await drainTx.wait(1);
+  }
 
-  // Drain via processQueue. processQueue's `approveAmount` arg is the USDC
-  // the PSM grants the queue for paying out — set to current PSM balance.
-  const head: bigint = await ctx.queue.queueHead();
-  const tail: bigint = await ctx.queue.queueTail();
-  const bufNow: bigint = await ctx.usdc.balanceOf(psmAddr);
-  await waitForTx(
-    await ctx.litePSM.processQueue(head, tail, bufNow),
-    `LitePSM.processQueue(${head}, ${tail}, ${ethers.formatUnits(bufNow, 6)} USDC)`
-  );
+  await (await (ctx.okuMoney as any).approve(psmAddr, okuMBal)).wait(1);
 
-  // processQueue clears entries (sets user=address(0)) but does NOT
-  // auto-advance queueHead. Call advanceHead to move it past cleared slots.
-  await waitForTx(
-    await ctx.queue.advanceHead(tail - head),
-    `queue.advanceHead(${tail - head})`
-  );
+  try {
+    await (ctx.litePSM as any).redeemOkuM.staticCall(okuMBal);
+    logger.error("  Expected InsufficientBuffer, but the redemption simulated cleanly");
+  } catch (e: any) {
+    const msg = e?.shortMessage ?? e?.message ?? String(e);
+    if (msg.includes("InsufficientBuffer")) {
+      logger.success("  redeemOkuM correctly reverts with InsufficientBuffer on an empty buffer");
+    } else {
+      logger.error(`  Reverted, but not with InsufficientBuffer: ${msg}`);
+    }
+  }
 
-  const tailFinal: bigint = await ctx.queue.queueTail();
-  const headFinal: bigint = await ctx.queue.queueHead();
-  const remaining: bigint = tailFinal - headFinal;
-  if (remaining !== 0n) throw new Error(`Queue did not fully drain (remaining=${remaining})`);
-  logger.success("Queue drained to empty");
+  // Restore the buffer so later steps are unaffected.
+  if (bufferBefore > 0n) {
+    await (await (ctx.usdc as any).approve(psmAddr, bufferBefore)).wait(1);
+    await (await (ctx.litePSM as any).depositBuffer(bufferBefore)).wait(1);
+    logger.info("  Buffer restored");
+  }
 }
 
-async function stepDistributeYield(ctx: TestCtx) {
-  logger.section("Step 8: distributeYield");
+async function stepStartYieldEpoch(ctx: TestCtx) {
+  logger.section("Step 8: startYieldEpoch");
   const supply: bigint = await ctx.okuMoney.totalSupply();
-  if (supply === 0n) throw new Error("Total supply is zero; cannot distribute yield");
+  if (supply === 0n) throw new Error("Total supply is zero; cannot start a yield epoch");
 
   await ensureRole(ctx, ROLES.OKUM_REBASER, "OKUM_REBASER");
 
   const mBefore: bigint = await ctx.okuMoney.okuMMultiplier();
-  const balBefore: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
 
-  // Pick a yield amount that produces a measurable per-token bump but stays
-  // well below MAX_MULTIPLIER (1e30 wei equivalent). A 0.01% yield on
-  // current supply is plenty.
-  const yieldAmount = supply / 10000n; // 1 bps
+  // 1 bps of supply streamed over 30 days: a measurable bump that sits well
+  // inside the 20% implied-APR cap (1 bps over 30 days annualizes to ~12 bps).
+  const yieldAmount = supply / 10000n;
   if (yieldAmount === 0n) throw new Error("Computed yield amount rounded to zero");
+  const duration = 30n * 24n * 60n * 60n;
 
   await waitForTx(
-    await ctx.okuMoney.distributeYield(yieldAmount),
-    `okuMoney.distributeYield(${ethers.formatUnits(yieldAmount, 18)})`
+    await ctx.okuMoney.startYieldEpoch(yieldAmount, duration),
+    `okuMoney.startYieldEpoch($${ethers.formatUnits(yieldAmount, 18)}, ${duration}s)`
   );
 
-  const mAfter: bigint = await ctx.okuMoney.okuMMultiplier();
-  const balAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
-  logger.info(`Multiplier: ${mBefore} -> ${mAfter} (+${mAfter - mBefore})`);
-  logger.info(
-    `Signer balance: ${ethers.formatUnits(balBefore, 18)} -> ` +
-      `${ethers.formatUnits(balAfter, 18)} (+${ethers.formatUnits(balAfter - balBefore, 18)})`
+  // THE key property: publishing an epoch must not move the price. If it did,
+  // the multiplier would be steppable and therefore sandwichable.
+  const mAtPublication: bigint = await ctx.okuMoney.okuMMultiplier();
+  if (mAtPublication !== mBefore) {
+    throw new Error(
+      `Epoch publication moved the multiplier (${mBefore} -> ${mAtPublication}); ` +
+        `an epoch must start at the current value`
+    );
+  }
+  logger.success(`Multiplier unchanged at publication: ${mBefore}`);
+
+  const endsAt: bigint = await ctx.okuMoney.yieldEpochEndsAt();
+  logger.info(`Epoch ends at ${endsAt} (${new Date(Number(endsAt) * 1000).toISOString()})`);
+
+  // Accrual is a function of wall-clock time, so on a live chain the multiplier
+  // only moves once a block with a later timestamp is mined. Project forward
+  // instead of waiting: `okuMMultiplierAt` is a pure function of time.
+  const projected: bigint = await ctx.okuMoney.okuMMultiplierAt(endsAt);
+  if (projected <= mBefore) {
+    throw new Error("Epoch does not project any accrual by its end time");
+  }
+  logger.success(
+    `Projected multiplier at epoch end: ${projected} (+${projected - mBefore})`
   );
-  if (mAfter <= mBefore) throw new Error("distributeYield did not bump multiplier");
 }
 
 async function pollUntil<T>(
@@ -738,8 +704,8 @@ const STEPS: Record<string, (ctx: TestCtx) => Promise<unknown>> = {
   wrap: stepWrap,
   unwrap: stepUnwrap,
   redeem: stepRedeem,
-  queueRedeem: stepQueueRedeem,
-  distributeYield: stepDistributeYield,
+  insufficientBuffer: stepInsufficientBuffer,
+  startYieldEpoch: stepStartYieldEpoch,
   pause: stepPause,
   configureMinterAllowance: stepConfigureMinterAllowance,
 };
@@ -751,8 +717,8 @@ const STEP_ORDER = [
   "wrap",
   "unwrap",
   "redeem",
-  "queueRedeem",
-  "distributeYield",
+  "insufficientBuffer",
+  "startYieldEpoch",
   "pause",
   "configureMinterAllowance",
 ];

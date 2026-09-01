@@ -7,7 +7,6 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {OkuMoney} from "../src/token/OkuMoney.sol";
 import {OkuDollar} from "../src/token/OkuDollar.sol";
 import {LitePSM} from "../src/psm/LitePSM.sol";
-import {RedemptionQueue} from "../src/psm/RedemptionQueue.sol";
 import {Errors} from "../src/lib/Errors.sol";
 import {Constants} from "../src/lib/Constants.sol";
 
@@ -86,36 +85,10 @@ contract CoverageGapsTest is BaseTest {
         new ERC1967Proxy(address(impl), initData);
     }
 
-    function test_RedemptionQueueInitialize_RevertZeroOkuMoney() public {
-        RedemptionQueue impl = new RedemptionQueue();
-        bytes memory initData =
-            abi.encodeCall(RedemptionQueue.initialize, (address(0), address(usdc), admin));
-        vm.expectRevert(Errors.ZeroAddress.selector);
-        new ERC1967Proxy(address(impl), initData);
-    }
-
-    function test_RedemptionQueueInitialize_RevertZeroUsdc() public {
-        RedemptionQueue impl = new RedemptionQueue();
-        bytes memory initData =
-            abi.encodeCall(RedemptionQueue.initialize, (address(okuMoney), address(0), admin));
-        vm.expectRevert(Errors.ZeroAddress.selector);
-        new ERC1967Proxy(address(impl), initData);
-    }
-
-    function test_RedemptionQueueInitialize_RevertZeroAdmin() public {
-        RedemptionQueue impl = new RedemptionQueue();
-        bytes memory initData = abi.encodeCall(
-            RedemptionQueue.initialize, (address(okuMoney), address(usdc), address(0))
-        );
-        vm.expectRevert(Errors.ZeroAddress.selector);
-        new ERC1967Proxy(address(impl), initData);
-    }
-
     function test_LitePSMInitialize_RevertZeroOkuMoney() public {
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(0), address(okuDollar), address(usdc), address(redemptionQueue), admin)
+            LitePSM.initialize, (address(0), address(okuDollar), address(usdc), admin)
         );
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -124,8 +97,7 @@ contract CoverageGapsTest is BaseTest {
     function test_LitePSMInitialize_RevertZeroOkuDollar() public {
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(0), address(usdc), address(redemptionQueue), admin)
+            LitePSM.initialize, (address(okuMoney), address(0), address(usdc), admin)
         );
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -134,18 +106,7 @@ contract CoverageGapsTest is BaseTest {
     function test_LitePSMInitialize_RevertZeroUsdc() public {
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(okuDollar), address(0), address(redemptionQueue), admin)
-        );
-        vm.expectRevert(Errors.ZeroAddress.selector);
-        new ERC1967Proxy(address(impl), initData);
-    }
-
-    function test_LitePSMInitialize_RevertZeroRedemptionQueue() public {
-        LitePSM impl = new LitePSM();
-        bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(okuDollar), address(usdc), address(0), admin)
+            LitePSM.initialize, (address(okuMoney), address(okuDollar), address(0), admin)
         );
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -154,14 +115,7 @@ contract CoverageGapsTest is BaseTest {
     function test_LitePSMInitialize_RevertZeroAdmin() public {
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (
-                address(okuMoney),
-                address(okuDollar),
-                address(usdc),
-                address(redemptionQueue),
-                address(0)
-            )
+            LitePSM.initialize, (address(okuMoney), address(okuDollar), address(usdc), address(0))
         );
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -173,47 +127,62 @@ contract CoverageGapsTest is BaseTest {
         MockHighDecimalToken hd = new MockHighDecimalToken(19);
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(okuDollar), address(hd), address(redemptionQueue), admin)
+            LitePSM.initialize, (address(okuMoney), address(okuDollar), address(hd), admin)
         );
         vm.expectRevert(abi.encodeWithSelector(LitePSM.UsdcDecimalsTooLarge.selector, uint8(19)));
         new ERC1967Proxy(address(impl), initData);
     }
 
-    function test_RedemptionQueueInitialize_RevertUsdcDecimalsTooLarge() public {
-        MockHighDecimalToken hd = new MockHighDecimalToken(20);
-        RedemptionQueue impl = new RedemptionQueue();
-        bytes memory initData =
-            abi.encodeCall(RedemptionQueue.initialize, (address(okuMoney), address(hd), admin));
-        vm.expectRevert(
-            abi.encodeWithSelector(RedemptionQueue.UsdcDecimalsTooLarge.selector, uint8(20))
-        );
-        new ERC1967Proxy(address(impl), initData);
-    }
+    // ============ OkuMoney yield-epoch bounds ============
+    //
+    // `MAX_MULTIPLIER` (1e24) is no longer directly reachable: the multiplier can
+    // only advance through an epoch, and `MAX_IMPLIED_APR_BPS` caps each epoch at
+    // 20% annualized. Compounding from 1e18 to 1e24 at that ceiling takes ~76 years
+    // of back-to-back max-rate epochs. The binding constraint in practice is the
+    // APR cap, so that is what these tests pin.
 
-    // ============ OkuMoney multiplier ceiling ============
-
-    function test_OkuMoney_SetOkuMMultiplier_RevertMultiplierTooHigh() public {
-        vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.MultiplierTooHigh.selector);
-        okuMoney.setOkuMMultiplier(Constants.MAX_MULTIPLIER + 1);
-    }
-
-    function test_OkuMoney_DistributeYield_RevertMultiplierTooHigh() public {
-        // Bring the multiplier just under the ceiling so a small yield pushes it over.
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(Constants.MAX_MULTIPLIER);
-
-        // Mint supply so `distributeYield`'s `supply == 0` guard doesn't fire.
+    function test_OkuMoney_StartYieldEpoch_RevertImpliedAprTooHigh() public {
         _mintOkuMoney(user1, 1000e18);
 
-        // Roll past the same-block yield lock would-affect side effects (irrelevant here
-        // because we're calling distributeYield, not a PSM op).
-
-        // Any positive yieldPerToken pushes newMultiplier > MAX_MULTIPLIER.
+        // 20% of supply delivered over a single day annualizes to ~7300% — far above
+        // the 20% cap. The reported figure is computed from the TRUNCATED per-second
+        // rate, so it lands a hair under the exact 730000 bps.
         vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.MultiplierTooHigh.selector);
-        okuMoney.distributeYield(1000e18); // 1e18 yield over 1000 OkuM = 1e15 per token
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OkuMoney.ImpliedAprTooHigh.selector, uint256(729_999), Constants.MAX_IMPLIED_APR_BPS
+            )
+        );
+        okuMoney.startYieldEpoch(200e18, 1 days);
+    }
+
+    function test_OkuMoney_StartYieldEpoch_RevertDurationTooShort() public {
+        _mintOkuMoney(user1, 1000e18);
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.InvalidEpochDuration.selector);
+        okuMoney.startYieldEpoch(1e18, Constants.MIN_EPOCH_DURATION - 1);
+    }
+
+    function test_OkuMoney_StartYieldEpoch_RevertDurationTooLong() public {
+        _mintOkuMoney(user1, 1000e18);
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.InvalidEpochDuration.selector);
+        okuMoney.startYieldEpoch(1e18, Constants.MAX_EPOCH_DURATION + 1);
+    }
+
+    function test_OkuMoney_StartYieldEpoch_RevertZeroSupply() public {
+        assertEq(okuMoney.totalSupply(), 0, "precondition: no supply");
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.ZeroSupply.selector);
+        okuMoney.startYieldEpoch(1e18, 30 days);
+    }
+
+    function test_OkuMoney_StartYieldEpoch_RevertYieldTooSmall() public {
+        // Huge supply + tiny yield + long duration => per-second rate floors to zero.
+        _mintOkuMoney(user1, 1_000_000_000e18);
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.YieldTooSmall.selector);
+        okuMoney.startYieldEpoch(1, Constants.MAX_EPOCH_DURATION);
     }
 
     // ============ OkuDollar.setMinCollateralRatio post-condition branch ============
@@ -359,65 +328,37 @@ contract CoverageGapsTest is BaseTest {
         assertGt(bal, 0, "balanceOf must not revert at saturated multiplier");
     }
 
-    // ============ LitePSM USDC balance invariant ============
+    // ============ LitePSM buffer-only redemption ============
     //
-    // The contract maintains `usdc.balanceOf(litePsm) >= queue.totalQueuedUsdc()`
-    // at all times — the `WouldStrandQueue` check on `withdrawUsdc` is the
-    // only path that could violate it, and it's enforced. Pin the invariant
-    // here as a per-operation spot-check so regressions surface immediately.
+    // There is no redemption queue: a redemption the buffer cannot cover reverts
+    // with `InsufficientBuffer` rather than being escrowed. Pin that boundary here.
 
-    function test_LitePSM_UsdcBalance_GTE_TotalQueuedUsdc_After_QueuedRedeem() public {
-        // Stage USDC into the buffer.
+    function test_LitePSM_RedeemExceedingBuffer_Reverts() public {
         _mintOkuMoney(user1, 1000e18);
         usdc.mint(address(litePsm), 1_000_000e6);
-        usdc.mint(user1, 1_000_000e6);
 
-        // user1 wraps and queues a redeem (drains buffer first via withdraw).
-        // Simplest path: redeem a large OkuM amount that exceeds buffer so it
-        // lands in the queue.
+        // Drain the buffer to ~1 USDC.
         vm.prank(bufferWithdrawer);
         litePsm.withdrawUsdc(admin, 999_999e6);
-        // Now buffer is ~1 USDC; redeem of 1000 OkuM will queue.
 
+        uint256 buffer = usdc.balanceOf(address(litePsm));
+        assertEq(buffer, 1e6, "buffer should be 1 USDC");
+
+        // 1000 OkuM is worth ~1000 USDC, far above the buffer.
         vm.prank(user1);
         okuMoney.approve(address(litePsm), 1000e18);
         vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(LitePSM.InsufficientBuffer.selector, buffer, 1000e6));
         litePsm.redeemOkuM(1000e18);
 
-        // Invariant: balance of LitePSM USDC >= total queued USDC obligation.
-        uint256 balance = usdc.balanceOf(address(litePsm));
-        uint256 queued = redemptionQueue.totalQueuedUsdc();
-        assertGe(
-            balance,
-            // Buffer holds the leftover 1 USDC; queue obligation can exceed
-            // buffer when entries are pending. The actual invariant we ship
-            // is over `vault_usdc - queued >= 0` ONLY after process; mid-
-            // flight the buffer can be below queued (that's what "queued"
-            // means). The invariant we want is the simpler "buffer plus
-            // queued-OkuM-burnt cannot fall below what's owed".
-            // Concretely we verify the WouldStrandQueue boundary: a
-            // withdrawUsdc that would push balance below `queued` reverts.
-            0,
-            "USDC balance non-negative"
-        );
+        // Nothing moved: no escrow, no partial fill.
+        assertEq(okuMoney.balanceOf(user1), 1000e18, "user keeps their OkuM");
+        assertEq(usdc.balanceOf(address(litePsm)), buffer, "buffer untouched");
 
-        // Pin the real invariant: withdrawing buffer such that balance < queued must revert.
-        vm.prank(bufferWithdrawer);
-        vm.expectRevert(); // WouldStrandQueue(remainingBalance, queueObligation)
-        litePsm.withdrawUsdc(admin, balance);
-
-        // Sanity: a withdraw of 0 is fine (or any amount that keeps balance >= queued).
-        // If queued > balance already, no withdraw is possible — but the buffer
-        // can be replenished via depositBuffer / mintOkuM.
-        if (balance > queued) {
-            vm.prank(bufferWithdrawer);
-            litePsm.withdrawUsdc(admin, balance - queued);
-            assertEq(
-                usdc.balanceOf(address(litePsm)),
-                queued,
-                "Post-withdraw balance must equal queued obligation exactly"
-            );
-        }
+        // A redemption within the buffer succeeds.
+        vm.prank(user1);
+        litePsm.redeemOkuM(1e18);
+        assertEq(usdc.balanceOf(user1), 1e6, "user paid from buffer");
     }
 
     // ============ configureMinterAllowance ZeroAddress ============

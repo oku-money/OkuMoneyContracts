@@ -4,10 +4,12 @@ pragma solidity ^0.8.28;
 import {BaseTest} from "../Base.t.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {OkuDollarEvents} from "../../src/lib/events/OkuDollarEvents.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 /**
  * @title OkuDollarTest
@@ -412,6 +414,116 @@ contract OkuDollarTest is BaseTest {
         okuDollar.unwrap(100e18, user1);
     }
 
+    // ============ ERC-4626 Surface Tests ============
+    //
+    // Regression coverage for the `_redeemShares` floor-vs-ceil mismatch: prior to
+    // the fix, a third-party `withdraw`/`redeem` acting on an owner's exact balance
+    // at an elevated `usdMultiplier` could revert with `InsufficientBalance` because
+    // the internal-share move floored while `unwrap`'s burn ceiled. `_unwrap` now
+    // burns directly from `owner` using a single ceil computation, so this must
+    // succeed and leave a zero balance.
+
+    function test_Redeem_ThirdParty_ExactBalance_AtElevatedMultiplier_Succeeds() public {
+        _mintUsdOku(user1, 1000e18);
+        _setOkuMMultiplierAndRoll(PRECISION + PRECISION / 3); // ~$1.33, forces ceil-vs-floor daylight
+
+        uint256 ownerShares = okuDollar.balanceOf(user1);
+        assertGt(ownerShares, 0);
+
+        vm.prank(user1);
+        okuDollar.approve(user2, ownerShares);
+
+        vm.prank(user2);
+        uint256 assetsOut = okuDollar.redeem(ownerShares, user2, user1);
+
+        assertEq(okuDollar.balanceOf(user1), 0, "owner balance must be fully drained");
+        assertGt(assetsOut, 0);
+        assertEq(okuMoney.balanceOf(user2), assetsOut);
+    }
+
+    function test_Withdraw_ThirdParty_EmitsTransferAndCorrectWithdrawOwner() public {
+        _mintUsdOku(user1, 1000e18);
+        _setOkuMMultiplierAndRoll(PRECISION + PRECISION / 3);
+
+        uint256 assets = okuMoney.balanceOf(address(okuDollar)) / 2;
+        uint256 sharesQuote = okuDollar.previewWithdraw(assets);
+
+        vm.prank(user1);
+        okuDollar.approve(user2, sharesQuote);
+
+        vm.expectEmit(true, true, false, true);
+        emit Transfer(user1, address(0), sharesQuote);
+
+        vm.recordLogs();
+        vm.prank(user2);
+        okuDollar.withdraw(assets, user2, user1);
+
+        // Withdraw(sender, receiver, owner, assets, shares) — sender is the spender
+        // (user2), NOT the owner whose shares were burned (user1). Prior to the fix,
+        // `Withdraw` always reported `msg.sender` as the owner.
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("Withdraw(address,address,address,uint256,uint256)"))
+            {
+                address loggedSender = address(uint160(uint256(logs[i].topics[1])));
+                address loggedOwner = address(uint160(uint256(logs[i].topics[3])));
+                assertEq(loggedSender, user2, "Withdraw.sender must be the spender");
+                assertEq(loggedOwner, user1, "Withdraw.owner must be the share source");
+                found = true;
+            }
+        }
+        assertTrue(found, "Withdraw event must be emitted");
+    }
+
+    function test_MaxWithdraw_ReturnsAssetsNotShares() public {
+        _mintUsdOku(user1, 1000e18);
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
+
+        // Prior bug: maxWithdraw returned balanceOf(owner) (dollars/shares) instead
+        // of the OkuM asset equivalent.
+        assertEq(
+            okuDollar.maxWithdraw(user1),
+            okuDollar.convertToAssets(okuDollar.balanceOf(user1)),
+            "maxWithdraw must report assets, not shares"
+        );
+    }
+
+    function test_MaxDeposit_ZeroWhenPaused() public {
+        assertEq(okuDollar.maxDeposit(user1), type(uint256).max);
+
+        vm.prank(vaultPauser);
+        okuDollar.pause();
+
+        assertEq(okuDollar.maxDeposit(user1), 0);
+        assertEq(okuDollar.maxMint(user1), 0);
+    }
+
+    function test_MaxDeposit_ZeroWhenReceiverBlacklisted() public {
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        assertEq(okuDollar.maxDeposit(user1), 0);
+        assertEq(okuDollar.maxMint(user1), 0);
+    }
+
+    function test_Deposit_MintRoundTrip() public {
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(okuDollar), 100e18);
+
+        vm.prank(user1);
+        uint256 shares = okuDollar.deposit(100e18, user1);
+
+        assertEq(shares, okuDollar.balanceOf(user1));
+    }
+
+    function test_SupportsInterface_ERC8056() public view {
+        // OkuDollar itself does not implement ERC-8056 (OkuMoney does); this pins
+        // the ERC-165 surface OkuDollar DOES advertise so a future accidental
+        // removal is caught.
+        assertTrue(okuDollar.supportsInterface(type(IERC165).interfaceId));
+    }
+
     // ============ Price-Aware Wrap/Unwrap Behavior Tests ============
 
     function test_PriceAware_OneNoteWrapsToOneOkuDollar_AtBasePrice() public {
@@ -475,29 +587,12 @@ contract OkuDollarTest is BaseTest {
         assertLe(notesBack, okuMAmount, "Round trip should not gain tokens");
     }
 
-    function test_WrapUnwrap_RoundTrip_AfterUsdMultiplierChange() public {
-        // Wrap at 1x (okuMMultiplier=1e18, usdMult=1e18)
-        uint256 okuMAmount = 100e18;
-        _mintUsdOku(user1, okuMAmount);
-
-        // Bump USD multiplier to 1.5x
-        _elevateUsdMultiplier((PRECISION * 3) / 2);
-
-        // user1 OkuDollar balance grew to 150e18 (100 shares * 1.5x), but vault has 100 notes.
-        // The vault is undercollateralized after a pure USD rebase without reserve top-up.
-        //
-        // Unwrap a partial amount. The CORRECT formula is:
-        // okuMReturned = usdAmount × PRECISION / okuMMultiplier (multiplier is irrelevant for output)
-        // For 66e18 OkuDollar at okuMMultiplier=1e18: okuMReturned = 66e18 × 1e18 / 1e18 = 66e18 notes
-        //
-        // This is correct because usdMultiplier converts shares↔dollars, not dollars↔OkuMoney.
-        vm.prank(user1);
-        uint256 notesBack = okuDollar.unwrap(66e18, user1);
-
-        // Expected = usdAmount × PRECISION / okuMMultiplier = 66e18 × 1e18 / 1e18 = 66e18
-        uint256 expected = Math.mulDiv(66e18, PRECISION, PRECISION, Math.Rounding.Floor);
-        assertEq(notesBack, expected);
-    }
+    // REMOVED (single-multiplier refactor): test_WrapUnwrap_RoundTrip_AfterUsdMultiplierChange.
+    // Its premise was a pure USD-side rebase leaving okuMMultiplier at 1e18 —
+    // impossible now that usdMultiplier() delegates to okuMMultiplier() exactly.
+    // It had become a duplicate of test_WrapUnwrap_RoundTrip_AfterNotePriceChange
+    // below (moving "the" multiplier via `_elevateUsdMultiplier` vs.
+    // `_setOkuMMultiplierAndRoll` is now the same operation on the same storage).
 
     function test_WrapUnwrap_RoundTrip_AfterNotePriceChange() public {
         // Wrap at okuMMultiplier=1e18
@@ -520,22 +615,18 @@ contract OkuDollarTest is BaseTest {
         assertLt(notesBack, 100e18, "Should return fewer notes at higher note price");
     }
 
-    /// @notice CRITICAL: Test that caught the okuMReturned formula bug.
-    /// @dev When okuMMultiplier and usdMultiplier are equally elevated, a user wrapping
-    ///      N OkuMoney should get back exactly N OkuMoney on unwrap.
-    ///      OLD buggy formula (usdAmount * mult / price) returned MORE than deposited
-    ///      and reverted at the reserve check.
-    ///      CORRECT formula (usdAmount * PRECISION / price) returns exactly N.
+    /// @notice CRITICAL: Test that caught the original okuMReturned formula bug.
+    /// @dev Historically this elevated OkuM's and OkuDollar's multipliers
+    ///      independently to the SAME value and asserted a round trip returned
+    ///      exactly the original deposit. Under the single-multiplier design
+    ///      "elevate both to the same value" is not a distinct scenario — there is
+    ///      only one multiplier, so every elevated round trip already exercises
+    ///      this. This keeps the regression as a direct single-multiplier version.
     function test_WrapUnwrap_RoundTrip_MatchedPriceAndMultiplier() public {
-        // Wrap 100 OkuMoney at parity (okuMMultiplier=1e18, usdMult=1e18)
         uint256 okuMAmount = 100e18;
         _mintUsdOku(user1, okuMAmount);
 
-        // Elevate both multipliers to the same value (achieved value may exceed 1.04e18).
-        uint256 elevatedTarget = (PRECISION * 104) / 100;
-        _elevateUsdMultiplier(elevatedTarget);
-        uint256 elevatedActual = okuDollar.usdMultiplier();
-        _setOkuMMultiplierAndRoll(elevatedActual);
+        _elevateUsdMultiplier((PRECISION * 104) / 100);
         vm.roll(block.number + 1); // Roll past yield lock
 
         // Vault still has exactly 100 OkuMoney tokens (no extra reserves added).
@@ -557,7 +648,7 @@ contract OkuDollarTest is BaseTest {
         uint256 rate = PRECISION + 1393e6;
 
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, 0);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + 30 days);
 
         uint256 multBefore = okuDollar.usdMultiplier();
 
@@ -572,7 +663,7 @@ contract OkuDollarTest is BaseTest {
         uint256 rate = PRECISION + 1393e6;
 
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, 0);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + 30 days);
 
         uint256 start = block.timestamp;
 
@@ -636,11 +727,11 @@ contract OkuDollarTest is BaseTest {
     //   * test_UsdMultiplier_IndependentOfNotePrice — the multipliers are the same
     //     value by construction; independence is no longer a property.
 
-    function test_SetUsdYieldRate_SnapshotsMultiplier() public {
+    function test_UsdMultiplier_TracksOkuMYieldRate_SnapshotsMultiplier() public {
         uint256 rate = PRECISION + 1393e6;
 
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, 0);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + 30 days);
 
         vm.warp(block.timestamp + 1 days);
 
@@ -655,7 +746,7 @@ contract OkuDollarTest is BaseTest {
         assertEq(baseAfter, multBefore, "Base multiplier should be snapshotted");
     }
 
-    function test_SetUsdYieldRate_WithEndTimestamp() public {
+    function test_UsdMultiplier_TracksOkuMYieldRate_WithEndTimestamp() public {
         uint256 endTime = block.timestamp + 30 days;
 
         vm.prank(rebaser);
@@ -664,25 +755,25 @@ contract OkuDollarTest is BaseTest {
         assertEq(okuMoney.okuMRateEnd(), endTime);
     }
 
-    function test_SetUsdYieldRate_ClearsPendingRate() public {
+    function test_UsdMultiplier_TracksOkuMYieldRate_ClearsPendingRate() public {
         uint256 endTime = block.timestamp + 30 days;
 
         vm.prank(rebaser);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
 
         vm.prank(rebaser);
-        okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6, endTime + 60 days);
 
         // Setting a new rate should clear pending
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(PRECISION + 1000e6, 0);
+        okuMoney.setOkuMYieldRate(PRECISION + 1000e6, block.timestamp + 90 days);
 
         assertEq(okuMoney.okuMPendingRatePerSecond(), PRECISION);
     }
 
     // ============ setNextOkuMYieldRate delegation tests ============
 
-    function test_SetNextUsdYieldRate_SchedulesNextRate() public {
+    function test_UsdMultiplier_TracksOkuMPendingYieldRate_SchedulesNextRate() public {
         uint256 endTime = block.timestamp + 30 days;
 
         vm.prank(rebaser);
@@ -690,12 +781,12 @@ contract OkuDollarTest is BaseTest {
 
         uint256 nextRate = PRECISION + 2000e6;
         vm.prank(rebaser);
-        okuMoney.setNextOkuMYieldRate(nextRate);
+        okuMoney.setNextOkuMYieldRate(nextRate, endTime + 60 days);
 
         assertEq(okuMoney.okuMPendingRatePerSecond(), nextRate);
     }
 
-    function test_SetNextUsdYieldRate_HeadToTailTransition() public {
+    function test_UsdMultiplier_TracksOkuMPendingYieldRate_HeadToTailTransition() public {
         uint256 rate1 = PRECISION + 1393e6;
         uint256 rate2 = PRECISION + 2000e6;
         uint256 endTime = block.timestamp + 30 days;
@@ -704,7 +795,7 @@ contract OkuDollarTest is BaseTest {
         okuMoney.setOkuMYieldRate(rate1, endTime);
 
         vm.prank(rebaser);
-        okuMoney.setNextOkuMYieldRate(rate2);
+        okuMoney.setNextOkuMYieldRate(rate2, endTime + 60 days);
 
         // Warp past end time -- pending rate should take over
         vm.warp(endTime + 1 days);
@@ -826,7 +917,6 @@ contract OkuDollarTest is BaseTest {
         vm.expectRevert(Errors.ZeroAddress.selector);
         okuDollar.rescueDonation(1e18, address(0));
     }
-
 
     // ============ Pause Tests ============
 
@@ -1199,7 +1289,7 @@ contract OkuDollarTest is BaseTest {
         okuMoney.setOkuMYieldRate(rate1, endTime);
 
         vm.prank(rebaser);
-        okuMoney.setNextOkuMYieldRate(rate2);
+        okuMoney.setNextOkuMYieldRate(rate2, endTime + 400 days);
 
         // Warp past end + 365 days: should have 30d of rate1 + 365d of rate2
         vm.warp(endTime + 365 days);
@@ -1220,7 +1310,7 @@ contract OkuDollarTest is BaseTest {
         uint256 rate = 1_000_000_001_395_766_281;
 
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, 0);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + 400 days);
 
         uint256 startMult = okuDollar.usdMultiplier();
 
@@ -1234,26 +1324,29 @@ contract OkuDollarTest is BaseTest {
         assertGt(endMult, startMult);
     }
 
-    // ============ Independent Multiplier Tests ============
+    // ============ Single Multiplier Delegation Tests ============
+    //
+    // REPLACES test_UsdMultiplier_IndependentOfNotePrice (removed): under the
+    // pre-refactor dual-multiplier design, OkuM's discrete price and OkuDollar's
+    // independent USD rate could diverge over time. Under the single-multiplier
+    // design that's no longer a property to test — `usdMultiplier()` delegates to
+    // `okuMoney.okuMMultiplier()` exactly, by construction, always. This asserts
+    // that identity holds across both a discrete override AND a streaming rate.
 
-    function test_UsdMultiplier_IndependentOfNotePrice() public {
-        // Set OkuM price discretely; set USD rate separately
-        uint256 usdRate = PRECISION + 634e6; // ~2% APY
+    function test_UsdMultiplier_AlwaysEqualsOkuMMultiplier() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMMultiplier(PRECISION * 1045 / 1000); // discrete override
+        assertEq(okuDollar.usdMultiplier(), okuMoney.okuMMultiplier());
 
         vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION * 1045 / 1000); // simulate ~4.5% multiplier appreciation
-
-        vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(usdRate, 0);
-
+        okuMoney.setOkuMYieldRate(PRECISION + 634e6, block.timestamp + 400 days); // streaming rate
         vm.warp(block.timestamp + 365 days);
 
-        uint256 noteP = okuMoney.okuMMultiplier();
-        uint256 usdMult = okuDollar.usdMultiplier();
-
-        // They should be different (note at 4.5%, USD ~2% after 1 year)
-        assertGt(noteP, usdMult, "Note price should be higher than USD multiplier");
-        assertTrue(noteP != usdMult, "Note price and USD multiplier must be independent");
+        assertEq(
+            okuDollar.usdMultiplier(),
+            okuMoney.okuMMultiplier(),
+            "usdMultiplier must always equal okuMMultiplier under the single-multiplier design"
+        );
     }
 
     // ============ Continuous Yield + Balance/Supply Tests ============
@@ -1263,7 +1356,7 @@ contract OkuDollarTest is BaseTest {
 
         uint256 rate = PRECISION + 1393e6;
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, 0);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + 60 days);
 
         uint256 balBefore = okuDollar.balanceOf(user1);
 
@@ -1279,7 +1372,7 @@ contract OkuDollarTest is BaseTest {
 
         uint256 rate = PRECISION + 1393e6;
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, 0);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + 60 days);
 
         uint256 supplyBefore = okuDollar.totalSupply();
 
@@ -1358,7 +1451,7 @@ contract OkuDollarTest is BaseTest {
 
         uint256 rate = 1_000_000_001_395_766_281; // ~4.5% APY
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, 0);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + 400 days);
 
         vm.warp(block.timestamp + 365 days);
 
@@ -1599,17 +1692,17 @@ contract OkuDollarTest is BaseTest {
     /// @notice Setting the rate when totalUsdShares == 0 should succeed. The multiplier
     ///         has no supply term, so it accrues regardless and any later `wrap()`
     ///         prices in at the accrued value.
-    function test_SetUsdYieldRate_WorksWithZeroSupply() public {
+    function test_UsdMultiplier_TracksOkuMYieldRate_WorksWithZeroSupply() public {
         assertEq(okuDollar.totalSupply(), 0);
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(MAX_RATE, 0);
+        okuMoney.setOkuMYieldRate(MAX_RATE, block.timestamp + 30 days);
         assertGt(okuMoney.okuMRatePerSecond(), PRECISION);
     }
 
     /// @notice Verify that a non-zero rate accrues correctly after supply is added.
-    function test_SetUsdYieldRate_AccruesAfterSubsequentWrap() public {
+    function test_UsdMultiplier_TracksOkuMYieldRate_AccruesAfterSubsequentWrap() public {
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(MAX_RATE, 0);
+        okuMoney.setOkuMYieldRate(MAX_RATE, block.timestamp + 30 days);
         vm.warp(block.timestamp + 1 days);
 
         _mintOkuMoney(user1, 100e18);
@@ -1785,6 +1878,16 @@ contract OkuDollarTest is BaseTest {
         okuDollar.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
     }
 
+    /// @notice `approve` mirrors `permit`'s posture: a blacklisted spender cannot be approved.
+    function test_Approve_RevertsOnBlacklistedSpender() public {
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        okuDollar.approve(user2, 50e18);
+    }
+
     // ============ Permit Positive-Path Tests ============
 
     function test_Permit_SetsAllowance() public {
@@ -1875,10 +1978,10 @@ contract OkuDollarTest is BaseTest {
     /// @dev REMOVED (single-multiplier refactor): OkuDollar no longer exposes
     ///      `usdLastAccrualTime` — the accrual clock lives on OkuMoney. Retained here as
     ///      a delegation check.
-    function test_View_UsdLastAccrualTime() public {
+    function test_UsdMultiplier_DelegatesLastAccrualTime() public {
         // Calling setOkuMYieldRate stamps okuMLastAccrualTime = block.timestamp.
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(PRECISION + 1e9, 0);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e9, block.timestamp + 30 days);
         assertEq(okuMoney.okuMLastAccrualTime(), block.timestamp);
         assertEq(okuDollar.usdMultiplier(), okuMoney.okuMMultiplier());
     }

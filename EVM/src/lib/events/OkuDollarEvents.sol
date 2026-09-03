@@ -44,19 +44,8 @@ abstract contract OkuDollarEvents {
         uint256 usdMultiplier
     );
 
-    /// @notice ERC-4626 deposit (emitted by wrap()).
-    event Deposit(
-        address indexed sender, address indexed owner, uint256 assets, uint256 shares
-    );
-
-    /// @notice ERC-4626 withdraw (emitted by unwrap()).
-    event Withdraw(
-        address indexed sender,
-        address indexed receiver,
-        address indexed owner,
-        uint256 assets,
-        uint256 shares
-    );
+    // `Deposit` / `Withdraw` (ERC-4626, emitted by wrap()/unwrap()) come from the
+    // inherited `IERC4626` interface on OkuDollar, not declared here.
 
     /// @notice Emitted when donated OkuM is rescued from the vault.
     /// @dev See {OkuDollar.rescueDonation} — donations accrue to nobody under the

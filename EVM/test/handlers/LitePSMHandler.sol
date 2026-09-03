@@ -31,9 +31,6 @@ contract LitePSMHandler is Test {
     RedemptionQueue public queue;
     address public rebaser;
     address public minter;
-    /// @notice Retained no-op setter target. Under the single-multiplier design there is
-    ///         no separate USD rebaser — the rate lives on OkuMoney (OKUM_REBASER).
-    address public usdRebaser;
 
     address[] public actors;
     mapping(address => bool) public isActor;
@@ -98,21 +95,12 @@ contract LitePSMHandler is Test {
         queue = _queue;
         rebaser = _rebaser;
         minter = _minter;
-        // `usdRebaser` is vestigial (single-multiplier refactor): the yield rate is
-        // driven on OkuMoney via `rebaser` / OKUM_REBASER. The setter is kept so
-        // existing invariant setUps compile unchanged.
 
         _addActor(makeAddr("psmActor1"));
         _addActor(makeAddr("psmActor2"));
         _addActor(makeAddr("psmActor3"));
 
         ghostLastSeenMultiplier = okuMoney.okuMMultiplier();
-    }
-
-    /// @notice Vestigial setter — kept for call-site compatibility. The yield rate is
-    ///         now driven on OkuMoney via OKUM_REBASER (`rebaser`).
-    function setUsdRebaser(address _usdRebaser) external {
-        usdRebaser = _usdRebaser;
     }
 
     function _addActor(address actor) internal {
@@ -348,8 +336,11 @@ contract LitePSMHandler is Test {
     function setUsdYieldRate(uint256 rate) external {
         ghostSetUsdYieldRateCalls++;
         rate = bound(rate, PRECISION, MAX_RATE);
+        // A halted rate (== PRECISION) requires endTimestamp == 0; any yielding
+        // rate requires a bounded future window.
+        uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + 365 days;
         vm.prank(rebaser);
-        try okuMoney.setOkuMYieldRate(rate, 0) {}
+        try okuMoney.setOkuMYieldRate(rate, endTimestamp) {}
         catch {
             ghostSetUsdYieldRateReverts++;
         }

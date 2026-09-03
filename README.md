@@ -45,31 +45,31 @@ agility:
 
 ## Token model
 
-### EVM — dual-token split-economy
+### EVM — two tokens, single shared multiplier
 
-Two tokens with independent economics:
+Two tokens, one price:
 
-| Token | Type | Yield | Purpose |
-|---|---|---|---|
-| **OkuMoney (OkuM)** | Non-rebasing | Rear-facing (realized T-Bill returns) | DeFi, bridging, protocol integrations |
-| **OkuDollar (usdOku)** | Rebasing ($1 peg) | Forward-facing (policy rate set by Oku) | Retail UX, "balance grows" experience |
+| Token | Type | Purpose |
+|---|---|---|
+| **OkuMoney (OkuM)** | Non-rebasing | DeFi, bridging, protocol integrations |
+| **OkuDollar (usdOku)** | Rebasing ($1 peg) | Retail UX, "balance grows" experience |
 
-**OkuMoney** is the solvency anchor — it only distributes yield
-already earned. `balanceOf()` returns a static raw token count.
-Price appreciation is tracked separately via `okuMMultiplier()`, a
-stored value updated discretely by the orchestrator.
+**OkuMoney** is the solvency anchor and the sole source of yield.
+`balanceOf()` returns a static raw token count; price appreciation is
+tracked via `okuMMultiplier()`, computed continuously from a
+streaming rate schedule (`setOkuMYieldRate` / `setNextOkuMYieldRate`)
+rather than written in discrete ticks — see
+[`EVM/README.md`](EVM/README.md) for the full rationale.
 
-**OkuDollar** is a policy lever — Oku sets the yield rate
-independently. `balanceOf()` grows every second via continuous
-`_rpow` streaming. OkuDollar holds OkuMoney as reserves. The spread
-between the two rates determines collateralization and protocol
-revenue.
-
-```
-usdOku rate > OkuM rate  →  Vault undercollateralized → Oku tops up (depositReserves)
-usdOku rate = OkuM rate  →  Vault fully collateralized → No action needed
-usdOku rate < OkuM rate  →  Vault overcollateralized  → Oku extracts revenue (withdrawSurplus)
-```
+**OkuDollar** wraps OkuMoney 1:1 at that same multiplier — it has no
+independent rate of its own; `usdMultiplier()` **is**
+`okuMoney.okuMMultiplier()`. `balanceOf()` grows every second because
+the shared multiplier does. Collateralization is exactly 1.0 by
+construction (shares are only ever minted/burned 1:1 against real
+OkuM at the same multiplier), so there is no spread to manage, no
+surplus to extract, and no reserve top-up path — protocol margin
+comes entirely from the off-chain spread between realized T-Bill
+yield and the published on-chain rate.
 
 ### SVM — single-token model
 
@@ -152,24 +152,25 @@ multiplier to a value that already accounts for the protocol take).
 
 ## Yield distribution & sandwich prevention
 
-The multiplier is updated discretely by the orchestrator:
+**EVM and SVM diverge here** — EVM streams yield continuously (no
+per-tick MEV to sandwich); SVM still writes the multiplier in
+discrete ticks. See `TRACKER.md` for the open item tracking SVM
+parity.
 
-- **EVM:** `distributeYield()` or `setOkuMMultiplier()` on OkuMoney.
-- **SVM:** `set_multiplier()` or `distribute_yield()` on lite-psm.
-
-To prevent sandwich attacks around discrete updates, a single-block
-lock is enforced:
-
-- Both write functions set `lastYieldDistributionBlock` (EVM) /
-  `last_yield_distribution_slot` (SVM).
-- PSM and vault operations revert if executed in the same block/slot
-  as a multiplier update.
-- The lock auto-releases in subsequent blocks/slots — no backend
-  changes needed.
-
-On EVM, OkuDollar uses the same fence on its own `usd_multiplier`
-updates (cycle 4 / OKUD-06). SVM has no separate OkuDollar — the
-single multiplier fence on lite-psm covers all operations.
+- **EVM:** `okuMMultiplier()` is computed continuously from a
+  per-second rate schedule (`setOkuMYieldRate` /
+  `setNextOkuMYieldRate` on OkuMoney) — there is no discrete step for
+  an arbitrageur to sandwich. `setOkuMMultiplier` survives only as a
+  pause-gated emergency override; it's the sole function that still
+  stamps `lastYieldDistributionBlock`, and PSM/vault operations revert
+  if executed in the same block as that override. OkuDollar has no
+  multiplier of its own to update — `usdMultiplier()` reads OkuMoney's
+  directly, so it inherits the same continuity and the same guard.
+- **SVM:** `set_multiplier()` / `distribute_yield()` on lite-psm still
+  write the multiplier in discrete ticks. Both set
+  `last_yield_distribution_slot`, and PSM operations revert if
+  executed in the same slot as an update. The lock auto-releases in
+  the next slot.
 
 ---
 
@@ -386,11 +387,12 @@ All metrics on a 1-min cadence. PagerDuty for "token float" and
   Compromise does not allow minting beyond the key's USDC holdings.
   On SVM, the orchestrator may hold `direct_minter` / `direct_burner`
   roles for cross-chain bridge operations (direct OkuM mint/burn).
-- **EVM roles:** `OKUM_REBASER`, `VAULT_REBASER`,
-  `PSM_QUEUE_PROCESSOR`, `PSM_BUFFER_DEPOSITOR`.
+- **EVM roles:** `OKUM_REBASER` (governs both OkuM and UsdOku — the
+  vault has no rate of its own), `PSM_QUEUE_PROCESSOR`,
+  `PSM_BUFFER_DEPOSITOR`.
 - **SVM roles:** `rebaser`, `buffer_depositor`, `direct_minter`,
-  `direct_burner`. (No `VAULT_REBASER` or queue-processor equivalent
-  on SVM — no vault, no redemption queue.)
+  `direct_burner`. (No queue-processor equivalent on SVM — no
+  redemption queue.)
 - Compromise allows multiplier manipulation and buffer drain —
   material but bounded. On EVM, compromise also allows skipping
   ahead in the redemption queue. On SVM, compromise allows direct
@@ -411,9 +413,9 @@ One role per action. No role performs more than one function.
 
 | Entity | EVM Roles | SVM Roles |
 |---|---|---|
-| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, RESERVE_MANAGER | role_admin, unpauser, cap_manager, allowance_manager, buffer_withdrawer |
+| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, VAULT_RESCUER | role_admin, unpauser, cap_manager, allowance_manager, buffer_withdrawer |
 | Warm Multisig | all PAUSER, all BLACKLISTER | pauser, freezer |
-| Orchestrator | OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR | rebaser, buffer_depositor, direct_minter, direct_burner |
+| Orchestrator | OKUM_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR | rebaser, buffer_depositor, direct_minter, direct_burner |
 | LitePSM | OKUM_MINTER, OKUM_BURNER (cycle 4: split on EVM) | Mint authority on OkuM Token-2022 mint |
 | RedemptionQueue | OKUM_BURNER (cycle 4) | no SVM equivalent — redemption queue removed entirely, buffer-only PSM |
 
@@ -448,8 +450,10 @@ the company*, not protection *against* the company.
 - Drain the USDC buffer (`withdrawUsdc` / `withdraw_buffer`). On EVM,
   bounded by pending redemption-queue obligations; on SVM, bounded
   only by the vault's current balance (no queue to protect).
-- Withdraw OkuMoney surplus from the vault (`withdrawSurplus` /
-  `withdraw_reserves`) down to the `minCollateralRatio` floor (EVM only).
+- Rescue OkuMoney donated directly to the EVM vault (`rescueDonation`)
+  — cannot touch OkuM backing outstanding shares; there is no
+  "surplus" beyond accidental donations under the single-multiplier
+  design (collateralization is exactly 1.0 by construction).
 - Grant any role to any address (DEFAULT_ADMIN_ROLE / role_admin SVM).
 - Unblacklist, unpause, unfreeze ATAs.
 - Rotate operational authority pubkeys.
@@ -457,10 +461,9 @@ the company*, not protection *against* the company.
 **Cannot (on-chain code prevents even at quorum):**
 - Mint above `maxSupply` or `minterAllowance`.
 - Set `okuMMultiplier` (EVM) / `multiplier` (SVM) below current (monotonic).
-- Set `usdMultiplier` below current (EVM only — SVM has no vault).
-- Push the vault below `minCollateralRatio` via surplus withdrawal (EVM only).
+- Set a yield rate outside `[PRECISION, MAX_RATE]` (EVM).
 - Set `maxSupply` below current `totalSupply`.
-- Set `minCollateralRatio` below the 90 % hard floor (EVM only).
+- Rescue any OkuM below `totalUsdShares` (EVM `rescueDonation`).
 
 #### Warm Multisig (lower-quorum, faster to sign)
 
@@ -477,14 +480,13 @@ the company*, not protection *against* the company.
 #### Orchestrator (KMS-backed, automated)
 
 **Can:**
-- Update `okuMMultiplier` (EVM) / `multiplier` (SVM)
-  (non-decreasing, bounded by `MAX_MULTIPLIER`). A compromised
-  rebaser key can ratchet the multiplier toward the ceiling,
-  inflating token dollar value beyond the actual T-Bill backing rate.
-- Update `usdMultiplier` on EVM (bounded by `MAX_USD_MULTIPLIER`).
-  An extreme bump would push the vault toward the
-  `minCollateralRatio` floor, requiring Oku to deposit more
-  reserves. (Not applicable on SVM — no vault.)
+- Update the OkuM yield-rate schedule (EVM: `setOkuMYieldRate` /
+  `setNextOkuMYieldRate`, bounded by `[PRECISION, MAX_RATE]`) or the
+  multiplier directly (SVM: `set_multiplier`, non-decreasing, bounded
+  by `MAX_MULTIPLIER`). A compromised rebaser key can ratchet the
+  multiplier toward the ceiling, inflating token dollar value beyond
+  the actual T-Bill backing rate. On EVM this single schedule governs
+  **both** OkuM and UsdOku, since UsdOku has no rate of its own.
 - Process the redemption queue (EVM only — SVM has no queue).
 - Deposit USDC to the PSM buffer.
 - Call `mintOkuM` / `redeemOkuM` (EVM) or `mint_oku_m` /
@@ -784,7 +786,6 @@ PRIVATE_KEY=<evm-key> tsx scripts/test/bridge-svm-evm.ts \
 |---|---|---|
 | `maxSupply` | 1 B OkuM (1e27 raw) | 1 B token cap. |
 | `minterAllowance` | 1 B OkuM | Matches `maxSupply` (effectively uncapped on testnet). **Production**: 1 % of weekly bridging volume, weekly rotation. |
-| `minCollateralRatio` | 100 % (1e18) | Full backing at deploy; lowerable post-deploy. |
 
 **SVM (`SVM/oku-programs/scripts/config/constants.ts`):**
 

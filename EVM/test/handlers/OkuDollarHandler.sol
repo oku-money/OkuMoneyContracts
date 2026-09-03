@@ -178,24 +178,28 @@ contract OkuDollarHandler is Test {
         // Stay above PRECISION (no negative yield) and below MAX_RATE.
         rate = bound(rate, PRECISION, TestConstants.MAX_RATE);
         endOffset = bound(endOffset, 1 hours, 365 days);
+        // A halted rate (== PRECISION) requires endTimestamp == 0; any yielding
+        // rate requires a bounded future window — see setOkuMYieldRate's NatSpec.
+        uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + endOffset;
 
         vm.prank(rebaser);
-        try okuMoney.setOkuMYieldRate(rate, block.timestamp + endOffset) {}
+        try okuMoney.setOkuMYieldRate(rate, endTimestamp) {}
         catch {
             ghostSetYieldRateReverts++;
         }
     }
 
-    function setNextOkuMYieldRate(uint256 rate) external {
+    function setNextOkuMYieldRate(uint256 rate, uint256 pendingEndOffset) external {
         ghostSetNextYieldRateCalls++;
         rate = bound(rate, PRECISION, TestConstants.MAX_RATE);
+        pendingEndOffset = bound(pendingEndOffset, 1 hours, 365 days);
 
         // Pre-check: contract requires okuMRateEnd != 0 AND not yet expired.
         uint256 endTs = okuMoney.okuMRateEnd();
         if (endTs == 0 || block.timestamp >= endTs) return;
 
         vm.prank(rebaser);
-        try okuMoney.setNextOkuMYieldRate(rate) {}
+        try okuMoney.setNextOkuMYieldRate(rate, endTs + pendingEndOffset) {}
         catch {
             ghostSetNextYieldRateReverts++;
         }

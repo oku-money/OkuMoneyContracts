@@ -36,7 +36,7 @@ library Constants {
     /// @notice Standard precision for price and multiplier calculations (1e18 = $1.00)
     uint256 public constant PRECISION = 1e18;
 
-    /// @notice Maximum yield rate: PRECISION + 1e11 ≈ 3700% APY safety cap.
+    /// @notice Maximum yield rate: PRECISION + 1e11 ≈ 2242% APY safety cap.
     /// @dev Far above any plausible T-Bill rate; bounds the per-second compounding
     ///      input to {MathLib.rpow} away from overflow regions. NOTE: this caps
     ///      the *per-second compounding rate*, NOT the cumulative multiplier
@@ -60,11 +60,9 @@ library Constants {
     /// @notice Basis points denominator (10000 = 100%)
     uint256 public constant BASIS_POINTS = 10_000;
 
-    // ============ Vault / Collateralization ============
-
-    /// @notice Hard floor for OkuDollar minimum collateral ratio (90% of PRECISION).
-    /// @dev Mirrors the SVM-side floor so cross-chain accounting stays consistent.
-    uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = 9e17;
+    // REMOVED (single-multiplier refactor): MIN_COLLATERAL_RATIO_FLOOR —
+    // collateralization is exactly 1.0 by construction, so there is no
+    // minCollateralRatio to floor.
 
     /// @notice Maximum supported USDC decimal count.
     /// @dev USDC implementations on EVM chains use 6 decimals; allowing up to 18 keeps

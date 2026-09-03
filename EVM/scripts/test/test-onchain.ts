@@ -638,11 +638,13 @@ async function stepSetOkuMYieldRate(ctx: TestCtx) {
   logger.success("Yield rate schedule written and verified");
 
   // Stage a successor rate off the bounded window just set. It activates off the
-  // absolute okuMRateEnd timestamp with no tx at the boundary.
+  // absolute okuMRateEnd timestamp with no tx at the boundary. pendingEndTimestamp
+  // bounds how long the successor itself can compound unattended.
   const nextRate = apyToRatePerSecond(0.0325); // 3.25% APY
+  const pendingEndTimestamp = endAfter + 86_400n; // +1 day past its own activation
   await waitForTx(
-    await ctx.okuMoney.setNextOkuMYieldRate(nextRate),
-    `okuMoney.setNextOkuMYieldRate(${describeRate(nextRate)})`
+    await ctx.okuMoney.setNextOkuMYieldRate(nextRate, pendingEndTimestamp),
+    `okuMoney.setNextOkuMYieldRate(${describeRate(nextRate)}, pendingEnd=${pendingEndTimestamp})`
   );
   const staged: bigint = await ctx.okuMoney.okuMPendingRatePerSecond();
   if (staged !== nextRate) throw new Error(`Staged rate is ${staged}, expected ${nextRate}`);

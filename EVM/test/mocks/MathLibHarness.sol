@@ -57,28 +57,7 @@ contract MathLibHarness {
     {
         return MathLib.usdcToDollars(usdcAmount, decimalMultiplier);
     }
-
-    function wrappedSharesFromOkuM(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
-    )
-        external
-        pure
-        returns (uint256)
-    {
-        return MathLib.wrappedSharesFromOkuM(okuMAmount, okuMMult, usdMult);
-    }
-
-    function okuMToWrappedUsd(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
-    )
-        external
-        pure
-        returns (uint256)
-    {
-        return MathLib.okuMToWrappedUsd(okuMAmount, okuMMult, usdMult);
-    }
+    // REMOVED (single-multiplier collapse): wrappedSharesFromOkuM / okuMToWrappedUsd
+    // harness entries — MathLib no longer carries these two-multiplier helpers.
+    // `okuMToDollars` above covers the single-multiplier equivalent.
 }

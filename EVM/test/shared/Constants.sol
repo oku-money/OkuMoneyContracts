@@ -26,8 +26,8 @@ library TestConstants {
     /// @notice Basis points denominator (10000 = 100%)
     uint256 public constant BASIS_POINTS = SrcConstants.BASIS_POINTS;
 
-    /// @notice OkuDollar minimum collateral ratio floor (re-exported for tests)
-    uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = SrcConstants.MIN_COLLATERAL_RATIO_FLOOR;
+    // REMOVED (single-multiplier refactor): MIN_COLLATERAL_RATIO_FLOOR re-export —
+    // see src/lib/Constants.sol.
 
     // ============ Test-Only Constants ============
 

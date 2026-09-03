@@ -10,6 +10,8 @@ pragma solidity 0.8.28;
  *      off-chain consumers and test scaffolding.
  */
 interface IOkuDollar {
+    /// @notice Underlying asset (OkuMoney address). ERC-4626 `asset()`.
+    function asset() external view returns (address);
     /// @notice Wrap OkuMoney into OkuDollar.
     function wrap(
         uint256 okuMAmount,

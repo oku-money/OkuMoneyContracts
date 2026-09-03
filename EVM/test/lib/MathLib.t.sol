@@ -24,18 +24,6 @@ contract OldMathShadow {
         return (a * PRECISION) / b;
     }
 
-    function wrappedSharesFromOkuM(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
-    )
-        external
-        pure
-        returns (uint256)
-    {
-        return (okuMAmount * okuMMult) / usdMult;
-    }
-
     function unwrapSharesCeil(uint256 usdAmount, uint256 usdMult) external pure returns (uint256) {
         // Pre-migration ceiling-div pattern from OkuDollar.unwrap.
         return ((usdAmount * PRECISION) + usdMult - 1) / usdMult;
@@ -151,16 +139,11 @@ contract MathLibTest is Test {
         assertEq(h.dollarsToUsdc(dollars, dm), usdc);
     }
 
-    function test_WrappedSharesFromOkuM_MatchesOkuMToWrappedUsd() public view {
-        // Tight identity: okuMToWrappedUsd is wrappedSharesFromOkuM rescaled by
-        // usdMult/PRECISION. Both helpers must agree on the same truncation path.
-        uint256 okuM = 100e18;
-        uint256 okuMMult = 105e16;
-        uint256 usdMult = 11e17; // 1.1
-        uint256 shares = h.wrappedSharesFromOkuM(okuM, okuMMult, usdMult);
-        uint256 expectedUsd = Math.mulDiv(shares, usdMult, PRECISION, Math.Rounding.Floor);
-        assertEq(h.okuMToWrappedUsd(okuM, okuMMult, usdMult), expectedUsd);
-    }
+    // REMOVED (single-multiplier collapse): test_WrappedSharesFromOkuM_MatchesOkuMToWrappedUsd
+    // — `wrappedSharesFromOkuM` / `okuMToWrappedUsd` were deleted from MathLib. Under
+    // the single-multiplier design `wrap`'s share formula is the identity
+    // (mulDiv(a, m, m) == a) and its dollar output is exactly `okuMToDollars`, so
+    // there is no separate two-multiplier helper left to pin an identity between.
 
     // ============ mulDiv migration: intermediate-overflow safety ============
     //
@@ -204,41 +187,9 @@ contract MathLibTest is Test {
         assertEq(result, dollarValue);
     }
 
-    /// @notice `wrappedSharesFromOkuM` succeeds at intermediate overflow.
-    function test_WrappedSharesFromOkuM_IntermediateOverflow_NewImplSucceeds() public view {
-        // okuMAmount * okuMMult = 2^200 * 2^60 = 2^260 > 2^256
-        // shares = 2^260 / 2^60 = 2^200 (fits)
-        uint256 okuMAmount = 2 ** 200;
-        uint256 okuMMult = 2 ** 60;
-        uint256 usdMult = 2 ** 60;
-        uint256 shares = h.wrappedSharesFromOkuM(okuMAmount, okuMMult, usdMult);
-        assertEq(shares, 2 ** 200);
-    }
-
-    /// @notice `okuMToWrappedUsd` succeeds at intermediate overflow on BOTH
-    ///         internal mulDiv steps. Pre-mulDiv this reverted on either the
-    ///         shares step or the usdMinted step depending on input shape.
-    function test_OkuMToWrappedUsd_IntermediateOverflow_NewImplSucceeds() public view {
-        // First step: okuMAmount * okuMMult overflows uint256.
-        //   okuMAmount = 2^150, okuMMult = 2^150 -> product = 2^300
-        //   shares = 2^300 / usdMult
-        // Pick usdMult = 2^150 -> shares = 2^150 (fits).
-        // Second step: shares * usdMult = 2^150 * 2^150 = 2^300 (overflows again).
-        //   usdMinted = 2^300 / PRECISION
-        // So BOTH internal mulDivs require 512-bit intermediates.
-        uint256 okuMAmount = 2 ** 150;
-        uint256 okuMMult = 2 ** 150;
-        uint256 usdMult = 2 ** 150;
-
-        uint256 usdMinted = h.okuMToWrappedUsd(okuMAmount, okuMMult, usdMult);
-
-        // Verify against the canonical mulDiv-based expectation.
-        uint256 shares = Math.mulDiv(okuMAmount, okuMMult, usdMult, Math.Rounding.Floor);
-        uint256 expected = Math.mulDiv(shares, usdMult, PRECISION, Math.Rounding.Floor);
-        assertEq(usdMinted, expected);
-        // Sanity: result is large but fits in uint256.
-        assertGt(usdMinted, 2 ** 240);
-    }
+    // REMOVED (single-multiplier collapse): test_WrappedSharesFromOkuM_IntermediateOverflow_NewImplSucceeds
+    // and test_OkuMToWrappedUsd_IntermediateOverflow_NewImplSucceeds — both pinned
+    // the deleted two-multiplier helpers.
 
     /// @notice Side-by-side: NEW `okuMToDollars` succeeds while the SHADOW of
     ///         the OLD `(a * b) / PRECISION` arithmetic REVERTS on the same
@@ -272,18 +223,8 @@ contract MathLibTest is Test {
         assertEq(result, dollarValue);
     }
 
-    /// @notice Side-by-side: NEW `wrappedSharesFromOkuM` succeeds while OLD reverts.
-    function test_WrappedSharesFromOkuM_OldReverts_NewSucceeds() public {
-        uint256 okuMAmount = 2 ** 200;
-        uint256 okuMMult = 2 ** 60;
-        uint256 usdMult = 2 ** 60;
-
-        vm.expectRevert();
-        old.wrappedSharesFromOkuM(okuMAmount, okuMMult, usdMult);
-
-        uint256 shares = h.wrappedSharesFromOkuM(okuMAmount, okuMMult, usdMult);
-        assertEq(shares, 2 ** 200);
-    }
+    // REMOVED (single-multiplier collapse): test_WrappedSharesFromOkuM_OldReverts_NewSucceeds
+    // — pinned the deleted `wrappedSharesFromOkuM` helper.
 
     /// @notice Side-by-side for the ONLY ceil site in the protocol
     ///         (`OkuDollar.unwrap`'s `sharesToBurn`). The OLD ceil pattern

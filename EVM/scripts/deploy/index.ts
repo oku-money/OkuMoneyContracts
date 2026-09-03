@@ -547,6 +547,9 @@ async function deployPSM(
   logger.step(3, "Deploying LitePSM");
 
   // LitePSM.initialize(okuMoney, okuDollar, usdc, redemptionQueue, admin).
+  // On-chain wiring check: initialize() reverts AssetMismatch if okuDollar.asset()
+  // != okuMoney, so a swapped/mismatched address pair fails loudly here rather than
+  // silently mispricing every PSM/vault operation downstream.
   const litePSM = await deployUUPSProxy(
     "LitePSM",
     [

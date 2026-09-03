@@ -206,7 +206,7 @@ describe("OkuDollar Vault Scenarios", () => {
     })
 
     describe("Exchange Rate After NotePrice Update", () => {
-        it("NotePrice increase creates surplus, unwrap returns fewer notes (price-aware)", async () => {
+        it("NotePrice increase: unwrap returns fewer notes (price-aware), vault stays fully drained on full exit", async () => {
             const aliceAddr = await Alice.getAddress()
             const okuUsdAddr = await okuUsd.getAddress()
             const depositAmount = parseUnits("10000", 6)
@@ -251,8 +251,10 @@ describe("OkuDollar Vault Scenarios", () => {
             const expectedNotes = (okuUsdBalance * usdMult) / newPrice
             expect(notesReturned).to.be.closeTo(expectedNotes, 1n)
 
-            // Vault should be nearly empty (surplus notes remain)
-            expect(await okuUsd.totalOkuMReserves()).to.be.closeTo(surplus, 1n)
+            // Vault should be (near-)empty: shares track raw OkuM 1:1 under the
+            // single-multiplier design, so unwrapping the only depositor's full
+            // balance drains reserves to ~0, not a leftover "surplus".
+            expect(await okuUsd.totalOkuMReserves()).to.be.closeTo(0n, 1n)
         })
     })
 
@@ -305,12 +307,11 @@ describe("OkuDollar Vault Scenarios", () => {
             expect(bobUsdGained).to.be.closeTo(aliceUsdGained * 2n, aliceUsdGained / 10n)
             expect(charlieUsdGained).to.be.closeTo(aliceUsdGained * 3n, aliceUsdGained / 10n)
 
-            // Admin increases notePrice by 10% — vault accumulates surplus
+            // Admin increases notePrice by 10%. Collateralization stays exactly 1.0
+            // under the single-multiplier design (no surplus() to check).
             const priceBefore = await okuMoney.okuMMultiplier()
             const newPrice = priceBefore * 110n / 100n
             await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
-
-            // REMOVED: surplus() — see note above. Collateralization is 1.0 always.
 
             // Users unwrap their gained OkuDollar in reverse order
             // Unwrap is price-aware: notesReturned = usdAmount × usdMultiplier / notePrice

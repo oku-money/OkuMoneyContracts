@@ -200,7 +200,12 @@ contract OkuDollarFuzzTest is BaseTest {
         );
     }
 
-    /// @notice Wrap rounding at elevated note price
+    /// @notice Wrap share-minting at an elevated multiplier is the exact identity.
+    /// @dev SINGLE MULTIPLIER: `sharesToMint == actualReceived` always (the contract
+    ///      no longer computes `mulDiv(amount, okuMMultiplier, usdMultiplier)` — with
+    ///      both multipliers provably equal, that mulDiv IS the identity, so `wrap`
+    ///      assigns shares directly). Only the dollar VALUE credited scales with the
+    ///      multiplier, via a single `okuMToDollars` conversion.
     function testFuzz_WrapRoundingAtHighNotePrice(
         uint256 okuMAmount,
         uint256 okuMMultiplier
@@ -213,28 +218,13 @@ contract OkuDollarFuzzTest is BaseTest {
         _setOkuMMultiplierAndRoll(okuMMultiplier);
 
         uint256 mult = okuDollar.usdMultiplier();
-
-        // usdMinted = okuMAmount × okuMMultiplier / usdMultiplier
-        uint256 expectedUsd = Math.mulDiv(okuMAmount, okuMMultiplier, mult, Math.Rounding.Floor);
-        // sharesToMint = usdMinted × PRECISION / usdMultiplier
-        uint256 expectedShares = Math.mulDiv(expectedUsd, PRECISION, mult, Math.Rounding.Floor);
-
-        if (expectedShares == 0) return;
-
-        uint256 impliedDollarValue =
-            Math.mulDiv(expectedShares, mult, PRECISION, Math.Rounding.Floor);
-        uint256 notesDollarValue =
-            Math.mulDiv(okuMAmount, okuMMultiplier, PRECISION, Math.Rounding.Floor);
-        assertLe(
-            impliedDollarValue, notesDollarValue, "Wrap rounding must favor vault at any note price"
-        );
+        uint256 expectedDollarValue = Math.mulDiv(okuMAmount, mult, PRECISION, Math.Rounding.Floor);
 
         vm.prank(user1);
-        okuDollar.wrap(okuMAmount, user1, 0);
+        uint256 usdMinted = okuDollar.wrap(okuMAmount, user1, 0);
 
-        assertEq(
-            okuDollar.usdSharesOf(user1), expectedShares, "Shares match at elevated note price"
-        );
+        assertEq(okuDollar.usdSharesOf(user1), okuMAmount, "Shares are the exact identity");
+        assertEq(usdMinted, expectedDollarValue, "Dollar value matches okuMToDollars exactly");
     }
 
     // ============ 3. Unwrap Rounding Favors Vault ============
@@ -314,12 +304,7 @@ contract OkuDollarFuzzTest is BaseTest {
     // `rescueDonation`, which recovers OkuM transferred directly to the vault.
 
     /// @notice `rescueDonation` can recover exactly the donated OkuM and no more.
-    function testFuzz_RescueDonationBoundedByDonation(
-        uint256 okuMAmount,
-        uint256 donation
-    )
-        public
-    {
+    function testFuzz_RescueDonationBoundedByDonation(uint256 okuMAmount, uint256 donation) public {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 4);
         donation = bound(donation, 1e6, okuMoney.balanceOf(user2) / 4);
 
@@ -382,10 +367,17 @@ contract OkuDollarFuzzTest is BaseTest {
         assertEq(okuDollar.balanceOf(user1), expected, "Balance formula must hold after rebase");
     }
 
-    /// @notice OkuDollar balance NOT affected by okuMMultiplier changes
-    /// @dev okuMMultiplier increase doesn't change usdShares or usdMultiplier,
-    ///      so OkuDollar balanceOf is unchanged. Only collateralization changes.
-    function testFuzz_OkuUsdBalanceUnchangedByNotePrice(
+    /// @notice OkuDollar shares are untouched by an okuMMultiplier change; balance
+    ///         moves in lockstep with it (single-multiplier design).
+    /// @dev PREVIOUSLY (dual-multiplier design) `usdMultiplier` was independent of
+    ///      `okuMMultiplier`, so `balanceOf` (shares × usdMultiplier) was provably
+    ///      unaffected by an OkuM-side price move. Under the single-multiplier
+    ///      design `usdMultiplier() == okuMMultiplier()` by construction, so moving
+    ///      one moves the other — the invariant worth asserting is that the
+    ///      internal SHARE accounting is untouched, and that balance tracks the
+    ///      formula exactly (shares × new multiplier / PRECISION), not that it's
+    ///      frozen.
+    function testFuzz_OkuUsdBalanceTracksOkuMMultiplier(
         uint256 okuMAmount,
         uint256 newNotePrice
     )
@@ -396,7 +388,6 @@ contract OkuDollarFuzzTest is BaseTest {
         vm.prank(user1);
         okuDollar.wrap(okuMAmount, user1, 0);
 
-        uint256 balanceBefore = okuDollar.balanceOf(user1);
         uint256 sharesBefore = okuDollar.usdSharesOf(user1);
 
         newNotePrice = _boundOkuMMultiplier(newNotePrice);
@@ -408,7 +399,11 @@ contract OkuDollarFuzzTest is BaseTest {
         uint256 sharesAfter = okuDollar.usdSharesOf(user1);
 
         assertEq(sharesAfter, sharesBefore, "Shares unchanged by okuMMultiplier");
-        assertEq(balanceAfter, balanceBefore, "OkuDollar balance unchanged by okuMMultiplier");
+        assertEq(
+            balanceAfter,
+            Math.mulDiv(sharesAfter, newNotePrice, PRECISION, Math.Rounding.Floor),
+            "Balance must track shares * okuMMultiplier / PRECISION exactly"
+        );
     }
 
     /// @notice totalSupply == totalUsdShares * usdMultiplier / PRECISION

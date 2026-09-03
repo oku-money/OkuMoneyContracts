@@ -9,11 +9,11 @@ import {MathLib} from "../../src/lib/MathLib.sol";
  * @title LitePSMFuzzTest
  * @notice Fuzz tests for LitePSM mint paths that exercise multiplier-driven rounding.
  * @dev Focused on `mintUsdOku`: the path that flows USDC -> mint OkuM -> wrap -> UsdOku.
- *      The slippage floor passed to {OkuDollar.wrap} is computed via
- *      {MathLib.okuMToWrappedUsd} which replicates wrap's two-step floor math exactly.
- *      These fuzz tests pin the invariant that any USDC amount at any reachable
- *      (okuMMultiplier, usdMultiplier) pair must mint without reverting on rounding,
- *      and the minted UsdOku must match the helper-computed value within share-conversion drift.
+ *      SINGLE MULTIPLIER: `usdMultiplier() == okuMMultiplier()` always, so `wrap`'s
+ *      dollar output is exactly {MathLib.okuMToDollars} — no separate wrap-replica
+ *      helper needed. These fuzz tests pin the invariant that any USDC amount at any
+ *      reachable multiplier must mint without reverting on rounding, and the minted
+ *      UsdOku must match the helper-computed value within share-conversion drift.
  */
 contract LitePSMFuzzTest is BaseTest {
     // ============ Setup ============
@@ -27,18 +27,13 @@ contract LitePSMFuzzTest is BaseTest {
 
     // ============ Helpers ============
 
-    function _expectedUsdMinted(
-        uint256 usdcAmount,
-        uint256 okuMMult,
-        uint256 usdMult
-    )
-        internal
-        pure
-        returns (uint256)
-    {
+    /// @dev SINGLE MULTIPLIER: only one multiplier is meaningful now; the parameter
+    ///      list is kept 2-wide (rather than collapsing call sites) so the diff
+    ///      against the historical dual-multiplier signature stays obvious.
+    function _expectedUsdMinted(uint256 usdcAmount, uint256 mult) internal pure returns (uint256) {
         uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
-        uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, okuMMult);
-        return MathLib.okuMToWrappedUsd(okuMAmount, okuMMult, usdMult);
+        uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, mult);
+        return MathLib.okuMToDollars(okuMAmount, mult);
     }
 
     // ============ mintUsdOku Rounding Invariants ============
@@ -60,7 +55,7 @@ contract LitePSMFuzzTest is BaseTest {
         _setOkuMMultiplierAndRoll(okuMMultiplier);
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
-        uint256 expected = _expectedUsdMinted(usdcAmount, okuMMultiplier, okuDollar.usdMultiplier());
+        uint256 expected = _expectedUsdMinted(usdcAmount, okuMMultiplier);
 
         uint256 balBefore = okuDollar.balanceOf(user1);
         vm.prank(user1);
@@ -74,34 +69,38 @@ contract LitePSMFuzzTest is BaseTest {
         assertLe(minted, usdcAmount * DECIMAL_MULTIPLIER, "minted <= deposited dollar value");
     }
 
-    /// @notice mintUsdOku at varying (okuMMultiplier, usdMultiplier) pairs.
-    ///         Exercises the dual-multiplier rounding interaction.
-    function testFuzz_MintUsdOku_DualMultiplier(
+    /// @notice mintUsdOku at a varying elevated shared multiplier.
+    /// @dev PREVIOUSLY (dual-multiplier design) this fuzzed okuMMultiplier and
+    ///      usdMultiplier as two INDEPENDENT targets to exercise their
+    ///      cross-rate rounding interaction. Under the single-multiplier design
+    ///      there is only one value: elevating it and then trying to move it to a
+    ///      second, independently-fuzzed (and possibly lower) target via
+    ///      `_setOkuMMultiplierAndRoll` would revert `MultiplierCannotDecrease`.
+    ///      A single fuzzed elevation still exercises the same rounding path,
+    ///      since `_expectedUsdMinted` independently takes an okuMMult and a
+    ///      usdMult argument — they're just guaranteed equal now.
+    function testFuzz_MintUsdOku_AtElevatedMultiplier(
         uint256 usdcAmount,
-        uint256 okuMMultInput,
-        uint256 usdMultTarget
+        uint256 multTarget
     )
         public
     {
         usdcAmount = bound(usdcAmount, 1e6, 100_000e6);
 
-        // Bound the okuM multiplier to a realistic range.
-        uint256 okuMMult = _boundOkuMMultiplier(okuMMultInput);
+        // Bound the target to [PRECISION, 2 * PRECISION]. The elevate helper only
+        // goes up, and may not reach the exact target; we read back the actual
+        // value after.
+        multTarget = bound(multTarget, PRECISION, 2 * PRECISION);
 
-        // Bound the target usdMultiplier to [PRECISION, 2 * PRECISION]. The elevate
-        // helper only goes up, and may not reach the exact target; we read back the
-        // actual value after.
-        usdMultTarget = bound(usdMultTarget, PRECISION, 2 * PRECISION);
-
-        _elevateUsdMultiplier(usdMultTarget); // rolls block internally via warps
-        _setOkuMMultiplierAndRoll(okuMMult); // also rolls a block
+        _elevateUsdMultiplier(multTarget); // rolls block internally via warps
 
         uint256 actualUsdMult = okuDollar.usdMultiplier();
         uint256 actualOkuMMult = okuMoney.okuMMultiplier();
+        assertEq(actualOkuMMult, actualUsdMult, "single multiplier: both reads must agree");
 
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
-        uint256 expected = _expectedUsdMinted(usdcAmount, actualOkuMMult, actualUsdMult);
+        uint256 expected = _expectedUsdMinted(usdcAmount, actualOkuMMult);
 
         uint256 balBefore = okuDollar.balanceOf(user1);
         vm.prank(user1);

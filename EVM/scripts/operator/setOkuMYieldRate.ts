@@ -8,18 +8,24 @@
  *
  * TWO PATHS:
  *
- *   --stage  (PREFERRED)  -> setNextOkuMYieldRate(rate)
+ *   --stage  (PREFERRED)  -> setNextOkuMYieldRate(rate, pendingEndTimestamp)
  *       Pre-stages the successor rate. It activates off the absolute `okuMRateEnd`
  *       timestamp INSIDE the view function, with NO transaction at the boundary.
  *       Staging txs may therefore land on different chains days apart and the
  *       activation is still simultaneous to the second. This is the primitive that
- *       makes the rear-facing epoch pipeline cross-chain safe.
+ *       makes the rear-facing epoch pipeline cross-chain safe. `pendingEndTimestamp`
+ *       must itself be strictly after the CURRENT `okuMRateEnd` — it bounds how long
+ *       the successor can compound unattended before accrual halts.
  *
  *   (default)             -> setOkuMYieldRate(rate, endTimestamp)
  *       Re-anchors the accrual base at `block.timestamp`. Broadcast skew between
  *       chains causes a permanent divergence of (r_old/r_new)^delta — negligible
  *       for routine changes (~1e-10), but material for the initial 0% -> r
  *       activation. Use for activation and corrections; prefer --stage otherwise.
+ *       `endTimestamp` MUST be strictly in the future for any yielding rate
+ *       (`--rate`/`--apy` > 0) — every yielding rate carries a bounded window, so
+ *       there is no "open-ended" mode any more. `endTimestamp=0` is only valid
+ *       when explicitly halting via `--rate` equal to `PRECISION` (1e18).
  *
  * Rate is DERIVED from --apy via scripts/utils/yieldRate.ts so every chain gets a
  * byte-identical integer. Passing a raw --rate is supported for corrections but
@@ -29,16 +35,17 @@
  *   NETWORK=base npx hardhat run scripts/operator/setOkuMYieldRate.ts --network base \
  *       --apy 0.03 --endTimestamp 1767225600
  *   NETWORK=base npx hardhat run scripts/operator/setOkuMYieldRate.ts --network base \
- *       --apy 0.0325 --stage
+ *       --apy 0.0325 --stage --pendingEndTimestamp 1769904000
  *   DRY_RUN=true APY=0.03 NETWORK=base npx hardhat run ... --network base
  *
  * Flags / env:
- *   --apy=<fraction>          e.g. 0.03 for 3% (preferred)
- *   --rate=<1e18-scaled>      raw override; mutually exclusive with --apy
- *   --endTimestamp=<unix>     0 = open-ended. Ignored with --stage.
- *   --stage                   use setNextOkuMYieldRate instead
- *   DRY_RUN=true              simulate without submitting
- *   --yes-mainnet             required to broadcast on mainnet
+ *   --apy=<fraction>              e.g. 0.03 for 3% (preferred)
+ *   --rate=<1e18-scaled>          raw override; mutually exclusive with --apy
+ *   --endTimestamp=<unix>         required (> now) unless rate == PRECISION
+ *   --stage                       use setNextOkuMYieldRate instead
+ *   --pendingEndTimestamp=<unix>  required with --stage; must be > current okuMRateEnd
+ *   DRY_RUN=true                  simulate without submitting
+ *   --yes-mainnet                 required to broadcast on mainnet
  */
 
 import { ethers } from "hardhat";
@@ -76,15 +83,21 @@ async function main() {
   const endStr = parseArg("endTimestamp") ?? "0";
   const endTimestamp = BigInt(endStr);
   const now = BigInt(Math.floor(Date.now() / 1000));
-  if (!STAGE && endTimestamp !== 0n && endTimestamp <= now) {
-    throw new Error(`--endTimestamp (${endTimestamp}) must be 0 or > now (${now})`);
+  if (!STAGE) {
+    if (rate === PRECISION) {
+      if (endTimestamp !== 0n) throw new Error("Halting (--rate == PRECISION) requires endTimestamp == 0");
+    } else if (endTimestamp <= now) {
+      throw new Error(
+        `--endTimestamp (${endTimestamp}) must be > now (${now}) for any yielding rate — ` +
+          "open-ended yielding rates are no longer supported (every window is bounded)"
+      );
+    }
   }
-  if (!STAGE && endTimestamp === 0n) {
-    logger.warning(
-      "endTimestamp=0 (open-ended). setNextOkuMYieldRate will revert NoRateEndSet " +
-        "until a bounded window is set, forcing every future change through the " +
-        "skew-sensitive re-anchor path."
-    );
+
+  const pendingEndStr = parseArg("pendingEndTimestamp");
+  const pendingEndTimestamp = pendingEndStr ? BigInt(pendingEndStr) : 0n;
+  if (STAGE && !pendingEndStr) {
+    throw new Error("--stage requires --pendingEndTimestamp=<unix>, strictly after the current okuMRateEnd");
   }
 
   const okuMAddr = loadAddress(ctx.bookKey, "OkuMoney");
@@ -124,7 +137,7 @@ async function main() {
   }
 
   const tx = STAGE
-    ? await okuM.setNextOkuMYieldRate(rate)
+    ? await okuM.setNextOkuMYieldRate(rate, pendingEndTimestamp)
     : await okuM.setOkuMYieldRate(rate, endTimestamp);
   const receipt = await tx.wait(1);
   logger.success(`tx: ${receipt.hash}`);

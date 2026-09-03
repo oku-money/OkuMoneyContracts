@@ -19,6 +19,7 @@ import {
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
@@ -31,28 +32,12 @@ import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
 /**
  * @title OkuDollar
  * @notice Rebasing $1-pegged stablecoin (ticker `UsdOku`) wrapping OkuMoney.
- * @dev SINGLE MULTIPLIER DESIGN. OkuDollar has no independent yield rate. Its
- *      `usdMultiplier()` is exactly `okuMoney.okuMMultiplier()`, so OkuM and
- *      UsdOku necessarily earn identical yield. Protocol margin comes from the
- *      spread between off-chain RWA yield and the published on-chain rate, not
- *      from an on-chain rate differential.
- *
- *      Consequences of collapsing to one multiplier:
- *        - `wrap` reduces to `mulDiv(A, m, m) == A`, so `usdShares` are
- *          numerically identical to the raw OkuM deposited.
- *        - Collateralization is exactly 1.0 by construction: shares are only
- *          minted/burned 1:1 against real OkuM at the same `m`. The min-ratio /
- *          surplus / reserve-manager machinery is therefore gone.
- *        - The vault is structurally immune to the ERC-4626 inflation attack,
- *          because conversions use `m` rather than `totalAssets/totalSupply`.
- *          The corollary is that donated OkuM accrues to nobody — see {rescueDonation}.
- *
- *      ERC-4626: implements the {IERC4626} surface (OkuM = `asset`, UsdOku =
- *      `shares`) but does NOT inherit OpenZeppelin's `ERC4626Upgradeable`, whose
- *      `_convertTo*` assume a STATIC share balance with a floating ratio. UsdOku
- *      shares rebase: `balanceOf` grows with `m` while price stays pinned at $1.
- *      This is the stETH/aToken shape, and is why Aave ships aTokens as non-4626
- *      with a separate static wrapper.
+ * @dev SINGLE MULTIPLIER DESIGN: `usdMultiplier()` is exactly
+ *      `okuMoney.okuMMultiplier()` — OkuDollar has no independent yield rate. See
+ *      README.md § Token Model for the full rationale and consequences
+ *      (collateralization exactly 1.0, ERC-4626 inflation-attack immunity, why
+ *      donations need {rescueDonation}). See the "ERC-4626 Surface" section below
+ *      for why `ERC4626Upgradeable` is not inherited.
  *
  *      TERMINOLOGY HAZARD: internal `usdShares` (non-rebasing accounting unit) and
  *      ERC-4626 "shares" (the rebasing displayed balance) are DIFFERENT quantities
@@ -60,9 +45,7 @@ import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
  *
  *      See Constants.sol for terminology legend.
  *      See {OkuMoney.initialize} for the unified role-grant policy.
- *
- *      Storage uses the ERC-7201 namespaced storage pattern for upgrade safety.
- *      See https://eips.ethereum.org/EIPS/eip-7201
+ *      Storage uses ERC-7201 namespaced storage (https://eips.ethereum.org/EIPS/eip-7201).
  */
 contract OkuDollar is
     Initializable,
@@ -74,7 +57,8 @@ contract OkuDollar is
     YieldSandwichGuard,
     UUPSUpgradeable,
     OkuDollarEvents,
-    IOkuDollar
+    IOkuDollar,
+    IERC4626
 {
     using SafeERC20 for IERC20;
 
@@ -210,7 +194,12 @@ contract OkuDollar is
 
     // ============ ERC20 Overrides (USD Share-based) ============
 
-    function totalSupply() public view override(ERC20Upgradeable, IOkuDollar) returns (uint256) {
+    function totalSupply()
+        public
+        view
+        override(ERC20Upgradeable, IOkuDollar, IERC20)
+        returns (uint256)
+    {
         return Math.mulDiv(
             _getOkuDollarStorage().totalUsdShares,
             usdMultiplier(),
@@ -222,7 +211,7 @@ contract OkuDollar is
     function balanceOf(address account)
         public
         view
-        override(ERC20Upgradeable, IOkuDollar)
+        override(ERC20Upgradeable, IOkuDollar, IERC20)
         returns (uint256)
     {
         return Math.mulDiv(
@@ -233,10 +222,18 @@ contract OkuDollar is
         );
     }
 
-    function transfer(address to, uint256 amount) public override whenNotPaused returns (bool) {
+    function transfer(
+        address to,
+        uint256 amount
+    )
+        public
+        override(ERC20Upgradeable, IERC20)
+        whenNotPaused
+        returns (bool)
+    {
         uint256 multiplier = usdMultiplier();
         uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
-        _transferUsdShares(msg.sender, to, shares);
+        _transferUsdShares(msg.sender, to, shares, multiplier);
         // Emit `Transfer` with the effective post-rounding dollar amount
         // (`shares * multiplier / 1e18`) rather than the caller-specified
         // `amount`, keeping the ERC-20 invariant `sum(Transfer.value) ==
@@ -261,14 +258,14 @@ contract OkuDollar is
         uint256 amount
     )
         public
-        override
+        override(ERC20Upgradeable, IERC20)
         whenNotPaused
         returns (bool)
     {
         _spendAllowance(from, msg.sender, amount);
         uint256 multiplier = usdMultiplier();
         uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
-        _transferUsdShares(from, to, shares);
+        _transferUsdShares(from, to, shares, multiplier);
         // See `transfer` above.
         uint256 effective =
             Math.mulDiv(shares, multiplier, Constants.PRECISION, Math.Rounding.Floor);
@@ -278,7 +275,18 @@ contract OkuDollar is
 
     /// @dev Public ERC-20 `Transfer` event is emitted by the calling function with the
     ///      original token amount. This helper only tracks share movement + dollar value.
-    function _transferUsdShares(address from, address to, uint256 shares) internal {
+    ///      `multiplier` is threaded in by the caller (which already read
+    ///      `usdMultiplier()` to compute `shares`) rather than re-read here — halves
+    ///      the cross-contract `okuMoney.okuMMultiplier()` calls (and the `rpow` behind
+    ///      it) per `transfer`/`transferFrom`.
+    function _transferUsdShares(
+        address from,
+        address to,
+        uint256 shares,
+        uint256 multiplier
+    )
+        internal
+    {
         if (from == address(0)) revert Errors.ZeroAddress();
         if (to == address(0)) revert Errors.ZeroAddress();
 
@@ -291,7 +299,7 @@ contract OkuDollar is
         $.usdShares[from] = fromBalance - shares;
         $.usdShares[to] += shares;
         uint256 dollarValue =
-            Math.mulDiv(shares, usdMultiplier(), Constants.PRECISION, Math.Rounding.Floor);
+            Math.mulDiv(shares, multiplier, Constants.PRECISION, Math.Rounding.Floor);
         emit TransferValue(from, to, shares, dollarValue);
     }
 
@@ -324,6 +332,21 @@ contract OkuDollar is
         if ($.isBlacklisted[owner]) revert SenderBlacklisted();
         if ($.isBlacklisted[spender]) revert RecipientBlacklisted();
         super.permit(owner, spender, value, deadline, v, r, s);
+    }
+
+    /// @dev Blocks approving a blacklisted spender, mirroring {permit}'s posture.
+    ///      Does NOT retroactively revoke an allowance already granted before the
+    ///      spender was blacklisted — only new/updated approvals are blocked.
+    function approve(
+        address spender,
+        uint256 value
+    )
+        public
+        override(ERC20Upgradeable, IERC20)
+        returns (bool)
+    {
+        if (_getOkuDollarStorage().isBlacklisted[spender]) revert RecipientBlacklisted();
+        return super.approve(spender, value);
     }
 
     // ============ Inherited ERC20 guard ============
@@ -382,16 +405,15 @@ contract OkuDollar is
         IERC20(address($.okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
         uint256 actualReceived = IERC20(address($.okuMoney)).balanceOf(address(this)) - balBefore;
 
-        // shares = actualReceived * okuMMultiplier / usdMultiplier
-        // usdMinted = shares * usdMultiplier / PRECISION
-        // Both steps are sourced from MathLib so LitePSM.mintUsdOku can replicate
-        // wrap's exact rounding when computing its slippage floor.
-        uint256 okuMMult = $.okuMoney.okuMMultiplier();
-        uint256 usdMult = usdMultiplier();
-        uint256 sharesToMint = MathLib.wrappedSharesFromOkuM(actualReceived, okuMMult, usdMult);
+        // SINGLE MULTIPLIER: usdMultiplier() IS okuMoney.okuMMultiplier() (enforced at
+        // LitePSM.initialize / this contract's own asset() wiring), so shares track
+        // raw OkuM 1:1 exactly — mulDiv(actualReceived, m, m, Floor) == actualReceived,
+        // no rounding loss. One multiplier read instead of the historical two.
+        uint256 mult = $.okuMoney.okuMMultiplier();
+        uint256 sharesToMint = actualReceived;
         if (sharesToMint == 0) revert AmountTooSmall();
 
-        usdMinted = MathLib.okuMToWrappedUsd(actualReceived, okuMMult, usdMult);
+        usdMinted = MathLib.okuMToDollars(actualReceived, mult);
         if (usdMinted < minAmountOut) revert OutputBelowMinimum(usdMinted, minAmountOut);
 
         $.totalUsdShares += sharesToMint;
@@ -399,7 +421,11 @@ contract OkuDollar is
 
         emit Transfer(address(0), receiver, usdMinted);
         emit TransferValue(address(0), receiver, sharesToMint, usdMinted);
-        emit Wrapped(msg.sender, receiver, actualReceived, usdMinted, okuMMult, usdMult);
+        // `Wrapped`'s last two params are historically (okuMMultiplier, usdMultiplier)
+        // from the pre-collapse dual-multiplier design; both are `mult` here since
+        // they're now provably identical — kept for indexer/ABI compatibility rather
+        // than collapsing to a single param.
+        emit Wrapped(msg.sender, receiver, actualReceived, usdMinted, mult, mult);
         emit Deposit(msg.sender, receiver, actualReceived, usdMinted);
     }
 
@@ -421,11 +447,32 @@ contract OkuDollar is
         whenYieldNotDistributing
         returns (uint256 okuMReturned)
     {
+        return _unwrap(msg.sender, usdAmount, receiver);
+    }
+
+    /// @dev Shared core for {unwrap} and the ERC-4626 {withdraw}/{redeem} paths.
+    ///      `owner` is the share source (whose balance is burned); `msg.sender`
+    ///      (recorded via `_msgSender()`) is only relevant for the `Withdraw`
+    ///      event's `sender` field when acting on another owner's behalf via
+    ///      an allowance — see {_redeemShares}. Burning directly from `owner`
+    ///      here (rather than the old two-step "move internal shares to the
+    ///      spender, then unwrap as the spender" path) avoids computing the
+    ///      ceil-rounded share burn twice against two different balances,
+    ///      which could previously leave a third-party `withdraw`/`redeem`
+    ///      one share short of what the burn demanded.
+    function _unwrap(
+        address owner,
+        uint256 usdAmount,
+        address receiver
+    )
+        internal
+        returns (uint256 okuMReturned)
+    {
         if (usdAmount == 0) revert Errors.ZeroAmount();
         if (receiver == address(0)) revert Errors.ZeroAddress();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
-        if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();
+        if ($.isBlacklisted[owner]) revert SenderBlacklisted();
         // Symmetric with `wrap`: both sides of the principal flow are
         // checked. The receiver gets OkuMoney back, and OkuMoney's `_update`
         // hook independently enforces its own blacklist on the recipient.
@@ -434,27 +481,32 @@ contract OkuDollar is
         // via `unwrap(amount, victimAddr)`.
         if ($.isBlacklisted[receiver]) revert RecipientBlacklisted();
 
-        uint256 usdMult = usdMultiplier();
-        uint256 okuMMult = $.okuMoney.okuMMultiplier();
-        okuMReturned = Math.mulDiv(usdAmount, Constants.PRECISION, okuMMult, Math.Rounding.Floor);
+        // SINGLE MULTIPLIER: one external read instead of the historical two
+        // (usdMultiplier() would otherwise re-derive the identical value via its own
+        // call to okuMoney.okuMMultiplier()). The two mulDiv calls below still use
+        // DIFFERENT rounding directions on purpose — floor on the OkuM returned,
+        // ceil on the shares burned — both favor the vault; that asymmetry is a
+        // rounding-policy choice, not multiplier redundancy.
+        uint256 mult = $.okuMoney.okuMMultiplier();
+        okuMReturned = Math.mulDiv(usdAmount, Constants.PRECISION, mult, Math.Rounding.Floor);
 
         // Ceil to favor vault on share burn.
-        uint256 sharesToBurn =
-            Math.mulDiv(usdAmount, Constants.PRECISION, usdMult, Math.Rounding.Ceil);
-        if ($.usdShares[msg.sender] < sharesToBurn) revert Errors.InsufficientBalance();
+        uint256 sharesToBurn = Math.mulDiv(usdAmount, Constants.PRECISION, mult, Math.Rounding.Ceil);
+        if ($.usdShares[owner] < sharesToBurn) revert Errors.InsufficientBalance();
 
         uint256 reserves = IERC20(address($.okuMoney)).balanceOf(address(this));
         if (reserves < okuMReturned) revert InsufficientReserves();
 
         $.totalUsdShares -= sharesToBurn;
-        $.usdShares[msg.sender] -= sharesToBurn;
+        $.usdShares[owner] -= sharesToBurn;
 
         IERC20(address($.okuMoney)).safeTransfer(receiver, okuMReturned);
 
-        emit Transfer(msg.sender, address(0), usdAmount);
-        emit TransferValue(msg.sender, address(0), sharesToBurn, usdAmount);
-        emit Unwrapped(msg.sender, receiver, usdAmount, okuMReturned, okuMMult, usdMult);
-        emit Withdraw(msg.sender, receiver, msg.sender, okuMReturned, usdAmount);
+        emit Transfer(owner, address(0), usdAmount);
+        emit TransferValue(owner, address(0), sharesToBurn, usdAmount);
+        // See `wrap`'s NatSpec on the identical `mult, mult` pattern.
+        emit Unwrapped(owner, receiver, usdAmount, okuMReturned, mult, mult);
+        emit Withdraw(_msgSender(), receiver, owner, okuMReturned, usdAmount);
     }
 
     // ============ ERC-4626 Surface ============
@@ -467,7 +519,7 @@ contract OkuDollar is
     // which is what makes the vault structurally immune to the 4626 inflation attack.
 
     /// @notice Underlying asset (OkuMoney).
-    function asset() public view returns (address) {
+    function asset() public view override(IERC4626, IOkuDollar) returns (address) {
         return address(_getOkuDollarStorage().okuMoney);
     }
 
@@ -487,16 +539,27 @@ contract OkuDollar is
         return MathLib.dollarsToOkuM(shares, usdMultiplier());
     }
 
-    function maxDeposit(address) public pure returns (uint256) {
+    /// @dev Zero while paused or when `receiver` is blacklisted (deposits would
+    ///      revert on `wrap`'s own `whenNotPaused` / blacklist checks either way;
+    ///      this makes that visible to spec-conforming integrators via `maxDeposit`
+    ///      rather than only surfacing as a revert).
+    function maxDeposit(address receiver) public view returns (uint256) {
+        if (paused() || _getOkuDollarStorage().isBlacklisted[receiver]) return 0;
         return type(uint256).max;
     }
 
-    function maxMint(address) public pure returns (uint256) {
-        return type(uint256).max;
+    /// @dev Delegates to {maxDeposit}: both only ever return `0` or
+    ///      `type(uint256).max`, which are valid unlimited/blocked sentinels in
+    ///      either units (assets here vs. shares per spec), so no unit conversion
+    ///      is needed between the two.
+    function maxMint(address receiver) public view returns (uint256) {
+        return maxDeposit(receiver);
     }
 
+    /// @dev Spec requires the ASSET (OkuM) equivalent, not the raw share/dollar
+    ///      balance — `balanceOf(owner)` is dollars, not OkuM.
     function maxWithdraw(address owner) public view returns (uint256) {
-        return balanceOf(owner);
+        return convertToAssets(balanceOf(owner));
     }
 
     function maxRedeem(address owner) public view returns (uint256) {
@@ -524,11 +587,20 @@ contract OkuDollar is
     /// @notice Deposit `assets` OkuM, minting UsdOku to `receiver`.
     /// @dev Thin alias over {wrap}. The 4626 signature carries no slippage
     ///      parameter, so `minAmountOut` is 0 — EOAs should prefer {wrap}.
+    ///
+    ///      Deliberately carries NO `nonReentrant` / `whenNotPaused` /
+    ///      `whenYieldNotDistributing` of its own — `wrap` (called below) already
+    ///      enforces all three. Adding them here too would make this call
+    ///      re-enter `wrap`'s own `nonReentrant` guard and revert on every call;
+    ///      the asymmetry with {withdraw}/{redeem} (which DO carry explicit
+    ///      modifiers, since they route through the internal `_unwrap` rather than
+    ///      the public, already-guarded `unwrap`) is intentional, not an oversight.
     function deposit(uint256 assets, address receiver) external returns (uint256) {
         return wrap(assets, receiver, 0);
     }
 
     /// @notice Mint `shares` dollars of UsdOku to `receiver`.
+    /// @dev See {deposit} — no guards here either, for the same reason.
     function mint(uint256 shares, address receiver) external returns (uint256) {
         uint256 assets = previewMint(shares);
         wrap(assets, receiver, 0);
@@ -536,28 +608,40 @@ contract OkuDollar is
     }
 
     /// @notice Withdraw `assets` OkuM to `receiver`, burning `owner`'s UsdOku.
-    function withdraw(uint256 assets, address receiver, address owner) external returns (uint256) {
-        uint256 shares = previewWithdraw(assets);
-        _redeemShares(shares, receiver, owner);
-        return shares;
-    }
-
-    /// @notice Redeem `shares` dollars of UsdOku from `owner` for OkuM to `receiver`.
-    function redeem(uint256 shares, address receiver, address owner) external returns (uint256) {
+    function withdraw(
+        uint256 assets,
+        address receiver,
+        address owner
+    )
+        external
+        nonReentrant
+        whenNotPaused
+        whenYieldNotDistributing
+        returns (uint256 shares)
+    {
+        shares = previewWithdraw(assets);
         return _redeemShares(shares, receiver, owner);
     }
 
-    /// @dev Shared 4626 withdraw/redeem path. {unwrap} burns from `msg.sender`, so
-    ///      when acting for another owner we spend the allowance and move the
-    ///      internal shares across first.
-    ///
-    ///      KNOWN ISSUE (deferred to follow-up pass): the internal-share move below
-    ///      FLOORS, while `unwrap` CEILS `sharesToBurn`. When `usdMultiplier > 1e18`
-    ///      the spender can end up 1 share short of what `unwrap` demands, reverting
-    ///      with `InsufficientBalance` on an exact-balance third-party
-    ///      `withdraw`/`redeem`. Same floor-vs-ceil asymmetry that
-    ///      `LitePSM._redeemUsdOku` resolves with a balance-delta read; this path
-    ///      needs the equivalent treatment plus a targeted regression test.
+    /// @notice Redeem `shares` dollars of UsdOku from `owner` for OkuM to `receiver`.
+    function redeem(
+        uint256 shares,
+        address receiver,
+        address owner
+    )
+        external
+        nonReentrant
+        whenNotPaused
+        whenYieldNotDistributing
+        returns (uint256)
+    {
+        return _redeemShares(shares, receiver, owner);
+    }
+
+    /// @dev Shared 4626 withdraw/redeem path, guarded by the caller (`withdraw` /
+    ///      `redeem`). Spends `owner`'s allowance when acting on their behalf, then
+    ///      burns directly from `owner` via {_unwrap} — see that function's NatSpec
+    ///      for why this avoids the prior floor-vs-ceil share mismatch.
     function _redeemShares(
         uint256 shares,
         address receiver,
@@ -568,11 +652,8 @@ contract OkuDollar is
     {
         if (owner != _msgSender()) {
             _spendAllowance(owner, _msgSender(), shares);
-            uint256 internalShares =
-                Math.mulDiv(shares, Constants.PRECISION, usdMultiplier(), Math.Rounding.Floor);
-            _transferUsdShares(owner, _msgSender(), internalShares);
         }
-        return unwrap(shares, receiver);
+        return _unwrap(owner, shares, receiver);
     }
 
     // ============ Reserves & Donation Rescue ============

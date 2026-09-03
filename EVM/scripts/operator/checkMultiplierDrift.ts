@@ -14,7 +14,7 @@
  *
  * Checks per chain:
  *   - okuMMultiplier()        cross-chain equality is the single catch-all check
- *   - rate / rateEnd / pending  config drift and expiry
+ *   - rate / rateEnd / pending / pendingRateEnd   config drift and expiry
  *   - collateralization       should be exactly 1.0 under the single-multiplier design
  *
  * Usage:
@@ -39,8 +39,10 @@ const EXPIRY_WARN_HOURS = Number(process.env.EXPIRY_WARN_HOURS ?? "48");
 const ABI = [
   "function okuMMultiplier() view returns (uint256)",
   "function okuMRatePerSecond() view returns (uint256)",
+  "function okuMEffectiveRatePerSecond() view returns (uint256)",
   "function okuMRateEnd() view returns (uint256)",
   "function okuMPendingRatePerSecond() view returns (uint256)",
+  "function okuMPendingRateEnd() view returns (uint256)",
   "function totalSupply() view returns (uint256)",
 ];
 
@@ -48,8 +50,10 @@ type Reading = {
   chain: string;
   multiplier: bigint;
   rate: bigint;
+  effectiveRate: bigint;
   rateEnd: bigint;
   pending: bigint;
+  pendingRateEnd: bigint;
   totalSupply: bigint;
 };
 
@@ -59,14 +63,17 @@ async function readChain(name: string, rpcUrl: string): Promise<Reading | null> 
     if (!addr) return null;
     const provider = new ethers.JsonRpcProvider(rpcUrl);
     const c = new ethers.Contract(addr, ABI, provider);
-    const [multiplier, rate, rateEnd, pending, totalSupply] = await Promise.all([
-      c.okuMMultiplier(),
-      c.okuMRatePerSecond(),
-      c.okuMRateEnd(),
-      c.okuMPendingRatePerSecond(),
-      c.totalSupply(),
-    ]);
-    return { chain: name, multiplier, rate, rateEnd, pending, totalSupply };
+    const [multiplier, rate, effectiveRate, rateEnd, pending, pendingRateEnd, totalSupply] =
+      await Promise.all([
+        c.okuMMultiplier(),
+        c.okuMRatePerSecond(),
+        c.okuMEffectiveRatePerSecond(),
+        c.okuMRateEnd(),
+        c.okuMPendingRatePerSecond(),
+        c.okuMPendingRateEnd(),
+        c.totalSupply(),
+      ]);
+    return { chain: name, multiplier, rate, effectiveRate, rateEnd, pending, pendingRateEnd, totalSupply };
   } catch (e: any) {
     logger.warning(`${name}: read failed — ${e.message ?? e}`);
     return null;
@@ -93,8 +100,9 @@ async function main() {
   for (const r of readings) {
     logger.info(
       `${r.chain.padEnd(14)} mult=${ethers.formatEther(r.multiplier)} ` +
-        `rate=${describeRate(r.rate)} ` +
-        `end=${r.rateEnd === 0n ? "open" : new Date(Number(r.rateEnd) * 1000).toISOString()}`
+        `rate=${describeRate(r.rate)} effective=${describeRate(r.effectiveRate)} ` +
+        `end=${r.rateEnd === 0n ? "open" : new Date(Number(r.rateEnd) * 1000).toISOString()} ` +
+        `pendingEnd=${r.pendingRateEnd === 0n ? "none" : new Date(Number(r.pendingRateEnd) * 1000).toISOString()}`
     );
   }
 
@@ -132,6 +140,12 @@ async function main() {
       logger.error(`PENDING MISMATCH: ${r.chain} pending=${r.pending} vs ${ref.chain} pending=${ref.pending}`);
       failed = true;
     }
+    if (r.pendingRateEnd !== ref.pendingRateEnd) {
+      logger.error(
+        `PENDING-END MISMATCH: ${r.chain} pendingEnd=${r.pendingRateEnd} vs ${ref.chain} pendingEnd=${ref.pendingRateEnd}`
+      );
+      failed = true;
+    }
   }
 
   // --- Epoch expiry ---
@@ -144,6 +158,16 @@ async function main() {
     } else if (r.rateEnd - now < warnWindow) {
       const hrs = Number(r.rateEnd - now) / 3600;
       logger.warning(`${r.chain}: rate window closes in ${hrs.toFixed(1)}h — stage the successor`);
+    }
+
+    // A staged successor's OWN window can also elapse if it's left unattended,
+    // silently halting accrual (see MathLib.computeMultiplier's overhang bound).
+    if (r.pendingRateEnd === 0n) continue;
+    if (now >= r.pendingRateEnd) {
+      logger.warning(`${r.chain}: staged successor's own window EXPIRED — accrual has halted`);
+    } else if (r.pendingRateEnd - now < warnWindow) {
+      const hrs = Number(r.pendingRateEnd - now) / 3600;
+      logger.warning(`${r.chain}: staged successor's window closes in ${hrs.toFixed(1)}h — stage the next one`);
     }
   }
 

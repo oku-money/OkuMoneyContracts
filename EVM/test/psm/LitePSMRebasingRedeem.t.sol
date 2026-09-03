@@ -72,12 +72,15 @@ contract LitePSMRebasingRedeemTest is BaseTest {
 
     // ============ Helpers ============
 
-    /// @notice Set the active yield rate (open-ended).
+    /// @notice Set the active yield rate with a generous bounded window.
     /// @dev SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` is exactly
     ///      `okuMoney.okuMMultiplier()`, so the rate is set on OkuMoney via OKUM_REBASER.
+    ///      Every yielding rate now requires a bounded future window (open-ended
+    ///      yielding rates are no longer supported) — 100 years comfortably covers
+    ///      every horizon exercised in this suite (max 50 years).
     function _setUsdRate(uint256 rate) internal {
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, 0);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + 100 * 365 days);
     }
 
     /// @notice Mint UsdOku to a user from a USDC deposit through the PSM. Returns the

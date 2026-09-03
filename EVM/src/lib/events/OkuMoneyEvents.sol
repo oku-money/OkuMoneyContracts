@@ -42,7 +42,9 @@ abstract contract OkuMoneyEvents {
     ///      simultaneous.
     /// @param newRate     Successor per-second rate
     /// @param activatesAt Timestamp the successor takes effect (= current okuMRateEnd)
-    event NextOkuMYieldRateSet(uint256 newRate, uint256 activatesAt);
+    /// @param expiresAt   Timestamp the successor's own window elapses (bounds the
+    ///                    overhang if it is left unattended past `activatesAt`)
+    event NextOkuMYieldRateSet(uint256 newRate, uint256 activatesAt, uint256 expiresAt);
 
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance

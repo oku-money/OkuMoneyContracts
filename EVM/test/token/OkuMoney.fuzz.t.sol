@@ -286,9 +286,12 @@ contract OkuMoneyFuzzTest is BaseTest {
         _mintOkuMoney(user1, supply);
 
         uint256 before = okuMoney.okuMMultiplier();
+        // A halted rate (== PRECISION) requires endTimestamp == 0; a yielding rate
+        // requires a bounded future window comfortably beyond the fuzzed elapsed.
+        uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + 10 * 365 days + 1;
 
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, 0);
+        okuMoney.setOkuMYieldRate(rate, endTimestamp);
         // Setting the rate re-anchors the base: the curve is continuous, no step.
         assertEq(okuMoney.okuMMultiplier(), before, "no step at the rate write");
 
@@ -312,8 +315,9 @@ contract OkuMoneyFuzzTest is BaseTest {
         supply = bound(supply, 1e18, MAX_SUPPLY / 100);
         _mintOkuMoney(user1, supply);
 
+        uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + 10 * 365 days + 1;
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, 0);
+        okuMoney.setOkuMYieldRate(rate, endTimestamp);
         vm.warp(block.timestamp + elapsed);
 
         assertEq(okuMoney.balanceOf(user1), supply, "balanceOf unchanged");
@@ -323,9 +327,11 @@ contract OkuMoneyFuzzTest is BaseTest {
     /// @notice Rates outside [PRECISION, MAX_RATE] are always rejected.
     function testFuzz_SetOkuMYieldRate_RejectsOutOfRangeRates(uint256 rate) public {
         if (rate >= PRECISION && rate <= MAX_RATE) {
-            // In-range: must succeed.
+            // In-range: must succeed. A halted rate (== PRECISION) requires
+            // endTimestamp == 0; any yielding rate requires a bounded future window.
+            uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + 30 days;
             vm.prank(rebaser);
-            okuMoney.setOkuMYieldRate(rate, 0);
+            okuMoney.setOkuMYieldRate(rate, endTimestamp);
             assertEq(okuMoney.okuMRatePerSecond(), rate);
             return;
         }
@@ -334,6 +340,54 @@ contract OkuMoneyFuzzTest is BaseTest {
             rate < PRECISION ? OkuMoney.InvalidRate.selector : OkuMoney.RateTooHigh.selector
         );
         okuMoney.setOkuMYieldRate(rate, 0);
+    }
+
+    /// @notice `okuMMultiplier()` must never revert, no matter how a bounded-window
+    ///         rate, a long warp past its `okuMRateEnd`, and a subsequent discrete
+    ///         override are combined. Regression for the underflow found in
+    ///         `MathLib.computeMultiplier` branch 2 (`rateEnd - anchor`) when
+    ///         `setOkuMMultiplier` re-anchored past an already-expired window without
+    ///         clearing the schedule — see `setOkuMMultiplier`'s schedule collapse.
+    function testFuzz_OkuMMultiplierNeverReverts(
+        uint256 rate,
+        uint256 endOffset,
+        uint256 warpAmount,
+        uint256 overrideBump
+    )
+        public
+    {
+        // Exclude PRECISION: a halted rate requires endTimestamp == 0, which is a
+        // different (and already separately covered) scenario from this bounded-
+        // window regression test.
+        rate = bound(rate, PRECISION + 1, MAX_RATE);
+        endOffset = bound(endOffset, 1, 365 days);
+        warpAmount = bound(warpAmount, 0, 100 * 365 days);
+        overrideBump = bound(overrideBump, 1, 1e24);
+
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + endOffset);
+
+        vm.warp(block.timestamp + warpAmount);
+
+        // Must not revert regardless of how far past okuMRateEnd we've warped.
+        uint256 current = okuMoney.okuMMultiplier();
+
+        uint256 newMultiplier = current > Constants.MAX_MULTIPLIER - overrideBump
+            ? Constants.MAX_MULTIPLIER
+            : current + overrideBump;
+        if (newMultiplier <= current) return; // saturated at MAX_MULTIPLIER already
+
+        vm.prank(rebaser);
+        okuMoney.setOkuMMultiplier(newMultiplier);
+
+        // The regression: this call must not revert either.
+        uint256 afterOverride = okuMoney.okuMMultiplier();
+        assertEq(afterOverride, newMultiplier, "collapsed schedule must not drift");
+
+        // And the schedule must actually be halted, so a further arbitrary warp
+        // still can't revert.
+        vm.warp(block.timestamp + warpAmount + 1);
+        assertEq(okuMoney.okuMMultiplier(), newMultiplier, "halted schedule must not accrue");
     }
 
     // ============ Minter Allowance Tests ============

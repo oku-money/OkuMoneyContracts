@@ -97,6 +97,9 @@ contract LitePSM is
     error WouldStrandQueue(uint256 remainingBalance, uint256 queueObligation);
     /// @dev Reverted when the configured USDC reports more decimals than supported (>18).
     error UsdcDecimalsTooLarge(uint8 reported);
+    /// @dev `_okuDollar` must wrap the same OkuMoney instance passed as `_okuMoney` —
+    ///      every PSM/vault price computation assumes a single shared multiplier.
+    error AssetMismatch();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -124,6 +127,7 @@ contract LitePSM is
         if (_usdc == address(0)) revert Errors.ZeroAddress();
         if (_redemptionQueue == address(0)) revert Errors.ZeroAddress();
         if (_admin == address(0)) revert Errors.ZeroAddress();
+        if (IOkuDollar(_okuDollar).asset() != _okuMoney) revert AssetMismatch();
 
         __AccessControl_init();
         __Pausable_init();
@@ -302,12 +306,12 @@ contract LitePSM is
 
     /// @notice Mint OkuDollar by depositing USDC (USDC -> mint OkuM -> wrap -> OkuDollar to user).
     /// @param usdcAmount Amount of USDC to deposit (USDC native decimals).
-    /// @dev Multiplier-aware. The slippage floor passed to `wrap` is computed by
-    ///      replicating `wrap`'s exact two-step floor math via {MathLib.okuMToWrappedUsd}.
-    ///      Passing `usdcValue18` directly would revert at non-even multipliers because
-    ///      `dollarsToOkuM` truncates okuMAmount in the protocol's favor and `wrap`'s
-    ///      output is bounded above by `usdcValue18`, so the naive floor is unreachable.
-    ///      A symmetric 1-USDC-unit round-trip drift check mirrors {mintOkuM}.
+    /// @dev Multiplier-aware. SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` IS
+    ///      `okuMoney.okuMMultiplier()` (enforced at `initialize`'s wiring check), so
+    ///      `wrap`'s share formula is the identity and its dollar output is exactly
+    ///      {MathLib.okuMToDollars} — one multiplier read instead of the historical
+    ///      two-multiplier replication. A symmetric 1-USDC-unit round-trip drift
+    ///      check mirrors {mintOkuM}.
     function mintUsdOku(uint256 usdcAmount)
         external
         nonReentrant
@@ -326,11 +330,10 @@ contract LitePSM is
 
         // Expected wrap output computed with the same truncation `wrap` performs.
         // This is the tightest possible slippage floor: it can only diverge if the
-        // vault's multipliers move between this call and the wrap (impossible — we
+        // vault's multiplier moves between this call and the wrap (impossible — we
         // hold the reentrancy guard and the yield-distribution guard) or if OkuM
         // becomes fee-on-transfer (handled by `wrap`'s own balance-delta check).
-        uint256 usdMult = $.okuDollar.usdMultiplier();
-        uint256 expectedUsdMinted = MathLib.okuMToWrappedUsd(okuMAmount, okuMMult, usdMult);
+        uint256 expectedUsdMinted = MathLib.okuMToDollars(okuMAmount, okuMMult);
 
         // Round-trip drift check: usdcAmount -> usdMinted -> usdcAmount must be within
         // 1 USDC unit. Mirrors the pattern in {mintOkuM}; truncation favors the

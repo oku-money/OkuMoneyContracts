@@ -18,6 +18,30 @@ removable post-launch.
 
 ## 🟡 Should-fix before external audit
 
+### EVM/SVM yield-model divergence: SVM still ticks discretely `[SVM]`
+
+EVM's `4626+8056` refactor moved OkuMoney to continuous streaming
+accrual (a per-second rate schedule computed on read, no discrete
+multiplier write) specifically to eliminate the MEV window around
+discrete multiplier ticks and to get cross-chain agreement "for free"
+(no messaging — every chain holding the same schedule returns the
+same value at the same wall-clock instant). SVM's `lite-psm` was
+**not** ported: it still writes the multiplier discretely via
+`set_multiplier` / `distribute_yield`, so the exact unfairness/MEV
+window the EVM refactor set out to remove still exists on SVM, and
+the "no messaging needed" cross-chain property only holds among EVM
+chains today. Porting SVM to the same rate-schedule model is
+complicated by Token-2022's `InterestBearingConfig` using a 365.24-day
+year (vs. EVM's 365-day protocol convention), already noted as a
+source of EVM/SVM parity friction elsewhere. See `EVM/README.md`
+§ Streaming Accrual and § Accepted Risks (10) for the EVM-side
+rationale and scope note.
+
+**Follow-up required before this can be closed:** decide whether SVM
+gets the same streaming model or the divergence is accepted
+permanently; if accepted, state that explicitly in `SVM/README.md`
+rather than leaving it implicit.
+
 ### SVM devnet needs a fresh re-deploy (not an in-place upgrade) `[SVM]`
 
 The program builds and passes all tests, but **the devnet program has

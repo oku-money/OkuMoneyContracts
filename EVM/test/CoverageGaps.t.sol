@@ -146,6 +146,32 @@ contract CoverageGapsTest is BaseTest {
         new ERC1967Proxy(address(impl), initData);
     }
 
+    /// @notice Regression: LitePSM must reject an OkuDollar wired to a DIFFERENT
+    ///         OkuMoney instance than the one passed as `_okuMoney`. Every PSM
+    ///         price computation assumes a single shared multiplier; a mismatched
+    ///         pair would silently price both sides off the wrong token.
+    function test_LitePSMInitialize_RevertAssetMismatch() public {
+        OkuMoney otherOkuMoneyImpl = new OkuMoney();
+        bytes memory otherInit =
+            abi.encodeCall(OkuMoney.initialize, ("Other", "OTH", admin, MAX_SUPPLY));
+        OkuMoney otherOkuMoney =
+            OkuMoney(address(new ERC1967Proxy(address(otherOkuMoneyImpl), otherInit)));
+
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (
+                address(otherOkuMoney), // mismatched: okuDollar wraps `okuMoney`, not this
+                address(okuDollar),
+                address(usdc),
+                address(redemptionQueue),
+                admin
+            )
+        );
+        vm.expectRevert(LitePSM.AssetMismatch.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
     // ============ UsdcDecimalsTooLarge ============
 
     function test_LitePSMInitialize_RevertUsdcDecimalsTooLarge() public {

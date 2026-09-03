@@ -281,8 +281,7 @@ abstract contract BaseTest is Test, Actors {
     /// @notice Elevate the (single) multiplier to at least `targetMultiplier`.
     /// @dev SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` is exactly
     ///      `okuMoney.okuMMultiplier()`, so this drives the OkuMoney rate schedule.
-    ///      Retains the historical name because many tests call it; see
-    ///      {_elevateOkuMMultiplier} for the alias.
+    ///      Retains the historical name because many tests call it.
     ///
     ///      Uses `setOkuMYieldRate` + `vm.warp` rather than the discrete
     ///      `setOkuMMultiplier` override so no `lastYieldDistributionBlock` stamp is
@@ -292,11 +291,12 @@ abstract contract BaseTest is Test, Actors {
         uint256 current = okuMoney.okuMMultiplier();
         if (targetMultiplier <= current) return;
 
-        // Set the active rate to MAX_RATE with no end timestamp (open-ended) so the
-        // multiplier compounds continuously. Then warp forward enough seconds to clear
+        // Set the active rate to MAX_RATE with a window comfortably beyond the loop's
+        // own safety bound below, so the multiplier compounds continuously for as
+        // long as this helper might need. Then warp forward enough seconds to clear
         // the target. We loop in case rounding leaves us short on the first warp.
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(MAX_RATE, 0);
+        okuMoney.setOkuMYieldRate(MAX_RATE, block.timestamp + 365 days * 5);
 
         uint256 elapsed = 1;
         while (okuMoney.okuMMultiplier() < targetMultiplier) {
@@ -306,13 +306,9 @@ abstract contract BaseTest is Test, Actors {
             require(elapsed < 365 days * 4, "target unreachable");
         }
 
-        // Snapshot the achieved multiplier and stop accrual so subsequent reads stay stable.
+        // Snapshot the achieved multiplier and stop accrual so subsequent reads stay
+        // stable. Halting always pairs with endTimestamp == 0.
         vm.prank(rebaser);
         okuMoney.setOkuMYieldRate(PRECISION, 0);
-    }
-
-    /// @notice Alias for {_elevateUsdMultiplier} — there is only one multiplier now.
-    function _elevateOkuMMultiplier(uint256 targetMultiplier) internal {
-        _elevateUsdMultiplier(targetMultiplier);
     }
 }

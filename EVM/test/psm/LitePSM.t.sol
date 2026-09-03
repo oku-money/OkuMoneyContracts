@@ -262,18 +262,18 @@ contract LitePSMTest is BaseTest {
 
     // ============ Price-Aware mintUsdOku Tests ============
     //
-    // mintUsdOku flows USDC -> mint OkuM -> wrap -> UsdOku. The slippage floor passed
-    // to `wrap` is computed via MathLib.okuMToWrappedUsd so non-even multipliers no
-    // longer trigger spurious OutputBelowMinimum reverts. Tests below pin that
-    // behavior at the multipliers most likely to expose rounding.
+    // mintUsdOku flows USDC -> mint OkuM -> wrap -> UsdOku. SINGLE MULTIPLIER:
+    // `usdMultiplier() == okuMMultiplier()` always, so the slippage floor passed to
+    // `wrap` is exactly MathLib.okuMToDollars — no separate wrap-replica helper
+    // needed. Tests below pin that behavior at the multipliers most likely to
+    // expose rounding.
 
-    /// @dev Helper: expected UsdOku minted for a given USDC deposit at current multipliers.
+    /// @dev Helper: expected UsdOku minted for a given USDC deposit at the current multiplier.
     function _expectedUsdMintedFromUsdc(uint256 usdcAmount) internal view returns (uint256) {
         uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
         uint256 okuMMult = okuMoney.okuMMultiplier();
-        uint256 usdMult = okuDollar.usdMultiplier();
         uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, okuMMult);
-        return MathLib.okuMToWrappedUsd(okuMAmount, okuMMult, usdMult);
+        return MathLib.okuMToDollars(okuMAmount, okuMMult);
     }
 
     /// @notice Regression: the on-chain failure that motivated this fix.
@@ -365,19 +365,22 @@ contract LitePSMTest is BaseTest {
         returns (uint256)
     {
         uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
-        uint256 usdMult = okuDollar.usdMultiplier();
         uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, okuMMult);
-        return MathLib.okuMToWrappedUsd(okuMAmount, okuMMult, usdMult);
+        return MathLib.okuMToDollars(okuMAmount, okuMMult);
     }
 
-    /// @notice Exercise the dual-multiplier rounding path: both okuMMultiplier
-    ///         and usdMultiplier elevated simultaneously.
+    /// @notice Exercise the rounding path at an elevated shared multiplier.
+    /// @dev PREVIOUSLY (dual-multiplier design) this elevated okuMMultiplier and
+    ///      usdMultiplier to two DIFFERENT values to exercise their cross-rate
+    ///      rounding. Under the single-multiplier design there is only one value
+    ///      to elevate — `_setNotePrice` after `_elevateUsdMultiplier` would try to
+    ///      move the (now-shared) multiplier backwards and revert
+    ///      `MultiplierCannotDecrease`. A single elevation still exercises the
+    ///      same rounding path since `_expectedUsdMintedFromUsdc` independently
+    ///      reads `okuMMult` (parameter) and `usdMult` (live read) — they're just
+    ///      guaranteed equal now.
     function test_MintUsdOku_PriceAware_AtElevatedUsdMultiplier() public {
-        // Elevate UsdOku multiplier first (rolls block internally), then move
-        // okuMMultiplier (also rolls a block), so neither yield-sandwich guard
-        // is tripped by the subsequent mint.
-        _elevateUsdMultiplier(11e17); // ~$1.10 per share, capped by compounded reachability
-        _setNotePrice(105e16); // $1.05 per OkuM
+        _elevateUsdMultiplier(11e17); // ~$1.10, rolls block internally
 
         uint256 usdcAmount = 250e6; // 250 USDC
         _approveUsdc(user1, address(litePsm), usdcAmount);

@@ -23,7 +23,7 @@
 /** 1e18 fixed-point scale, matching `Constants.PRECISION`. */
 export const PRECISION = 10n ** 18n;
 
-/** `Constants.MAX_RATE` — PRECISION + 1e11, ~3700% APY ceiling. */
+/** `Constants.MAX_RATE` — PRECISION + 1e11, ~2242% APY ceiling. */
 export const MAX_RATE = PRECISION + 10n ** 11n;
 
 /** Protocol convention: 365 days. Must match the off-chain yield model. */

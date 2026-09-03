@@ -10,9 +10,12 @@ pragma solidity 0.8.28;
  *      while preserving normal `emit` semantics.
  */
 abstract contract OkuMoneyEvents {
-    /// @notice Emitted when multiplier is updated directly via setOkuMMultiplier.
-    /// @param oldMultiplier  Previous multiplier value
-    /// @param newMultiplier  New multiplier value
+    /// @notice Emitted when the discrete emergency override {setOkuMMultiplier} re-anchors
+    ///         the accrual base.
+    /// @dev NOT emitted for normal streaming accrual (which is continuous and has no
+    ///      discrete events) nor for rate-schedule changes (see {OkuMYieldRateUpdated}).
+    /// @param oldMultiplier  Multiplier immediately before the override
+    /// @param newMultiplier  New base multiplier
     /// @param totalSupply    Token supply at time of update
     /// @param blockNumber    `block.number` at update time (indexed, so
     ///                       subgraphs can shard yield events without
@@ -24,19 +27,22 @@ abstract contract OkuMoneyEvents {
         uint256 indexed blockNumber
     );
 
-    /// @notice Emitted when yield is distributed via distributeYield.
-    /// @param yieldAmount    Dollar yield distributed (18 decimals)
-    /// @param oldMultiplier  Previous multiplier value
-    /// @param newMultiplier  New multiplier value
-    /// @param totalSupply    Token supply at time of distribution
-    /// @param blockNumber    `block.number` at distribution time (indexed).
-    event YieldDistributed(
-        uint256 yieldAmount,
-        uint256 oldMultiplier,
-        uint256 newMultiplier,
-        uint256 totalSupply,
-        uint256 indexed blockNumber
+    /// @notice Emitted when the active yield rate is set, re-anchoring the accrual base.
+    /// @param oldRate            Previous per-second rate
+    /// @param newRate            New per-second rate (PRECISION = no yield)
+    /// @param endTimestamp       Timestamp the new rate expires (0 = open-ended)
+    /// @param snapshotMultiplier Multiplier snapshotted as the new accrual base
+    event OkuMYieldRateUpdated(
+        uint256 oldRate, uint256 newRate, uint256 endTimestamp, uint256 snapshotMultiplier
     );
+
+    /// @notice Emitted when a successor rate is pre-staged.
+    /// @dev The successor activates off `activatesAt` with no transaction at the
+    ///      boundary — the primitive that keeps cross-chain epoch handovers
+    ///      simultaneous.
+    /// @param newRate     Successor per-second rate
+    /// @param activatesAt Timestamp the successor takes effect (= current okuMRateEnd)
+    event NextOkuMYieldRateSet(uint256 newRate, uint256 activatesAt);
 
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
@@ -44,10 +50,4 @@ abstract contract OkuMoneyEvents {
     event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
-
-    /// @notice Emitted alongside the standard ERC-20 Transfer with the dollar-denominated value
-    /// @dev dollarValue = amount * okuMMultiplier / PRECISION
-    event TransferValue(
-        address indexed from, address indexed to, uint256 amount, uint256 dollarValue
-    );
 }

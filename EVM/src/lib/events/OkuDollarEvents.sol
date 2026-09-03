@@ -44,29 +44,29 @@ abstract contract OkuDollarEvents {
         uint256 usdMultiplier
     );
 
-    /// @notice Emitted when yield rate is updated
-    event UsdYieldRateUpdated(
-        uint256 oldRatePerSecond,
-        uint256 newRatePerSecond,
-        uint256 endTimestamp,
-        uint256 snapshotMultiplier
+    /// @notice ERC-4626 deposit (emitted by wrap()).
+    event Deposit(
+        address indexed sender, address indexed owner, uint256 assets, uint256 shares
     );
 
-    event NextUsdYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
-    event MinCollateralRatioUpdated(uint256 oldRatio, uint256 newRatio);
-
-    /// @notice Emitted when reserves are deposited without minting shares
-    event ReservesDeposited(
-        address indexed depositor,
-        uint256 okuMAmount,
-        uint256 dollarValue,
-        uint256 collateralizationRatio
+    /// @notice ERC-4626 withdraw (emitted by unwrap()).
+    event Withdraw(
+        address indexed sender,
+        address indexed receiver,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares
     );
 
-    /// @notice Emitted when surplus reserves are withdrawn
-    event SurplusWithdrawn(
-        address indexed to, uint256 okuMAmount, uint256 dollarValue, uint256 collateralizationRatio
-    );
+    /// @notice Emitted when donated OkuM is rescued from the vault.
+    /// @dev See {OkuDollar.rescueDonation} — donations accrue to nobody under the
+    ///      single-multiplier design and would otherwise be permanently locked.
+    event DonationRescued(address indexed receiver, uint256 okuMAmount);
+
+    // REMOVED (single-multiplier refactor): UsdYieldRateUpdated, NextUsdYieldRateSet
+    // (OkuDollar has no rate of its own — see OkuMoneyEvents.OkuMYieldRateUpdated),
+    // MinCollateralRatioUpdated, ReservesDeposited, SurplusWithdrawn
+    // (collateralization is 1.0 by construction).
 
     /// @notice Emitted when an address is added to the OkuDollar blacklist
     /// @dev Uses the shared OKUM_BLACKLISTER role for consistency with OkuMoney.

@@ -43,25 +43,10 @@ library Deploy {
     /// @notice Deploy OkuDollar vault with UUPS proxy
     /// @param okuMoney_ OkuMoney token address
     /// @param admin_ Admin address
-    /// @param minCollateralRatio_ Minimum collateral ratio (e.g., 95e16 = 95%)
     /// @return proxy The deployed proxy contract
     /// @return impl The implementation contract
-    function deployOkuDollar(
-        address okuMoney_,
-        address admin_,
-        uint256 minCollateralRatio_
-    )
-        internal
-        returns (OkuDollar proxy, OkuDollar impl)
-    {
-        impl = new OkuDollar();
-        bytes memory initData = abi.encodeCall(
-            OkuDollar.initialize, (okuMoney_, "OkuDollar", "usdOku", admin_, minCollateralRatio_)
-        );
-        proxy = OkuDollar(address(new ERC1967Proxy(address(impl), initData)));
-    }
-
-    /// @notice Deploy OkuDollar with default collateral ratio
+    /// @dev The `minCollateralRatio_` parameter was dropped in the single-multiplier
+    ///      refactor: collateralization is exactly 1.0 by construction.
     function deployOkuDollar(
         address okuMoney_,
         address admin_
@@ -69,7 +54,10 @@ library Deploy {
         internal
         returns (OkuDollar proxy, OkuDollar impl)
     {
-        return deployOkuDollar(okuMoney_, admin_, TestConstants.MIN_COLLATERAL_RATIO);
+        impl = new OkuDollar();
+        bytes memory initData =
+            abi.encodeCall(OkuDollar.initialize, (okuMoney_, "OkuDollar", "usdOku", admin_));
+        proxy = OkuDollar(address(new ERC1967Proxy(address(impl), initData)));
     }
 
     /// @notice Deploy RedemptionQueue with UUPS proxy

@@ -66,6 +66,89 @@ library MathLib {
     }
 
     /**
+     * @notice Compound `base` by `rate^elapsed`, capped at {Constants.MAX_MULTIPLIER}.
+     * @dev Identity when `elapsed == 0`. The cap keeps a long-running rate at
+     *      `MAX_RATE` from pushing the multiplier beyond the overflow-safe region.
+     * @param base Starting multiplier (PRECISION-scaled)
+     * @param rate Per-second rate (PRECISION = no yield)
+     * @param elapsed Seconds to compound over
+     * @return Compounded multiplier, clamped to `MAX_MULTIPLIER`
+     */
+    function compoundFor(
+        uint256 base,
+        uint256 rate,
+        uint256 elapsed
+    )
+        internal
+        pure
+        returns (uint256)
+    {
+        if (elapsed == 0) return base;
+        uint256 result =
+            Math.mulDiv(base, rpow(rate, elapsed, Constants.PRECISION), Constants.PRECISION, Math.Rounding.Floor);
+        return result > Constants.MAX_MULTIPLIER ? Constants.MAX_MULTIPLIER : result;
+    }
+
+    /**
+     * @notice Continuous streaming accrual — the protocol's single multiplier function.
+     * @dev Shared by {OkuMoney.okuMMultiplier} and (transitively) {OkuDollar.usdMultiplier}
+     *      so the two can never diverge. Pure function of the rate schedule and
+     *      `nowTs`; contains no supply term, which is what makes the multiplier
+     *      identical across chains given identical schedule state and timestamp.
+     *
+     *      Branches:
+     *        1. Active rate is the no-yield placeholder (`<= PRECISION`): return
+     *           `base`, unless the window has closed and a pending rate is armed —
+     *           then compound the pending rate over the overhang.
+     *        2. Active rate is yielding and the window has closed: compound to
+     *           `rateEnd`, then compound the pending rate over the overhang.
+     *        3. Otherwise: compound the active rate from `anchor` to `nowTs`.
+     *
+     *      `rateEnd == 0` is the open-ended sentinel (accrue until the next
+     *      schedule write). A `pendingRate` activates with no transaction at the
+     *      boundary, which is what keeps multi-chain epoch handovers simultaneous.
+     * @param base Snapshot multiplier taken at `anchor`
+     * @param rate Active per-second rate (PRECISION = no yield)
+     * @param anchor Timestamp `base` was snapshotted at
+     * @param rateEnd Timestamp `rate` expires (0 = open-ended)
+     * @param pendingRate Successor rate, active after `rateEnd` (PRECISION = none)
+     * @param nowTs Evaluation timestamp (`block.timestamp`)
+     * @return Current multiplier, PRECISION-scaled
+     */
+    function computeMultiplier(
+        uint256 base,
+        uint256 rate,
+        uint256 anchor,
+        uint256 rateEnd,
+        uint256 pendingRate,
+        uint256 nowTs
+    )
+        internal
+        pure
+        returns (uint256)
+    {
+        // Branch 1: active rate is the no-yield placeholder.
+        if (rate <= Constants.PRECISION) {
+            if (rateEnd != 0 && nowTs > rateEnd && pendingRate > Constants.PRECISION) {
+                return compoundFor(base, pendingRate, nowTs - rateEnd);
+            }
+            return base;
+        }
+
+        // Branch 2: active rate is yielding and its window has closed.
+        if (rateEnd != 0 && nowTs > rateEnd) {
+            uint256 compounded = compoundFor(base, rate, rateEnd - anchor);
+            if (pendingRate > Constants.PRECISION) {
+                compounded = compoundFor(compounded, pendingRate, nowTs - rateEnd);
+            }
+            return compounded;
+        }
+
+        // Branch 3: active rate still running.
+        return compoundFor(base, rate, nowTs - anchor);
+    }
+
+    /**
      * @notice Convert OkuMoney token amount to dollar value
      * @param okuMAmount Amount of OkuMoney tokens
      * @param okuMMultiplier Current OkuMoney multiplier (dollar value per token, scaled by PRECISION)

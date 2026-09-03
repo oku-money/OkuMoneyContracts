@@ -1242,9 +1242,8 @@ contract LitePSMTest is BaseTest {
 
     function test_MintOkuM_RevertsInYieldDistributionBlock() public {
         // Distribute yield to set lastYieldDistributionBlock
-        _mintOkuMoney(user2, 10_000e18); // Need supply for distributeYield
-        vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
+        _mintOkuMoney(user2, 10_000e18);
+        _stampYieldLockBlock();
 
         // Same block — mintOkuM should revert
         _approveUsdc(user1, address(litePsm), 100e6);
@@ -1254,7 +1253,8 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_MintOkuM_SucceedsInNextBlock() public {
-        // Use setOkuMMultiplier instead of distributeYield to avoid slippage issues
+        // Use setOkuMMultiplier (the only remaining discrete-stamp path) to avoid
+        // slippage issues.
         // (setOkuMMultiplier also sets lastYieldDistributionBlock). A strict
         // increase of 1 wei is sufficient to trip the sandwich-lock stamp without
         // moving math materially.
@@ -1279,8 +1279,7 @@ contract LitePSMTest is BaseTest {
         okuMoney.approve(address(litePsm), 100e18);
 
         // Distribute yield to set lastYieldDistributionBlock
-        vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
+        _stampYieldLockBlock();
 
         // Same block — redeemOkuM should revert
         vm.prank(user1);
@@ -1295,8 +1294,7 @@ contract LitePSMTest is BaseTest {
         okuMoney.approve(address(litePsm), 100e18);
 
         // Distribute yield
-        vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
+        _stampYieldLockBlock();
 
         // Roll to next block
         vm.roll(block.number + 1);
@@ -1312,8 +1310,7 @@ contract LitePSMTest is BaseTest {
     function test_MintOkuDollar_RevertsInYieldDistributionBlock() public {
         // Distribute yield
         _mintOkuMoney(user2, 10_000e18);
-        vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
+        _stampYieldLockBlock();
 
         // Same block — mintUsdOku should revert
         _approveUsdc(user1, address(litePsm), 100e6);
@@ -1329,8 +1326,7 @@ contract LitePSMTest is BaseTest {
         okuDollar.approve(address(litePsm), 100e18);
 
         // Distribute yield
-        vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
+        _stampYieldLockBlock();
 
         // Same block — redeemUsdOku should revert
         vm.prank(user1);
@@ -1363,12 +1359,10 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_WithdrawUSDC_RevertsInYieldDistributionBlock() public {
-        // Need positive OkuM supply so distributeYield doesn't revert with ZeroSupply.
         _mintOkuMoney(user2, 10_000e18);
 
         // Distribute yield to set lastYieldDistributionBlock to the current block.
-        vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
+        _stampYieldLockBlock();
 
         // Same-block withdrawUsdc must revert via the YieldSandwichGuard. This closes the
         // historical NOTE in withdrawUsdc where queueObligation could be computed against
@@ -1380,8 +1374,7 @@ contract LitePSMTest is BaseTest {
 
     function test_WithdrawUSDC_SucceedsInNextBlockAfterYield() public {
         _mintOkuMoney(user2, 10_000e18);
-        vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
+        _stampYieldLockBlock();
 
         vm.roll(block.number + 1);
 

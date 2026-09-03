@@ -20,10 +20,12 @@ contract VaultInvariantsTest is BaseTest {
         super.setUp();
         handler = new OkuDollarHandler(okuMoney, okuDollar, minter, rebaser);
 
-        // Grant roles required by the expanded handler surface.
+        // Grant roles required by the handler surface.
+        // REMOVED (single-multiplier refactor): VAULT_REBASER / VAULT_RESERVE_MANAGER
+        // grants — those roles no longer exist. The handler drives the shared
+        // multiplier by pranking `rebaser` (OKUM_REBASER on OkuMoney), granted in
+        // BaseTest._setupRoles.
         vm.startPrank(admin);
-        okuDollar.grantRole(VAULT_REBASER, address(handler));
-        okuDollar.grantRole(VAULT_RESERVE_MANAGER, address(handler));
         okuDollar.grantRole(DEFAULT_ADMIN_ROLE, address(handler));
         vm.stopPrank();
 
@@ -39,33 +41,37 @@ contract VaultInvariantsTest is BaseTest {
         excludeContract(address(usdc));
     }
 
-    /// @notice OkuDollar vault is collateralized by OkuMoney reserves (within a fixed
-    ///         small rounding tolerance, NOT a tolerance that grows with call count).
+    /// @notice Reserves exactly cover obligations — collateralization is 1.0.
+    /// @dev Restated from the old `>= 100% within tolerance` form. Under the
+    ///      single-multiplier design shares track raw OkuM 1:1, so
+    ///      `totalUsdShares == ` the OkuM required to honour every share, and both
+    ///      sides are floored through the same multiplier. The remaining content of
+    ///      this invariant is that the vault holds AT LEAST its share backing — i.e.
+    ///      that no code path can transfer out OkuM that backs live shares
+    ///      (`rescueDonation` being the one path that touches reserves directly).
+    ///
+    ///      REMOVED: the separate `invariant_CollateralizationRatio` — it asserted
+    ///      the identical inequality on the identical quantities and was a duplicate
+    ///      even before the refactor.
     function invariant_VaultBacked() public view {
         uint256 reserves = okuMoney.balanceOf(address(okuDollar));
-        uint256 obligations = okuDollar.totalSupply();
-        uint256 price = okuMoney.okuMMultiplier();
-        uint256 reservesDollarValue = (reserves * price) / 1e18;
+        uint256 shareBacking = okuDollar.totalUsdShares();
 
         assertGe(
-            reservesDollarValue + ROUNDING_TOLERANCE,
-            obligations,
-            "Vault must be backed by OkuMoney reserves (within 100 wei rounding)"
+            reserves,
+            shareBacking,
+            "Vault OkuM reserves must cover outstanding share backing 1:1"
         );
-    }
 
-    /// @notice Collateralization ratio stays at-or-above 100% (within rounding).
-    function invariant_CollateralizationRatio() public view {
-        uint256 obligations = okuDollar.totalSupply();
-        if (obligations == 0) return;
-
-        uint256 reserves = okuMoney.balanceOf(address(okuDollar));
+        // Dollar-denominated restatement: reserves valued at the shared multiplier
+        // must cover obligations. Exact by construction, hence assertGe with a small
+        // tolerance is kept only to absorb the two independent floor() operations.
         uint256 price = okuMoney.okuMMultiplier();
         uint256 reservesDollarValue = (reserves * price) / 1e18;
         assertGe(
             reservesDollarValue + ROUNDING_TOLERANCE,
-            obligations,
-            "Collateralization should be >= 100% within rounding tolerance"
+            okuDollar.totalSupply(),
+            "Reserves' dollar value must cover obligations"
         );
     }
 

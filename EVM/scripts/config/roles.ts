@@ -27,13 +27,16 @@ export const ROLES = {
 
   // ============ OkuDollar (Vault) Roles ============
   VAULT_UPGRADER:         keccak256(toUtf8Bytes("VAULT_UPGRADER")),
-  VAULT_REBASER:          keccak256(toUtf8Bytes("VAULT_REBASER")),
-  VAULT_RESERVE_MANAGER:  keccak256(toUtf8Bytes("VAULT_RESERVE_MANAGER")),
   VAULT_PAUSER:           keccak256(toUtf8Bytes("VAULT_PAUSER")),
   VAULT_UNPAUSER:         keccak256(toUtf8Bytes("VAULT_UNPAUSER")),
-  /// Dedicated vault-admin role for parameter updates (e.g. min collateral ratio)
-  /// — see Roles.sol for the rationale on carving this out from DEFAULT_ADMIN_ROLE.
-  VAULT_ADMIN:            keccak256(toUtf8Bytes("VAULT_ADMIN")),
+  /// Withdraws OkuM donated directly to the vault. Donations accrue to nobody under
+  /// the single-multiplier design (conversions use the multiplier, not
+  /// totalAssets/totalSupply), so without this they would be locked forever.
+  VAULT_RESCUER:          keccak256(toUtf8Bytes("VAULT_RESCUER")),
+  // REMOVED (single-multiplier refactor): VAULT_REBASER — OkuDollar has no rate of
+  // its own; accrual is set on OkuMoney via OKUM_REBASER. VAULT_RESERVE_MANAGER and
+  // VAULT_ADMIN — collateralization is 1.0 by construction, so there is no surplus
+  // to manage and no min-ratio to configure.
 
   // ============ LitePSM Roles ============
   PSM_UPGRADER: keccak256(toUtf8Bytes("PSM_UPGRADER")),

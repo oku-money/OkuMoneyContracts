@@ -23,8 +23,9 @@
  *                             assert USDC delta.
  *    7. queueRedeem           Drain buffer to 0 -> redeem forces queue ->
  *                             refill -> processQueue drains -> queue empty.
- *    8. distributeYield       OkuMoney.distributeYield; assert multiplier
- *                             bump and signer balance grows.
+ *    8. setOkuMYieldRate      OkuMoney.setOkuMYieldRate (rate derived from an APY
+ *                             via utils/yieldRate) + setNextOkuMYieldRate; assert
+ *                             the schedule fields, not a discrete multiplier bump.
  *    9. pause                 psm.pause -> assert mint reverts -> unpause ->
  *                             assert mint succeeds.
  *   10. configureMinterAllowance
@@ -56,6 +57,7 @@ import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { ROLES } from "../config/roles";
 import { DEV_WALLET_ADDRESS } from "../config/chains";
+import { apyToRatePerSecond, describeRate, PRECISION } from "../utils/yieldRate";
 
 // ============================================================================
 // CLI / env helpers
@@ -593,35 +595,58 @@ async function stepQueueRedeem(ctx: TestCtx) {
   logger.success("Queue drained to empty");
 }
 
-async function stepDistributeYield(ctx: TestCtx) {
-  logger.section("Step 8: distributeYield");
-  const supply: bigint = await ctx.okuMoney.totalSupply();
-  if (supply === 0n) throw new Error("Total supply is zero; cannot distribute yield");
-
+async function stepSetOkuMYieldRate(ctx: TestCtx) {
+  logger.section("Step 8: setOkuMYieldRate");
+  // REMOVED: the old distributeYield assertions (yield amount derived from local
+  // totalSupply, immediate multiplier bump). Yield is now a RATE that streams
+  // continuously, so there is no discrete bump to assert against right after the
+  // write — the multiplier is re-anchored to its current value and grows with
+  // elapsed time. The deterministic post-conditions are the schedule fields.
   await ensureRole(ctx, ROLES.OKUM_REBASER, "OKUM_REBASER");
 
-  const mBefore: bigint = await ctx.okuMoney.okuMMultiplier();
-  const balBefore: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  const rate = apyToRatePerSecond(0.03); // 3% APY
+  const endTimestamp = BigInt(Math.floor(Date.now() / 1000) + 86_400); // +1 day
 
-  // Pick a yield amount that produces a measurable per-token bump but stays
-  // well below MAX_MULTIPLIER (1e30 wei equivalent). A 0.01% yield on
-  // current supply is plenty.
-  const yieldAmount = supply / 10000n; // 1 bps
-  if (yieldAmount === 0n) throw new Error("Computed yield amount rounded to zero");
+  const mBefore: bigint = await ctx.okuMoney.okuMMultiplier();
+  const rateBefore: bigint = await ctx.okuMoney.okuMRatePerSecond();
 
   await waitForTx(
-    await ctx.okuMoney.distributeYield(yieldAmount),
-    `okuMoney.distributeYield(${ethers.formatUnits(yieldAmount, 18)})`
+    await ctx.okuMoney.setOkuMYieldRate(rate, endTimestamp),
+    `okuMoney.setOkuMYieldRate(${describeRate(rate)}, end=${endTimestamp})`
   );
 
-  const mAfter: bigint = await ctx.okuMoney.okuMMultiplier();
-  const balAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
-  logger.info(`Multiplier: ${mBefore} -> ${mAfter} (+${mAfter - mBefore})`);
-  logger.info(
-    `Signer balance: ${ethers.formatUnits(balBefore, 18)} -> ` +
-      `${ethers.formatUnits(balAfter, 18)} (+${ethers.formatUnits(balAfter - balBefore, 18)})`
+  const [rateAfter, endAfter, baseAfter, pendingAfter, mAfter]: bigint[] = await Promise.all([
+    ctx.okuMoney.okuMRatePerSecond(),
+    ctx.okuMoney.okuMRateEnd(),
+    ctx.okuMoney.okuMBaseMultiplier(),
+    ctx.okuMoney.okuMPendingRatePerSecond(),
+    ctx.okuMoney.okuMMultiplier(),
+  ]);
+
+  logger.info(`Rate:       ${describeRate(rateBefore)} -> ${describeRate(rateAfter)}`);
+  logger.info(`Rate end:   ${endAfter} (${new Date(Number(endAfter) * 1000).toISOString()})`);
+  logger.info(`Multiplier: ${mBefore} -> ${mAfter} (base re-anchored to ${baseAfter})`);
+
+  if (rateAfter !== rate) throw new Error(`okuMRatePerSecond is ${rateAfter}, expected ${rate}`);
+  if (endAfter !== endTimestamp) throw new Error(`okuMRateEnd is ${endAfter}, expected ${endTimestamp}`);
+  // setOkuMYieldRate re-anchors the base to the multiplier at write time and clears
+  // any armed successor, so the curve is continuous across the write (no step).
+  if (mAfter < mBefore) throw new Error(`Multiplier went backwards: ${mBefore} -> ${mAfter}`);
+  if (pendingAfter !== PRECISION) {
+    throw new Error(`Pending rate not cleared: ${pendingAfter}, expected ${PRECISION}`);
+  }
+  logger.success("Yield rate schedule written and verified");
+
+  // Stage a successor rate off the bounded window just set. It activates off the
+  // absolute okuMRateEnd timestamp with no tx at the boundary.
+  const nextRate = apyToRatePerSecond(0.0325); // 3.25% APY
+  await waitForTx(
+    await ctx.okuMoney.setNextOkuMYieldRate(nextRate),
+    `okuMoney.setNextOkuMYieldRate(${describeRate(nextRate)})`
   );
-  if (mAfter <= mBefore) throw new Error("distributeYield did not bump multiplier");
+  const staged: bigint = await ctx.okuMoney.okuMPendingRatePerSecond();
+  if (staged !== nextRate) throw new Error(`Staged rate is ${staged}, expected ${nextRate}`);
+  logger.success(`Successor rate staged, activates at ${new Date(Number(endAfter) * 1000).toISOString()}`);
 }
 
 async function pollUntil<T>(
@@ -739,7 +764,7 @@ const STEPS: Record<string, (ctx: TestCtx) => Promise<unknown>> = {
   unwrap: stepUnwrap,
   redeem: stepRedeem,
   queueRedeem: stepQueueRedeem,
-  distributeYield: stepDistributeYield,
+  setOkuMYieldRate: stepSetOkuMYieldRate,
   pause: stepPause,
   configureMinterAllowance: stepConfigureMinterAllowance,
 };
@@ -752,7 +777,7 @@ const STEP_ORDER = [
   "unwrap",
   "redeem",
   "queueRedeem",
-  "distributeYield",
+  "setOkuMYieldRate",
   "pause",
   "configureMinterAllowance",
 ];

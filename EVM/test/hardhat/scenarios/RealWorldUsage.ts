@@ -276,12 +276,15 @@ describe(`RealWorldUsage — ${DURATION_DAYS}-day stochastic simulation (seed 0x
         await seedBuffer(chainA, admin, parseUnits("500000", 6))
         await seedBuffer(chainB, admin, parseUnits("500000", 6))
 
-        // Set 5% APY yield rate on OkuDollar (both chains)
-        // rate must be per-second 1e18-precision; end time = 5 years from now
+        // Set 5% APY streaming rate on OkuMoney (both chains). Single-multiplier
+        // refactor: OkuDollar has no rate of its own — usdMultiplier() delegates to
+        // okuMMultiplier(), so setting the rate here drives BOTH tokens.
+        // Identical (rate, endTimestamp) on both chains is what makes the multiplier
+        // agree cross-chain with no messaging.
         const now = (await ethers.provider.getBlock("latest"))!.timestamp
         const fiveYears = now + 5 * 365 * DAY
-        await chainA.okuDollar.connect(admin).setUsdYieldRate(FIVE_PCT_APY_RATE, BigInt(fiveYears))
-        await chainB.okuDollar.connect(admin).setUsdYieldRate(FIVE_PCT_APY_RATE, BigInt(fiveYears))
+        await chainA.okuMoney.connect(admin).setOkuMYieldRate(FIVE_PCT_APY_RATE, BigInt(fiveYears))
+        await chainB.okuMoney.connect(admin).setOkuMYieldRate(FIVE_PCT_APY_RATE, BigInt(fiveYears))
 
         rng = mulberry32(SEED)
         lastMultiplierA = await chainA.okuDollar.usdMultiplier()

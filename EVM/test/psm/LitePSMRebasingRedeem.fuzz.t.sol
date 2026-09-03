@@ -2,9 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
-import {MathLib} from "../../src/lib/MathLib.sol";
 
 /**
  * @title LitePSMRebasingRedeemFuzzTest
@@ -35,37 +33,13 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
         return okuDollar.balanceOf(user) - balBefore;
     }
 
-    /// @notice Top up the vault's OkuMoney reserves so unwrap won't revert with
-    ///         InsufficientReserves after the multiplier has been pushed above
-    ///         PRECISION. This isolates the rounding-asymmetry test from the
-    ///         orthogonal collateral-drift concern.
-    /// @dev Sizes the deposit to fully back current obligations at any reachable
-    ///      (okuMMult, usdMult) pair: deposit enough OkuM so that
-    ///      `reserves * okuMMult >= totalSupply` (USD-denominated).
-    function _topUpReservesFully() internal {
-        uint256 obligationsUsd = okuDollar.totalSupply();
-        uint256 okuMMult = okuMoney.okuMMultiplier();
-        // Required OkuM = obligations / okuMMult (ceiling). Over-provision generously
-        // to absorb any rounding plus the small extra obligation accrual from any
-        // remaining warps within this test.
-        uint256 required = Math.mulDiv(obligationsUsd, PRECISION, okuMMult, Math.Rounding.Floor);
-        uint256 currentReserves = okuMoney.balanceOf(address(okuDollar));
-        if (currentReserves >= required) return;
-        uint256 topUp = required - currentReserves + (required / 10) + 1e18; // +10% buffer
-        // Cap at the remaining mintable supply to avoid blowing MaxSupply.
-        uint256 mintable = okuMoney.maxSupply() - okuMoney.totalSupply();
-        if (topUp > mintable) topUp = mintable;
-        if (topUp == 0) return;
-        vm.prank(minter);
-        try okuMoney.mint(reserveManager, topUp) {}
-        catch {
-            return;
-        }
-        vm.prank(reserveManager);
-        okuMoney.approve(address(okuDollar), topUp);
-        vm.prank(reserveManager);
-        okuDollar.depositReserves(topUp);
-    }
+    /// @notice No-op retained so the call sites below read unchanged.
+    /// @dev REMOVED (single-multiplier refactor): the reserve top-up. `depositReserves`
+    ///      is gone and there is nothing to top up — shares track raw OkuM 1:1 and both
+    ///      reserves and obligations are valued through the same multiplier, so
+    ///      collateral cannot drift as the multiplier accrues. `InsufficientReserves`
+    ///      is no longer a confounding failure mode for these rounding tests.
+    function _topUpReservesFully() internal pure {}
 
     // ============ Fuzz Tests ============
 
@@ -195,11 +169,10 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
         redeemFraction = bound(redeemFraction, 1, 10_000);
 
         _mintUsdOkuViaPsm(user1, usdcAmount);
-        vm.prank(usdRebaser);
-        okuDollar.setUsdYieldRate(1_000_000_001_546_176_000, 0); // ~5% APY
+        // SINGLE MULTIPLIER: the rate lives on OkuMoney; `usdMultiplier()` reads it.
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(1_000_000_001_546_176_000, 0); // ~5% APY
         vm.warp(block.timestamp + elapsedSeconds);
-        // Top up reserves to match accrued obligations so InsufficientReserves
-        // (a separate failure mode) doesn't confound the rounding test.
         _topUpReservesFully();
 
         uint256 userBal = okuDollar.balanceOf(user1);

@@ -26,16 +26,17 @@ library Roles {
 
     // ============ OkuDollar (Vault) Roles ============
     bytes32 public constant VAULT_UPGRADER = keccak256("VAULT_UPGRADER");
-    bytes32 public constant VAULT_REBASER = keccak256("VAULT_REBASER");
-    bytes32 public constant VAULT_RESERVE_MANAGER = keccak256("VAULT_RESERVE_MANAGER");
     bytes32 public constant VAULT_PAUSER = keccak256("VAULT_PAUSER");
     bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
-    /// @dev Dedicated vault-admin role for parameter updates (e.g. min collateral
-    ///      ratio) that previously gated on `DEFAULT_ADMIN_ROLE`. Carving it out
-    ///      keeps the AccessControl super-admin role focused on role-management
-    ///      duties and lets the operational vault-config key be rotated
-    ///      independently of the meta-role holder.
-    bytes32 public constant VAULT_ADMIN = keccak256("VAULT_ADMIN");
+    /// @dev Withdraws OkuM donated directly to the vault. Donations accrue to nobody
+    ///      under the single-multiplier design (conversions use the multiplier, not
+    ///      totalAssets/totalSupply), so without this they would be locked forever.
+    ///      Cannot touch OkuM backing outstanding shares.
+    bytes32 public constant VAULT_RESCUER = keccak256("VAULT_RESCUER");
+    // REMOVED (single-multiplier refactor): VAULT_REBASER — OkuDollar has no rate of
+    // its own; accrual is set on OkuMoney via OKUM_REBASER. VAULT_RESERVE_MANAGER and
+    // VAULT_ADMIN — collateralization is 1.0 by construction, so there is no surplus
+    // to manage and no min-ratio to configure.
 
     // ============ LitePSM Roles ============
     bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");

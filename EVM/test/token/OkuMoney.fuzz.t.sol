@@ -5,6 +5,7 @@ import {BaseTest} from "../Base.t.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
+import {Constants} from "../../src/lib/Constants.sol";
 
 /**
  * @title OkuMoneyFuzzTest
@@ -259,59 +260,80 @@ contract OkuMoneyFuzzTest is BaseTest {
         okuMoney.setOkuMMultiplier(lowerPrice);
     }
 
-    // ============ distributeYield Fuzz Tests ============
+    // ============ Streaming-accrual Fuzz Tests ============
+    //
+    // REMOVED (streaming-accrual refactor): testFuzz_DistributeYield and
+    // testFuzz_DistributeYield_RevertWhenYieldTooSmall — `distributeYield(uint256)`
+    // and the `YieldTooSmall` error were deleted. The multiplier is no longer moved by
+    // a supply-relative yield amount, so the `yieldAmount * PRECISION / supply`
+    // arithmetic and its truncation-to-zero revert branch no longer exist. The
+    // replacements below fuzz the rate schedule instead.
 
-    /// @notice distributeYield increases the multiplier monotonically and matches the
-    ///         exact arithmetic formula across a realistic range of yield sizes.
-    /// @dev distributeYield itself has no rate cap (only setOkuMMultiplier does).
-    ///      Bound the yield to up to 10x the existing supply (1000% jump per call) —
-    ///      a wildly aggressive but mathematically valid distribution that still
-    ///      exercises the truncation/dust branches near MAX_SUPPLY without overflowing.
-    function testFuzz_DistributeYield(uint256 supply, uint256 yieldAmount) public {
-        // Keep room for `supply * 10` in the bounded yieldAmount without overflowing
-        // (MAX_SUPPLY = 1e27, so supply * 10 stays well below 2^256).
+    /// @notice The multiplier is monotonically non-decreasing over any (rate, elapsed)
+    ///         pair in the legal input space, and never exceeds MAX_MULTIPLIER.
+    function testFuzz_SetOkuMYieldRate_MonotonicAndCapped(
+        uint256 rate,
+        uint256 elapsed,
+        uint256 supply
+    )
+        public
+    {
+        rate = bound(rate, PRECISION, MAX_RATE);
+        // Cap elapsed at 10 years: beyond that MAX_RATE saturates the cap, which is
+        // asserted below but is a separate property from monotonicity.
+        elapsed = bound(elapsed, 0, 10 * 365 days);
         supply = bound(supply, 1e18, MAX_SUPPLY / 100);
-
-        // Lower bound: yieldAmount must produce a non-zero per-token increment
-        // (yieldAmount * PRECISION / supply >= 1), so yieldAmount >= ceil(supply / PRECISION).
-        // Since PRECISION = 1e18 and supply <= MAX_SUPPLY / 100 = 1e25, the min yieldAmount
-        // is at most 1e7 — never more than the supply itself.
-        uint256 minYield = supply / PRECISION + 1;
-        // Realistic upper bound: 10x current supply per single distribution.
-        yieldAmount = bound(yieldAmount, minYield, supply * 10);
-
         _mintOkuMoney(user1, supply);
 
-        uint256 priceBefore = okuMoney.okuMMultiplier();
+        uint256 before = okuMoney.okuMMultiplier();
 
         vm.prank(rebaser);
-        okuMoney.distributeYield(yieldAmount);
+        okuMoney.setOkuMYieldRate(rate, 0);
+        // Setting the rate re-anchors the base: the curve is continuous, no step.
+        assertEq(okuMoney.okuMMultiplier(), before, "no step at the rate write");
 
-        uint256 priceAfter = okuMoney.okuMMultiplier();
-        uint256 expectedIncrease = Math.mulDiv(yieldAmount, PRECISION, supply, Math.Rounding.Floor);
-        assertEq(priceAfter, priceBefore + expectedIncrease, "price increase equals yield/supply");
-        assertGe(priceAfter, priceBefore, "multiplier must never decrease");
+        vm.warp(block.timestamp + elapsed);
 
-        // lastYieldDistributionBlock advanced.
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+        uint256 after_ = okuMoney.okuMMultiplier();
+        assertGe(after_, before, "multiplier must never decrease");
+        assertLe(after_, Constants.MAX_MULTIPLIER, "multiplier must respect MAX_MULTIPLIER");
     }
 
-    /// @notice Confirm that distributeYield reverts with YieldTooSmall when the yield
-    ///         amount would truncate to zero per token (yieldAmount * PRECISION / supply == 0).
-    function testFuzz_DistributeYield_RevertWhenYieldTooSmall(uint256 supply) public {
-        // Need supply > PRECISION so that there exist yieldAmounts < supply/PRECISION that
-        // still truncate to zero. E.g. supply=2e18, tinyYield=1 -> 1*1e18/2e18 = 0.
-        supply = bound(supply, PRECISION * 2, MAX_SUPPLY / 100);
+    /// @notice Accrual never touches raw balances — OkuM is non-rebasing.
+    function testFuzz_SetOkuMYieldRate_DoesNotAffectBalances(
+        uint256 rate,
+        uint256 elapsed,
+        uint256 supply
+    )
+        public
+    {
+        rate = bound(rate, PRECISION, MAX_RATE);
+        elapsed = bound(elapsed, 0, 10 * 365 days);
+        supply = bound(supply, 1e18, MAX_SUPPLY / 100);
         _mintOkuMoney(user1, supply);
 
-        // Choose a yieldAmount that definitely truncates: anything strictly less than
-        // ceil(supply / PRECISION) = supply / PRECISION + 1.  Use 1 as the simplest case:
-        // 1 * PRECISION / supply = 0 whenever supply > PRECISION.
-        uint256 tinyYield = 1;
-
         vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.YieldTooSmall.selector);
-        okuMoney.distributeYield(tinyYield);
+        okuMoney.setOkuMYieldRate(rate, 0);
+        vm.warp(block.timestamp + elapsed);
+
+        assertEq(okuMoney.balanceOf(user1), supply, "balanceOf unchanged");
+        assertEq(okuMoney.totalSupply(), supply, "totalSupply unchanged");
+    }
+
+    /// @notice Rates outside [PRECISION, MAX_RATE] are always rejected.
+    function testFuzz_SetOkuMYieldRate_RejectsOutOfRangeRates(uint256 rate) public {
+        if (rate >= PRECISION && rate <= MAX_RATE) {
+            // In-range: must succeed.
+            vm.prank(rebaser);
+            okuMoney.setOkuMYieldRate(rate, 0);
+            assertEq(okuMoney.okuMRatePerSecond(), rate);
+            return;
+        }
+        vm.prank(rebaser);
+        vm.expectRevert(
+            rate < PRECISION ? OkuMoney.InvalidRate.selector : OkuMoney.RateTooHigh.selector
+        );
+        okuMoney.setOkuMYieldRate(rate, 0);
     }
 
     // ============ Minter Allowance Tests ============

@@ -270,77 +270,21 @@ contract OkuDollarFuzzTest is BaseTest {
         assertEq(actualBurn, expectedBurn, "Burn matches ceil division");
     }
 
-    // ============ 4. Collateralization Under Various Rates ============
+    // ============ 4. Collateralization ============
+    //
+    // REMOVED (single-multiplier refactor): testFuzz_CollateralizationAtParity,
+    // testFuzz_NotePriceIncreaseOvercollateralizes, testFuzz_UsdRebaseUndercollateralizes,
+    // testFuzz_CollateralizationViewsAfterNotePriceIncrease. `collateralizationRatio()`
+    // and `surplus()` no longer exist, and the properties they asserted are now vacuous:
+    // OkuDollar's `usdMultiplier()` IS `okuMoney.okuMMultiplier()`, so a multiplier move
+    // scales reserves' dollar value and obligations by the identical factor. There is no
+    // over/under-collateralization state to reach.
 
-    /// @notice After wrap at 1:1 (okuMMultiplier == usdMultiplier == PRECISION), ratio >= 100%
-    function testFuzz_CollateralizationAtParity(uint256 okuMAmount) public {
-        okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
-
-        vm.prank(user1);
-        okuDollar.wrap(okuMAmount, user1, 0);
-
-        uint256 ratio = okuDollar.collateralizationRatio();
-        assertGe(ratio, PRECISION, "Collateral ratio must be >= 100% at parity");
-    }
-
-    /// @notice After okuMMultiplier increase, vault becomes overcollateralized
-    /// @dev okuMMultiplier increase does NOT change vault's note token count, but increases
-    ///      their dollar value: (reserves × okuMMultiplier / PRECISION) grows while totalSupply
-    ///      (OkuDollar obligations) stays the same.
-    function testFuzz_NotePriceIncreaseOvercollateralizes(
-        uint256 okuMAmount,
-        uint256 newNotePrice
-    )
-        public
-    {
-        okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 2);
-
-        vm.prank(user1);
-        okuDollar.wrap(okuMAmount, user1, 0);
-
-        uint256 currentNotePrice = okuMoney.okuMMultiplier();
-        newNotePrice =
-            bound(newNotePrice, currentNotePrice + currentNotePrice / 100, currentNotePrice * 5);
-
-        // Increase note price — vault note balance unchanged, but dollar value increases
-        // No need to roll here since we're only checking collateralization, not wrapping/unwrapping
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newNotePrice);
-
-        uint256 ratio = okuDollar.collateralizationRatio();
-        assertGe(ratio, PRECISION, "Note price increase should overcollateralize vault");
-    }
-
-    /// @notice After USD rebase without note price change, vault becomes undercollateralized
-    /// @dev usdMultiplier increase grows totalSupply (obligations) while reserve dollar
-    ///      value (reserves × okuMMultiplier / PRECISION) stays the same.
-    function testFuzz_UsdRebaseUndercollateralizes(
-        uint256 okuMAmount,
-        uint256 usdMultiplier
-    )
-        public
-    {
-        okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 2);
-
-        vm.prank(user1);
-        okuDollar.wrap(okuMAmount, user1, 0);
-
-        uint256 currentUsdMult = okuDollar.usdMultiplier();
-        usdMultiplier =
-            bound(usdMultiplier, currentUsdMult + currentUsdMult / 100, currentUsdMult * 5);
-
-        // Rebase USD only — OkuDollar supply grows, note reserves dollar value stays same
-        _elevateUsdMultiplier(usdMultiplier);
-
-        uint256 ratio = okuDollar.collateralizationRatio();
-        assertLe(ratio, PRECISION, "USD-only rebase should undercollateralize vault");
-    }
-
-    /// @notice Collateralization views are consistent (multiplier-aware)
-    /// @dev reserves dollar value = reserves × okuMMultiplier / PRECISION
-    ///      obligations = totalSupply (already in dollar terms)
-    ///      surplus converts dollar surplus back to note tokens via okuMMultiplier
-    function testFuzz_CollateralizationViewsConsistent(uint256 okuMAmount) public {
+    /// @notice Reserve/obligation views stay consistent and collateralization is exactly 1.0.
+    /// @dev Restated from the deleted `collateralizationRatio()` / `surplus()` assertions:
+    ///      the ratio is computed manually here to pin that it really is PRECISION (modulo
+    ///      the single floor() in `totalSupply`).
+    function testFuzz_CollateralizationIsExactlyOne(uint256 okuMAmount) public {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
         vm.prank(user1);
@@ -348,204 +292,57 @@ contract OkuDollarFuzzTest is BaseTest {
 
         uint256 reserves = okuDollar.totalOkuMReserves();
         uint256 obligations = okuDollar.totalUsdObligations();
-        uint256 ratio = okuDollar.collateralizationRatio();
-        uint256 surplusVal = okuDollar.surplus();
         uint256 price = okuMoney.okuMMultiplier();
 
         assertEq(obligations, okuDollar.totalSupply(), "Obligations == totalSupply");
         assertEq(reserves, okuMoney.balanceOf(address(okuDollar)), "Reserves == note balance");
+        // Shares track raw OkuM 1:1 under the single multiplier.
+        assertEq(okuDollar.totalUsdShares(), reserves, "Shares track raw OkuM 1:1");
 
-        // Dollar value of reserves
         uint256 reservesDollarValue = Math.mulDiv(reserves, price, PRECISION, Math.Rounding.Floor);
-
-        if (reservesDollarValue >= obligations) {
-            assertGe(ratio, PRECISION, "Ratio >= 100% when overcollateralized");
-            // Surplus is in note tokens: (dollarSurplus × PRECISION) / okuMMultiplier
-            uint256 dollarSurplus = reservesDollarValue - obligations;
-            uint256 expectedSurplusNotes =
-                Math.mulDiv(dollarSurplus, PRECISION, price, Math.Rounding.Floor);
-            assertEq(surplusVal, expectedSurplusNotes, "Surplus matches excess in note tokens");
-        } else {
-            assertLt(ratio, PRECISION, "Ratio < 100% when undercollateralized");
-            assertEq(surplusVal, 0, "No surplus when undercollateralized");
-        }
+        assertEq(reservesDollarValue, obligations, "Collateralization is exactly 1.0");
     }
 
-    /// @notice Collateralization views consistent after okuMMultiplier increase
-    function testFuzz_CollateralizationViewsAfterNotePriceIncrease(
+    // ============ 5. Donation Rescue ============
+    //
+    // REMOVED (single-multiplier refactor): the four `withdrawSurplus` fuzz tests
+    // (testFuzz_WithdrawSurplusRevertsAtFloor, ...WithExcessReserves,
+    // ...RevertsBelowFloor, ...AfterNotePriceIncrease). `withdrawSurplus`,
+    // `depositReserves`, `surplus()`, `minCollateralRatio()` and the
+    // `BelowMinimumCollateral` error are all gone: there is no surplus because
+    // collateralization is 1.0 by construction. The replacement surface is
+    // `rescueDonation`, which recovers OkuM transferred directly to the vault.
+
+    /// @notice `rescueDonation` can recover exactly the donated OkuM and no more.
+    function testFuzz_RescueDonationBoundedByDonation(
         uint256 okuMAmount,
-        uint256 newNotePrice
-    )
-        public
-    {
-        okuMAmount = bound(okuMAmount, 1e18, okuMoney.balanceOf(user1) / 2);
-
-        vm.prank(user1);
-        okuDollar.wrap(okuMAmount, user1, 0);
-
-        uint256 currentNotePrice = okuMoney.okuMMultiplier();
-        // Strict increase required by setOkuMMultiplier.
-        newNotePrice = bound(newNotePrice, currentNotePrice + 1, currentNotePrice * 5);
-
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newNotePrice);
-
-        uint256 reserves = okuDollar.totalOkuMReserves();
-        uint256 obligations = okuDollar.totalUsdObligations();
-        uint256 ratio = okuDollar.collateralizationRatio();
-        uint256 price = okuMoney.okuMMultiplier();
-
-        // Note balance in vault unchanged (non-rebasing)
-        assertEq(reserves, okuMoney.balanceOf(address(okuDollar)), "Reserves == note balance");
-
-        // Dollar value of reserves increased
-        uint256 reservesDollarValue = Math.mulDiv(reserves, price, PRECISION, Math.Rounding.Floor);
-        if (obligations > 0) {
-            uint256 expectedRatio =
-                Math.mulDiv(reservesDollarValue, PRECISION, obligations, Math.Rounding.Floor);
-            assertEq(ratio, expectedRatio, "Ratio formula matches");
-        }
-    }
-
-    // ============ 5. Surplus Extraction ============
-
-    /// @notice withdrawSurplus(maxWithdrawable + 1) reverts at the collateralization
-    ///         floor; withdrawSurplus(maxWithdrawable) succeeds.
-    /// @dev maxWithdrawable is the precise boundary against the configured floor:
-    ///      ratio_after = (reserves - X) / supply >= minCollateralRatio
-    ///      => X <= reserves - supply * minCollateralRatio / PRECISION
-    ///      The test sets up a 200% ratio so `maxWithdrawable` is comfortably > 0.
-    function testFuzz_WithdrawSurplusRevertsAtFloor(uint256 okuMAmount) public {
-        okuMAmount = bound(okuMAmount, 1e18, okuMoney.balanceOf(user1) / 4);
-
-        vm.prank(user1);
-        okuDollar.wrap(okuMAmount, user1, 0);
-
-        _mintOkuMoney(reserveManager, okuMAmount);
-        _approveOkuMoney(reserveManager, address(okuDollar), okuMAmount);
-        vm.prank(reserveManager);
-        okuDollar.depositReserves(okuMAmount);
-
-        // mult == PRECISION here, so dollar-value math == OkuM math.
-        uint256 reserves = okuDollar.totalOkuMReserves();
-        uint256 supply = okuDollar.totalSupply();
-        uint256 minRatio = okuDollar.minCollateralRatio();
-        // Compute a comfortably-safe withdraw amount (back off 1e6 wei from the
-        // exact boundary to absorb integer rounding in collateralizationRatio()).
-        uint256 minReservesForFloor =
-            Math.mulDiv(supply, minRatio, PRECISION, Math.Rounding.Floor) + 1e6;
-        uint256 safeWithdraw = reserves - minReservesForFloor;
-        assertGt(safeWithdraw, 0, "test setup must allow some withdrawal");
-
-        // Far past the boundary — must revert.
-        vm.prank(reserveManager);
-        vm.expectRevert(OkuDollar.BelowMinimumCollateral.selector);
-        okuDollar.withdrawSurplus(reserves); // would zero the reserves
-
-        // Below the boundary — must succeed and leave ratio at-or-above floor.
-        vm.prank(reserveManager);
-        okuDollar.withdrawSurplus(safeWithdraw);
-        assertGe(okuDollar.collateralizationRatio(), minRatio, "ratio must be at-or-above floor");
-    }
-
-    /// @notice withdrawSurplus succeeds when overcollateralized, respects floor
-    function testFuzz_WithdrawSurplusWithExcessReserves(
-        uint256 okuMAmount,
-        uint256 extraNotes
+        uint256 donation
     )
         public
     {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 4);
-        extraNotes = bound(extraNotes, 1e6, okuMoney.balanceOf(user1) / 4);
-
-        // Wrap to create OkuDollar supply
-        vm.prank(user1);
-        okuDollar.wrap(okuMAmount, user1, 0);
-
-        // Deposit extra reserves (overcollateralize)
-        _mintOkuMoney(reserveManager, extraNotes);
-        _approveOkuMoney(reserveManager, address(okuDollar), extraNotes);
-        vm.prank(reserveManager);
-        okuDollar.depositReserves(extraNotes);
-
-        uint256 surplusVal = okuDollar.surplus();
-        assertGt(surplusVal, 0, "Should have surplus after extra deposit");
-
-        uint256 ratioBefore = okuDollar.collateralizationRatio();
-
-        // Withdraw exactly the surplus
-        vm.prank(reserveManager);
-        okuDollar.withdrawSurplus(surplusVal);
-
-        uint256 ratioAfter = okuDollar.collateralizationRatio();
-        assertGe(
-            ratioAfter, okuDollar.minCollateralRatio(), "Must stay above floor after withdrawal"
-        );
-        assertLe(ratioAfter, ratioBefore, "Ratio should decrease after withdrawal");
-    }
-
-    /// @notice withdrawSurplus reverts if would breach minCollateralRatio
-    function testFuzz_WithdrawSurplusRevertsBelowFloor(
-        uint256 okuMAmount,
-        uint256 extraNotes
-    )
-        public
-    {
-        okuMAmount = bound(okuMAmount, 1e18, okuMoney.balanceOf(user1) / 4);
-        extraNotes = bound(extraNotes, 1e6, okuMAmount / 10);
+        donation = bound(donation, 1e6, okuMoney.balanceOf(user2) / 4);
 
         vm.prank(user1);
         okuDollar.wrap(okuMAmount, user1, 0);
 
-        // Small extra deposit
-        _mintOkuMoney(reserveManager, extraNotes);
-        _approveOkuMoney(reserveManager, address(okuDollar), extraNotes);
-        vm.prank(reserveManager);
-        okuDollar.depositReserves(extraNotes);
+        uint256 backing = okuDollar.totalUsdShares();
 
-        // Try to withdraw way more than surplus
-        uint256 totalReserves = okuDollar.totalOkuMReserves();
-        uint256 excessiveWithdraw = totalReserves; // withdrawing everything
+        // Donate straight into the vault — accrues to nobody.
+        vm.prank(user2);
+        okuMoney.transfer(address(okuDollar), donation);
 
-        vm.prank(reserveManager);
-        vm.expectRevert();
-        okuDollar.withdrawSurplus(excessiveWithdraw);
-    }
+        // Over-rescuing must revert.
+        vm.prank(vaultRescuer);
+        vm.expectRevert(OkuDollar.NoDonationAvailable.selector);
+        okuDollar.rescueDonation(donation + 1, treasury);
 
-    /// @notice withdrawSurplus works after okuMMultiplier increase creates surplus
-    function testFuzz_WithdrawSurplusAfterNotePriceIncrease(
-        uint256 okuMAmount,
-        uint256 newNotePrice
-    )
-        public
-    {
-        okuMAmount = bound(okuMAmount, 1e18, okuMoney.balanceOf(user1) / 4);
+        // Rescuing exactly the donation must succeed and leave backing intact.
+        vm.prank(vaultRescuer);
+        okuDollar.rescueDonation(donation, treasury);
 
-        vm.prank(user1);
-        okuDollar.wrap(okuMAmount, user1, 0);
-
-        uint256 currentNotePrice = okuMoney.okuMMultiplier();
-        newNotePrice =
-            bound(newNotePrice, currentNotePrice + currentNotePrice / 10, currentNotePrice * 3);
-
-        // okuMMultiplier increase → vault's reserve dollar value grows → surplus created
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newNotePrice);
-        // Roll forward one block so the yield-distribution lock (WS1.3 whenYieldNotDistributing
-        // on withdrawSurplus) clears before we attempt the withdrawal.
-        vm.roll(block.number + 1);
-
-        uint256 surplusVal = okuDollar.surplus();
-        assertGt(surplusVal, 0, "Should have surplus after note price increase");
-
-        // Withdraw surplus
-        vm.prank(reserveManager);
-        okuDollar.withdrawSurplus(surplusVal);
-
-        uint256 ratioAfter = okuDollar.collateralizationRatio();
-        assertGe(
-            ratioAfter, okuDollar.minCollateralRatio(), "Must stay above floor after withdrawal"
-        );
+        assertEq(okuMoney.balanceOf(treasury), donation, "Rescuer receives the donation");
+        assertEq(okuDollar.totalOkuMReserves(), backing, "Share backing untouched");
     }
 
     // ============ 6. Balance Formula ============
@@ -781,63 +578,35 @@ contract OkuDollarFuzzTest is BaseTest {
         );
     }
 
-    // ============ 9. depositReserves Increases Collateral Ratio ============
+    // ============ 9. Reserve donations ============
+    //
+    // REMOVED (single-multiplier refactor): testFuzz_DepositReservesIncreasesRatio and
+    // testFuzz_DepositReservesReflectedInReserves — `depositReserves` was deleted.
+    // A bare `transfer` into the vault is the only way OkuM arrives outside `wrap`, and
+    // it accrues to nobody (conversions use the multiplier, not totalAssets/totalSupply).
 
-    /// @notice depositReserves increases collateralization without minting shares
-    function testFuzz_DepositReservesIncreasesRatio(
-        uint256 okuMAmount,
-        uint256 depositAmount
-    )
-        public
-    {
+    /// @notice A bare OkuM transfer into the vault mints no shares and does not change
+    ///         anyone's balance — it is purely a rescuable donation.
+    function testFuzz_DonationMintsNoShares(uint256 okuMAmount, uint256 donation) public {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 4);
-        depositAmount = bound(depositAmount, 1e6, okuMoney.balanceOf(user1) / 4);
+        donation = bound(donation, 1e6, okuMoney.balanceOf(user2) / 4);
 
-        // Create OkuDollar supply
         vm.prank(user1);
         okuDollar.wrap(okuMAmount, user1, 0);
 
         uint256 sharesBefore = okuDollar.totalUsdShares();
-        uint256 ratioBefore = okuDollar.collateralizationRatio();
-
-        // Deposit reserves
-        _mintOkuMoney(reserveManager, depositAmount);
-        _approveOkuMoney(reserveManager, address(okuDollar), depositAmount);
-        vm.prank(reserveManager);
-        okuDollar.depositReserves(depositAmount);
-
-        uint256 sharesAfter = okuDollar.totalUsdShares();
-        uint256 ratioAfter = okuDollar.collateralizationRatio();
-
-        assertEq(sharesAfter, sharesBefore, "depositReserves must not mint USD shares");
-        assertGe(ratioAfter, ratioBefore, "Collateral ratio must not decrease after deposit");
-    }
-
-    /// @notice depositReserves reflected in totalNoteReserves
-    function testFuzz_DepositReservesReflectedInReserves(
-        uint256 okuMAmount,
-        uint256 depositAmount
-    )
-        public
-    {
-        okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 4);
-        depositAmount = bound(depositAmount, 1e6, okuMoney.balanceOf(user1) / 4);
-
-        vm.prank(user1);
-        okuDollar.wrap(okuMAmount, user1, 0);
-
+        uint256 supplyBefore = okuDollar.totalSupply();
         uint256 reservesBefore = okuDollar.totalOkuMReserves();
 
-        _mintOkuMoney(reserveManager, depositAmount);
-        _approveOkuMoney(reserveManager, address(okuDollar), depositAmount);
-        vm.prank(reserveManager);
-        okuDollar.depositReserves(depositAmount);
+        vm.prank(user2);
+        okuMoney.transfer(address(okuDollar), donation);
 
-        uint256 reservesAfter = okuDollar.totalOkuMReserves();
+        assertEq(okuDollar.totalUsdShares(), sharesBefore, "Donation must not mint USD shares");
+        assertEq(okuDollar.totalSupply(), supplyBefore, "Donation must not change totalSupply");
         assertEq(
-            reservesAfter,
-            reservesBefore + depositAmount,
-            "Reserves must increase by exact deposit amount"
+            okuDollar.totalOkuMReserves(),
+            reservesBefore + donation,
+            "Reserves must increase by exact donation amount"
         );
     }
 

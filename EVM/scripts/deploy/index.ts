@@ -500,11 +500,12 @@ async function deployCoreContracts(
   logger.success(`  OkuMoney: ${await okuMoney.getAddress()}`);
 
   // OkuDollar
+  // REMOVED: trailing `minCollateralRatio` initialize arg — collateralization is
+  // exactly 1.0 by construction under the single-multiplier design.
   logger.info("  Deploying OkuDollar...");
-  const minCollateralRatio = ethers.parseUnits("1", 18); // 100% (1e18 = 100%)
   const okuDollar = await deployUUPSProxy(
     "OkuDollar",
-    [await okuMoney.getAddress(), "Oku Dollar", "usdOku", deployerAddress, minCollateralRatio],
+    [await okuMoney.getAddress(), "Oku Dollar", "usdOku", deployerAddress],
     bookKey,
     deployer
   );
@@ -613,7 +614,8 @@ async function configureRoles(
   await sendAndWait("Set RedemptionQueue minter allowance", () => okuMoney.configureMinterAllowance(redemptionQueueAddress, config.minterAllowance));
 
   // OkuDollar roles
-  await sendAndWait("Grant VAULT_REBASER to Admin", () => okuDollar.grantRole(ROLES.VAULT_REBASER, deployerAddress));
+  // REMOVED: VAULT_REBASER grant — OkuDollar has no rate of its own. The
+  // OKUM_REBASER grant on OkuMoney above is what drives the shared multiplier.
 
   // RedemptionQueue roles
   await sendAndWait("Grant QUEUE_PSM to LitePSM", () => redemptionQueue.grantRole(ROLES.QUEUE_PSM, litePSMAddress));
@@ -635,7 +637,9 @@ async function configureRoles(
   // OkuDollar additional admin roles
   await sendAndWait("Grant VAULT_PAUSER to Admin", () => okuDollar.grantRole(ROLES.VAULT_PAUSER, deployerAddress));
   await sendAndWait("Grant VAULT_UNPAUSER to Admin", () => okuDollar.grantRole(ROLES.VAULT_UNPAUSER, deployerAddress));
-  await sendAndWait("Grant VAULT_RESERVE_MANAGER to Admin", () => okuDollar.grantRole(ROLES.VAULT_RESERVE_MANAGER, deployerAddress));
+  // REMOVED: VAULT_RESERVE_MANAGER grant (role deleted). VAULT_RESCUER replaces it
+  // as the only asset-touching vault role — it withdraws OkuM donated to the vault.
+  await sendAndWait("Grant VAULT_RESCUER to Admin", () => okuDollar.grantRole(ROLES.VAULT_RESCUER, deployerAddress));
 
   // OkuDollar blacklist roles (shared OKUM_ prefix — one grant covers both tokens)
   await sendAndWait("Grant OKUM_BLACKLISTER on OkuDollar to Admin", () => okuDollar.grantRole(ROLES.OKUM_BLACKLISTER, deployerAddress));

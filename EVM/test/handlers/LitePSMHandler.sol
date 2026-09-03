@@ -8,7 +8,8 @@ import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../../src/interfaces/IOkuDollar.sol";
-import {OkuDollar} from "../../src/token/OkuDollar.sol";
+// The concrete `OkuDollar` import is no longer needed: the yield rate is driven on
+// OkuMoney under the single-multiplier design, so `IOkuDollar` suffices here.
 import {TestConstants} from "../shared/Constants.sol";
 
 /**
@@ -30,8 +31,8 @@ contract LitePSMHandler is Test {
     RedemptionQueue public queue;
     address public rebaser;
     address public minter;
-    /// @notice Address holding VAULT_REBASER on the OkuDollar instance. Allowed to be
-    ///         address(0); in that case `setUsdYieldRate` becomes a no-op handler.
+    /// @notice Retained no-op setter target. Under the single-multiplier design there is
+    ///         no separate USD rebaser — the rate lives on OkuMoney (OKUM_REBASER).
     address public usdRebaser;
 
     address[] public actors;
@@ -97,9 +98,9 @@ contract LitePSMHandler is Test {
         queue = _queue;
         rebaser = _rebaser;
         minter = _minter;
-        // usdRebaser defaults to zero; PSMInvariants sets it via setUsdRebaser
-        // after granting VAULT_REBASER so this handler can exercise the USD-yield
-        // path. Zero means the `setUsdYieldRate` handler is a no-op.
+        // `usdRebaser` is vestigial (single-multiplier refactor): the yield rate is
+        // driven on OkuMoney via `rebaser` / OKUM_REBASER. The setter is kept so
+        // existing invariant setUps compile unchanged.
 
         _addActor(makeAddr("psmActor1"));
         _addActor(makeAddr("psmActor2"));
@@ -108,8 +109,8 @@ contract LitePSMHandler is Test {
         ghostLastSeenMultiplier = okuMoney.okuMMultiplier();
     }
 
-    /// @notice Set the USD rebaser address. Used by PSMInvariants after it grants
-    ///         VAULT_REBASER on OkuDollar so this handler can drive USD yield rates.
+    /// @notice Vestigial setter — kept for call-site compatibility. The yield rate is
+    ///         now driven on OkuMoney via OKUM_REBASER (`rebaser`).
     function setUsdRebaser(address _usdRebaser) external {
         usdRebaser = _usdRebaser;
     }
@@ -333,20 +334,22 @@ contract LitePSMHandler is Test {
         }
     }
 
-    // ============ USD Yield Rate (drives usdMultiplier compounding) ============
+    // ============ Yield Rate (drives multiplier compounding) ============
 
     uint256 public ghostSetUsdYieldRateCalls;
     uint256 public ghostSetUsdYieldRateReverts;
 
-    /// @notice Drive `usdRatePerSecond` so that subsequent `warpTime` calls compound
-    ///         `usdMultiplier()` above PRECISION. No-op if PSMInvariants did not
-    ///         configure a usdRebaser address.
+    /// @notice Drive `okuMRatePerSecond` so that subsequent `warpTime` calls compound
+    ///         the (single) multiplier above PRECISION.
+    /// @dev SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` is exactly
+    ///      `okuMoney.okuMMultiplier()`, so the rate is set on OkuMoney via
+    ///      OKUM_REBASER. Retains the historical handler name so the fuzz selector
+    ///      set is unchanged.
     function setUsdYieldRate(uint256 rate) external {
-        if (usdRebaser == address(0)) return;
         ghostSetUsdYieldRateCalls++;
         rate = bound(rate, PRECISION, MAX_RATE);
-        vm.prank(usdRebaser);
-        try OkuDollar(address(okuDollar)).setUsdYieldRate(rate, 0) {}
+        vm.prank(rebaser);
+        try okuMoney.setOkuMYieldRate(rate, 0) {}
         catch {
             ghostSetUsdYieldRateReverts++;
         }
@@ -354,8 +357,8 @@ contract LitePSMHandler is Test {
 
     // ============ Time Progression ============
     //
-    // Required so that any active `usdRatePerSecond` actually compounds
-    // `usdMultiplier()` during invariant runs. Without this, the multiplier stays
+    // Required so that any active `okuMRatePerSecond` actually compounds
+    // the multiplier during invariant runs. Without this, the multiplier stays
     // pinned at PRECISION and rounding-asymmetry bugs in PSM redeem paths
     // (historical: `_redeemUsdOku` InsufficientBalance) cannot be caught.
 

@@ -46,7 +46,7 @@ contract CoverageGapsTest is BaseTest {
     function test_OkuDollarInitialize_RevertZeroOkuMoney() public {
         OkuDollar impl = new OkuDollar();
         bytes memory initData =
-            abi.encodeCall(OkuDollar.initialize, (address(0), "OkuDollar", "usdOku", admin, 95e16));
+            abi.encodeCall(OkuDollar.initialize, (address(0), "OkuDollar", "usdOku", admin));
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
@@ -54,37 +54,16 @@ contract CoverageGapsTest is BaseTest {
     function test_OkuDollarInitialize_RevertZeroAdmin() public {
         OkuDollar impl = new OkuDollar();
         bytes memory initData = abi.encodeCall(
-            OkuDollar.initialize, (address(okuMoney), "OkuDollar", "usdOku", address(0), 95e16)
+            OkuDollar.initialize, (address(okuMoney), "OkuDollar", "usdOku", address(0))
         );
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
-    function test_OkuDollarInitialize_RevertRatioExceedsMax() public {
-        OkuDollar impl = new OkuDollar();
-        bytes memory initData = abi.encodeCall(
-            OkuDollar.initialize,
-            (address(okuMoney), "OkuDollar", "usdOku", admin, Constants.PRECISION + 1)
-        );
-        vm.expectRevert(OkuDollar.RatioExceedsMax.selector);
-        new ERC1967Proxy(address(impl), initData);
-    }
-
-    function test_OkuDollarInitialize_RevertRatioBelowFloor() public {
-        OkuDollar impl = new OkuDollar();
-        bytes memory initData = abi.encodeCall(
-            OkuDollar.initialize,
-            (
-                address(okuMoney),
-                "OkuDollar",
-                "usdOku",
-                admin,
-                Constants.MIN_COLLATERAL_RATIO_FLOOR - 1
-            )
-        );
-        vm.expectRevert(OkuDollar.RatioBelowFloor.selector);
-        new ERC1967Proxy(address(impl), initData);
-    }
+    // REMOVED (single-multiplier refactor): test_OkuDollarInitialize_RevertRatioExceedsMax
+    // and test_OkuDollarInitialize_RevertRatioBelowFloor — `initialize` no longer takes a
+    // `_minCollateralRatio` argument and the `RatioExceedsMax` / `RatioBelowFloor` errors
+    // are gone. Collateralization is exactly 1.0 by construction.
 
     function test_RedemptionQueueInitialize_RevertZeroOkuMoney() public {
         RedemptionQueue impl = new RedemptionQueue();
@@ -199,64 +178,27 @@ contract CoverageGapsTest is BaseTest {
         okuMoney.setOkuMMultiplier(Constants.MAX_MULTIPLIER + 1);
     }
 
-    function test_OkuMoney_DistributeYield_RevertMultiplierTooHigh() public {
-        // Bring the multiplier just under the ceiling so a small yield pushes it over.
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(Constants.MAX_MULTIPLIER);
+    // REMOVED (streaming-accrual refactor): test_OkuMoney_DistributeYield_RevertMultiplierTooHigh
+    // — `distributeYield(uint256)` was deleted. The MAX_MULTIPLIER ceiling on the
+    // discrete override is still covered by
+    // test_OkuMoney_SetOkuMMultiplier_RevertMultiplierTooHigh above; the streaming path
+    // saturates at MAX_MULTIPLIER rather than reverting (see
+    // test_OkuDollar_UsdMultiplier_SaturatesAtMaxMultiplier).
 
-        // Mint supply so `distributeYield`'s `supply == 0` guard doesn't fire.
-        _mintOkuMoney(user1, 1000e18);
+    // REMOVED (single-multiplier refactor):
+    // test_OkuDollar_SetMinCollateralRatio_RevertBelowMinimumCollateral and
+    // test_OkuDollar_WithdrawSurplus_RevertInsufficientReserves — `setMinCollateralRatio`,
+    // `withdrawSurplus` and the `BelowMinimumCollateral` error no longer exist.
+    // Collateralization is exactly 1.0 by construction, so there is no surplus and no
+    // min-ratio post-condition to enforce.
 
-        // Roll past the same-block yield lock would-affect side effects (irrelevant here
-        // because we're calling distributeYield, not a PSM op).
+    // ============ OkuDollar.rescueDonation NoDonationAvailable branch ============
 
-        // Any positive yieldPerToken pushes newMultiplier > MAX_MULTIPLIER.
-        vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.MultiplierTooHigh.selector);
-        okuMoney.distributeYield(1000e18); // 1e18 yield over 1000 OkuM = 1e15 per token
-    }
-
-    // ============ OkuDollar.setMinCollateralRatio post-condition branch ============
-
-    function test_OkuDollar_SetMinCollateralRatio_RevertBelowMinimumCollateral() public {
-        // Wrap a small amount so the vault has obligations but no surplus.
-        _mintOkuMoney(user1, 100e18);
-        vm.prank(user1);
-        okuMoney.approve(address(okuDollar), 100e18);
-        vm.prank(user1);
-        okuDollar.wrap(100e18, user1, 0);
-
-        // Current ratio is 100% (1:1 OkuM:UsdOku at PRECISION multipliers). Raising the
-        // floor above 100% would force the live ratio below the new floor.
-        // Since PRECISION is the cap, request exactly PRECISION (= 100%) is the highest valid.
-        // To trigger BelowMinimumCollateral we'd need a ratio above current live ratio.
-        // The cleanest way: bring live ratio below PRECISION by distributing yield to USD side.
-        // Easier: directly call with PRECISION when live ratio is < PRECISION.
-
-        // Stage a positive USD yield rate so USD multiplier > 1 and live ratio < 1.
-        // VAULT_REBASER (not the OkuMoney OKUM_REBASER) controls usdYieldRate.
-        vm.prank(usdRebaser);
-        okuDollar.setUsdYieldRate(Constants.PRECISION + 1e9, block.timestamp + 365 days);
-        vm.warp(block.timestamp + 30 days);
-
-        // Live ratio now < PRECISION. Attempt to raise floor to PRECISION → must revert.
-        // VAULT_ADMIN is granted to `admin` at OkuDollar.initialize().
-        vm.prank(admin);
-        vm.expectRevert(OkuDollar.BelowMinimumCollateral.selector);
-        okuDollar.setMinCollateralRatio(Constants.PRECISION);
-    }
-
-    // ============ OkuDollar.withdrawSurplus InsufficientReserves branch ============
-
-    function test_OkuDollar_WithdrawSurplus_RevertInsufficientReserves() public {
-        // Vault has zero reserves at setup.
-        // Roll forward so we're not in the same block as a yield distribution (none has
-        // been done in this test, but be safe vs. setUp).
-        vm.roll(block.number + 1);
-
-        vm.prank(reserveManager);
-        vm.expectRevert(OkuDollar.InsufficientReserves.selector);
-        okuDollar.withdrawSurplus(1e18);
+    function test_OkuDollar_RescueDonation_RevertNoDonation() public {
+        // Vault holds no donated OkuM, so any rescue must revert.
+        vm.prank(vaultRescuer);
+        vm.expectRevert(OkuDollar.NoDonationAvailable.selector);
+        okuDollar.rescueDonation(1e18, admin);
     }
 
     // ============ LitePSM ZeroAmount reverts ============
@@ -319,14 +261,16 @@ contract CoverageGapsTest is BaseTest {
         okuDollar.unwrap(1e18, address(0));
     }
 
-    // ============ OkuDollar._compoundFor saturation @ MAX_MULTIPLIER ============
+    // ============ Multiplier saturation @ MAX_MULTIPLIER ============
     //
-    // `_compoundFor` clips silently when the compounded value would exceed
-    // `MAX_MULTIPLIER`. Downstream views (`usdMultiplier()`, `balanceOf`,
-    // `totalSupply`, collateralization ratio) continue to operate using the
-    // saturated value. This test pins the saturation behaviour so future
-    // refactors (or a switch to a different `rpow` impl) cannot silently
-    // wrap or revert at the cap.
+    // `MathLib.computeMultiplier` clips silently when the compounded value would
+    // exceed `MAX_MULTIPLIER`. Downstream views (`usdMultiplier()`, `balanceOf`,
+    // `totalSupply`) continue to operate using the saturated value. This test pins
+    // the saturation behaviour so future refactors (or a switch to a different
+    // `rpow` impl) cannot silently wrap or revert at the cap.
+    //
+    // SINGLE MULTIPLIER: driven via OkuMoney's rate schedule; `usdMultiplier()`
+    // just reads it back.
 
     function test_OkuDollar_UsdMultiplier_SaturatesAtMaxMultiplier() public {
         // Stage a tiny supply so `wrap` succeeds; the value isn't material.
@@ -342,8 +286,8 @@ contract CoverageGapsTest is BaseTest {
         // warp 10 years to land well past the saturation point but inside
         // the rpow-safe input region (warping 50+ years overflows rpow's
         // intermediate squarings, which is a separate property).
-        vm.prank(usdRebaser);
-        okuDollar.setUsdYieldRate(Constants.MAX_RATE, block.timestamp + 20 * 365 days);
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(Constants.MAX_RATE, block.timestamp + 20 * 365 days);
 
         vm.warp(block.timestamp + 10 * 365 days);
 

@@ -31,11 +31,12 @@ library TestRoles {
     // ============ OkuDollar Vault Roles (VAULT_ prefix) ============
 
     bytes32 public constant VAULT_UPGRADER = SrcRoles.VAULT_UPGRADER;
-    bytes32 public constant VAULT_REBASER = SrcRoles.VAULT_REBASER;
-    bytes32 public constant VAULT_RESERVE_MANAGER = SrcRoles.VAULT_RESERVE_MANAGER;
     bytes32 public constant VAULT_PAUSER = SrcRoles.VAULT_PAUSER;
     bytes32 public constant VAULT_UNPAUSER = SrcRoles.VAULT_UNPAUSER;
-    bytes32 public constant VAULT_ADMIN = SrcRoles.VAULT_ADMIN;
+    bytes32 public constant VAULT_RESCUER = SrcRoles.VAULT_RESCUER;
+    // REMOVED (single-multiplier refactor): VAULT_REBASER (OkuDollar has no rate of its
+    // own — use OKUM_REBASER on OkuMoney), VAULT_RESERVE_MANAGER and VAULT_ADMIN
+    // (collateralization is 1.0 by construction, so no surplus/min-ratio machinery).
 
     // ============ LitePSM Roles (PSM_ prefix) ============
 

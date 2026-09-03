@@ -5,9 +5,9 @@
  *
  *   Cold Multisig   → ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER,
  *                     ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER,
- *                     RESERVE_MANAGER
+ *                     VAULT_RESCUER
  *   Warm Multisig   → all PAUSER, all BLACKLISTER
- *   Orchestrator    → OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR
+ *   Orchestrator    → OKUM_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR
  *
  * QUEUE_PSM is intentionally NOT in this list — it must remain on the LitePSM
  * proxy address (set at deploy time via configureRoles).
@@ -101,8 +101,10 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
       "DEFAULT_ADMIN_ROLE",
       "VAULT_UPGRADER",
       "VAULT_UNPAUSER",
-      "VAULT_RESERVE_MANAGER",
-      "VAULT_ADMIN",
+      // REMOVED (single-multiplier refactor): VAULT_RESERVE_MANAGER / VAULT_ADMIN.
+      // VAULT_RESCUER lives on the cold key: it moves donated OkuM out of the
+      // vault, so it belongs with the other asset-withdrawing roles.
+      "VAULT_RESCUER",
       "OKUM_UNBLACKLISTER",
     ]],
     ["LitePSM", [
@@ -126,8 +128,10 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
   ]);
 
   const orchRoles = new Map<string, RoleName[]>([
+    // OKUM_REBASER is now the ONLY rate-setting role in the system: OkuDollar
+    // derives its multiplier from OkuMoney, so there is no vault-side rebaser.
     ["OkuMoney", ["OKUM_REBASER"]],
-    ["OkuDollar", ["VAULT_REBASER"]],
+    ["OkuDollar", []],
     ["LitePSM", ["PSM_QUEUE_PROCESSOR", "PSM_BUFFER_DEPOSITOR"]],
     ["RedemptionQueue", []],
   ]);

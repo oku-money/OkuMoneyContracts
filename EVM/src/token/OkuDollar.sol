@@ -30,13 +30,33 @@ import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
 
 /**
  * @title OkuDollar
- * @notice Rebasing $1-pegged stablecoin (ticker `UsdOku`) backed by OkuMoney reserves
- * @dev NOT an ERC-4626 vault. Custom rebasing token with its own shares/multiplier.
- *      Holds OkuMoney as reserves. Independent yield rate enables revenue extraction
- *      (OkuM rate > USD rate) or forward-facing yield (USD rate > OkuM rate).
+ * @notice Rebasing $1-pegged stablecoin (ticker `UsdOku`) wrapping OkuMoney.
+ * @dev SINGLE MULTIPLIER DESIGN. OkuDollar has no independent yield rate. Its
+ *      `usdMultiplier()` is exactly `okuMoney.okuMMultiplier()`, so OkuM and
+ *      UsdOku necessarily earn identical yield. Protocol margin comes from the
+ *      spread between off-chain RWA yield and the published on-chain rate, not
+ *      from an on-chain rate differential.
  *
- *      Wrap/unwrap are multiplier-aware: they use okuMMultiplier() and usdMultiplier() to convert
- *      between OkuMoney token amounts and OkuDollar amounts at their respective dollar values.
+ *      Consequences of collapsing to one multiplier:
+ *        - `wrap` reduces to `mulDiv(A, m, m) == A`, so `usdShares` are
+ *          numerically identical to the raw OkuM deposited.
+ *        - Collateralization is exactly 1.0 by construction: shares are only
+ *          minted/burned 1:1 against real OkuM at the same `m`. The min-ratio /
+ *          surplus / reserve-manager machinery is therefore gone.
+ *        - The vault is structurally immune to the ERC-4626 inflation attack,
+ *          because conversions use `m` rather than `totalAssets/totalSupply`.
+ *          The corollary is that donated OkuM accrues to nobody — see {rescueDonation}.
+ *
+ *      ERC-4626: implements the {IERC4626} surface (OkuM = `asset`, UsdOku =
+ *      `shares`) but does NOT inherit OpenZeppelin's `ERC4626Upgradeable`, whose
+ *      `_convertTo*` assume a STATIC share balance with a floating ratio. UsdOku
+ *      shares rebase: `balanceOf` grows with `m` while price stays pinned at $1.
+ *      This is the stETH/aToken shape, and is why Aave ships aTokens as non-4626
+ *      with a separate static wrapper.
+ *
+ *      TERMINOLOGY HAZARD: internal `usdShares` (non-rebasing accounting unit) and
+ *      ERC-4626 "shares" (the rebasing displayed balance) are DIFFERENT quantities
+ *      in this design. `convertToShares` returns the latter.
  *
  *      See Constants.sol for terminology legend.
  *      See {OkuMoney.initialize} for the unified role-grant policy.
@@ -63,21 +83,19 @@ contract OkuDollar is
     /// @custom:storage-location erc7201:okumoney.storage.OkuDollar
     struct OkuDollarStorage {
         IOkuMoney okuMoney;
-        // USD rebasing mechanism (mirrors OkuMoney pattern)
+        // Internal share accounting. NOT the ERC-4626 "shares" quantity — see the
+        // terminology hazard note in the contract NatSpec. Under the single-multiplier
+        // design these are numerically identical to raw OkuM deposited.
         mapping(address => uint256) usdShares;
         uint256 totalUsdShares;
-        uint256 usdBaseMultiplier;
-        uint256 usdRatePerSecond;
-        uint256 usdLastAccrualTime;
-        uint256 usdRateEnd;
-        uint256 usdPendingRatePerSecond;
-        // Collateralization
-        uint256 minCollateralRatio;
         // Blacklist — uses shared OKUM_BLACKLISTER / OKUM_UNBLACKLISTER roles so a single
         // role grant covers both OkuMoney and OkuDollar. This mirrors regulatory requirements:
         // a blacklisted address should not be able to hold or transfer UsdOku either.
         mapping(address => bool) isBlacklisted;
     }
+    // REMOVED (single-multiplier refactor): usdBaseMultiplier, usdRatePerSecond,
+    // usdLastAccrualTime, usdRateEnd, usdPendingRatePerSecond — accrual now lives
+    // solely on OkuMoney. minCollateralRatio — collateralization is 1.0 by construction.
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuDollar")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant OKUDOLLAR_STORAGE_LOCATION =
@@ -97,17 +115,11 @@ contract OkuDollar is
     error RecipientBlacklisted();
     error AlreadyBlacklisted();
     error NotBlacklisted();
-    error RatioExceedsMax();
-    error RatioBelowFloor();
     error AmountTooSmall();
     error OutputBelowMinimum(uint256 actual, uint256 minimum);
     error InsufficientReserves();
-    error BelowMinimumCollateral();
-    error InvalidRate();
-    error RateTooHigh();
-    error EndTimestampInPast();
-    error RateAlreadyExpired();
-    error NoRateEndSet();
+    /// @notice {rescueDonation} would dip into OkuM that backs outstanding shares.
+    error NoDonationAvailable();
     /// @notice Defensive guard: direct `_mint` is forbidden; use `wrap()` instead.
     error UseWrapInstead();
     /// @notice Defensive guard: direct `_burn` is forbidden; use `unwrap()` instead.
@@ -126,22 +138,19 @@ contract OkuDollar is
     /// @param name_ ERC-20 name.
     /// @param symbol_ ERC-20 symbol (canonical ticker is `usdOku`).
     /// @param _admin Admin address (receives full vault role set; see {OkuMoney.initialize}).
-    /// @param _minCollateralRatio Initial minimum collateral ratio enforced by `withdrawSurplus`
-    ///        (1e18 = 100%). Must be within [MIN_COLLATERAL_RATIO_FLOOR, PRECISION].
+    /// @dev The `_minCollateralRatio` parameter was removed in the single-multiplier
+    ///      refactor: collateralization is exactly 1.0 by construction.
     function initialize(
         address _okuMoney,
         string memory name_,
         string memory symbol_,
-        address _admin,
-        uint256 _minCollateralRatio
+        address _admin
     )
         public
         initializer
     {
         if (_okuMoney == address(0)) revert Errors.ZeroAddress();
         if (_admin == address(0)) revert Errors.ZeroAddress();
-        if (_minCollateralRatio > Constants.PRECISION) revert RatioExceedsMax();
-        if (_minCollateralRatio < Constants.MIN_COLLATERAL_RATIO_FLOOR) revert RatioBelowFloor();
 
         __ERC20_init(name_, symbol_);
         __ERC20Permit_init(name_);
@@ -151,19 +160,12 @@ contract OkuDollar is
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         $.okuMoney = IOkuMoney(_okuMoney);
-        $.minCollateralRatio = _minCollateralRatio;
-        $.usdBaseMultiplier = Constants.PRECISION;
-        $.usdRatePerSecond = Constants.PRECISION;
-        $.usdLastAccrualTime = block.timestamp;
-        $.usdPendingRatePerSecond = Constants.PRECISION;
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(Roles.VAULT_UPGRADER, _admin);
-        _grantRole(Roles.VAULT_REBASER, _admin);
-        _grantRole(Roles.VAULT_RESERVE_MANAGER, _admin);
         _grantRole(Roles.VAULT_PAUSER, _admin);
         _grantRole(Roles.VAULT_UNPAUSER, _admin);
-        _grantRole(Roles.VAULT_ADMIN, _admin);
+        _grantRole(Roles.VAULT_RESCUER, _admin);
         // Shared blacklist roles: a single grant covers both OkuMoney and OkuDollar.
         _grantRole(Roles.OKUM_BLACKLISTER, _admin);
         _grantRole(Roles.OKUM_UNBLACKLISTER, _admin);
@@ -175,32 +177,10 @@ contract OkuDollar is
         return _getOkuDollarStorage().okuMoney;
     }
 
-    /// @notice Active per-second accrual rate for the USD multiplier (1e18 = no yield).
-    function usdRatePerSecond() external view returns (uint256) {
-        return _getOkuDollarStorage().usdRatePerSecond;
-    }
-
-    /// @notice Timestamp when the base multiplier was last snapshotted.
-    function usdLastAccrualTime() external view returns (uint256) {
-        return _getOkuDollarStorage().usdLastAccrualTime;
-    }
-
-    /// @notice Timestamp at which the active rate expires (0 = open-ended).
-    function usdRateEnd() external view returns (uint256) {
-        return _getOkuDollarStorage().usdRateEnd;
-    }
-
-    /// @notice Pending per-second rate that activates after `usdRateEnd` (1e18 = no yield).
-    function usdPendingRatePerSecond() external view returns (uint256) {
-        return _getOkuDollarStorage().usdPendingRatePerSecond;
-    }
-
-    /// @notice Minimum collateral ratio enforced by `withdrawSurplus` (1e18 = 100%).
-    function minCollateralRatio() external view returns (uint256) {
-        return _getOkuDollarStorage().minCollateralRatio;
-    }
-
     /// @notice Total internal share tokens across all holders.
+    /// @dev NOT the ERC-4626 `totalSupply()` of shares — see contract NatSpec
+    ///      terminology hazard. Under the single-multiplier design this equals
+    ///      the raw OkuM held as reserves.
     function totalUsdShares() external view returns (uint256) {
         return _getOkuDollarStorage().totalUsdShares;
     }
@@ -210,73 +190,22 @@ contract OkuDollar is
         return _getOkuDollarStorage().usdShares[account];
     }
 
-    /// @notice Snapshotted base multiplier before continuous accrual is applied.
-    function usdBaseMultiplier() external view returns (uint256) {
-        return _getOkuDollarStorage().usdBaseMultiplier;
-    }
-
     /// @notice Whether `account` is on the OkuDollar blacklist.
     function isBlacklisted(address account) external view returns (bool) {
         return _getOkuDollarStorage().isBlacklisted[account];
     }
 
-    // ============ USD Multiplier (Continuous Accrual) ============
+    // ============ USD Multiplier (Delegated to OkuMoney) ============
 
-    /// @notice Computed USD multiplier with continuous yield accrual.
-    /// @dev Uses {MathLib.rpow} for exponential accrual. Branches:
-    ///      1. Active rate at `PRECISION` (no yield): returns base, optionally compounded
-    ///         by a pending rate after `usdRateEnd` has elapsed.
-    ///      2. Active rate above `PRECISION`: compounds base by the active rate up to
-    ///         `usdRateEnd` (or `now`), then by the pending rate for any time past.
+    /// @notice Dollar value per UsdOku share, 1e18 = $1.00.
+    /// @dev SINGLE MULTIPLIER: this is exactly `okuMoney.okuMMultiplier()`. OkuDollar
+    ///      holds no rate state of its own, so OkuM and UsdOku cannot diverge and
+    ///      there is only one schedule to keep in sync across chains.
+    ///
+    ///      Because OkuMoney streams continuously, this inherits that continuity:
+    ///      no discrete step, nothing to sandwich.
     function usdMultiplier() public view returns (uint256) {
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
-        uint256 rate = $.usdRatePerSecond;
-        uint256 base = $.usdBaseMultiplier;
-        uint256 rateEnd = $.usdRateEnd;
-        uint256 pendingRate = $.usdPendingRatePerSecond;
-
-        // Branch 1: active rate is the no-yield placeholder.
-        if (rate <= Constants.PRECISION) {
-            if (rateEnd != 0 && block.timestamp > rateEnd && pendingRate > Constants.PRECISION) {
-                return _compoundFor(base, pendingRate, block.timestamp - rateEnd);
-            }
-            return base;
-        }
-
-        // Branch 2: active rate is yielding.
-        if (rateEnd != 0 && block.timestamp > rateEnd) {
-            uint256 elapsedCurrent = rateEnd - $.usdLastAccrualTime;
-            base = _compoundFor(base, rate, elapsedCurrent);
-            if (pendingRate > Constants.PRECISION) {
-                base = _compoundFor(base, pendingRate, block.timestamp - rateEnd);
-            }
-            return base;
-        }
-
-        return _compoundFor(base, rate, block.timestamp - $.usdLastAccrualTime);
-    }
-
-    /// @dev Compound `base` by `rate^elapsed`. Identity when `elapsed == 0`.
-    ///      Caps the result at `Constants.MAX_MULTIPLIER` for symmetry with
-    ///      `OkuMoney.setOkuMMultiplier`. A long-running rate at `MAX_RATE`
-    ///      would otherwise push `usdMultiplier` beyond the overflow-safe region.
-    function _compoundFor(
-        uint256 base,
-        uint256 rate,
-        uint256 elapsed
-    )
-        internal
-        pure
-        returns (uint256)
-    {
-        if (elapsed == 0) return base;
-        uint256 result = Math.mulDiv(
-            base,
-            MathLib.rpow(rate, elapsed, Constants.PRECISION),
-            Constants.PRECISION,
-            Math.Rounding.Floor
-        );
-        return result > Constants.MAX_MULTIPLIER ? Constants.MAX_MULTIPLIER : result;
+        return _getOkuDollarStorage().okuMoney.okuMMultiplier();
     }
 
     // ============ ERC20 Overrides (USD Share-based) ============
@@ -435,7 +364,7 @@ contract OkuDollar is
         address receiver,
         uint256 minAmountOut
     )
-        external
+        public
         nonReentrant
         whenNotPaused
         whenYieldNotDistributing
@@ -471,6 +400,7 @@ contract OkuDollar is
         emit Transfer(address(0), receiver, usdMinted);
         emit TransferValue(address(0), receiver, sharesToMint, usdMinted);
         emit Wrapped(msg.sender, receiver, actualReceived, usdMinted, okuMMult, usdMult);
+        emit Deposit(msg.sender, receiver, actualReceived, usdMinted);
     }
 
     /// @notice Unwrap OkuDollar back to OkuMoney.
@@ -485,7 +415,7 @@ contract OkuDollar is
         uint256 usdAmount,
         address receiver
     )
-        external
+        public
         nonReentrant
         whenNotPaused
         whenYieldNotDistributing
@@ -524,244 +454,183 @@ contract OkuDollar is
         emit Transfer(msg.sender, address(0), usdAmount);
         emit TransferValue(msg.sender, address(0), sharesToBurn, usdAmount);
         emit Unwrapped(msg.sender, receiver, usdAmount, okuMReturned, okuMMult, usdMult);
+        emit Withdraw(msg.sender, receiver, msg.sender, okuMReturned, usdAmount);
     }
 
-    // ============ Reserve Management ============
+    // ============ ERC-4626 Surface ============
+    // OkuM = `asset`, UsdOku = `shares`. Deliberately NOT inheriting OZ's
+    // ERC4626Upgradeable: its _convertTo* assume a static share balance with a
+    // floating ratio, whereas UsdOku shares rebase (balance grows with `m`, price
+    // pinned at $1). See contract NatSpec.
+    //
+    // Conversions use the multiplier directly rather than totalAssets/totalSupply,
+    // which is what makes the vault structurally immune to the 4626 inflation attack.
 
-    /// @notice Convert an OkuMoney token amount to its dollar value at the current multiplier.
-    function _okuMToDollarValue(uint256 okuMAmount) internal view returns (uint256) {
-        return MathLib.okuMToDollars(okuMAmount, _getOkuDollarStorage().okuMoney.okuMMultiplier());
+    /// @notice Underlying asset (OkuMoney).
+    function asset() public view returns (address) {
+        return address(_getOkuDollarStorage().okuMoney);
     }
 
-    /// @notice Deposit OkuMoney without minting OkuDollar shares (top up reserves).
-    /// @param okuMAmount Amount of OkuMoney tokens to deposit.
-    /// @dev Used when USD rate > OkuM rate (vault undercollateralized). OkuMoney is
-    ///      non-rebasing — token value depends on okuMMultiplier().
+    /// @notice Total OkuM managed by the vault.
+    function totalAssets() public view returns (uint256) {
+        return totalOkuMReserves();
+    }
+
+    /// @notice Dollar value of `assets` OkuM at the current multiplier.
+    /// @dev Rounds down, per spec (convertTo* MUST always round down).
+    function convertToShares(uint256 assets) public view returns (uint256) {
+        return MathLib.okuMToDollars(assets, usdMultiplier());
+    }
+
+    /// @notice OkuM equivalent of `shares` dollars at the current multiplier.
+    function convertToAssets(uint256 shares) public view returns (uint256) {
+        return MathLib.dollarsToOkuM(shares, usdMultiplier());
+    }
+
+    function maxDeposit(address) public pure returns (uint256) {
+        return type(uint256).max;
+    }
+
+    function maxMint(address) public pure returns (uint256) {
+        return type(uint256).max;
+    }
+
+    function maxWithdraw(address owner) public view returns (uint256) {
+        return balanceOf(owner);
+    }
+
+    function maxRedeem(address owner) public view returns (uint256) {
+        return balanceOf(owner);
+    }
+
+    function previewDeposit(uint256 assets) public view returns (uint256) {
+        return convertToShares(assets);
+    }
+
+    /// @dev Rounds up — assets the caller must supply to receive `shares`.
+    function previewMint(uint256 shares) public view returns (uint256) {
+        return Math.mulDiv(shares, Constants.PRECISION, usdMultiplier(), Math.Rounding.Ceil);
+    }
+
+    /// @dev Rounds up — dollar amount burned to withdraw `assets` of OkuM.
+    function previewWithdraw(uint256 assets) public view returns (uint256) {
+        return Math.mulDiv(assets, usdMultiplier(), Constants.PRECISION, Math.Rounding.Ceil);
+    }
+
+    function previewRedeem(uint256 shares) public view returns (uint256) {
+        return convertToAssets(shares);
+    }
+
+    /// @notice Deposit `assets` OkuM, minting UsdOku to `receiver`.
+    /// @dev Thin alias over {wrap}. The 4626 signature carries no slippage
+    ///      parameter, so `minAmountOut` is 0 — EOAs should prefer {wrap}.
+    function deposit(uint256 assets, address receiver) external returns (uint256) {
+        return wrap(assets, receiver, 0);
+    }
+
+    /// @notice Mint `shares` dollars of UsdOku to `receiver`.
+    function mint(uint256 shares, address receiver) external returns (uint256) {
+        uint256 assets = previewMint(shares);
+        wrap(assets, receiver, 0);
+        return assets;
+    }
+
+    /// @notice Withdraw `assets` OkuM to `receiver`, burning `owner`'s UsdOku.
+    function withdraw(uint256 assets, address receiver, address owner) external returns (uint256) {
+        uint256 shares = previewWithdraw(assets);
+        _redeemShares(shares, receiver, owner);
+        return shares;
+    }
+
+    /// @notice Redeem `shares` dollars of UsdOku from `owner` for OkuM to `receiver`.
+    function redeem(uint256 shares, address receiver, address owner) external returns (uint256) {
+        return _redeemShares(shares, receiver, owner);
+    }
+
+    /// @dev Shared 4626 withdraw/redeem path. {unwrap} burns from `msg.sender`, so
+    ///      when acting for another owner we spend the allowance and move the
+    ///      internal shares across first.
     ///
-    ///      No `whenYieldNotDistributing` guard needed: deposits only increase
-    ///      reserves, no downstream value depends on the multiplier read here
-    ///      (the multiplier appears only in the informational event field), and
-    ///      `withdrawSurplus` carries the cross-side guard that protects the
-    ///      collateralization invariant.
-    ///
-    ///      No `nonReentrant` guard: the only external call is `safeTransferFrom`
-    ///      on OkuMoney, which is a controlled, standard ERC-20 with no transfer
-    ///      hooks. A reentrant callback is not possible today. If OkuMoney is ever
-    ///      upgraded to introduce hooks, the risk is limited to inflating the
-    ///      `ReservesDeposited` event (reserves only increase, so the accounting
-    ///      invariant cannot be broken by a reentrant deposit).
-    function depositReserves(uint256 okuMAmount)
-        external
-        whenNotPaused
-        onlyRole(Roles.VAULT_RESERVE_MANAGER)
+    ///      KNOWN ISSUE (deferred to follow-up pass): the internal-share move below
+    ///      FLOORS, while `unwrap` CEILS `sharesToBurn`. When `usdMultiplier > 1e18`
+    ///      the spender can end up 1 share short of what `unwrap` demands, reverting
+    ///      with `InsufficientBalance` on an exact-balance third-party
+    ///      `withdraw`/`redeem`. Same floor-vs-ceil asymmetry that
+    ///      `LitePSM._redeemUsdOku` resolves with a balance-delta read; this path
+    ///      needs the equivalent treatment plus a targeted regression test.
+    function _redeemShares(
+        uint256 shares,
+        address receiver,
+        address owner
+    )
+        internal
+        returns (uint256 assets)
     {
-        if (okuMAmount == 0) revert Errors.ZeroAmount();
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
-        uint256 balBefore = IERC20(address($.okuMoney)).balanceOf(address(this));
-        IERC20(address($.okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
-        uint256 actualReceived = IERC20(address($.okuMoney)).balanceOf(address(this)) - balBefore;
-        emit ReservesDeposited(
-            msg.sender, actualReceived, _okuMToDollarValue(actualReceived), collateralizationRatio()
-        );
-    }
-
-    /// @notice Withdraw surplus OkuMoney without burning OkuDollar shares.
-    /// @param okuMAmount Amount of OkuMoney tokens to withdraw.
-    /// @dev Enforces `collateralizationRatio() >= minCollateralRatio` BEFORE the
-    ///      token transfer (correct CEI ordering). `nonReentrant` is applied as
-    ///      defense-in-depth — OkuMoney today is a standard ERC-20 with no
-    ///      transfer callbacks, but if a future upgrade ever introduces hooks
-    ///      (ERC-777 / ERC-4337 callouts) a reentrant call back into
-    ///      `wrap`/`unwrap` between the transfer and a post-check would
-    ///      observe a temporarily-inflated reserve balance.
-    ///      `whenYieldNotDistributing` mirrors the guard on `wrap`/`unwrap` —
-    ///      a yield distribution in the same block changes `okuMMultiplier`, which
-    ///      is read inside `collateralizationRatio()` and `withdrawSurplus`'s own
-    ///      post-withdrawal ratio check. Without this guard a privileged operator
-    ///      could sandwich a yield distribution and a withdrawal in the same block.
-    ///      This guard only prevents the intra-block case; see
-    ///      `EVM/README.md § Accepted Risks (2)` for the cross-block trust
-    ///      assumption on `VAULT_REBASER` + `VAULT_RESERVE_MANAGER`.
-    function withdrawSurplus(uint256 okuMAmount)
-        external
-        nonReentrant
-        whenNotPaused
-        whenYieldNotDistributing
-        onlyRole(Roles.VAULT_RESERVE_MANAGER)
-    {
-        if (okuMAmount == 0) revert Errors.ZeroAmount();
-
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
-
-        // Compute the post-withdrawal collateralization ratio against the
-        // reserve balance the vault WILL HAVE after `safeTransfer` completes,
-        // and revert before moving any tokens if that ratio breaches the floor.
-        uint256 currentReserves = totalOkuMReserves();
-        if (currentReserves < okuMAmount) revert InsufficientReserves();
-        uint256 postReserves;
-        unchecked {
-            // Safe: just bounds-checked above.
-            postReserves = currentReserves - okuMAmount;
+        if (owner != _msgSender()) {
+            _spendAllowance(owner, _msgSender(), shares);
+            uint256 internalShares =
+                Math.mulDiv(shares, Constants.PRECISION, usdMultiplier(), Math.Rounding.Floor);
+            _transferUsdShares(owner, _msgSender(), internalShares);
         }
-
-        uint256 obligations = totalUsdObligations();
-        uint256 postRatio;
-        if (obligations == 0) {
-            postRatio = type(uint256).max;
-        } else {
-            uint256 postReservesDollarValue =
-                MathLib.okuMToDollars(postReserves, $.okuMoney.okuMMultiplier());
-            postRatio = Math.mulDiv(
-                postReservesDollarValue, Constants.PRECISION, obligations, Math.Rounding.Floor
-            );
-        }
-        if (postRatio < $.minCollateralRatio) revert BelowMinimumCollateral();
-
-        IERC20(address($.okuMoney)).safeTransfer(msg.sender, okuMAmount);
-
-        emit SurplusWithdrawn(msg.sender, okuMAmount, _okuMToDollarValue(okuMAmount), postRatio);
+        return unwrap(shares, receiver);
     }
 
-    // ============ Admin ============
+    // ============ Reserves & Donation Rescue ============
 
-    /// @notice Update the minimum collateral ratio enforced by `withdrawSurplus`.
-    /// @param newRatio New ratio (1e18 = 100%). Must be within
-    ///        [MIN_COLLATERAL_RATIO_FLOOR, PRECISION] and <= current live ratio.
-    /// @dev Gated on `VAULT_ADMIN` rather than `DEFAULT_ADMIN_ROLE` so the
-    ///      vault-config key can be rotated independently of the AccessControl
-    ///      meta-role holder. Mirrors the granular-role posture used by every
-    ///      other admin function on this contract.
-    ///
-    ///      Live-health gate: any new floor that the vault doesn't already meet
-    ///      is rejected. Without this check, raising the floor above the live
-    ///      ratio would silently brick `withdrawSurplus` (and any future
-    ///      collateralization-checked operation) until the reserve manager
-    ///      deposited additional OkuMoney. Operational expectation: call
-    ///      `depositReserves` first to lift the live ratio above the new bar,
-    ///      then call this in the same operational batch.
-    function setMinCollateralRatio(uint256 newRatio) external onlyRole(Roles.VAULT_ADMIN) {
-        if (newRatio > Constants.PRECISION) revert RatioExceedsMax();
-        if (newRatio < Constants.MIN_COLLATERAL_RATIO_FLOOR) revert RatioBelowFloor();
-        if (collateralizationRatio() < newRatio) revert BelowMinimumCollateral();
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
-        uint256 oldRatio = $.minCollateralRatio;
-        $.minCollateralRatio = newRatio;
-        emit MinCollateralRatioUpdated(oldRatio, newRatio);
-    }
-
-    // ============ Collateralization Views (Price-Aware) ============
-
-    /// @notice Total OkuMoney tokens held as reserves
+    /// @notice Total OkuMoney tokens held as backing.
+    /// @dev Doubles as ERC-4626 `totalAssets()`.
     function totalOkuMReserves() public view returns (uint256) {
         return IERC20(address(_getOkuDollarStorage().okuMoney)).balanceOf(address(this));
     }
 
-    /// @notice Total OkuDollar obligations (in dollar terms)
+    /// @notice Total UsdOku obligations, in dollar terms.
     function totalUsdObligations() public view returns (uint256) {
         return totalSupply();
     }
 
-    /// @notice Multiplier-aware collateralization ratio.
-    /// @dev (reservesDollarValue * PRECISION) / totalSupply, where reservesDollarValue
-    ///      converts the OkuM token reserves to dollars via okuMMultiplier().
-    function collateralizationRatio() public view returns (uint256) {
-        uint256 obligations = totalUsdObligations();
-        if (obligations == 0) return type(uint256).max;
-        return Math.mulDiv(
-            _okuMToDollarValue(totalOkuMReserves()),
-            Constants.PRECISION,
-            obligations,
-            Math.Rounding.Floor
-        );
-    }
-
-    /// @notice Extractable surplus as OkuMoney tokens (0 if undercollateralized).
-    /// @return Amount of OkuMoney tokens withdrawable without breaching the floor.
-    function surplus() external view returns (uint256) {
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
-        uint256 okuMMult = $.okuMoney.okuMMultiplier();
-        uint256 reservesDollarValue =
-            Math.mulDiv(totalOkuMReserves(), okuMMult, Constants.PRECISION, Math.Rounding.Floor);
-        uint256 obligations = totalUsdObligations();
-        if (reservesDollarValue <= obligations) return 0;
-        return MathLib.dollarsToOkuM(reservesDollarValue - obligations, okuMMult);
-    }
-
-    // ============ Rate Management (VAULT_REBASER) ============
-
-    /// @notice Set the USD multiplier accrual rate.
-    /// @param newRate Per-second rate (1e18 = no yield). Must be in [PRECISION, MAX_RATE].
-    /// @param endTimestamp Unix timestamp at which the rate expires (0 = open-ended).
-    /// @dev Does NOT stamp a separate
-    ///      `lastUsdRateUpdateBlock`. Rate changes manifest over time
-    ///      (the multiplier moves linearly per-second), not instantly,
-    ///      so the same-block sandwich attack vector that `OkuMoney`'s
-    ///      `distributeYield` carries does not apply: a tx landing in
-    ///      the same block as `setUsdYieldRate` reads the (just-
-    ///      recomputed) `usdBaseMultiplier` and `usdLastAccrualTime`,
-    ///      so its `usdMultiplier()` view returns the pre-jump value
-    ///      until at least one second has elapsed. The
-    ///      `whenYieldNotDistributing` modifier on user-facing paths
-    ///      (`wrap`, `unwrap`, `transfer`) still defends against
-    ///      OkuMoney-side `distributeYield` collisions, which is the
-    ///      attack class that does have instantaneous impact.
+    /// @notice Rescue OkuM donated directly to the vault.
+    /// @param amount Raw OkuM to withdraw.
+    /// @param receiver Recipient of the rescued tokens.
+    /// @dev Under the single-multiplier design, conversions use `m` rather than
+    ///      `totalAssets/totalSupply`. That makes the vault structurally immune to
+    ///      the ERC-4626 inflation attack, but the corollary is that a direct OkuM
+    ///      transfer to this contract accrues to NOBODY — it would otherwise be
+    ///      locked forever. This is the escape hatch.
     ///
-    ///      `endTimestamp == 0` is the "open-ended" sentinel: the rate
-    ///      accrues indefinitely until the next `setUsdYieldRate` call.
-    ///      Non-zero values must be strictly in the future. While an
-    ///      open-ended rate is active, `setNextUsdYieldRate` cannot
-    ///      schedule a successor (it reverts with `NoRateEndSet`); the
-    ///      operator must re-call `setUsdYieldRate` to switch.
+    ///      Cannot touch backing: `totalUsdShares` is the OkuM required to honour
+    ///      every outstanding share (shares track raw OkuM 1:1), so anything above
+    ///      that balance is donation surplus.
     ///
-    ///      Pause-bypass is intentional: operators may need to ZERO the
-    ///      rate (pass `newRate = PRECISION`) during an incident response,
-    ///      and pausing this setter would defeat that. The companion
-    ///      rate-effect setters on `OkuMoney` (`setOkuMMultiplier`,
-    ///      `distributeYield`) ARE pause-gated — see those for the
-    ///      effect-vs-config split rationale.
-    function setUsdYieldRate(
-        uint256 newRate,
-        uint256 endTimestamp
+    ///      NOTE (deferred): the 1:1 identity is exact only while `wrap`/`unwrap` are
+    ///      the sole mutators. `unwrap` ceils `sharesToBurn` while flooring
+    ///      `okuMReturned`, so each unwrap can leave reserves up to 1 wei ABOVE
+    ///      `totalUsdShares`. That dust is classified as rescuable donation here.
+    ///      Directionally safe (favours the protocol, and the rescuer is trusted),
+    ///      but the accounting is 1-wei-per-unwrap optimistic rather than exact.
+    function rescueDonation(
+        uint256 amount,
+        address receiver
     )
         external
-        onlyRole(Roles.VAULT_REBASER)
+        nonReentrant
+        onlyRole(Roles.VAULT_RESCUER)
     {
-        if (newRate < Constants.PRECISION) revert InvalidRate();
-        if (newRate > Constants.MAX_RATE) revert RateTooHigh();
-        if (endTimestamp != 0 && endTimestamp <= block.timestamp) revert EndTimestampInPast();
+        if (amount == 0) revert Errors.ZeroAmount();
+        if (receiver == address(0)) revert Errors.ZeroAddress();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
-        uint256 oldRate = $.usdRatePerSecond;
-        $.usdBaseMultiplier = usdMultiplier();
-        $.usdLastAccrualTime = block.timestamp;
+        uint256 backing = $.totalUsdShares;
+        uint256 held = totalOkuMReserves();
+        if (held <= backing) revert NoDonationAvailable();
 
-        $.usdRatePerSecond = newRate;
-        $.usdRateEnd = endTimestamp;
-        $.usdPendingRatePerSecond = Constants.PRECISION;
+        uint256 available;
+        unchecked {
+            available = held - backing;
+        }
+        if (amount > available) revert NoDonationAvailable();
 
-        emit UsdYieldRateUpdated(oldRate, newRate, endTimestamp, $.usdBaseMultiplier);
-    }
-
-    /// @notice Schedule a successor rate that activates after the current rate's `usdRateEnd`.
-    /// @param newRate Per-second rate (1e18 = no yield). Must be in [PRECISION, MAX_RATE].
-    /// @dev Requires a non-zero `usdRateEnd` (cannot schedule against an open-ended rate)
-    ///      and the current rate must not have already expired.
-    function setNextUsdYieldRate(uint256 newRate) external onlyRole(Roles.VAULT_REBASER) {
-        if (newRate < Constants.PRECISION) revert InvalidRate();
-        if (newRate > Constants.MAX_RATE) revert RateTooHigh();
-
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
-        if ($.usdRateEnd == 0) revert NoRateEndSet();
-        // Staging a pending rate after the current rate has already expired would let
-        // the pending rate accrue from the (past) usdRateEnd timestamp the moment it
-        // activates, snapshotting an arbitrary amount of unearned yield at that
-        // boundary. Force the operator to call setUsdYieldRate() with a fresh end
-        // timestamp instead.
-        if (block.timestamp >= $.usdRateEnd) revert RateAlreadyExpired();
-
-        $.usdPendingRatePerSecond = newRate;
-
-        emit NextUsdYieldRateSet(newRate, $.usdRateEnd);
+        IERC20(address($.okuMoney)).safeTransfer(receiver, amount);
+        emit DonationRescued(receiver, amount);
     }
 
     // ============ Blacklist (Works While Paused) ============

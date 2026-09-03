@@ -148,11 +148,12 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
   OkuDollar: [
     "DEFAULT_ADMIN_ROLE",
     "VAULT_UPGRADER",
-    "VAULT_REBASER",
-    "VAULT_RESERVE_MANAGER",
     "VAULT_PAUSER",
     "VAULT_UNPAUSER",
-    "VAULT_ADMIN",
+    // REMOVED (single-multiplier refactor): VAULT_REBASER / VAULT_RESERVE_MANAGER /
+    // VAULT_ADMIN no longer exist. VAULT_RESCUER replaces them as the only
+    // asset-touching vault role (withdraws OkuM donated directly to the vault).
+    "VAULT_RESCUER",
     // Per-contract grants of the shared OKUM_BLACKLISTER / OKUM_UNBLACKLISTER
     // role hashes — required for OkuDollar.blacklist() / unblacklist() since
     // AccessControl role mappings are per-contract even when the hash is shared.

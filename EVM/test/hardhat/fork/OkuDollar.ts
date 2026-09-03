@@ -233,9 +233,10 @@ describe("OkuDollar Vault Scenarios", () => {
             const newReserves = await okuUsd.totalOkuMReserves()
             expect(newReserves).to.equal(initialReserves)
 
-            // But the dollar VALUE of reserves increased → surplus exists
-            const surplus = await okuUsd.surplus()
-            expect(surplus).to.be.gt(0)
+            // REMOVED: surplus() — single-multiplier refactor. OkuM and UsdOku share
+            // one multiplier, so collateralization is exactly 1.0 by construction and
+            // no surplus can accrue. The dollar value of reserves and of obligations
+            // now move together.
 
             // Unwrap is price-aware: notesReturned = okuUsdBalance × usdMultiplier / notePrice
             // After notePrice increase, each note is worth more → fewer notes returned
@@ -309,8 +310,7 @@ describe("OkuDollar Vault Scenarios", () => {
             const newPrice = priceBefore * 110n / 100n
             await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
 
-            // Vault is now overcollateralized
-            expect(await okuUsd.surplus()).to.be.gt(0)
+            // REMOVED: surplus() — see note above. Collateralization is 1.0 always.
 
             // Users unwrap their gained OkuDollar in reverse order
             // Unwrap is price-aware: notesReturned = usdAmount × usdMultiplier / notePrice

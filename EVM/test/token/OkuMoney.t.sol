@@ -27,13 +27,13 @@ contract OkuMoneyTest is BaseTest {
         uint256 totalSupply,
         uint256 indexed blockNumber
     );
-    event YieldDistributed(
-        uint256 yieldAmount,
-        uint256 oldPrice,
-        uint256 newPrice,
-        uint256 totalSupply,
-        uint256 indexed blockNumber
+    // REMOVED (streaming-accrual refactor): local mirror of `YieldDistributed` —
+    // the event and `distributeYield` were both deleted. New events are
+    // OkuMYieldRateUpdated / NextOkuMYieldRateSet, mirrored below.
+    event OkuMYieldRateUpdated(
+        uint256 oldRate, uint256 newRate, uint256 endTimestamp, uint256 snapshotMultiplier
     );
+    event NextOkuMYieldRateSet(uint256 newRate, uint256 activatesAt);
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
     );
@@ -511,99 +511,185 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
-    // ============ distributeYield Tests ============
+    // ============ setOkuMYieldRate / setNextOkuMYieldRate Tests ============
+    //
+    // REMOVED (streaming-accrual refactor): the whole `distributeYield` test block
+    // (test_DistributeYield_OnlyRebaser, _CorrectPriceMath, _ZeroSupplyReverts,
+    // _RevertsWhenPaused, _EmitsEvent, _MonotonicallyIncreases, _DoesNotAffectBalances).
+    // `distributeYield(uint256)` and the `YieldTooSmall` / `YieldDistributed` symbols
+    // were deleted: the multiplier is no longer nudged by a supply-relative yield
+    // amount, it is COMPUTED continuously from a rate schedule. The replacement
+    // surface is tested below.
 
-    function test_DistributeYield_OnlyRebaser() public {
-        _mintOkuMoney(user1, 10_000e18);
-
+    function test_SetOkuMYieldRate_OnlyRebaser() public {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
             )
         );
-        okuMoney.distributeYield(1000e18);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e9, 0);
     }
 
-    function test_DistributeYield_CorrectPriceMath() public {
-        // $1000 yield on 10000 tokens → +$0.10/token
+    function test_SetNextOkuMYieldRate_OnlyRebaser() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
+            )
+        );
+        okuMoney.setNextOkuMYieldRate(PRECISION + 1e9);
+    }
+
+    function test_SetOkuMYieldRate_RevertsOnRateBelowPrecision() public {
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.InvalidRate.selector);
+        okuMoney.setOkuMYieldRate(PRECISION - 1, 0);
+    }
+
+    function test_SetOkuMYieldRate_RevertsOnRateTooHigh() public {
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.RateTooHigh.selector);
+        okuMoney.setOkuMYieldRate(MAX_RATE + 1, 0);
+    }
+
+    function test_SetOkuMYieldRate_RevertsOnPastEndTimestamp() public {
+        vm.warp(1000);
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.EndTimestampInPast.selector);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp - 1);
+    }
+
+    function test_SetOkuMYieldRate_StoresSchedule() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
+
+        assertEq(okuMoney.okuMRatePerSecond(), PRECISION + 1393e6);
+        assertEq(okuMoney.okuMRateEnd(), endTime);
+        assertEq(okuMoney.okuMLastAccrualTime(), block.timestamp);
+        // A fresh schedule clears any armed successor.
+        assertEq(okuMoney.okuMPendingRatePerSecond(), PRECISION);
+    }
+
+    function test_SetOkuMYieldRate_SnapshotsMultiplier() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, 0);
+
+        vm.warp(block.timestamp + 1 days);
+        uint256 multBefore = okuMoney.okuMMultiplier();
+        assertGt(multBefore, PRECISION);
+
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION, 0); // halt accrual
+
+        assertEq(okuMoney.okuMBaseMultiplier(), multBefore, "base is snapshotted");
+        assertEq(okuMoney.okuMMultiplier(), multBefore, "curve is continuous across the write");
+    }
+
+    /// @notice Continuous accrual does NOT stamp the sandwich-guard block: there is no
+    ///         discrete step to sandwich. Only `setOkuMMultiplier` stamps.
+    function test_SetOkuMYieldRate_DoesNotStampYieldBlock() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, 0);
+
+        assertEq(okuMoney.lastYieldDistributionBlock(), 0);
+    }
+
+    function test_SetOkuMYieldRate_DoesNotAffectBalances() public {
         uint256 supply = 10_000e18;
         _mintOkuMoney(user1, supply);
 
-        uint256 priceBefore = okuMoney.okuMMultiplier();
-
         vm.prank(rebaser);
-        okuMoney.distributeYield(1000e18);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, 0);
+        vm.warp(block.timestamp + 365 days);
 
-        uint256 priceAfter = okuMoney.okuMMultiplier();
-        assertEq(priceAfter, priceBefore + 0.1e18);
+        assertGt(okuMoney.okuMMultiplier(), PRECISION, "multiplier accrued");
+        assertEq(okuMoney.balanceOf(user1), supply, "balanceOf unchanged (non-rebasing)");
+        assertEq(okuMoney.totalSupply(), supply, "totalSupply unchanged (non-rebasing)");
     }
 
-    function test_DistributeYield_ZeroSupplyReverts() public {
-        // No tokens minted
+    /// @notice The multiplier has no supply term, so a zero-supply rate change is fine.
+    /// @dev Replaces test_DistributeYield_ZeroSupplyReverts — `ZeroSupply` is unreachable.
+    function test_SetOkuMYieldRate_WorksWithZeroSupply() public {
+        assertEq(okuMoney.totalSupply(), 0);
         vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.ZeroSupply.selector);
-        okuMoney.distributeYield(1000e18);
+        okuMoney.setOkuMYieldRate(MAX_RATE, 0);
+        vm.warp(block.timestamp + 1 days);
+        assertGt(okuMoney.okuMMultiplier(), PRECISION);
     }
 
-    /// @dev Sibling of test_SetOkuMMultiplier_RevertsWhenPaused. See that test's
-    ///      NatSpec for the rationale.
-    function test_DistributeYield_RevertsWhenPaused() public {
-        _mintOkuMoney(user1, 10_000e18);
-
-        vm.prank(pauser);
-        okuMoney.pause();
+    function test_SetNextOkuMYieldRate_RevertsWhenNoRateEnd() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, 0); // open-ended
 
         vm.prank(rebaser);
-        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        okuMoney.distributeYield(1000e18);
+        vm.expectRevert(OkuMoney.NoRateEndSet.selector);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6);
     }
 
-    function test_DistributeYield_EmitsEvent() public {
-        uint256 supply = 10_000e18;
-        _mintOkuMoney(user1, supply);
-
-        uint256 yieldAmount = 1000e18;
-        uint256 expectedOldPrice = PRECISION;
-        uint256 expectedNewPrice = PRECISION + 0.1e18;
-
-        // Cycle 4 (EVM-01): event payload now includes the indexed
-        // `blockNumber` field.
-        vm.expectEmit(true, false, false, true);
-        emit YieldDistributed(yieldAmount, expectedOldPrice, expectedNewPrice, supply, block.number);
-
+    function test_SetNextOkuMYieldRate_RevertsWhenAlreadyExpired() public {
+        uint256 endTime = block.timestamp + 30 days;
         vm.prank(rebaser);
-        okuMoney.distributeYield(yieldAmount);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
+
+        // `>=` boundary: exactly endTime already reverts.
+        vm.warp(endTime);
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.RateAlreadyExpired.selector);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6);
     }
 
-    function test_DistributeYield_MonotonicallyIncreases() public {
-        _mintOkuMoney(user1, 10_000e18);
-
-        uint256 price0 = okuMoney.okuMMultiplier();
-
+    function test_SetNextOkuMYieldRate_SucceedsOneSecondBeforeEnd() public {
+        uint256 endTime = block.timestamp + 30 days;
         vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
-        uint256 price1 = okuMoney.okuMMultiplier();
-        assertGt(price1, price0);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
 
+        vm.warp(endTime - 1);
+        uint256 nextRate = PRECISION + 2000e6;
         vm.prank(rebaser);
-        okuMoney.distributeYield(200e18);
-        uint256 price2 = okuMoney.okuMMultiplier();
-        assertGt(price2, price1);
+        okuMoney.setNextOkuMYieldRate(nextRate);
+
+        assertEq(okuMoney.okuMPendingRatePerSecond(), nextRate);
     }
 
-    function test_DistributeYield_DoesNotAffectBalances() public {
-        uint256 supply = 10_000e18;
-        _mintOkuMoney(user1, supply);
-
-        uint256 balanceBefore = okuMoney.balanceOf(user1);
-        uint256 totalSupplyBefore = okuMoney.totalSupply();
+    function test_SetNextOkuMYieldRate_RevertsOnRateTooHigh() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
 
         vm.prank(rebaser);
-        okuMoney.distributeYield(1000e18);
+        vm.expectRevert(OkuMoney.RateTooHigh.selector);
+        okuMoney.setNextOkuMYieldRate(MAX_RATE + 1);
+    }
 
-        assertEq(okuMoney.balanceOf(user1), balanceBefore, "balanceOf unchanged after yield");
-        assertEq(okuMoney.totalSupply(), totalSupplyBefore, "totalSupply unchanged after yield");
+    /// @notice The successor activates off the absolute `okuMRateEnd` with NO
+    ///         transaction at the boundary — the cross-chain-safety primitive.
+    function test_SetNextOkuMYieldRate_ActivatesWithoutTransaction() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
+        vm.prank(rebaser);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6);
+
+        vm.warp(endTime);
+        uint256 atBoundary = okuMoney.okuMMultiplier();
+        vm.warp(endTime + 30 days);
+
+        assertGt(okuMoney.okuMMultiplier(), atBoundary, "successor accrued with no tx");
+    }
+
+    /// @notice With no successor armed, accrual halts at `okuMRateEnd`.
+    function test_RateExpiry_HaltsAccrualWhenNoPending() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
+
+        vm.warp(endTime);
+        uint256 atEnd = okuMoney.okuMMultiplier();
+        vm.warp(endTime + 100 days);
+
+        assertEq(okuMoney.okuMMultiplier(), atEnd, "no accrual past expiry without a successor");
     }
 
     // ============ okuMMultiplier Storage Tests ============
@@ -635,37 +721,22 @@ contract OkuMoneyTest is BaseTest {
     }
 
     // ============ Yield Distribution Block Tests (Sandwich Attack Prevention) ============
+    //
+    // REMOVED (streaming-accrual refactor): the distributeYield-driven variants
+    // (test_DistributeYield_SetsLastYieldDistributionBlock,
+    // test_DistributeYield_UpdatesLastYieldDistributionBlock,
+    // test_LastYieldDistributionBlock_UpdatesOnEachDistribution). `setOkuMMultiplier`
+    // is now the SOLE function that stamps `lastYieldDistributionBlock` — continuous
+    // accrual creates no step, so `setOkuMYieldRate` deliberately does not stamp
+    // (see test_SetOkuMYieldRate_DoesNotStampYieldBlock).
 
     function test_LastYieldDistributionBlock_InitiallyZero() public view {
         assertEq(okuMoney.lastYieldDistributionBlock(), 0);
     }
 
-    function test_DistributeYield_SetsLastYieldDistributionBlock() public {
-        uint256 supply = 10_000e18;
-        _mintOkuMoney(user1, supply);
-
-        vm.prank(rebaser);
-        okuMoney.distributeYield(1000e18);
-
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
-    }
-
     function test_SetOkuMMultiplier_SetsLastYieldDistributionBlock() public {
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
-
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
-    }
-
-    function test_DistributeYield_UpdatesLastYieldDistributionBlock() public {
-        uint256 supply = 10_000e18;
-        _mintOkuMoney(user1, supply);
-
-        uint256 blockBefore = okuMoney.lastYieldDistributionBlock();
-        assertEq(blockBefore, 0);
-
-        vm.prank(rebaser);
-        okuMoney.distributeYield(1000e18);
 
         assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
     }
@@ -680,19 +751,15 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
     }
 
-    function test_LastYieldDistributionBlock_UpdatesOnEachDistribution() public {
-        uint256 supply = 10_000e18;
-        _mintOkuMoney(user1, supply);
-
+    function test_LastYieldDistributionBlock_UpdatesOnEachOverride() public {
         vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
         uint256 block1 = okuMoney.lastYieldDistributionBlock();
 
-        // Roll forward and distribute again
         vm.roll(block.number + 10);
 
         vm.prank(rebaser);
-        okuMoney.distributeYield(100e18);
+        okuMoney.setOkuMMultiplier(PRECISION * 3);
         uint256 block2 = okuMoney.lastYieldDistributionBlock();
 
         assertEq(block2, block1 + 10);

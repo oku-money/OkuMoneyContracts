@@ -72,10 +72,12 @@ contract LitePSMRebasingRedeemTest is BaseTest {
 
     // ============ Helpers ============
 
-    /// @notice Set the active USD yield rate (open-ended).
+    /// @notice Set the active yield rate (open-ended).
+    /// @dev SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` is exactly
+    ///      `okuMoney.okuMMultiplier()`, so the rate is set on OkuMoney via OKUM_REBASER.
     function _setUsdRate(uint256 rate) internal {
-        vm.prank(usdRebaser);
-        okuDollar.setUsdYieldRate(rate, 0);
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(rate, 0);
     }
 
     /// @notice Mint UsdOku to a user from a USDC deposit through the PSM. Returns the

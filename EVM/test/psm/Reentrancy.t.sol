@@ -44,7 +44,7 @@ contract ReentrancyTest is Test {
                 new ERC1967Proxy(
                     address(dollarImpl),
                     abi.encodeCall(
-                        OkuDollar.initialize, (address(rOkuM), "OkuDollar", "usdOku", admin, 95e16)
+                        OkuDollar.initialize, (address(rOkuM), "OkuDollar", "usdOku", admin)
                     )
                 )
             )

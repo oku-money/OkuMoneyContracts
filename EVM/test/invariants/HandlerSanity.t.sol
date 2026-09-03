@@ -17,10 +17,9 @@ contract HandlerSanityTest is BaseTest {
 
     /// @notice Minimum acceptable handler success rate (40%).
     /// @dev Tighter than the original 30% but loose enough to accommodate the
-    ///      expanded admin surface (setNextUsdYieldRate before setUsdYieldRate;
-    ///      withdrawSurplus when there is no surplus; setMinCollateralRatio with
-    ///      out-of-range values; etc). A real handler bug shows up as a success
-    ///      rate well below this floor.
+    ///      expanded admin surface (e.g. setNextOkuMYieldRate before any bounded
+    ///      window is armed; rebase rejected as non-increasing; etc). A real handler
+    ///      bug shows up as a success rate well below this floor.
     uint256 public constant MIN_SUCCESS_RATE = 40;
 
     /// @notice Minimum calls before checking success rate. Increased from 10 to

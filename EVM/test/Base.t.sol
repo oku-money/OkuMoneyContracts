@@ -55,11 +55,11 @@ abstract contract BaseTest is Test, Actors {
 
     // OkuDollar vault roles (VAULT_ prefix)
     bytes32 public constant VAULT_UPGRADER = TestRoles.VAULT_UPGRADER;
-    bytes32 public constant VAULT_REBASER = TestRoles.VAULT_REBASER;
-    bytes32 public constant VAULT_RESERVE_MANAGER = TestRoles.VAULT_RESERVE_MANAGER;
     bytes32 public constant VAULT_PAUSER = TestRoles.VAULT_PAUSER;
     bytes32 public constant VAULT_UNPAUSER = TestRoles.VAULT_UNPAUSER;
-    bytes32 public constant VAULT_ADMIN = TestRoles.VAULT_ADMIN;
+    bytes32 public constant VAULT_RESCUER = TestRoles.VAULT_RESCUER;
+    // REMOVED (single-multiplier refactor): VAULT_REBASER, VAULT_RESERVE_MANAGER,
+    // VAULT_ADMIN — see TestRoles.
 
     // LitePSM roles (PSM_ prefix)
     bytes32 public constant PSM_UPGRADER = TestRoles.PSM_UPGRADER;
@@ -133,8 +133,9 @@ abstract contract BaseTest is Test, Actors {
         okuMoney.grantRole(OKUM_ALLOWANCE_MANAGER, allowanceManager);
 
         // OkuDollar vault roles (VAULT_ prefix)
-        okuDollar.grantRole(VAULT_REBASER, usdRebaser);
-        okuDollar.grantRole(VAULT_RESERVE_MANAGER, reserveManager);
+        // REMOVED (single-multiplier refactor): VAULT_REBASER / VAULT_RESERVE_MANAGER
+        // grants — those roles no longer exist.
+        okuDollar.grantRole(VAULT_RESCUER, vaultRescuer);
         okuDollar.grantRole(VAULT_PAUSER, vaultPauser);
         okuDollar.grantRole(VAULT_UNPAUSER, vaultUnpauser);
         // OkuDollar blacklist (shared OKUM_ roles — one grant covers both tokens)
@@ -253,6 +254,21 @@ abstract contract BaseTest is Test, Actors {
         return a > b ? a : b;
     }
 
+    /// @notice Stamp `lastYieldDistributionBlock` on OkuMoney for the current block.
+    /// @dev REPLACES `distributeYield(...)`, which was deleted in the streaming-accrual
+    ///      refactor. `setOkuMMultiplier` is now the ONLY function that stamps the
+    ///      sandwich-guard block (continuous accrual creates no step, so
+    ///      `setOkuMYieldRate` deliberately does not stamp). Bumps the multiplier by
+    ///      the smallest legal increment, since a non-increasing value reverts.
+    function _stampYieldLockBlock() internal {
+        // Read BEFORE the prank: `vm.prank` applies to the next call, and an inline
+        // `okuMoney.okuMMultiplier()` argument would consume it as a staticcall,
+        // leaving `setOkuMMultiplier` to execute as the test contract (no role).
+        uint256 next = okuMoney.okuMMultiplier() + 1;
+        vm.prank(rebaser);
+        okuMoney.setOkuMMultiplier(next);
+    }
+
     /// @notice Set OkuMoney multiplier and roll to next block to avoid yield distribution lock
     /// @dev Use this helper when testing multiplier-aware operations that would be blocked
     ///      in the same block as a multiplier change (sandwich attack prevention).
@@ -262,24 +278,28 @@ abstract contract BaseTest is Test, Actors {
         vm.roll(block.number + 1);
     }
 
-    /// @notice Elevate OkuDollar's `usdMultiplier()` to (approximately) `targetMultiplier`.
-    /// @dev Drives the multiplier via `setUsdYieldRate` + `vm.warp` rather than a direct
-    ///      override; this mirrors the only production path for moving the multiplier.
-    ///      The achieved value is the smallest multiplier >= target reachable by warping
-    ///      forward at MAX_RATE.
+    /// @notice Elevate the (single) multiplier to at least `targetMultiplier`.
+    /// @dev SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` is exactly
+    ///      `okuMoney.okuMMultiplier()`, so this drives the OkuMoney rate schedule.
+    ///      Retains the historical name because many tests call it; see
+    ///      {_elevateOkuMMultiplier} for the alias.
+    ///
+    ///      Uses `setOkuMYieldRate` + `vm.warp` rather than the discrete
+    ///      `setOkuMMultiplier` override so no `lastYieldDistributionBlock` stamp is
+    ///      left behind (which would block PSM/vault ops for the rest of the block).
     function _elevateUsdMultiplier(uint256 targetMultiplier) internal {
         require(targetMultiplier >= PRECISION, "target below floor");
-        uint256 current = okuDollar.usdMultiplier();
+        uint256 current = okuMoney.okuMMultiplier();
         if (targetMultiplier <= current) return;
 
         // Set the active rate to MAX_RATE with no end timestamp (open-ended) so the
         // multiplier compounds continuously. Then warp forward enough seconds to clear
         // the target. We loop in case rounding leaves us short on the first warp.
-        vm.prank(usdRebaser);
-        okuDollar.setUsdYieldRate(MAX_RATE, 0);
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(MAX_RATE, 0);
 
         uint256 elapsed = 1;
-        while (okuDollar.usdMultiplier() < targetMultiplier) {
+        while (okuMoney.okuMMultiplier() < targetMultiplier) {
             vm.warp(block.timestamp + elapsed);
             elapsed *= 2;
             // Safety: bound the loop in case targetMultiplier is unreachable.
@@ -287,7 +307,12 @@ abstract contract BaseTest is Test, Actors {
         }
 
         // Snapshot the achieved multiplier and stop accrual so subsequent reads stay stable.
-        vm.prank(usdRebaser);
-        okuDollar.setUsdYieldRate(PRECISION, 0);
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION, 0);
+    }
+
+    /// @notice Alias for {_elevateUsdMultiplier} — there is only one multiplier now.
+    function _elevateOkuMMultiplier(uint256 targetMultiplier) internal {
+        _elevateUsdMultiplier(targetMultiplier);
     }
 }

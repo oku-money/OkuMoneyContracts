@@ -5,17 +5,21 @@ import {Test} from "forge-std/Test.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {TestConstants} from "../shared/Constants.sol";
 
 /**
  * @title OkuDollarHandler
  * @notice Stateful handler for OkuDollar invariant testing — exercises wrap, unwrap,
- *         transfer, rebase (OkuMoney multiplier), depositReserves, withdrawSurplus,
- *         setUsdYieldRate, setNextUsdYieldRate, setMinCollateralRatio.
+ *         transfer, discrete rebase, and the (single) yield-rate schedule.
  *
- *         The handler must be granted VAULT_REBASER, VAULT_RESERVE_MANAGER and
- *         DEFAULT_ADMIN_ROLE on the OkuDollar instance — see VaultInvariants.setUp.
+ *         The handler must be granted OKUM_REBASER on the OkuMoney instance so it can
+ *         drive the shared multiplier — see VaultInvariants.setUp.
+ *
+ * @dev REMOVED (single-multiplier refactor): depositReserves / withdrawSurplus actions
+ *      (collateralization is 1.0 by construction, so there is no surplus and nothing to
+ *      top up), setMinCollateralRatio (no min-ratio config exists), and
+ *      setUsdYieldRate / setNextUsdYieldRate (OkuDollar has no rate of its own; the
+ *      equivalents now live on OkuMoney as setOkuMYieldRate / setNextOkuMYieldRate).
  */
 contract OkuDollarHandler is Test {
     OkuMoney public okuMoney;
@@ -29,13 +33,10 @@ contract OkuDollarHandler is Test {
     uint256 public constant MAX_SUPPLY = TestConstants.MAX_SUPPLY;
     uint256 public constant PRECISION = TestConstants.PRECISION;
     uint256 public constant MAX_FUZZ_PRICE = TestConstants.MAX_FUZZ_PRICE;
-    uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = 9e17; // matches OkuDollar contract
 
     // Ghost variables
     uint256 public ghostTotalWrapped;
     uint256 public ghostTotalUnwrapped;
-    uint256 public ghostTotalDepositedReserves;
-    uint256 public ghostTotalWithdrawnSurplus;
 
     // Call/revert counters
     uint256 public ghostMintOkuMCalls;
@@ -48,16 +49,10 @@ contract OkuDollarHandler is Test {
     uint256 public ghostRebaseReverts;
     uint256 public ghostTransferCalls;
     uint256 public ghostTransferReverts;
-    uint256 public ghostDepositReservesCalls;
-    uint256 public ghostDepositReservesReverts;
-    uint256 public ghostWithdrawSurplusCalls;
-    uint256 public ghostWithdrawSurplusReverts;
     uint256 public ghostSetYieldRateCalls;
     uint256 public ghostSetYieldRateReverts;
     uint256 public ghostSetNextYieldRateCalls;
     uint256 public ghostSetNextYieldRateReverts;
-    uint256 public ghostSetMinCollatRatioCalls;
-    uint256 public ghostSetMinCollatRatioReverts;
 
     constructor(OkuMoney _okuMoney, OkuDollar _okuDollar, address _minter, address _rebaser) {
         okuMoney = _okuMoney;
@@ -168,96 +163,55 @@ contract OkuDollarHandler is Test {
         }
     }
 
-    // ============ Reserve Management ============
-
-    function depositReserves(uint256 amount) external {
-        ghostDepositReservesCalls++;
-        amount = bound(amount, 1e18, 1_000_000e18);
-
-        // Bail out cleanly if minting would exceed allowance/cap.
-        uint256 allowance = okuMoney.minterAllowance(minter);
-        uint256 remaining = okuMoney.maxSupply() - okuMoney.totalSupply();
-        if (amount > allowance || amount > remaining) return;
-
-        vm.prank(minter);
-        okuMoney.mint(address(this), amount);
-        IERC20(address(okuMoney)).approve(address(okuDollar), amount);
-
-        try okuDollar.depositReserves(amount) {
-            ghostTotalDepositedReserves += amount;
-        } catch {
-            ghostDepositReservesReverts++;
-        }
-    }
-
-    function withdrawSurplus(uint256 amount) external {
-        ghostWithdrawSurplusCalls++;
-        uint256 surplusVal = okuDollar.surplus();
-        if (surplusVal == 0) return;
-        // Use a conservative cap that avoids the floor-rounding revert path.
-        uint256 cap = surplusVal > 1e6 ? surplusVal - 1e6 : surplusVal / 2;
-        if (cap == 0) return;
-        amount = bound(amount, 1, cap);
-
-        try okuDollar.withdrawSurplus(amount) {
-            ghostTotalWithdrawnSurplus += amount;
-        } catch {
-            ghostWithdrawSurplusReverts++;
-        }
-    }
+    // REMOVED (single-multiplier refactor): depositReserves / withdrawSurplus /
+    // setMinCollateralRatio handler actions. Under the single-multiplier design the
+    // vault holds exactly the OkuM backing its shares (1:1), so there is no surplus
+    // to withdraw, no reserve top-up to perform, and no min-ratio to configure.
+    // Donations are handled by `rescueDonation` (see VAULT_RESCUER), which is a
+    // one-shot admin escape hatch rather than an interesting fuzz action.
 
     // ============ Yield-rate management ============
+    // The rate lives on OkuMoney now — OkuDollar's `usdMultiplier()` just reads it.
 
-    function setUsdYieldRate(uint256 rate, uint256 endOffset) external {
+    function setOkuMYieldRate(uint256 rate, uint256 endOffset) external {
         ghostSetYieldRateCalls++;
         // Stay above PRECISION (no negative yield) and below MAX_RATE.
         rate = bound(rate, PRECISION, TestConstants.MAX_RATE);
         endOffset = bound(endOffset, 1 hours, 365 days);
 
-        try okuDollar.setUsdYieldRate(rate, block.timestamp + endOffset) {}
+        vm.prank(rebaser);
+        try okuMoney.setOkuMYieldRate(rate, block.timestamp + endOffset) {}
         catch {
             ghostSetYieldRateReverts++;
         }
     }
 
-    function setNextUsdYieldRate(uint256 rate) external {
+    function setNextOkuMYieldRate(uint256 rate) external {
         ghostSetNextYieldRateCalls++;
         rate = bound(rate, PRECISION, TestConstants.MAX_RATE);
 
-        // Pre-check: contract requires usdRateEnd != 0 AND not yet expired.
-        uint256 endTs = okuDollar.usdRateEnd();
+        // Pre-check: contract requires okuMRateEnd != 0 AND not yet expired.
+        uint256 endTs = okuMoney.okuMRateEnd();
         if (endTs == 0 || block.timestamp >= endTs) return;
 
-        try okuDollar.setNextUsdYieldRate(rate) {}
+        vm.prank(rebaser);
+        try okuMoney.setNextOkuMYieldRate(rate) {}
         catch {
             ghostSetNextYieldRateReverts++;
         }
     }
 
-    function setMinCollateralRatio(uint256 newRatio) external {
-        ghostSetMinCollatRatioCalls++;
-        // Bound between the contract's hard floor and PRECISION.
-        newRatio = bound(newRatio, MIN_COLLATERAL_RATIO_FLOOR, PRECISION);
-
-        try okuDollar.setMinCollateralRatio(newRatio) {}
-        catch {
-            ghostSetMinCollatRatioReverts++;
-        }
-    }
-
     // ============ Time Progression ============
     //
-    // Without time advancement, `usdMultiplier()` stays at PRECISION no matter what
+    // Without time advancement, the multiplier stays at PRECISION no matter what
     // rate is set, because `rpow(rate, 0, PRECISION) == PRECISION`. This masked the
     // LitePSM `_redeemUsdOku` rounding-asymmetry bug from all invariant runs.
     // Advancing the clock here lets the multiplier actually compound, exercising the
     // full state space the production contracts experience.
     //
-    // After each warp we auto-rebalance reserves to model the operational contract:
-    // the orchestrator must keep reserves topped up to match accrued obligations
-    // when `usdRatePerSecond > PRECISION`. This isolates the rounding-asymmetry
-    // and share-conversion invariants from the orthogonal collateral-drift
-    // failure mode (which is its own operational concern, not a code bug).
+    // No reserve rebalancing is needed any more: under the single multiplier, shares
+    // track raw OkuM 1:1, so accrual moves reserves and obligations in lockstep and
+    // the vault can never drift out of backing.
 
     uint256 public ghostWarpCalls;
     uint256 public ghostTotalElapsed;
@@ -269,34 +223,6 @@ contract OkuDollarHandler is Test {
         vm.warp(block.timestamp + elapsed);
         // Roll a block too so any same-block guards (e.g. yield-sandwich) stay clean.
         vm.roll(block.number + 1);
-        // Rebalance reserves to keep `invariant_VaultBacked` meaningful under a
-        // live yield rate. This mirrors the operational pattern: a topped-up vault.
-        _rebalanceReservesIfNeeded();
-    }
-
-    /// @notice If obligations exceed reserves (after a multiplier-compounding warp),
-    ///         mint and deposit just enough OkuMoney to fully back the vault.
-    function _rebalanceReservesIfNeeded() internal {
-        uint256 obligationsUsd = okuDollar.totalSupply();
-        uint256 okuMMult = okuMoney.okuMMultiplier();
-        if (okuMMult == 0) return;
-        // Required OkuM = ceil(obligations / okuMMult)
-        uint256 required = Math.mulDiv(obligationsUsd, PRECISION, okuMMult, Math.Rounding.Ceil);
-        uint256 currentReserves = okuMoney.balanceOf(address(okuDollar));
-        if (currentReserves >= required) return;
-        uint256 deficit = required - currentReserves;
-        // Add a tiny safety buffer (10 wei) for downstream rounding.
-        uint256 topUp = deficit + 10;
-        // Respect MaxSupply ceiling.
-        uint256 mintable = okuMoney.maxSupply() - okuMoney.totalSupply();
-        if (topUp > mintable) topUp = mintable;
-        if (topUp == 0) return;
-
-        vm.prank(minter);
-        try okuMoney.mint(address(this), topUp) {
-            IERC20(address(okuMoney)).approve(address(okuDollar), topUp);
-            try okuDollar.depositReserves(topUp) {} catch {}
-        } catch {}
     }
 
     // ============ Aggregates ============
@@ -311,16 +237,13 @@ contract OkuDollarHandler is Test {
 
     function ghostTotalCalls() external view returns (uint256) {
         return ghostMintOkuMCalls + ghostWrapCalls + ghostUnwrapCalls + ghostRebaseCalls
-            + ghostTransferCalls + ghostDepositReservesCalls + ghostWithdrawSurplusCalls
-            + ghostSetYieldRateCalls + ghostSetNextYieldRateCalls + ghostSetMinCollatRatioCalls
+            + ghostTransferCalls + ghostSetYieldRateCalls + ghostSetNextYieldRateCalls
             + ghostWarpCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
         return ghostMintOkuMReverts + ghostWrapReverts + ghostUnwrapReverts + ghostRebaseReverts
-            + ghostTransferReverts + ghostDepositReservesReverts + ghostWithdrawSurplusReverts
-            + ghostSetYieldRateReverts + ghostSetNextYieldRateReverts
-            + ghostSetMinCollatRatioReverts;
+            + ghostTransferReverts + ghostSetYieldRateReverts + ghostSetNextYieldRateReverts;
     }
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {

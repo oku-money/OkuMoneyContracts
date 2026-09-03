@@ -24,18 +24,16 @@ interface IOkuDollar {
     function balanceOf(address account) external view returns (uint256);
     /// @notice Total dollar-denominated supply (rebasing).
     function totalSupply() external view returns (uint256);
-    /// @notice Computed USD multiplier with continuous yield accrual.
+    /// @notice Dollar value per UsdOku share. Delegates to `okuMoney.okuMMultiplier()`.
     function usdMultiplier() external view returns (uint256);
     /// @notice Internal share balance for `account`.
     function usdSharesOf(address account) external view returns (uint256);
     /// @notice Total internal share tokens across all holders.
     function totalUsdShares() external view returns (uint256);
-    /// @notice Total OkuMoney tokens held as reserves.
+    /// @notice Total OkuMoney tokens held as reserves (ERC-4626 `totalAssets`).
     function totalOkuMReserves() external view returns (uint256);
     /// @notice Total OkuDollar obligations (in dollar terms).
     function totalUsdObligations() external view returns (uint256);
-    /// @notice Multiplier-aware collateralization ratio.
-    function collateralizationRatio() external view returns (uint256);
-    /// @notice Extractable surplus as OkuMoney tokens.
-    function surplus() external view returns (uint256);
+    // REMOVED (single-multiplier refactor): collateralizationRatio, surplus —
+    // collateralization is exactly 1.0 by construction.
 }

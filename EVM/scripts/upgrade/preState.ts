@@ -64,47 +64,29 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
 //
 // Invariants exercised on upgrade:
 //   - Wired okuMoney preserved.
-//   - Rate-and-share storage (usdBaseMultiplier, usdRatePerSecond, usdLastAccrualTime,
-//     usdRateEnd, usdPendingRatePerSecond, totalUsdShares, minCollateralRatio) preserved.
+//   - Share accounting (totalUsdShares) preserved.
 //   - Pause state preserved.
 //
-// We deliberately *do not* snapshot `usdMultiplier()` because it is computed from
-// (base, rate, elapsed) at read time — if rate > PRECISION it will drift between
-// the pre- and post-snapshot reads even with zero storage change. The underlying
-// storage fields above are the right things to pin.
+// REMOVED (single-multiplier refactor): the vault no longer owns a rate schedule,
+// so usdBaseMultiplier / usdRatePerSecond / usdLastAccrualTime / usdRateEnd /
+// usdPendingRatePerSecond / minCollateralRatio no longer exist. The schedule that
+// used to live here is now snapshotted on OkuMoney (see readOkuMoneyState).
+//
+// We deliberately *do not* snapshot `usdMultiplier()` because it forwards to
+// `okuMoney.okuMMultiplier()`, which is computed from (base, rate, elapsed) at read
+// time — if rate > PRECISION it drifts between the pre- and post-snapshot reads even
+// with zero storage change. The OkuMoney storage fields are the right things to pin.
 
 export async function readOkuDollarState(c: Contract): Promise<StateSnapshot> {
-  const [
-    okuMoney,
-    usdBaseMultiplier,
-    usdRatePerSecond,
-    usdLastAccrualTime,
-    usdRateEnd,
-    usdPendingRatePerSecond,
-    totalUsdShares,
-    minCollateralRatio,
-    paused,
-  ] = await Promise.all([
+  const [okuMoney, totalUsdShares, paused] = await Promise.all([
     c.okuMoney(),
-    c.usdBaseMultiplier(),
-    c.usdRatePerSecond(),
-    c.usdLastAccrualTime(),
-    c.usdRateEnd(),
-    c.usdPendingRatePerSecond(),
     c.totalUsdShares(),
-    c.minCollateralRatio(),
     c.paused(),
   ]);
 
   return {
     okuMoney: String(okuMoney),
-    usdBaseMultiplier: usdBaseMultiplier.toString(),
-    usdRatePerSecond: usdRatePerSecond.toString(),
-    usdLastAccrualTime: usdLastAccrualTime.toString(),
-    usdRateEnd: usdRateEnd.toString(),
-    usdPendingRatePerSecond: usdPendingRatePerSecond.toString(),
     totalUsdShares: totalUsdShares.toString(),
-    minCollateralRatio: minCollateralRatio.toString(),
     paused: String(paused),
   };
 }
@@ -116,10 +98,16 @@ export async function readOkuDollarState(c: Contract): Promise<StateSnapshot> {
 // Invariants exercised on upgrade:
 //   - ERC20 identity (name, symbol, decimals) preserved.
 //   - Supply cap (maxSupply) and current totalSupply preserved.
-//   - okuMMultiplier — this is rebase-style derived state. Like
-//     OkuDollar.usdMultiplier(), it CAN drift between two reads when a non-zero
-//     rate is being applied. We deliberately do NOT snapshot it; the underlying
-//     storage fields are pinned indirectly via totalSupply + maxSupply.
+//   - Yield-schedule storage (okuMBaseMultiplier, okuMRatePerSecond,
+//     okuMLastAccrualTime, okuMRateEnd, okuMPendingRatePerSecond) preserved. Since
+//     the single-multiplier refactor this is the ONLY rate schedule in the system —
+//     OkuDollar derives from it — so an upgrade that scrambled it would silently
+//     reprice both tokens on every chain. These are plain storage reads and are
+//     stable across two reads absent a setOkuMYieldRate call.
+//   - okuMMultiplier — derived state. It CAN drift between two reads when a
+//     non-zero rate is being applied (and rolls the pending rate at okuMRateEnd
+//     without any storage write). We deliberately do NOT snapshot it; the five
+//     schedule fields above are the right things to pin.
 //   - Pause state preserved.
 //
 // We do not snapshot DEFAULT_ADMIN_ROLE / OKUM_MINTER role grants here because
@@ -128,12 +116,29 @@ export async function readOkuDollarState(c: Contract): Promise<StateSnapshot> {
 // orthogonal to an impl-only upgrade and would not be touched by it.
 
 export async function readOkuMoneyState(c: Contract): Promise<StateSnapshot> {
-  const [name, symbol, decimals, maxSupply, totalSupply, paused] = await Promise.all([
+  const [
+    name,
+    symbol,
+    decimals,
+    maxSupply,
+    totalSupply,
+    okuMBaseMultiplier,
+    okuMRatePerSecond,
+    okuMLastAccrualTime,
+    okuMRateEnd,
+    okuMPendingRatePerSecond,
+    paused,
+  ] = await Promise.all([
     c.name(),
     c.symbol(),
     c.decimals(),
     c.maxSupply(),
     c.totalSupply(),
+    c.okuMBaseMultiplier(),
+    c.okuMRatePerSecond(),
+    c.okuMLastAccrualTime(),
+    c.okuMRateEnd(),
+    c.okuMPendingRatePerSecond(),
     c.paused(),
   ]);
 
@@ -143,6 +148,11 @@ export async function readOkuMoneyState(c: Contract): Promise<StateSnapshot> {
     decimals: decimals.toString(),
     maxSupply: maxSupply.toString(),
     totalSupply: totalSupply.toString(),
+    okuMBaseMultiplier: okuMBaseMultiplier.toString(),
+    okuMRatePerSecond: okuMRatePerSecond.toString(),
+    okuMLastAccrualTime: okuMLastAccrualTime.toString(),
+    okuMRateEnd: okuMRateEnd.toString(),
+    okuMPendingRatePerSecond: okuMPendingRatePerSecond.toString(),
     paused: String(paused),
   };
 }

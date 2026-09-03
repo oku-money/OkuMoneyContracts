@@ -29,10 +29,12 @@ abstract contract Actors is Test {
 
     // ============ OkuDollar Vault Roles ============
 
-    address public usdRebaser = makeAddr("usdRebaser");
-    address public reserveManager = makeAddr("reserveManager");
     address public vaultPauser = makeAddr("vaultPauser");
     address public vaultUnpauser = makeAddr("vaultUnpauser");
+    address public vaultRescuer = makeAddr("vaultRescuer");
+    // REMOVED (single-multiplier refactor): usdRebaser (VAULT_REBASER is gone; the
+    // rate lives on OkuMoney and is driven by `rebaser`) and reserveManager
+    // (VAULT_RESERVE_MANAGER is gone; collateralization is 1.0 by construction).
 
     // ============ LitePSM Roles ============
 

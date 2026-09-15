@@ -13,7 +13,7 @@
     "deploy:init:mainnet": "NETWORK=mainnet-beta tsx scripts/deploy/deploy-init.ts",
     "test": "npm run test:rust && npm run test:bankrun",
     "test:rust": "cargo test --workspace --quiet",
-    "test:bankrun": "RUST_LOG= npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'",
+    "test:bankrun": "anchor build && RUST_LOG= npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'",
     "test:onchain": "NETWORK=devnet tsx scripts/test/test-devnet.ts",
     "test:onchain:fork": "NETWORK=devnet-fork tsx scripts/test/test-devnet.ts",
     "bridge:svm-evm": "tsx scripts/test/bridge-svm-evm.ts",
@@ -23,7 +23,6 @@
     "admin:set-upgrade-authority": "tsx scripts/admin/set-upgrade-authority.ts",
     "admin:pause-psm": "tsx scripts/admin/pause-psm.ts",
     "admin:unpause-psm": "tsx scripts/admin/unpause-psm.ts",
-    "admin:distribute-yield": "tsx scripts/admin/distribute-yield.ts",
     "admin:set-max-supply": "tsx scripts/admin/set-max-supply.ts",
     "admin:set-minter-allowance": "tsx scripts/admin/set-minter-allowance.ts",
     "admin:set-direct-minter-allowance": "tsx scripts/admin/set-direct-minter-allowance.ts",
@@ -31,7 +30,6 @@
     "admin:mint-oku-m": "tsx scripts/admin/mint-oku-m.ts",
     "admin:mint-oku-m-direct": "tsx scripts/admin/mint-oku-m-direct.ts",
     "admin:redeem-oku-m": "tsx scripts/admin/redeem-oku-m.ts",
-    "admin:set-multiplier": "tsx scripts/admin/set-multiplier.ts",
     "admin:freeze-account": "tsx scripts/admin/freeze-account.ts",
     "admin:thaw-account": "tsx scripts/admin/thaw-account.ts",
     "admin:deposit-buffer": "tsx scripts/admin/deposit-buffer.ts",
@@ -48,7 +46,10 @@
     "wallet:check": "tsx scripts/utils/check-wallet.ts",
     "cost": "tsx scripts/utils/calculateDeploymentCost.ts",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
-    "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w"
+    "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
+    "admin:set-yield-rate": "tsx scripts/admin/set-yield-rate.ts",
+    "admin:sync-display": "tsx scripts/admin/sync-display.ts",
+    "admin:read-schedule": "tsx scripts/admin/read-schedule.ts"
   },
   "dependencies": {
     "@anchor-lang/core": "^1.0.0",

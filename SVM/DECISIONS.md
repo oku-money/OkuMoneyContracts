@@ -180,20 +180,41 @@ value → assert display `<=` canonical immediately.
 
 ---
 
-## D-13 · `npm run test:bankrun` does not rebuild the program — `OPEN`
+## D-13 · `npm run test:bankrun` did not rebuild the program — `FIXED`
 
-Bankrun loads `target/deploy/lite_psm.so`, but `test:bankrun` is just
-`mocha`. Run it after editing Rust without an intervening `anchor build` and
-you silently test the **previous** binary.
+Bankrun loads `target/deploy/lite_psm.so`, but `test:bankrun` was just
+`mocha`. Running it after editing Rust without an intervening `anchor build`
+silently tested the **previous** binary.
 
-This is not hypothetical: it masked a real failure during this pass. The D-10
-fix (emergency override force-syncing the display mirror) appeared not to work
-because the suite was running a `.so` built before the fix. The test was
-correct and the code was correct; only the artifact was stale.
+Not hypothetical: it masked the D-10 fix appearing not to work. The test was
+correct and the code was correct; only the artifact was stale, and the
+resulting "the fix doesn't work" conclusion was wrong.
 
-**Proposed:** make `test:bankrun` depend on `anchor build`, or have
-`startBankrun` assert the `.so` mtime is newer than the newest file under
-`programs/`. The second is cheaper and fails loudly with a useful message.
+**Fixed** by making `test:bankrun` run `anchor build &&` first.
+
+**Still worth considering:** have `startBankrun` assert the `.so` mtime is
+newer than the newest file under `programs/`, so the trap cannot reappear for
+anyone invoking mocha directly.
+
+---
+
+## D-14 · `tsc --noEmit` does not pass on this repo — `ACCEPTED` (pre-existing)
+
+21 type errors, unchanged by this refactor (verified by diffing the count
+against a clean stash). Two categories:
+
+- 12 × Anchor generic variance — `Program<LitePsm>` not assignable to
+  `Program<Idl>` in shared test helpers.
+- 9 × miscellaneous: `accountsPartial` extra keys that Anchor accepts at
+  runtime, a wrong relative path to `target/types` in
+  `scenarios/realWorldUsage.ts`, and `AccountNamespace<Idl>` lacking
+  `psmConfig` in `tests/shared/setup.ts`.
+
+Tests pass because `tsx` transpiles without typechecking. Nothing here is a
+runtime bug, but it means TypeScript is not currently providing any safety net
+on the SVM tooling — worth fixing before the shared `@okumoney/yield-tooling`
+package lands, since that package's whole value is being a single trustworthy
+implementation.
 
 ---
 

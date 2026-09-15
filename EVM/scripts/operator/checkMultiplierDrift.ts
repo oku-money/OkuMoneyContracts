@@ -16,6 +16,11 @@
  *   - okuMMultiplier()        cross-chain equality is the single catch-all check
  *   - rate / rateEnd / pending / pendingRateEnd   config drift and expiry
  *   - collateralization       should be exactly 1.0 under the single-multiplier design
+ *   - epoch-grid alignment    (optional) rateEnd falls on the declared epoch grid
+ *   - accrual gap             ERROR (not just a warning) once a window has
+ *                             actually expired — under a fixed-epoch operating
+ *                             model this is a deadline every single epoch, on
+ *                             every chain, and missing it silently halts yield
  *
  * Usage:
  *   npx hardhat run scripts/operator/checkMultiplierDrift.ts
@@ -25,16 +30,29 @@
  *   CHAINS=base,arbitrum,...   chains to compare (default: all in the address book)
  *   TOLERANCE_BPS=<n>          max tolerated multiplier spread, basis points (default 1)
  *   EXPIRY_WARN_HOURS=<n>      warn when rateEnd is nearer than this (default 48)
+ *   EPOCH_ANCHOR_UNIX=<n>      (optional) Unix seconds of epoch 0's start, for grid
+ *                              alignment checking. Omit to skip this check entirely —
+ *                              the epoch length/anchor convention is not yet decided.
+ *   EPOCH_LENGTH_SECONDS=<n>   (optional) fixed epoch length, required if
+ *                              EPOCH_ANCHOR_UNIX is set.
+ *   EPOCH_GRID_TOLERANCE_SECONDS=<n>  slack allowed off the exact grid, e.g. for
+ *                              a settlement window (default 0 — exact alignment).
  */
 
 import { ethers } from "ethers";
 import { loadAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { describeRate } from "../utils/yieldRate";
+import { summarizeLedger } from "../utils/carryLedger";
 import { CHAIN_METADATA } from "../config/chains";
 
 const TOLERANCE_BPS = BigInt(process.env.TOLERANCE_BPS ?? "1");
 const EXPIRY_WARN_HOURS = Number(process.env.EXPIRY_WARN_HOURS ?? "48");
+const EPOCH_ANCHOR_UNIX = process.env.EPOCH_ANCHOR_UNIX ? Number(process.env.EPOCH_ANCHOR_UNIX) : undefined;
+const EPOCH_LENGTH_SECONDS = process.env.EPOCH_LENGTH_SECONDS
+  ? Number(process.env.EPOCH_LENGTH_SECONDS)
+  : undefined;
+const EPOCH_GRID_TOLERANCE_SECONDS = Number(process.env.EPOCH_GRID_TOLERANCE_SECONDS ?? "0");
 
 const ABI = [
   "function okuMMultiplier() view returns (uint256)",
@@ -149,12 +167,23 @@ async function main() {
   }
 
   // --- Epoch expiry ---
+  // Under a fixed-epoch operating model this fires every single epoch, on
+  // every chain, by design — it is a scheduled deadline, not an edge case.
+  // An EXPIRED window means yield has ALREADY silently halted (computeMultiplier
+  // falls back to PRECISION once both the active AND pending windows have
+  // elapsed), which is an ERROR, not a nudge — escalated from a warning so this
+  // script's exit code actually reflects "yield is currently not accruing
+  // somewhere" rather than requiring a human to read the log.
   const now = BigInt(Math.floor(Date.now() / 1000));
   const warnWindow = BigInt(EXPIRY_WARN_HOURS * 3600);
   for (const r of readings) {
     if (r.rateEnd === 0n) continue;
     if (now >= r.rateEnd) {
-      logger.warning(`${r.chain}: rate window EXPIRED — setNextOkuMYieldRate now reverts RateAlreadyExpired`);
+      logger.error(
+        `${r.chain}: rate window EXPIRED — accrual has HALTED on this chain. ` +
+          `setNextOkuMYieldRate now reverts RateAlreadyExpired; a fresh setOkuMYieldRate is required.`
+      );
+      failed = true;
     } else if (r.rateEnd - now < warnWindow) {
       const hrs = Number(r.rateEnd - now) / 3600;
       logger.warning(`${r.chain}: rate window closes in ${hrs.toFixed(1)}h — stage the successor`);
@@ -164,11 +193,57 @@ async function main() {
     // silently halting accrual (see MathLib.computeMultiplier's overhang bound).
     if (r.pendingRateEnd === 0n) continue;
     if (now >= r.pendingRateEnd) {
-      logger.warning(`${r.chain}: staged successor's own window EXPIRED — accrual has halted`);
+      logger.error(`${r.chain}: staged successor's own window EXPIRED — accrual has HALTED`);
+      failed = true;
     } else if (r.pendingRateEnd - now < warnWindow) {
       const hrs = Number(r.pendingRateEnd - now) / 3600;
       logger.warning(`${r.chain}: staged successor's window closes in ${hrs.toFixed(1)}h — stage the next one`);
     }
+  }
+
+  // --- Epoch-grid alignment (optional — skipped unless EPOCH_ANCHOR_UNIX is set) ---
+  // The epoch length/anchor convention is not yet decided (see TRACKER.md); this
+  // check exists so that once one IS adopted, a fat-fingered rateEnd on a single
+  // chain (the schedule is pushed manually per chain — nothing enforces this) is
+  // caught here rather than silently desynchronising that chain's grid from
+  // every other chain's.
+  if (EPOCH_ANCHOR_UNIX !== undefined && EPOCH_LENGTH_SECONDS !== undefined) {
+    for (const r of readings) {
+      if (r.rateEnd === 0n) continue; // halted — no window to check
+      const offset = Number(r.rateEnd) - EPOCH_ANCHOR_UNIX;
+      const remainder = ((offset % EPOCH_LENGTH_SECONDS) + EPOCH_LENGTH_SECONDS) % EPOCH_LENGTH_SECONDS;
+      const distanceToGrid = Math.min(remainder, EPOCH_LENGTH_SECONDS - remainder);
+      if (distanceToGrid > EPOCH_GRID_TOLERANCE_SECONDS) {
+        logger.error(
+          `${r.chain}: EPOCH-GRID MISALIGNMENT — rateEnd=${r.rateEnd} is ${distanceToGrid}s off the ` +
+            `declared grid (anchor=${EPOCH_ANCHOR_UNIX}, length=${EPOCH_LENGTH_SECONDS}s, ` +
+            `tolerance=${EPOCH_GRID_TOLERANCE_SECONDS}s). This chain's epoch boundary has drifted ` +
+            `from the rest of the fleet.`
+        );
+        failed = true;
+      }
+    }
+  } else {
+    logger.info("Epoch-grid alignment check skipped (set EPOCH_ANCHOR_UNIX + EPOCH_LENGTH_SECONDS to enable)");
+  }
+
+  // --- Cumulative distributed-vs-realized reporting (diagnostic only, does not fail the check) ---
+  // Reads the LOCAL reference-implementation carry ledger (see carryLedger.ts —
+  // this is not yet a durable/shared store; see TRACKER.md). Reports the
+  // cumulative-conservation identity: cumulativeAchieved = cumulativeRealised -
+  // outstandingCarry. This is internal bookkeeping against each entry's
+  // measurement basis, not a guarantee about literal on-chain dollars paid —
+  // see "Two V's" in yieldRate.ts.
+  const ledgerSummary = summarizeLedger();
+  if (ledgerSummary.epochCount > 0) {
+    logger.info(
+      `Carry ledger: ${ledgerSummary.epochCount} epoch(s) recorded, ` +
+        `cumulative realised $${ledgerSummary.cumulativeRealisedYieldUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}, ` +
+        `cumulative achieved (bookkeeping) $${ledgerSummary.cumulativeAchievedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}, ` +
+        `outstanding carry $${ledgerSummary.outstandingCarryUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+    );
+  } else {
+    logger.info("Carry ledger: no entries recorded yet");
   }
 
   if (failed) {
@@ -178,7 +253,16 @@ async function main() {
   logger.success("All chains in agreement");
 }
 
-main().catch((e) => {
-  logger.error(e.message ?? String(e));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((e) => {
+    logger.error(e.message ?? String(e));
+    process.exit(1);
+  });
+}
+
+// NOTE: not exercised by the operator drill (test/hardhat/drill/operatorDrill.test.ts).
+// This script is inherently multi-chain (reads via `new ethers.JsonRpcProvider(rpcUrl)`
+// per configured chain name) — a single local in-process hardhat network has no
+// meaningful "cross-chain drift" to detect, and no second chain to compare against.
+// Exercising this would require either a second live RPC target or a deeper
+// restructuring to accept an in-process provider, which is out of scope here.

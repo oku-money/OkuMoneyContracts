@@ -25,7 +25,7 @@ import {
   getChainMetadata,
   DEV_WALLET_ADDRESS,
 } from "../config/chains";
-import { resolveNetworkContext } from "../utils/networkContext";
+import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
 import {
@@ -652,49 +652,175 @@ async function configureRoles(
   await sendAndWait("Grant QUEUE_RESCUER to Admin", () => redemptionQueue.grantRole(ROLES.QUEUE_RESCUER, deployerAddress));
 }
 
+/**
+ * The complete set of role grants {@link configureRoles} is expected to have
+ * made, as `[label, contract-key, role, holder-kind]` tuples.
+ *
+ * Exported so the deploy drill asserts against the SAME source of truth the
+ * deploy itself verifies — a test with its own hand-copied list would silently
+ * drift from `configureRoles` the moment a role is added or removed.
+ */
+export type RoleHolderKind = "litePSM" | "redemptionQueue" | "deployer";
+
+export interface ExpectedRoleGrant {
+  label: string;
+  contract: "okuMoney" | "okuDollar" | "redemptionQueue" | "litePSM";
+  role: string;
+  holder: RoleHolderKind;
+}
+
+export function expectedRoleGrants(): ExpectedRoleGrant[] {
+  return [
+    // OkuMoney — contract-to-contract grants. Without these, mint/redeem revert.
+    { label: "OkuMoney.OKUM_MINTER -> LitePSM", contract: "okuMoney", role: ROLES.OKUM_MINTER, holder: "litePSM" },
+    { label: "OkuMoney.OKUM_MINTER -> RedemptionQueue", contract: "okuMoney", role: ROLES.OKUM_MINTER, holder: "redemptionQueue" },
+    { label: "OkuMoney.OKUM_BURNER -> LitePSM", contract: "okuMoney", role: ROLES.OKUM_BURNER, holder: "litePSM" },
+    { label: "OkuMoney.OKUM_BURNER -> RedemptionQueue", contract: "okuMoney", role: ROLES.OKUM_BURNER, holder: "redemptionQueue" },
+
+    // OkuMoney — operational/admin grants.
+    { label: "OkuMoney.OKUM_REBASER -> Admin", contract: "okuMoney", role: ROLES.OKUM_REBASER, holder: "deployer" },
+    { label: "OkuMoney.OKUM_ALLOWANCE_MANAGER -> Admin", contract: "okuMoney", role: ROLES.OKUM_ALLOWANCE_MANAGER, holder: "deployer" },
+    { label: "OkuMoney.OKUM_PAUSER -> Admin", contract: "okuMoney", role: ROLES.OKUM_PAUSER, holder: "deployer" },
+    { label: "OkuMoney.OKUM_UNPAUSER -> Admin", contract: "okuMoney", role: ROLES.OKUM_UNPAUSER, holder: "deployer" },
+    { label: "OkuMoney.OKUM_BLACKLISTER -> Admin", contract: "okuMoney", role: ROLES.OKUM_BLACKLISTER, holder: "deployer" },
+    { label: "OkuMoney.OKUM_UNBLACKLISTER -> Admin", contract: "okuMoney", role: ROLES.OKUM_UNBLACKLISTER, holder: "deployer" },
+    { label: "OkuMoney.OKUM_CAP_MANAGER -> Admin", contract: "okuMoney", role: ROLES.OKUM_CAP_MANAGER, holder: "deployer" },
+
+    // RedemptionQueue.
+    { label: "RedemptionQueue.QUEUE_PSM -> LitePSM", contract: "redemptionQueue", role: ROLES.QUEUE_PSM, holder: "litePSM" },
+    { label: "RedemptionQueue.QUEUE_RESCUER -> Admin", contract: "redemptionQueue", role: ROLES.QUEUE_RESCUER, holder: "deployer" },
+
+    // LitePSM operational set.
+    { label: "LitePSM.PSM_BUFFER_DEPOSITOR -> Admin", contract: "litePSM", role: ROLES.PSM_BUFFER_DEPOSITOR, holder: "deployer" },
+    { label: "LitePSM.PSM_QUEUE_PROCESSOR -> Admin", contract: "litePSM", role: ROLES.PSM_QUEUE_PROCESSOR, holder: "deployer" },
+    { label: "LitePSM.PSM_BUFFER_WITHDRAWER -> Admin", contract: "litePSM", role: ROLES.PSM_BUFFER_WITHDRAWER, holder: "deployer" },
+
+    // OkuDollar.
+    { label: "OkuDollar.VAULT_PAUSER -> Admin", contract: "okuDollar", role: ROLES.VAULT_PAUSER, holder: "deployer" },
+    { label: "OkuDollar.VAULT_UNPAUSER -> Admin", contract: "okuDollar", role: ROLES.VAULT_UNPAUSER, holder: "deployer" },
+    { label: "OkuDollar.VAULT_RESCUER -> Admin", contract: "okuDollar", role: ROLES.VAULT_RESCUER, holder: "deployer" },
+    { label: "OkuDollar.OKUM_BLACKLISTER -> Admin", contract: "okuDollar", role: ROLES.OKUM_BLACKLISTER, holder: "deployer" },
+    { label: "OkuDollar.OKUM_UNBLACKLISTER -> Admin", contract: "okuDollar", role: ROLES.OKUM_UNBLACKLISTER, holder: "deployer" },
+  ];
+}
+
 async function verifyDeployment(
   bookKey: string,
+  deployerAddress: string,
   okuMoney: Contract,
+  okuDollar: Contract,
   litePSM: Contract,
   redemptionQueue: Contract
 ): Promise<void> {
   logger.step(6, "Verifying Deployment");
 
-  // Check roles
   const litePSMAddress = await litePSM.getAddress();
   const queueAddress = await redemptionQueue.getAddress();
-  const hasLitePSMMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, litePSMAddress);
-  const hasQueueMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, queueAddress);
-  // Cycle 4 (EVM-15): OKUM_BURNER is required for redeem paths.
-  const hasLitePSMBurner = await okuMoney.hasRole(ROLES.OKUM_BURNER, litePSMAddress);
-  const hasQueueBurner = await okuMoney.hasRole(ROLES.OKUM_BURNER, queueAddress);
 
-  logger.info(`  LitePSM has OKUM_MINTER: ${hasLitePSMMinter}`);
-  logger.info(`  RedemptionQueue has OKUM_MINTER: ${hasQueueMinter}`);
-  logger.info(`  LitePSM has OKUM_BURNER: ${hasLitePSMBurner}`);
-  logger.info(`  RedemptionQueue has OKUM_BURNER: ${hasQueueBurner}`);
-  if (!hasLitePSMBurner || !hasQueueBurner) {
-    logger.warning("  Missing OKUM_BURNER grants — redeem paths will revert!");
+  const contracts: Record<string, Contract> = {
+    okuMoney,
+    okuDollar,
+    redemptionQueue,
+    litePSM,
+  };
+  const holders: Record<RoleHolderKind, string> = {
+    litePSM: litePSMAddress,
+    redemptionQueue: queueAddress,
+    deployer: deployerAddress,
+  };
+
+  // Assert the FULL role matrix, not a 4-role spot check.
+  //
+  // This previously logged four `hasRole` results and, on a missing
+  // OKUM_BURNER, printed "redeem paths will revert!" as a *warning* and then
+  // exited 0 — a deployment with a broken redeem path reported success. Role
+  // misconfiguration is the failure mode most likely to brick a fresh deploy
+  // (or silently leave a privilege hole), so it must fail loudly here, while
+  // the operator is still watching, rather than surface later as a revert.
+  const grants = expectedRoleGrants();
+  const missingRoles: string[] = [];
+
+  for (const g of grants) {
+    const held = await contracts[g.contract].hasRole(g.role, holders[g.holder]);
+    if (held) {
+      logger.info(`  OK  ${g.label}`);
+    } else {
+      logger.error(`  MISSING  ${g.label}`);
+      missingRoles.push(g.label);
+    }
   }
+
+  // Minter allowances are separate from the role itself: `OkuMoney.mint`
+  // checks BOTH `onlyRole(OKUM_MINTER)` and `minterAllowance[msg.sender]`, so
+  // a role grant without an allowance still reverts with ExceedsAllowance.
+  const psmAllowance = await okuMoney.minterAllowance(litePSMAddress);
+  const queueAllowance = await okuMoney.minterAllowance(queueAddress);
+  if (psmAllowance === 0n) missingRoles.push("LitePSM minter allowance is zero");
+  if (queueAllowance === 0n) missingRoles.push("RedemptionQueue minter allowance is zero");
+  logger.info(`  LitePSM minter allowance: ${psmAllowance}`);
+  logger.info(`  RedemptionQueue minter allowance: ${queueAllowance}`);
 
   // Verify all addresses saved
   const book = loadAddressBook();
-  const contracts = book[bookKey] || {};
+  const bookContracts = book[bookKey] || {};
   const expectedContracts = ["MockUSDC", "OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
+  const missingContracts = expectedContracts.filter(c => !bookContracts[c]);
 
-  const missing = expectedContracts.filter(c => !contracts[c]);
-  if (missing.length > 0) {
-    logger.warning(`  Missing contracts in address book: ${missing.join(", ")}`);
-  } else {
-    logger.success("  All contracts saved to address book");
+  if (missingRoles.length > 0 || missingContracts.length > 0) {
+    const parts: string[] = [];
+    if (missingRoles.length > 0) {
+      parts.push(`missing role grants / allowances:\n  - ${missingRoles.join("\n  - ")}`);
+    }
+    if (missingContracts.length > 0) {
+      parts.push(`missing contracts in address book: ${missingContracts.join(", ")}`);
+    }
+    throw new Error(`Deployment verification FAILED — ${parts.join("; ")}`);
   }
+
+  logger.success(`  All ${grants.length} role grants verified`);
+  logger.success("  All contracts saved to address book");
 }
 
 // ============================================================================
 // Main Deployment Function
 // ============================================================================
 
-async function main() {
+/** Contract handles + context returned by {@link runDeploy}, for in-process callers. */
+export interface DeployResult {
+  ctx: NetworkContext;
+  bookKey: string;
+  deployerAddress: string;
+  okuMoney: any;
+  okuDollar: any;
+  redemptionQueue: any;
+  litePSM: any;
+  usdcAddress: string;
+}
+
+export interface RunDeployOptions {
+  /**
+   * Override the deployer signer. Defaults to the CLI behaviour: impersonate
+   * `DEV_WALLET` on a fork, or use `getSigners()[0]` on a live network.
+   *
+   * In-process callers (the deploy drill, the operator drill) pass an explicit
+   * signer so the resulting role matrix is anchored to a signer the test also
+   * holds — without this, a fork deploy grants every role to `DEV_WALLET` and
+   * a test using `getSigners()[0]` as admin would hold none of them.
+   */
+  deployer?: Signer;
+}
+
+/**
+ * Full deployment, callable in-process.
+ *
+ * Extracted from the former `main()` so tests can exercise the REAL deploy
+ * path — proxies, address-book writes, and the complete role matrix — rather
+ * than re-implementing a parallel fixture that can drift from production. The
+ * CLI entry point at the bottom of this file is now a thin wrapper.
+ */
+export async function runDeploy(
+  opts: RunDeployOptions = {}
+): Promise<DeployResult> {
   // Single source of truth for "what chain are we on / where do we read+write addresses".
   // Returns: { networkName, bookKey, isFork, chainConfig }.
   const ctx = await resolveNetworkContext();
@@ -705,10 +831,14 @@ async function main() {
   logger.info(`Network: ${networkName} (chainId: ${chainConfig.chainId})`);
   logger.info(`Address book key: ${bookKey}`);
 
-  // Get deployer - use impersonation for localhost (fork), real signer for live networks.
+  // Get deployer - caller override, else impersonation for localhost (fork),
+  // else real signer for live networks.
   let deployer: Signer;
 
-  if (isFork) {
+  if (opts.deployer) {
+    deployer = opts.deployer;
+    logger.info("Using caller-supplied deployer signer");
+  } else if (isFork) {
     // Impersonate dev wallet for local fork testing.
     // Uses actual on-chain balance from forked network (no artificial funding).
     logger.info(`Impersonating dev wallet: ${DEV_WALLET}`);
@@ -809,7 +939,9 @@ async function main() {
   // Step 6: Verify deployment state
   await verifyDeployment(
     bookKey,
+    deployerAddress,
     okuMoney,
+    okuDollar,
     litePSM,
     redemptionQueue
   );
@@ -857,24 +989,41 @@ async function main() {
   logger.info("1. Check the updated testnet-addresses.json at the repo root");
   logger.info("2. Deploy SVM: cd ../SVM/oku-programs && NETWORK=devnet npm run deploy:programs && npm run deploy:init");
   logger.info("3. Test PSM flow: npx hardhat run scripts/test/test-onchain.ts --network " + networkName);
+
+  return {
+    ctx,
+    bookKey,
+    deployerAddress,
+    okuMoney,
+    okuDollar,
+    redemptionQueue,
+    litePSM,
+    usdcAddress,
+  };
 }
 
-main()
-  .then(() => {
-    // Diagnostic: confirm RPC compat shim engaged (helpful when debugging
-    // BSC pending-tx issues — set DEBUG_RPC_PATCH=1 for per-call logs).
-    try {
-      const { rpcCompatStats } = require("../utils/rpcCompat");
-      logger.info(`RPC compat: ${rpcCompatStats.sendCalls} send / ${rpcCompatStats.requestCalls} request calls intercepted; ${rpcCompatStats.fixedCount} responses fixed`);
-    } catch {}
-    process.exit(0);
-  })
-  .catch((error) => {
-    logger.error(`Deployment failed: ${error.message}`);
-    try {
-      const { rpcCompatStats } = require("../utils/rpcCompat");
-      logger.error(`RPC compat at failure: ${rpcCompatStats.sendCalls} send / ${rpcCompatStats.requestCalls} request calls intercepted; ${rpcCompatStats.fixedCount} responses fixed (zero send calls = patch was bypassed; non-zero with no fixes = no BSC bug responses came through this path)`);
-    } catch {}
-    console.error(error);
-    process.exit(1);
-  });
+// CLI entry point. Guarded so importing this module (e.g. from the deploy
+// drill) does NOT kick off a deployment and then kill the host process via
+// `process.exit` — the same `require.main === module` pattern the operator
+// scripts use.
+if (require.main === module) {
+  runDeploy()
+    .then(() => {
+      // Diagnostic: confirm RPC compat shim engaged (helpful when debugging
+      // BSC pending-tx issues — set DEBUG_RPC_PATCH=1 for per-call logs).
+      try {
+        const { rpcCompatStats } = require("../utils/rpcCompat");
+        logger.info(`RPC compat: ${rpcCompatStats.sendCalls} send / ${rpcCompatStats.requestCalls} request calls intercepted; ${rpcCompatStats.fixedCount} responses fixed`);
+      } catch {}
+      process.exit(0);
+    })
+    .catch((error) => {
+      logger.error(`Deployment failed: ${error.message}`);
+      try {
+        const { rpcCompatStats } = require("../utils/rpcCompat");
+        logger.error(`RPC compat at failure: ${rpcCompatStats.sendCalls} send / ${rpcCompatStats.requestCalls} request calls intercepted; ${rpcCompatStats.fixedCount} responses fixed (zero send calls = patch was bypassed; non-zero with no fixes = no BSC bug responses came through this path)`);
+      } catch {}
+      console.error(error);
+      process.exit(1);
+    });
+}

@@ -23,7 +23,12 @@ pragma solidity 0.8.28;
  *      - `newUIMultiplier()` / `effectiveAt()` presume a scheduled *value*.
  *        OkuMoney schedules a pending *rate*, so `newUIMultiplier()` returns the
  *        multiplier projected to be in effect at `effectiveAt()` (= the active
- *        rate's end timestamp).
+ *        rate's end timestamp) — but ONLY when a successor rate is actually
+ *        armed. If no successor is staged (or the active window has no bound,
+ *        i.e. accrual is halted), `effectiveAt()` returns `0` and
+ *        `newUIMultiplier()` returns the current `uiMultiplier()` — "nothing
+ *        scheduled", not a fabricated projection of the current rate's own
+ *        natural continuation.
  *
  *      Interface ID: 0xa60bf13d
  */

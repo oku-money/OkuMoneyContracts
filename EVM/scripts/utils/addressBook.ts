@@ -7,12 +7,49 @@
  *   2. A reserved `upgrades` key whose value is { [bookKey]: UpgradeRecord[] }.
  *      Append-only audit trail of proxy upgrades. Lookups by contract name skip
  *      this key (it's not a chain entry) — see `loadNetworkAddresses`.
+ *
+ * ---------------------------------------------------------------------------
+ * TWO FILES: tracked live state vs. gitignored ephemeral fork state
+ * ---------------------------------------------------------------------------
+ * Entries are split across two files by key prefix:
+ *
+ *   addresses.json         TRACKED   — live chains ("base", "sepolia", ...)
+ *   addresses.local.json   GITIGNORED — local forks ("fork:base", ...)
+ *
+ * Every fork run (dryRunForks.sh, `npm run deploy --network localhost`, the
+ * hardhat drills) redeploys to a throwaway chain and writes fresh addresses.
+ * When both shapes shared one tracked file, those ephemeral addresses showed
+ * up as a dirty working tree and were easy to commit by accident — the fork
+ * they refer to is discarded seconds later, so the diff is pure noise.
+ *
+ * The split is handled entirely here: `loadAddressBook()` returns a MERGED
+ * view of both files, and `saveAddressBook()` partitions by prefix and writes
+ * each file separately. Callers are unaffected and need no knowledge of it —
+ * `saveAddress`, `loadAddress`, `hasAddress`, `loadNetworkAddresses`, and
+ * `appendUpgradeRecord` all route through those two functions, so fork data
+ * structurally cannot reach the tracked file.
  */
 
 import fs from "fs";
 import path from "path";
 
+/** Tracked: live-chain deployments. Committed. */
 const ADDRESS_BOOK_PATH = path.join(__dirname, "../config/addresses.json");
+
+/** Gitignored: local-fork deployments. Ephemeral, never committed. */
+const LOCAL_ADDRESS_BOOK_PATH = path.join(__dirname, "../config/addresses.local.json");
+
+/**
+ * Book keys for local-fork runs are namespaced `fork:<chain>` by
+ * `resolveNetworkContext()`. That prefix is the sole signal used to decide
+ * which file an entry belongs in.
+ */
+const FORK_KEY_PREFIX = "fork:";
+
+/** `true` if `key` denotes an ephemeral local-fork deployment. */
+export function isForkKey(key: string): boolean {
+  return key.startsWith(FORK_KEY_PREFIX);
+}
 
 /// Reserved top-level key in addresses.json holding the upgrade history.
 /// Never used as a chain key; loadNetworkAddresses returns {} for it.
@@ -52,33 +89,100 @@ export interface AddressBook {
   };
 }
 
-/**
- * Load the address book from disk
- */
-export function loadAddressBook(): AddressBook {
-  if (!fs.existsSync(ADDRESS_BOOK_PATH)) {
-    return {};
-  }
-
+/** Read+parse one book file, tolerating absence and corruption. */
+function readBookFile(filePath: string): AddressBook {
+  if (!fs.existsSync(filePath)) return {};
   try {
-    const content = fs.readFileSync(ADDRESS_BOOK_PATH, "utf8");
+    const content = fs.readFileSync(filePath, "utf8");
+    if (content.trim().length === 0) return {};
     return JSON.parse(content);
   } catch (error) {
-    console.warn(`Warning: Could not parse address book: ${error}`);
+    console.warn(`Warning: Could not parse address book at ${filePath}: ${error}`);
     return {};
   }
 }
 
 /**
- * Save the address book to disk
+ * Load the address book from disk.
+ *
+ * Returns a MERGED view of the tracked (live) and gitignored (fork) files, so
+ * callers see one flat book exactly as before the split. The reserved
+ * `upgrades` sub-index is merged too.
  */
-export function saveAddressBook(book: AddressBook): void {
-  const dir = path.dirname(ADDRESS_BOOK_PATH);
+export function loadAddressBook(): AddressBook {
+  const live = readBookFile(ADDRESS_BOOK_PATH);
+  const local = readBookFile(LOCAL_ADDRESS_BOOK_PATH);
+
+  const merged: AddressBook = {};
+  for (const [key, value] of Object.entries(live)) {
+    if (key === UPGRADES_KEY) continue;
+    merged[key] = value;
+  }
+  for (const [key, value] of Object.entries(local)) {
+    if (key === UPGRADES_KEY) continue;
+    merged[key] = value;
+  }
+
+  const mergedUpgrades: UpgradesIndex = {
+    ...readUpgradesIndex(live),
+    ...readUpgradesIndex(local),
+  };
+  if (Object.keys(mergedUpgrades).length > 0) {
+    writeUpgradesIndex(merged, mergedUpgrades);
+  }
+
+  return merged;
+}
+
+/** Serialize + write, creating the parent dir if needed. */
+function writeBookFile(filePath: string, book: AddressBook): void {
+  const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+  // No trailing newline — matches the committed file's existing formatting,
+  // so an unchanged book rewrites byte-identically and produces no git diff.
+  fs.writeFileSync(filePath, JSON.stringify(book, null, 2), "utf8");
+}
 
-  fs.writeFileSync(ADDRESS_BOOK_PATH, JSON.stringify(book, null, 2), "utf8");
+/**
+ * Save the address book to disk, partitioning entries by key prefix:
+ * `fork:*` -> gitignored local file, everything else -> tracked file.
+ *
+ * Callers pass the same merged book they got from `loadAddressBook()`; the
+ * split is re-derived here on every write, so a fork entry can never land in
+ * tracked state regardless of how the caller assembled the object.
+ */
+export function saveAddressBook(book: AddressBook): void {
+  const live: AddressBook = {};
+  const local: AddressBook = {};
+
+  for (const [key, value] of Object.entries(book)) {
+    if (key === UPGRADES_KEY) continue; // handled below
+    (isForkKey(key) ? local : live)[key] = value;
+  }
+
+  // The upgrade audit trail is keyed by bookKey too, so it needs the same
+  // partitioning — otherwise a fork upgrade record leaks into the tracked file.
+  const upgrades = readUpgradesIndex(book);
+  const liveUpgrades: UpgradesIndex = {};
+  const localUpgrades: UpgradesIndex = {};
+  for (const [bookKey, records] of Object.entries(upgrades)) {
+    (isForkKey(bookKey) ? localUpgrades : liveUpgrades)[bookKey] = records;
+  }
+  if (Object.keys(liveUpgrades).length > 0) writeUpgradesIndex(live, liveUpgrades);
+  if (Object.keys(localUpgrades).length > 0) writeUpgradesIndex(local, localUpgrades);
+
+  writeBookFile(ADDRESS_BOOK_PATH, live);
+
+  // Only materialise the local file when there's fork state to record, and
+  // remove it once the last fork entry is gone, so a pure-live workflow never
+  // leaves a stray file behind.
+  if (Object.keys(local).length > 0) {
+    writeBookFile(LOCAL_ADDRESS_BOOK_PATH, local);
+  } else if (fs.existsSync(LOCAL_ADDRESS_BOOK_PATH)) {
+    fs.unlinkSync(LOCAL_ADDRESS_BOOK_PATH);
+  }
 }
 
 /**

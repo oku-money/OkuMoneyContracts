@@ -275,4 +275,144 @@ contract MathLibTest is Test {
         uint256 newResult = h.okuMToDollars(a, b);
         assertEq(oldResult, newResult, "Old and new must agree in the safe input range");
     }
+
+    // ============ compoundFor / computeMultiplier ============
+    // Direct branch coverage — previously exercised only transitively through
+    // OkuMoney's own tests, which never drove the defensive branches below
+    // (OkuMoney's writers never produce `rate <= PRECISION && rateEnd != 0`,
+    // nor `anchor > rateEnd`), leaving those paths untested despite being
+    // reachable via the library's own public contract (any future caller).
+
+    /// @notice compoundFor is the identity when elapsed == 0.
+    function test_CompoundFor_ZeroElapsed_IsIdentity() public view {
+        assertEq(h.compoundFor(12_345e17, PRECISION + 1e10, 0), 12_345e17);
+    }
+
+    /// @notice compoundFor clamps at MAX_MULTIPLIER rather than returning an
+    ///         uncapped (but not-yet-overflowing) compounded value.
+    function test_CompoundFor_ClampsAtMaxMultiplier() public view {
+        uint256 MAX_MULTIPLIER = 1_000_000e18; // Constants.MAX_MULTIPLIER
+        // A long elapsed time at a real (bounded) rate compounds well past the cap.
+        uint256 result = h.compoundFor(1e18, PRECISION + 1e11, 365 days * 20);
+        assertEq(result, MAX_MULTIPLIER);
+    }
+
+    /// @notice Branch 1 (halted): rate <= PRECISION with rateEnd == 0 (the
+    ///         ONLY state OkuMoney's writers ever produce for a halted rate)
+    ///         returns the flat base, ignoring anchor/nowTs entirely.
+    function test_ComputeMultiplier_Branch1_Halted_ReturnsFlatBase() public view {
+        uint256 result = h.computeMultiplier(15e17, PRECISION, 1000, 0, PRECISION, 0, 500_000);
+        assertEq(result, 15e17);
+    }
+
+    /// @notice Branch 1's DEFENSIVE overhang path: rate <= PRECISION but
+    ///         rateEnd != 0 with a pending rate armed — a state OkuMoney's own
+    ///         writers never produce (setOkuMMultiplier zeroes rateEnd when it
+    ///         halts; setOkuMYieldRate only sets rateEnd for a yielding rate),
+    ///         but reachable via MathLib's own public interface, so it must be
+    ///         verified directly rather than left implicitly "unreachable".
+    function test_ComputeMultiplier_Branch1_DefensiveOverhang_CompoundsPendingRate() public view {
+        uint256 base = 1e18;
+        uint256 rateEnd = 1000;
+        uint256 pendingRate = PRECISION + 1e11;
+        uint256 pendingRateEnd = 2000;
+        uint256 nowTs = 1500; // past rateEnd, before pendingRateEnd
+
+        uint256 result =
+            h.computeMultiplier(base, PRECISION, 500, rateEnd, pendingRate, pendingRateEnd, nowTs);
+        uint256 expected = h.compoundFor(base, pendingRate, nowTs - rateEnd);
+        assertEq(result, expected);
+    }
+
+    /// @notice Branch 1's defensive overhang bounds at pendingRateEnd, exactly
+    ///         mirroring branch 2's overhang bound.
+    function test_ComputeMultiplier_Branch1_DefensiveOverhang_BoundedByPendingRateEnd()
+        public
+        view
+    {
+        uint256 base = 1e18;
+        uint256 rateEnd = 1000;
+        uint256 pendingRate = PRECISION + 1e11;
+        uint256 pendingRateEnd = 2000;
+
+        uint256 atPendingEnd =
+            h.computeMultiplier(base, PRECISION, 500, rateEnd, pendingRate, pendingRateEnd, 2000);
+        uint256 wayPast = h.computeMultiplier(
+            base, PRECISION, 500, rateEnd, pendingRate, pendingRateEnd, 999_999
+        );
+        assertEq(
+            atPendingEnd, wayPast, "overhang must halt at pendingRateEnd, not keep compounding"
+        );
+    }
+
+    /// @notice Branch 2 (yielding, window closed): compounds the active rate
+    ///         through rateEnd, no pending rate armed.
+    function test_ComputeMultiplier_Branch2_WindowClosed_NoSuccessor() public view {
+        uint256 base = 1e18;
+        uint256 rate = PRECISION + 1e11;
+        uint256 anchor = 0;
+        uint256 rateEnd = 1000;
+        uint256 nowTs = 5000; // well past rateEnd
+
+        uint256 result = h.computeMultiplier(base, rate, anchor, rateEnd, PRECISION, 0, nowTs);
+        uint256 expected = h.compoundFor(base, rate, rateEnd - anchor);
+        assertEq(result, expected, "must NOT keep compounding past rateEnd with no successor armed");
+    }
+
+    /// @notice Branch 2 with an armed successor: compounds to rateEnd at the
+    ///         active rate, then the overhang at the pending rate.
+    function test_ComputeMultiplier_Branch2_WindowClosed_WithSuccessor() public view {
+        uint256 base = 1e18;
+        uint256 rate = PRECISION + 1e11;
+        uint256 anchor = 0;
+        uint256 rateEnd = 1000;
+        uint256 pendingRate = PRECISION + 2e11;
+        uint256 nowTs = 1500;
+
+        uint256 result = h.computeMultiplier(base, rate, anchor, rateEnd, pendingRate, 0, nowTs);
+        uint256 atRateEnd = h.compoundFor(base, rate, rateEnd - anchor);
+        uint256 expected = h.compoundFor(atRateEnd, pendingRate, nowTs - rateEnd);
+        assertEq(result, expected);
+    }
+
+    /// @notice Branch 2's defensive underflow guard: if `anchor` were ever
+    ///         past `rateEnd` (a state OkuMoney's writers never produce — see
+    ///         NatSpec), the elapsed-in-window computation clamps to 0 instead
+    ///         of underflowing.
+    function test_ComputeMultiplier_Branch2_DefensiveAnchorPastRateEnd_DoesNotUnderflow()
+        public
+        view
+    {
+        uint256 base = 1e18;
+        uint256 rate = PRECISION + 1e11;
+        uint256 anchor = 2000; // PAST rateEnd — the defensive case
+        uint256 rateEnd = 1000;
+        uint256 nowTs = 3000;
+
+        // Must not revert (would underflow without the `anchor < rateEnd` guard).
+        uint256 result = h.computeMultiplier(base, rate, anchor, rateEnd, PRECISION, 0, nowTs);
+        // elapsedInWindow clamps to 0, so the active-rate leg contributes nothing.
+        assertEq(result, base);
+    }
+
+    /// @notice Branch 3 (still running): compounds the active rate from
+    ///         anchor to nowTs, bounded because nowTs <= rateEnd here.
+    function test_ComputeMultiplier_Branch3_StillRunning() public view {
+        uint256 base = 1e18;
+        uint256 rate = PRECISION + 1e11;
+        uint256 anchor = 100;
+        uint256 rateEnd = 1000;
+        uint256 nowTs = 600; // before rateEnd
+
+        uint256 result = h.computeMultiplier(base, rate, anchor, rateEnd, PRECISION, 0, nowTs);
+        uint256 expected = h.compoundFor(base, rate, nowTs - anchor);
+        assertEq(result, expected);
+    }
+
+    /// @notice computeMultiplier is continuous across nowTs == anchor (branch 3, zero elapsed).
+    function test_ComputeMultiplier_Branch3_AtAnchor_IsIdentity() public view {
+        uint256 base = 12_345e14;
+        uint256 result = h.computeMultiplier(base, PRECISION + 1e11, 1000, 2000, PRECISION, 0, 1000);
+        assertEq(result, base);
+    }
 }

@@ -30,7 +30,8 @@ abstract contract OkuMoneyEvents {
     /// @notice Emitted when the active yield rate is set, re-anchoring the accrual base.
     /// @param oldRate            Previous per-second rate
     /// @param newRate            New per-second rate (PRECISION = no yield)
-    /// @param endTimestamp       Timestamp the new rate expires (0 = open-ended)
+    /// @param endTimestamp       Timestamp the new rate expires (0 = halted; only
+    ///                           valid when newRate == PRECISION)
     /// @param snapshotMultiplier Multiplier snapshotted as the new accrual base
     event OkuMYieldRateUpdated(
         uint256 oldRate, uint256 newRate, uint256 endTimestamp, uint256 snapshotMultiplier

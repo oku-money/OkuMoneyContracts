@@ -120,7 +120,7 @@ describe("OkuMoney Scenarios", () => {
 
         okuUsd = await upgrades.deployProxy(
             new OkuDollar__factory(Frank),
-            [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
+            [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as OkuDollar
         await okuUsd.waitForDeployment()
@@ -185,17 +185,36 @@ describe("OkuMoney Scenarios", () => {
             await getOkuMoney(Alice, depositAmount)
             const aliceInitialBalance = await okuMoney.balanceOf(aliceAddr)
 
-            // Alice transfers 5,000 OkuMoney to Bob (OkuMoney is 18 decimals)
+            // Alice transfers 5,000 OkuMoney to Bob (OkuMoney is 18 decimals).
+            //
+            // This previously asserted a `TransferValue` event carrying the
+            // dollar value alongside the raw amount. That event was
+            // deliberately REMOVED from OkuMoney (see OkuMoney.sol:758):
+            // under streaming accrual the dollar field would require an rpow
+            // on every transfer (~5-10k gas, forever), and without that field
+            // the event duplicated ERC-20 `Transfer` exactly. Indexers now
+            // derive dollar value off-chain from the rate schedule.
+            //
+            // The original intent — "the transfer moves the right raw amount
+            // AND the right dollar value" — is preserved here by asserting
+            // the standard `Transfer` event for the raw amount, then checking
+            // dollar value through `balanceOfUI()`, the ERC-8056 surface that
+            // replaced the event's dollar field.
             const transferAmount = parseEther("5000")
             const priceAtTransfer = await okuMoney.okuMMultiplier()
             const PRECISION = parseEther("1")
             const expectedDollarValue = (transferAmount * priceAtTransfer) / PRECISION
+
             await expect(okuMoney.connect(Alice).transfer(bobAddr, transferAmount))
-                .to.emit(okuMoney, "TransferValue")
-                .withArgs(aliceAddr, bobAddr, transferAmount, expectedDollarValue)
+                .to.emit(okuMoney, "Transfer")
+                .withArgs(aliceAddr, bobAddr, transferAmount)
 
             const aliceAfterTransfer = await okuMoney.balanceOf(aliceAddr)
             const bobAfterTransfer = await okuMoney.balanceOf(bobAddr)
+
+            // Dollar value of what Bob received matches the raw amount valued
+            // at the multiplier in force at transfer time.
+            expect(await okuMoney.balanceOfUI(bobAddr)).to.be.closeTo(expectedDollarValue, parseEther("1"))
 
             // Verify balances (allowing for small rounding)
             expect(aliceAfterTransfer).to.be.closeTo(aliceInitialBalance - transferAmount, parseEther("1"))
@@ -306,7 +325,7 @@ describe("OkuMoney Scenarios", () => {
 
             const freshOkuUsd = await upgrades.deployProxy(
                 new OkuDollar__factory(Frank),
-                [await freshOkuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
+                [await freshOkuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr],
                 { kind: "uups", unsafeAllow: ["constructor"] }
             ) as unknown as OkuDollar
             await freshOkuUsd.waitForDeployment()
@@ -391,10 +410,23 @@ describe("OkuMoney Scenarios", () => {
             const aliceBalance = await okuMoney.balanceOf(aliceAddr)
             expect(aliceBalance).to.be.gt(0)
 
-            // Transfer works before pause
+            // Transfer works before pause.
+            //
+            // Asserted as a DELTA against Bob's balance captured immediately
+            // before this transfer, not as an absolute. Contracts in this
+            // file are deployed once in a top-level `before` hook and state
+            // persists across every `it()`, so Bob already holds 5,000 OkuM
+            // from the "User-to-User Transfers" test above. The previous
+            // absolute assertion (`closeTo(transferAmount)`) only passed when
+            // this test ran in isolation and broke as soon as the file ran as
+            // a whole — an ordering dependency, not a real behavioural check.
             const transferAmount = parseEther("1000")
+            const bobBeforeTransfer = await okuMoney.balanceOf(bobAddr)
             await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
-            expect(await okuMoney.balanceOf(bobAddr)).to.be.closeTo(transferAmount, parseEther("1"))
+            expect(await okuMoney.balanceOf(bobAddr)).to.be.closeTo(
+                bobBeforeTransfer + transferAmount,
+                parseEther("1")
+            )
 
             // Frank (admin) pauses the contract
             await okuMoney.connect(Frank).pause()

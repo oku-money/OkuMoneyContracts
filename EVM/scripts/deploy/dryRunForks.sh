@@ -3,8 +3,10 @@
 # EVM chain. No on-chain transactions — every chain starts a fresh fork node
 # against its live RPC, runs the deploy, then tears the node down.
 #
-# Address-book entries land under `fork:<chain>` (see networkContext.ts), so
-# the live `<chain>` keys are not touched.
+# Address-book entries land under `fork:<chain>` (see networkContext.ts), which
+# scripts/utils/addressBook.ts routes to the gitignored addresses.local.json.
+# The tracked addresses.json is left byte-identical, so a dry-run never dirties
+# the working tree or risks ephemeral fork addresses being committed.
 #
 # Usage:
 #   ./scripts/deploy/dryRunForks.sh                # all 6 chains
@@ -27,7 +29,7 @@ LOG_DIR="${EVM_ROOT}/.dry-run-logs"
 mkdir -p "$LOG_DIR"
 
 # Wipe the whole log dir at run start. These transcripts are ephemeral — the
-# canonical addresses land in scripts/config/addresses.json — and clearing
+# deployed addresses land in scripts/config/addresses.local.json — and clearing
 # everything here prevents stragglers from prior subset runs (e.g.
 # `dryRunForks.sh sepolia base`) leaving stale logs for chains not in this run.
 rm -f "${LOG_DIR}"/*.log 2>/dev/null || true

@@ -36,7 +36,7 @@ forge test --match-path "test/invariants/*"   # Invariant suite only (256 runs, 
 forge test --match-contract OkuMoneyTest -vv  # Targeted
 
 npx hardhat compile                           # Required before fork tests
-npx hardhat test                              # Fork + happyPath + scenarios tests
+npx hardhat test                              # Fork + happyPath + scenarios + drills (177)
 ```
 
 ## Deployment & Address Book
@@ -74,7 +74,8 @@ Caveats:
 
 | File | Role | Touched by |
 |------|------|------------|
-| [`scripts/config/addresses.json`](scripts/config/addresses.json) | Working per-network address book consumed by deploy / test scripts. Keyed `<chain>` for live deploys; `fork:<chain>` for local-fork runs (so fork tests never overwrite live entries). | Every script run. |
+| [`scripts/config/addresses.json`](scripts/config/addresses.json) | **Tracked** per-network address book consumed by deploy / test scripts. Keyed `<chain>` — live deploys only. | Live deploys. |
+| `scripts/config/addresses.local.json` | **Gitignored** half of the same book, keyed `fork:<chain>`. Local-fork deployments are ephemeral (the chain is discarded after the run), so they're split out and never committed. `loadAddressBook()` merges both files, so scripts see one book and need no knowledge of the split. | Every fork run. |
 | [`../testnet-addresses.json`](../testnet-addresses.json) | Canonical, auto-synced multi-chain registry consumed by the SDK / backend / orchestrator. Includes `chainId`, `rpcUrl`, `explorer`, `contracts{}`, `deployer`. | Live deploys only — fork runs never write here. |
 | `.openzeppelin/<network>.json` | OZ upgrades plugin's per-chain proxy/impl manifest. Required for `upgradeProxy` to work. | OZ upgrades plugin. |
 
@@ -115,8 +116,25 @@ hh run scripts/test/test-onchain.ts --network localhost
 
 The deploy script auto-detects the target chain from the running node's
 `eth_chainId`, so you don't need to keep `FORK_NETWORK` and `NETWORK=` in sync
-across terminals. Fork-deployed addresses land under `addresses.json["fork:<chain>"]`
-so they never collide with live `<chain>` entries.
+across terminals. Fork-deployed addresses land under `fork:<chain>` in the
+gitignored `addresses.local.json`, so they neither collide with live `<chain>`
+entries nor dirty the tracked address book.
+
+**Automated equivalent — [`scripts/deploy/dryRunForks.sh`](scripts/deploy/dryRunForks.sh):**
+
+```bash
+./scripts/deploy/dryRunForks.sh                # all 6 chains
+./scripts/deploy/dryRunForks.sh sepolia base   # a subset
+```
+
+Starts a fresh fork node per chain, runs the full deploy against it, tears the
+node down, and exits non-zero if any chain fails. Transcripts land in
+`.dry-run-logs/`. This is the recommended pre-flight before a live deploy —
+it exercises the real script end-to-end, including the role-matrix
+verification below.
+
+> The dry-run writes only to the gitignored `addresses.local.json`, so it
+> leaves the tracked address book byte-identical and your working tree clean.
 
 ### Live deploy
 
@@ -140,6 +158,21 @@ The script is **idempotent and resumable**:
 - A separate provider shim (`scripts/utils/rpcCompat.ts`) preventatively
   normalises BSC's pending-tx response shape before ethers' strict formatter
   ever sees it.
+
+The script also **verifies itself before reporting success**. After the role
+grants, it re-reads the chain and asserts the complete expected matrix — all
+21 role grants, both minter allowances, and every contract's presence in the
+address book — throwing with an explicit list of what's missing if anything
+failed. Minter allowances are checked separately from roles because
+`OkuMoney.mint` gates on *both* `onlyRole(OKUM_MINTER)` and the
+`minterAllowance` mapping, so a role grant without an allowance still reverts
+at runtime.
+
+> This step used to only log warnings: a deploy missing `OKUM_BURNER` would
+> print `"redeem paths will revert!"` and still **exit 0**. It now fails loudly.
+> The expected matrix is exported as `expectedRoleGrants()` and asserted by
+> `test/hardhat/drill/deployDrill.test.ts` against the same source of truth, so
+> the test cannot drift from what the deploy actually grants.
 
 ### Upgrading deployed proxies
 
@@ -197,8 +230,9 @@ shipped deployments.
 |---|---|
 | `npm run compile` | `hardhat compile` (regenerates typechain) |
 | `npm run typechain` | Typechain bindings only |
-| `npm run test:forge` | Foundry unit + invariant suite |
-| `npm run test` | Hardhat fork + gas suite |
+| `npm run test:forge` | Foundry unit + invariant suite (576 tests) |
+| `npm run test` | Full Hardhat suite (177 tests, incl. fork + drills) |
+| `npm run test:unit` | Off-chain math + simulation + deploy/operator drills (150). Needs fork RPC |
 | `npm run test:all` | Both |
 | `npm run node` | Start `hardhat node` (default forks Sepolia; override via `FORK_NETWORK`) |
 | `npm run deploy:sepolia` / `:opSepolia` / `:baseSepolia` / `:arbSepolia` / `:bscTestnet` | Live deploy to the named testnet |
@@ -206,27 +240,65 @@ shipped deployments.
 | `npm run upgrade` | Upgrade proxies on a running localhost fork (auto-detects target chain) |
 | `npm run upgrade:sepolia` / `:opSepolia` / `:baseSepolia` / `:arbSepolia` / `:bscTestnet` | Live upgrade on the named testnet |
 | `npm run upgrade:base` / `:bsc` | Live upgrade on the named mainnet |
-| `npm run test:flow` / `:live` | `test-flow.ts` against a running localhost fork (or live Sepolia) |
+| `npm run test:onchain:*` | `scripts/test/test-onchain.ts` against the named live testnet |
 
 > The `npm run bridge:*` scripts were removed in the noBridge refactor.
 > Cross-chain transfers are now PSM-mediated mint/burn coordinated off-chain.
 
-> **Stale alias:** `npm run operator:distributeYield` still points at the deleted
-> `scripts/operator/distributeYield.ts` and will fail. Use
-> `scripts/operator/setOkuMYieldRate.ts` (below); the alias should be repointed or
-> dropped from `package.json`.
+> **Pass operator-script options as ENV VARS, not `--flags`.**
+> `npx hardhat run <script>` parses argv itself and rejects any parameter it
+> doesn't recognise, *before* the script executes:
+>
+> ```
+> npx hardhat run scripts/operator/psmOps.ts --action=mintOkuM
+>   -> Error HH310: Invalid param --action=mintOkuM. Command line params must be lowercase.
+> npx hardhat run scripts/operator/psmOps.ts --yes-mainnet
+>   -> Error HH305: Unrecognized param --yes-mainnet
+> ```
+>
+> Position doesn't matter. Every option has a working env-var equivalent
+> (`ACTION`, `AMOUNT`, `TARGET`, `YES_MAINNET`, …) — see each script's header,
+> or [`scripts/utils/cli.ts`](scripts/utils/cli.ts) for the name-mapping rule.
+> The `--flag` form still works if a script is invoked directly via `ts-node`.
+
+### Operator scripts (PSM / vault / admin)
+
+All take options as **env vars** (see the note above). All support
+`DRY_RUN=true`, and `YES_MAINNET=true` is required to broadcast on a mainnet
+network. All are also exported as `run*()` functions and exercised in-process
+by the operator drill.
+
+| Script | Purpose |
+|---|---|
+| [`scripts/operator/psmOps.ts`](scripts/operator/psmOps.ts) | PSM mint/redeem, consolidated. `ACTION=<mintOkuM\|redeemOkuM\|mintUsdOku\|redeemUsdOku\|burn>` + `AMOUNT=<units>` (USDC 6-dec, OkuM/UsdOku 18-dec). Replaces the deleted `mintOkuM.ts` / `redeemOkuM.ts` and adds `mintUsdOku`, `redeemUsdOku`, and a direct `burn` (needs `OKUM_BURNER`). `redeemOkuM` queues automatically when the PSM buffer is short. |
+| [`scripts/operator/vaultOps.ts`](scripts/operator/vaultOps.ts) | OkuDollar vault operations. `ACTION=<wrap\|unwrap\|deposit\|mint\|withdraw\|redeem\|rescueDonation>` + `AMOUNT`, optional `RECEIVER` / `OWNER` / `MIN_AMOUNT_OUT`. Covers both the legacy price-aware `wrap`/`unwrap` pair and the ERC-4626 surface. |
+| [`scripts/operator/depositBuffer.ts`](scripts/operator/depositBuffer.ts) / [`withdrawBuffer.ts`](scripts/operator/withdrawBuffer.ts) | PSM USDC buffer management. `AMOUNT=<6-dec USDC>`, plus `TO=0x...` for withdraw. Buffer depth determines whether redemptions settle instantly or queue. |
+| [`scripts/operator/processQueue.ts`](scripts/operator/processQueue.ts) | Drain queued redemptions once the buffer is refunded. `BATCH_SIZE` (default 50), `LIMIT` (default unlimited). |
+| [`scripts/operator/rescueQueueEntry.ts`](scripts/operator/rescueQueueEntry.ts) | Return a permanently-unprocessable queue entry's OkuM to an alternate recipient without burning. `INDEX` + `RECIPIENT`. Requires `QUEUE_RESCUER`. |
+| [`scripts/operator/configureMinterAllowance.ts`](scripts/operator/configureMinterAllowance.ts) | Rotate a minter's allowance. `MINTER` (defaults to deployed LitePSM) + `ALLOWANCE`. Note `OkuMoney.mint` gates on **both** the `OKUM_MINTER` role *and* this allowance. |
+| [`scripts/operator/setMaxSupply.ts`](scripts/operator/setMaxSupply.ts) | Raise/lower the supply cap. `MAX_SUPPLY=<18-dec>`. Requires `OKUM_CAP_MANAGER`. |
+| [`scripts/operator/setOkuMMultiplier.ts`](scripts/operator/setOkuMMultiplier.ts) | **Emergency** multiplier override. `NEW_MULTIPLIER=<1e18-scaled>`. Collapses the rate schedule to halted and engages the yield-sandwich guard for the rest of the block — prefer `setOkuMYieldRate.ts` for normal operation. |
+| [`scripts/operator/pause.ts`](scripts/operator/pause.ts) / [`unpause.ts`](scripts/operator/unpause.ts) | `TARGET=<psm\|okuM\|usdOku>`. |
+| [`scripts/operator/blacklistBoth.ts`](scripts/operator/blacklistBoth.ts) | Blacklist/unblacklist an address on OkuMoney **and** OkuDollar in one run. `ACCOUNT=0x...`, `ACTION=<blacklist\|unblacklist>` (default `blacklist`). |
+| [`scripts/operator/runEpoch.ts`](scripts/operator/runEpoch.ts) | Rear-facing epoch driver. `PHASE=<stage-settlement\|roll-epoch>` plus the phase's parameters — see § Rear-Facing Epoch Pipeline. Writes the carry ledger. |
 
 ### Operator scripts (yield)
 
 | Script | Purpose |
 |---|---|
-| [`scripts/utils/yieldRate.ts`](scripts/utils/yieldRate.ts) | **Single source of truth** for APY ↔ per-second rate. Exports `apyToRatePerSecond`, `ratePerSecondToApy`, `realisedYieldToRatePerSecond`, `describeRate`, plus `PRECISION` / `MAX_RATE` / `SECONDS_PER_YEAR`. Every chain MUST receive a byte-identical integer; deriving from a declared APY removes the likeliest cross-chain mismatch (hand-entered 19-digit integers). `SECONDS_PER_YEAR` is **365 days exactly** — a protocol convention, not a calendar fact (SVM's Token-2022 `InterestBearingConfig` uses 365.24, one reason it is unsuitable for EVM parity). `realisedYieldToRatePerSecond` divides by **global** dollar value across all chains, never a local supply. |
-| [`scripts/operator/setOkuMYieldRate.ts`](scripts/operator/setOkuMYieldRate.ts) | Replaces the deleted `distributeYield.ts`. Prefers `--apy=<fraction>` (raw `--rate` supported for corrections but warned against). Default path calls `setOkuMYieldRate(rate, endTimestamp)`, requiring a future `endTimestamp` for any yielding rate; `--stage --pendingEndTimestamp=<unix>` calls `setNextOkuMYieldRate(rate, pendingEndTimestamp)` — the **preferred** path, since the successor activates with no transaction at the boundary. Supports `DRY_RUN=true` and requires `--yes-mainnet` to broadcast on mainnet. |
-| [`scripts/operator/checkMultiplierDrift.ts`](scripts/operator/checkMultiplierDrift.ts) | Read-only cross-chain drift monitor. Compares `okuMMultiplier()`, rate, `rateEnd`, and pending rate across chains; exits non-zero on any mismatch. `CHAINS`, `TOLERANCE_BPS` (default 1), `EXPIRY_WARN_HOURS` (default 48). Also warns when a rate window is about to close so the successor gets staged in time. |
+| [`scripts/utils/yieldRate.ts`](scripts/utils/yieldRate.ts) | **Single source of truth** for APY ↔ per-second rate. Exports `apyToRatePerSecond`, `ratePerSecondToApy`, `realisedYieldToRatePerSecond`, `reconcileActualPayout`, `timeWeightedAverage`, `describeRate`, `describeCarry`, plus `PRECISION` / `MAX_RATE` / `SECONDS_PER_YEAR`. Every chain MUST receive a byte-identical integer; deriving from a declared APY removes the likeliest cross-chain mismatch (hand-entered 19-digit integers). `SECONDS_PER_YEAR` is **365 days exactly** — a protocol convention, not a calendar fact (SVM's Token-2022 `InterestBearingConfig` uses 365.24, one reason it is unsuitable for EVM parity). `realisedYieldToRatePerSecond` divides by a TIME-WEIGHTED AVERAGE global value across all chains, never a spot or local value — see § Rear-Facing Epoch Accounting's "Two V's". |
+| [`scripts/utils/epochDistribution.ts`](scripts/utils/epochDistribution.ts) | Base+settlement (B3) math: `distributedUsdOverWindow` (integrates dollars actually distributed from periodic value samples), `deriveSettlementRate` (closes the gap between target and measured-so-far, projecting the base window's own remaining tail). |
+| [`scripts/utils/epochSchedule.ts`](scripts/utils/epochSchedule.ts) | Single entry point deriving the full `(rBase, baseEndSec, rSettle, settleEndSec)` tuple so every chain computes byte-identical values. `deriveBaseRate` / `deriveSettlementRateForEpoch` / `floatRateToBigint` / `toOnChainSchedule`. |
+| [`scripts/utils/globalValue.ts`](scripts/utils/globalValue.ts) + [`scripts/operator/sampleGlobalValue.ts`](scripts/operator/sampleGlobalValue.ts) | Cross-chain `totalSupply() * okuMMultiplier()` sampler + local JSON store (REFERENCE implementation, not durable/shared — see `TRACKER.md`). `valueAt` (interpolation), `samplesInWindow`, `cumulativeDistributedUsd`. |
+| [`scripts/utils/carryLedger.ts`](scripts/utils/carryLedger.ts) | Append-only local JSON ledger (REFERENCE implementation) of every epoch's rate derivation; `summarizeLedger()` computes the cumulative-conservation identity, read (diagnostic-only) by `checkMultiplierDrift.ts`. |
+| [`scripts/operator/setOkuMYieldRate.ts`](scripts/operator/setOkuMYieldRate.ts) | Replaces the deleted `distributeYield.ts`. Prefers `APY=<fraction>` (raw `RATE=` supported for corrections but warned against). Default path calls `setOkuMYieldRate(rate, endTimestamp)`, requiring a future `END_TIMESTAMP` for any yielding rate; `STAGE=true PENDING_END_TIMESTAMP=<unix>` calls `setNextOkuMYieldRate(rate, pendingEndTimestamp)` — the **preferred** path, since the successor activates with no transaction at the boundary. `WITH_SUCCESSOR=true` (+ `NEXT_APY`) uses the atomic `setOkuMYieldRateWithSuccessor`. Supports `DRY_RUN=true`; `YES_MAINNET=true` required to broadcast on mainnet. |
+| [`scripts/operator/checkMultiplierDrift.ts`](scripts/operator/checkMultiplierDrift.ts) | Read-only cross-chain drift monitor. Compares `okuMMultiplier()`, rate, `rateEnd`, and pending rate across chains; exits non-zero on any mismatch. `CHAINS`, `TOLERANCE_BPS` (default 1), `EXPIRY_WARN_HOURS` (default 48), and OPTIONAL `EPOCH_ANCHOR_UNIX` / `EPOCH_LENGTH_SECONDS` / `EPOCH_GRID_TOLERANCE_SECONDS` for epoch-grid alignment checking (skipped until set). An EXPIRED rate window is now a hard failure (not a warning) — under a fixed-epoch model this is a recurring, scheduled deadline, not an edge case. Also reports the carry ledger's cumulative-conservation summary. |
 
 **Deleted**: `scripts/operator/distributeYield.ts`,
 `scripts/operator/setUsdYieldRate.ts`,
 `scripts/operator/setMinCollateralRatio.ts`.
+`package.json`'s `operator:distributeYield` alias pointed at the first of
+these for a time after the script was deleted — removed; see `TRACKER.md`.
 
 For chains without a pre-baked npm alias (`base`, `bsc`, `arbitrum`, `optimism`,
 `mainnet`):
@@ -428,6 +500,7 @@ function okuMMultiplier() public view returns (uint256) {
         okuMLastAccrualTime,
         okuMRateEnd,
         okuMPendingRatePerSecond,
+        okuMPendingRateEnd,
         block.timestamp
     );
 }
@@ -435,8 +508,9 @@ function okuMMultiplier() public view returns (uint256) {
 
 `computeMultiplier` is a MakerDAO `chi`/DSR-style `rpow` accumulator: it compounds
 the active rate from the anchor, rolls over to the pending rate at `okuMRateEnd`,
-and clamps at `MAX_MULTIPLIER`. `rpow` itself is unchanged (MakerDAO `pot.sol`
-assembly, half-up rounding).
+bounds that pending rate's own overhang at `okuMPendingRateEnd` (so an unattended
+successor halts rather than compounding forever), and clamps at `MAX_MULTIPLIER`.
+`rpow` itself is unchanged (MakerDAO `pot.sol` assembly, half-up rounding).
 
 **No discrete step ⇒ nothing to sandwich.** `setOkuMYieldRate` re-anchors the base
 to the *current* value, so the curve is continuous across the write; this is why
@@ -473,6 +547,86 @@ and the activation is still simultaneous to the second. This is the primitive th
 makes cross-chain epoch handovers exact. `pendingEndTimestamp` bounds how long that
 successor can compound unattended before accrual halts, in case the next scheduled
 write is itself missed.
+
+### Why streaming, not discrete ticks
+
+An earlier design paid yield in discrete jumps — `distributeYield`/
+`setOkuMMultiplier` moving the multiplier once per period. That mechanism is
+retained as the **emergency override only** (see {setOkuMMultiplier}); it is not
+how yield is meant to be paid, because the PSM makes discrete payout unsafe to
+offer permissionlessly.
+
+**The vector.** `LitePSM.mintOkuM` / `redeemOkuM` charge **no fee** (`tin`/`tout`
+are both zero) and have **no cooldown** — a round-trip is instant whenever the
+USDC buffer covers it. `YieldSandwichGuard` blocks exactly **one block** around a
+discrete multiplier write. At 5% APY paid monthly (a 0.407% jump per tick),
+depositing immediately before the tick and withdrawing immediately after
+captures the whole month's yield for ~24 seconds of capital exposure:
+
+| Capital | Profit per tick | Capital exposure |
+|---|---|---|
+| $1M | $4,070 | ~24 seconds |
+| $10M | $40,700 | ~24 seconds |
+| $100M | $407,000 | ~24 seconds |
+
+**Who pays, by primitive — there is no third option:**
+- `distributeYield(dollars)` divides by `totalSupply()` at call time. Attacker
+  capital equal to honest supply **halves every honest holder's yield that
+  period** — direct dilution.
+- `setOkuMMultiplier(value)` moves dollar-value-per-token independent of who
+  holds it. The attacker's share is **additional** — the **treasury** funds
+  yield on capital that was never at risk for the period it claims to cover.
+
+**The non-adversarial case is the sharper problem.** A holder who deposits the
+day before a tick earns a full period's yield for one day of exposure. A holder
+who withdraws the day before a tick earns **zero for the entire period** they
+held through. Neither did anything wrong — this is the mechanic working as
+designed, not an exploit. Private transaction submission does not fix it: it
+conceals the timing of the tick *transaction*, not the tick *cadence*, which is
+public (or trivially inferable) the moment the PSM is permissionless. Once the
+cadence is known, the rational strategy is to hold only across ticks, which
+doesn't get exploited so much as it makes continuous honest holding irrational.
+
+**Mitigations considered, and why each fails or costs the product:**
+
+| Mitigation | Outcome |
+|---|---|
+| Private/protected tx submission | Hides the tx, not the cadence — does not fix the structural unfairness |
+| Randomize tick timing | Attacker stays deposited across the uncertainty window; costs them opportunity cost, not the yield |
+| Redemption fee (`tout`) | Must exceed the largest tick (~0.41%/mo) to close the vector — taxes every honest exit forever; moves the cliff, doesn't remove it |
+| Deposit cooldown > tick period | Works, but destroys permissionless instant liquidity — i.e. the product |
+| Widen the sandwich guard to N blocks | Attacker waits N blocks; bricks the PSM around every tick instead |
+| Time-weighted / pro-rata accrual | This **is** streaming, reimplemented worse |
+| Snapshot-based distribution | Snapshot timing becomes the new target, and breaks ERC-20 fungibility |
+
+**The impossibility.** You cannot simultaneously have: a permissionless instant
+PSM **∧** discrete (chunky) yield payout **∧** fairness to honest holders **∧**
+a fungible ERC-20 balance. Something must give, and continuous streaming is the
+only one of those four properties that is purely cosmetic to trade away — the
+other three are the product.
+
+**What the old dual-rate design actually cost.** The pre-refactor design let
+`OkuDollar`'s rate exceed `OkuMoney`'s. That is an **unfunded promise**: if
+`usdRate > okuMRate`, UsdOku holders accrue faster than the OkuM backing them
+1:1 generates, and the vault drifts undercollateralized — funded by the
+treasury. `minCollateralRatio`, `depositReserves`, `withdrawSurplus`, and
+`collateralizationRatio` were the machinery for tracking that gap, not
+incidental plumbing. Collapsing to a single multiplier deleted the liability,
+not just the code that monitored it. (The two-rate feature was originally
+intended for UX/marketing differentiation — a forward-looking UsdOku rate
+distinct from OkuM's rear-facing realized rate — not as an on-chain margin
+lever. The adopted model is fully rear-facing for both tokens via one shared
+rate; see § Rear-Facing Epoch Accounting below for how that rate is derived
+and reconciled without a second rate or a forward-looking forecast.)
+
+**Honest costs of the streaming design**, not resolved by this section:
+dollars→rate conversion now happens in `scripts/utils/yieldRate.ts`
+(TypeScript, off-chain, unaudited by Solidity tooling) rather than on-chain
+arithmetic; `computeMultiplier` is a 7-argument, 3-branch function versus a
+single stored slot; every chain needs a live re-arm cadence rather than
+set-and-forget; and the refactor added ~450 `src/` lines net (see § Complexity,
+honestly, above). See `TRACKER.md` for open follow-ups, including the AUM-drift
+reconciliation gap in the realized-yield-to-rate conversion.
 
 ---
 
@@ -520,6 +674,469 @@ the boundary itself, every chain flips at the same second.
 
 ---
 
+## Rear-Facing Epoch Accounting
+
+**Adopted model.** Yield is **fully rear-facing**: the rate published for a
+fixed epoch is derived from the PRIOR epoch's confirmed, realized off-chain
+proceeds. There is no forecasting and no deliberate withholding by default
+(`conservativeFactor = 1`) — the mechanism below exists to convert a realized
+dollar amount into a rate correctly, and to reconcile the residual that
+conversion cannot avoid, not to manage a forecast.
+
+### Why you can't just pick a nominal USD amount to distribute
+
+The naive design — "we earned $40,000 last epoch, so distribute exactly
+$40,000 this epoch" — is **not achievable** for a fungible, streaming-accrual
+token, and it's worth being precise about why, because the failure mode is
+subtle rather than a missing feature.
+
+Dollars actually distributed over an epoch is:
+
+```
+Y_dist = ∫ S(t) dm(t) = rate · V̄ · W
+```
+
+where `S(t)` is global raw OkuM supply, `m(t)` the multiplier, `V̄` the
+TIME-WEIGHTED AVERAGE dollar value over the epoch (`S(t)·m(t)` integrated), and
+`W` the epoch length. `rate` is fixed at epoch start (that's what makes it
+pre-committable and cross-chain deterministic — see § Streaming Accrual). `S(t)`
+is a free variable: anyone can mint or redeem through the permissionless PSM.
+Two different supply paths under the identical rate produce two different
+`Y_dist`. **No rate chosen in advance can guarantee a nominal dollar amount**,
+because a multiplier is inherently a per-unit quantity and total = per-unit ×
+units, where units are not under the protocol's control.
+
+Four ways out exist, and three of them cost something significant:
+
+| Approach | Hits a nominal `Y*` exactly? | Cost |
+|---|---|---|
+| Publish a rate, accept `Y_dist` varies with AUM | No | None — this is the adopted model |
+| Adjust the rate mid-epoch via feedback | Yes | **Breaks cross-chain determinism** — every adjustment is an N-chain simultaneity event again, and it goes singular as `t → W` |
+| Fix the amount, divide by supply (`distributeYield`) | Yes | **Reintroduces dilution** — this is exactly the mechanism removed in the single-multiplier refactor; a late entrant dilutes every existing holder's per-token yield |
+| Per-holder equalisation (fund-industry standard for exact fixed payout) | Yes | Requires per-investor cost basis — **fundamentally incompatible with a fungible ERC-20**, where two OkuM with different entitlements would not be the same token |
+
+Money-market funds — the closest traditional analogue — accrue at a **declared
+rate**, not a fixed distributed amount, for exactly this reason. Rate-based is
+the industry-standard approach for a cash-like instrument, not a compromise
+particular to this protocol.
+
+### The reframe: publish a rate, not an amount — and it isn't a downgrade
+
+If the desk deploys new capital promptly, a rate-based design is actually
+**better** for holders than a fixed-amount one would be: capital that arrives
+mid-epoch earns proportionally, and no existing holder is diluted by a late
+entrant. Fixing the *rate* also keeps the protocol financially square
+automatically as AUM moves — fixing the *amount* would not.
+
+### The "Two V's" — measurement basis vs. paying basis
+
+Converting realized yield into a rate requires care about WHICH average value
+is the denominator. There are two conceptually different quantities, and
+conflating them is the single most common way to implement this wrong:
+
+1. **The measurement epoch's time-weighted average** (`measuredAvgValueUsd` in
+   `scripts/utils/yieldRate.ts`) — integrated over the CLOSED epoch whose
+   realized yield is being converted into a rate. This must be time-weighted,
+   not a spot value at epoch start: if supply changes mid-epoch, a spot
+   denominator mis-measures the realized rate by exactly the factor supply
+   moved (a 25% AUM change mid-epoch mis-measures the rate by ~25%; see the
+   "spot vs time-weighted" test in `test/hardhat/unit/yieldRate.test.ts`).
+2. **The paying epoch's average value** — unknown at the time the rate is
+   published, because it depends on future mint/redeem activity. This is NOT
+   an input to the rate derivation; the rate accrues per-token, uniformly,
+   regardless of how much future supply exists.
+
+Getting (1) right makes the published number a correctly-measured REALIZED
+RATE, decoupled from that epoch's own AUM path. It does **not** make future
+dollars paid equal the historical realized amount — that gap is driven by (2),
+specifically by how much the underlying yield rate itself moves between the
+measurement epoch and the paying epoch (rate drift), not by AUM growth. Rate
+drift is small because T-bill yields move slowly; AUM can move arbitrarily
+fast via mint/redeem. Decoupling the published rate from supply is the
+feature, not an approximation of a fixed-dollar target.
+
+### Mechanism
+
+`scripts/utils/yieldRate.ts::realisedYieldToRatePerSecond` takes the closed
+epoch's realized yield, its own time-weighted average value, a **carried-in
+balance** from the previous epoch, and an (optional, defaults to `1`)
+**conservative factor**:
+
+```
+publishedUsd = realisedYieldUsd * conservativeFactor + carryInUsd
+rate         = ratePerSecond such that publishedUsd compounds over the window
+carryForward = (realisedYieldUsd + carryInUsd) - achievedUsd     // basis (1) only
+```
+
+`carryForward` captures `PRECISION`/`MAX_RATE` clamping and float/rpow rounding
+dust — and, if `conservativeFactor < 1` is ever used, the deliberately withheld
+spread — uniformly, all measured against basis (1). It does **not** capture
+basis-(2) effects (actual paying-epoch AUM). There is **no on-chain "true-up"
+transaction** for any of this: every correction is expressed as a later
+epoch's rate being different from what it would otherwise have been.
+
+### Closing the loop: `reconcileActualPayout`
+
+For TRUE cumulative conservation against on-chain reality (not just internal
+bookkeeping against basis (1)), `scripts/utils/yieldRate.ts` also exports
+`reconcileActualPayout(targetUsd, actualPaidUsd)`. Once a paying epoch has
+closed and its OWN time-weighted average value is measurable (via
+`scripts/utils/globalValue.ts`), compute what the published rate ACTUALLY
+delivered and feed the residual into the next epoch's `carryInUsd` instead of
+(or summed with) the basis-(1)-only `carryForward`. This closes the gap driven
+by rate drift between the measurement and paying epochs — the one thing
+`realisedYieldToRatePerSecond` cannot know about at the time it runs.
+
+### Cumulative conservation
+
+Per-epoch amounts float with AUM (see the impossibility result above); the
+ledger closes cumulatively. Because `carryForward(i) = (realized(i) +
+carryIn(i)) − achieved(i)` and `carryIn(i) = carryForward(i−1)`, summing
+telescopes to:
+
+```
+Σ achieved = Σ realized − outstandingCarry
+```
+
+`scripts/utils/carryLedger.ts` persists every epoch's derivation and computes
+this identity via `summarizeLedger()`; `scripts/operator/checkMultiplierDrift.ts`
+reports it on every run. So the defensible accounting claim is: **cumulative
+distributed tracks cumulative realized yield exactly, up to the outstanding
+carry balance, which is reported** — not "every epoch pays its own realized
+amount exactly," which is impossible per the section above.
+
+### Adopted: base + settlement window (design "B3")
+
+Splitting the epoch improves on straight rate publication with a single new
+contract function (`setOkuMYieldRateWithSuccessor` — see below) and 2
+transactions per epoch per chain:
+
+```
+epoch N (30d)
+├────────────── base window (28d) ──────────────┤├─ settle (2d) ─┤
+   rate r_base, targets baseWindowFraction         rate r_settle,
+   of the (already cross-epoch-adjusted) target     derived from LIVE
+                                                     measured data,
+                                                     closes the remainder
+```
+
+`r_settle` is derived and staged in the SAME atomic transaction that
+re-anchors `r_base` (see `setOkuMYieldRateWithSuccessor` below), and activates
+at the base-window boundary with **no transaction** (preserving cross-chain
+simultaneity — see § Streaming Accrual). This turns the accounting error
+second-order (a short-window residual, rather than the whole epoch) at the
+cost of two transactions per epoch per chain.
+
+**Two independent knobs — do not conflate them** (an earlier draft of this
+design did; see git history / `TRACKER.md`):
+
+1. **Cross-epoch conservatism** (`conservativeFactor` / `carryInUsd`, already
+   in `yieldRate.ts`) — discount the OVERALL epoch target BEFORE either
+   window runs; the withheld remainder carries to the NEXT epoch. Insurance
+   against the settlement window's own forecast being wrong.
+2. **Within-epoch split** (`baseWindowFraction`, `scripts/utils/epochSchedule.ts`)
+   — of whatever the target is (already reflecting (1)), what fraction the
+   base window alone attempts, with settlement closing the remainder using
+   freshly measured data. This is what actually shrinks AUM-volatility error.
+
+`scripts/utils/epochSchedule.ts` implements the split;
+`scripts/utils/epochDistribution.ts` implements the underlying settlement-rate
+derivation and the sampled-supply distribution integral; both are validated
+against a real deployed contract (not just off-chain math) in
+`test/hardhat/simulation/epochAccounting.simulation.ts`.
+
+### `setOkuMYieldRateWithSuccessor` — the atomicity fix
+
+The base+settlement model re-anchors the active rate AND stages its successor
+at every boundary, twice per epoch, forever. Doing that as two separate
+transactions has a real failure window: `setOkuMYieldRate` unconditionally
+clears any pending rate, so if the first transaction lands and the second
+fails or is delayed, the chain is left with **no successor staged** — accrual
+then silently halts at `endTimestamp` until the operator notices.
+`setOkuMYieldRateWithSuccessor(newRate, endTimestamp, nextRate,
+nextEndTimestamp)` closes this window entirely: it is a pure composition of
+`setOkuMYieldRate` followed by `setNextOkuMYieldRate` in one transaction, with
+every check, event, and pause-gate behavior of both unchanged. Both writes
+land or neither does.
+
+### Simulation results
+
+`test/hardhat/simulation/epochAccounting.simulation.ts` runs 25 scenarios
+against a real deployed `OkuMoney`, each measuring dollars ACTUALLY
+distributed (computed exactly from the scripted mint/burn event history and
+the true rate segments — independent of the periodic-sampling approximation
+the settlement derivation itself uses) against the raw target `Y*`.
+**On-chain/off-chain model parity held to ~1e-7% across every normal-range
+scenario** (looser, ~1e-5%, at the deliberately-extreme `MAX_RATE`-clamping
+scenario — see below) — the pure-TS math in
+`epochDistribution.ts`/`epochSchedule.ts` matches the real contract's `rpow`
+accrual essentially exactly, so the off-chain derivation can be trusted
+without re-deploying to verify each decision.
+
+**A verification pass on this simulation suite found and fixed a real
+mechanism bug**, not just test-quality issues: `deriveSettlementRate` failed
+to project the base window's own remaining distribution after the staging
+instant, and `distributedUsdOverWindow` silently dropped the gap between the
+last sample and the window end. Together these produced a **~3.5% systematic
+over-distribution** — which happened to nearly cancel the deliberate 3%
+`conservativeFactor` buffer, making the mechanism *look* accurate in the
+original numbers (~0.5% reported error) while actually running ~3.5% hot
+before the buffer's correction. Both are now fixed; see
+`test/hardhat/unit/epochDistribution.test.ts`'s "CORE VALIDATION" test, which
+specifically proves flat supply with **no** buffer (`conservativeFactor =
+1.0`) lands within 0.1% of `Y*`. All numbers below reflect the corrected
+mechanism.
+
+**Baseline**: 1,000,000 OkuM global supply, 3.2% realized on-chain APY (after
+off-chain spread from a ~3.5% RWA return), 30-day epoch, 2-day (1/15)
+settlement window, `baseWindowFraction = 0.9`, `conservativeFactor = 0.97`.
+
+**A note on reading these tables**: with `conservativeFactor = 0.97`, the
+mechanism is DESIGNED to land at ≈ `-3%` vs. raw `Y*` — that's the buffer
+working correctly, not error. Several tables below therefore report error
+against the ADJUSTED (post-buffer) target where that's the relevant question,
+and against raw `Y*` where the buffer's own cost is what's being illustrated.
+
+**Yield level** (fixed epoch/buffer/split, moderate +20% mid-epoch volatility,
+error vs. ADJUSTED target since all these scenarios use the recommended buffer):
+
+| Realized APY | Error vs adjusted target |
+|---|---|
+| 0.05% (very low) | −2.69% |
+| 3.2% (baseline) | −2.69% |
+| 15% (high) | −2.69% |
+| 60% (very high) | −2.65% |
+| 2000% (near `MAX_RATE`'s 2242% APY ceiling) | −2.25% |
+
+Error is essentially **independent of yield level** across five orders of
+magnitude of APY — it's driven by AUM dynamics and the buffer/split settings,
+not by how large the rate itself is. A separate scenario deliberately exceeds
+`MAX_RATE` (50,000% APY target) to confirm the clamp behaves correctly:
+`floatRateToBigint` caps the rate rather than reverting, and the result is a
+large, honestly-reported shortfall (**−55.63%** vs. raw `Y*`) rather than a
+crash or silently-wrong number — the config is unreachable at that AUM, and
+the mechanism says so.
+
+**Cross-epoch buffer (`conservativeFactor`) extremes**, flat supply unless noted:
+
+| Setting | Error vs raw `Y*` | Finding |
+|---|---|---|
+| `1.0` (no buffer) | +1.80% (under adverse late-shock forecast) | Nothing absorbs a bad settlement-window forecast |
+| `0.97` (recommended) | **−3.00%** (exactly `-(1-0.97)`) | Buffer costs exactly what it's supposed to, no more |
+| `0.5` (excessive) | **−50.00%** (exactly `-(1-0.5)`) | Permanently withholds half of every epoch's yield as carry, even at ZERO volatility — an oversized buffer has a real, ongoing cost, not just a safety margin |
+
+The recommended and excessive rows now land almost exactly on
+`-(1-conservativeFactor)`, confirming the mechanism does precisely what it's
+designed to do once the underlying bug is fixed.
+
+**Within-epoch split (`baseWindowFraction`) extremes**, fixed +50% mid-BASE-window
+shock (lands before settlement is staged), error vs. raw `Y*` (buffer still
+applied, so compare against the ≈-3% baseline, not zero):
+
+| Setting | Error vs raw `Y*` | Finding |
+|---|---|---|
+| TRUE feed-forward control (`noSettlement`, single rate for the whole epoch) | **+16.94%** | Honest no-B3 baseline — NOT `baseWindowFraction=1.0`, which still runs a same-rate settlement window and understates this |
+| `0.9` (recommended) | +7.58% | Materially better than the true feed-forward control under IDENTICAL volatility |
+| `0.3` | −3.00% | Numerically fine here — but this table alone does NOT justify preferring 0.9. See the experiment below, which does. |
+
+**Experiment: does `0.3` actually carry more risk than `0.9`, or was the table
+above just not testing the right thing?** The mid-base-window shock above
+lands *before* settlement is staged, so a *smaller* base commitment (0.3)
+means *less* exposure to that particular disruption — it doesn't test the
+claim that 0.3 concentrates risk in the settlement window. Constructing the
+scenario that actually does — an identical +50% shock landing **inside the
+settlement window itself**, after its rate is already staged against a
+forecast that could not see the shock coming:
+
+| Setting | Error vs raw `Y*` | Base-window exposure to the disrupted period |
+|---|---|---|
+| `0.3` | **+13.99%** | 70% of target committed to the settlement window |
+| `0.9` | **−0.57%** | 10% of target committed to the settlement window |
+
+**`0.9` is confirmed materially better** — the claimed risk is real and this
+is the scenario that demonstrates it (`test/hardhat/simulation/epochAccounting.simulation.ts`,
+"EXPERIMENT" test). The general principle: `baseWindowFraction` trades off
+which window absorbs a shock's risk — a lower value shifts more target weight
+onto the settlement window, which is unavoidably short and forecast-only.
+`0.9` keeps that exposure small (10%) at the cost of slightly worse accuracy
+under a base-window-only shock; `0.3` inverts that trade. Recommend `0.9`.
+
+**Epoch length — a MECHANISM smoke test across scales, NOT an accuracy
+comparison.** The table below confirms `setOkuMYieldRateWithSuccessor`, the
+schedule derivation, and the on-chain/model parity all function correctly at
+epoch lengths spanning five orders of magnitude (1 hour to 90 days). **It does
+NOT demonstrate how accuracy varies with epoch length** — see the limitation
+below for why the "error" column isn't a real independent measurement of that.
+
+| Epoch length | Settlement window | Status |
+|---|---|---|
+| 1 hour | 4 minutes | Characterization only — see feasibility note below |
+| 1 day | 1.6 hours | Characterization only |
+| **7 days** | **11.2 hours** | **Fully tested candidate** |
+| **30 days (baseline)** | **2 days** | **Fully tested candidate** |
+| 90 days | 6 days | Characterization only |
+
+7-day and 30-day epochs are the fully-tested candidates for adoption (per
+product decision); 1 hour / 1 day / 90 days are characterized for mechanism
+correctness only, not recommended.
+
+**Known test-design limitation, not chased down (see `TRACKER.md`):** the
+measured "error vs `Y*`" figure came out nearly identical (~2.27-2.29%) across
+all five lengths in this suite, even after fixing an earlier version's
+staging-lead/sample-cadence self-similarity bug. This is very likely because
+the mid-epoch shock's position is still specified as a *fraction* of the
+epoch (`atFraction: 0.4`), so its relationship to the now-absolute staging
+lead still scales with epoch length — meaning this axis has not yet
+demonstrated a genuine, independent accuracy-vs-length relationship either
+way. Do not read the flatness as "epoch length doesn't affect accuracy"; read
+it as "this specific test isn't isolated enough to say."
+
+**The decisive constraint for epoch length is operational feasibility, not
+accuracy**, regardless of the above: a 1-hour epoch leaves a 4-minute
+settlement-staging window, an unrealistically tight deadline for a real
+transaction to land reliably. That alone rules out sub-day epochs
+independent of any accuracy question.
+
+**Supply-path scenarios** (fixed baseline yield/buffer/split, error vs. raw
+`Y*` — buffer still applied, ≈-3% is the no-shock baseline):
+
+| Scenario | Error vs raw `Y*` |
+|---|---|
+| Late shock (+50% at 97% through epoch) | −0.82% |
+| Flat | −3.00% |
+| Ramp down (−40%) | −3.15% |
+| Ramp up (+50%) | 10.38% |
+| Round trip (mint then redeem, net supply unchanged) | 10.68% |
+| Early shock (+50% at 5% through epoch) | **28.61%** |
+| Doubling (+100% mid-epoch, extreme stress) | 37.21% |
+
+**Multi-epoch carry threading** (NEW — the previously-missing end-to-end
+validation of the headline "cumulative conservation" claim, against a real
+deployed contract, not just hand-fed numbers): 5 consecutive epochs with
+varying supply events, carry threaded via `reconcileActualPayout`. Cumulative
+distributed tracked cumulative adjusted target to within the small residual
+expected from rate-drift and discretization; the outstanding carry balance
+stayed bounded across epochs (observed sequence: `0.00 → -0.02 → -4.05 → 4.49
+→ -0.02`), rather than growing unboundedly — confirming the carry mechanism
+conserves rather than silently accumulating error. A large deliberate negative
+carry-in (simulating a prior over-payment) correctly decelerates the next
+epoch's base rate without breaking monotonicity.
+
+### Finding: monotonicity means an early shock is worse than an equal-size late one
+
+The naive intuition is backwards. A shock landing AFTER settlement is staged
+seems "invisible" to the correction, so it should be the worst case — but the
+simulation shows the opposite (28.61% for an early shock vs. −0.82% for the
+identical late shock). The reason is monotonicity: settlement can HALT further
+over-distribution (`rSettle → PRECISION`) but can **never claw back** what the
+base window already distributed. An early, long-duration shock earns at
+`rBase` — sized for the smaller PRE-shock supply — for nearly the whole base
+window, pushing actual distribution past the target **before settlement ever
+runs**; by staging time there is nothing left to correct. A late shock,
+despite being genuinely invisible to the correction, simply doesn't have time
+to distribute much regardless of rate. Total capital-time exposure dominates
+over correctability.
+
+**Operational implication**: monitoring should not wait for the fixed staging
+instant. If `distributedSoFarUsd` (computable live from
+`scripts/utils/globalValue.ts` samples via
+`epochDistribution.ts::distributedUsdOverWindow`) is observed to exceed the
+target well before the scheduled staging time, the operator should re-anchor
+to `PRECISION` (halt) immediately via `setOkuMYieldRateWithSuccessor`, rather
+than waiting. This bounds the early-shock failure mode to **detection
+latency**, not epoch length. Not yet implemented as an automated alert — see
+`TRACKER.md`.
+
+### Steady state (conservativeFactor < 1, if ever used)
+
+At a constant realized yield `T` per epoch and a constant `conservativeFactor
+f`, withheld carry converges rather than growing unboundedly:
+
+```
+carry₀ = 0
+carry₁ = T(1 − f)
+carry₂ = T(1 − f)   (published = Tf + carry₁ = Tf + T(1-f) = T; fully caught up)
+carry₃ = T(1 − f)
+```
+
+From epoch 2 onward the published rate equals the true realized rate; the
+`T(1 − f)` buffer is permanent and would absorb a down-surprise in a later
+epoch rather than the treasury doing so. See the "steady state" test in
+`test/hardhat/unit/yieldRate.test.ts`.
+
+### Buffer sizing against rate drift, not AUM
+
+If a headroom buffer is wanted, it should be sized against **rate volatility**
+(the "Two V's" gap), not AUM volatility, since a correctly time-weighted
+denominator already removes the AUM term from the measurement conversion.
+Illustrative, monthly epochs, ~5% APY on $10M (≈$40,700/epoch):
+
+| Adverse rate move over the 2-epoch measurement→paying lag | Residual | % of distribution |
+|---|---|---|
+| 10 bp | ~$830 | ~2% |
+| 25 bp | ~$2,080 | ~5% |
+| 50 bp | ~$4,170 | ~10% |
+| 100 bp (stress) | ~$8,330 | ~20% |
+
+Since correction happens by publishing a slower rate later (never by moving
+the multiplier backwards), a buffer is optional — it buys smoother optics, not
+solvency.
+
+**Note on this table vs. the simulation results above**: this table isolates
+the rate-drift residual alone (no B3, no supply shocks) — it is the error that
+remains even with a perfectly time-weighted denominator and no AUM
+disturbance. The simulation results above are typically larger because they
+additionally stress-test AUM SHOCKS (which B3 exists to shrink, but does not
+eliminate — see the monotonicity finding). The two aren't inconsistent; they
+isolate different error sources.
+
+### Monotonicity is never violated
+
+Because `okuMMultiplier` can only hold or grow, an epoch that turns out to have
+been over-published relative to what was actually realized (`carryInUsd < 0`
+going into the next call) is corrected by publishing a **slower** rate next
+epoch — `realisedYieldToRatePerSecond` clamps at `PRECISION` (halts, never goes
+backward) if a deficit is larger than the next epoch's realized yield, and
+carries the still-unpaid remainder forward again. See the
+`"carries the UNPAID remainder forward"` test for the exact behavior at that
+boundary.
+
+### What this requires operationally
+
+- **The carry balance and the V̄ sample history are both cross-chain-critical
+  state**, exactly like the rate integer itself — every chain must apply the
+  identical schedule derived from the identical carry/measurement basis.
+  Unlike the rate, which is verifiable on-chain via `okuMRatePerSecond()`,
+  neither is currently stored or exposed on-chain.
+  `scripts/utils/carryLedger.ts` and `scripts/utils/globalValue.ts` /
+  `scripts/operator/sampleGlobalValue.ts` are REFERENCE implementations (local
+  JSON stores) — see `TRACKER.md` for the requirement to move these to a
+  durable, shared, ideally signed store before relying on them operationally.
+- `conservativeFactor` (if used) is an off-chain operator decision, not a
+  contract parameter — there is no on-chain enforcement that a published rate
+  is in fact conservative relative to any particular realized figure.
+- `checkMultiplierDrift.ts` reports the cumulative-conservation identity on
+  every run once ledger entries exist, and now treats an EXPIRED rate window
+  as a failure (not just a warning) — see § Rear-Facing Epoch Pipeline above
+  for why this is a recurring, scheduled deadline under a fixed-epoch model,
+  not an edge case.
+- **Two transactions per epoch per chain**, both non-time-critical within
+  their window: the base-window re-anchor at epoch start, and the
+  `setOkuMYieldRateWithSuccessor` re-anchor+stage call at the settlement
+  staging instant (≈85% through the epoch, ahead of the base-window boundary).
+- **No automated early-halt monitoring yet** for the "early sustained shock"
+  failure mode identified in the simulation results above — an operator alert
+  that watches `distributedSoFarUsd` continuously and triggers an emergency
+  re-anchor to `PRECISION` before the scheduled staging time is a documented
+  gap, not yet implemented. See `TRACKER.md`.
+- Before adopting a non-default `baseWindowFraction` / `conservativeFactor` /
+  epoch length, re-run
+  `test/hardhat/simulation/epochAccounting.simulation.ts` with those values —
+  it's the fastest way to see the actual accuracy/tx-count trade-off rather
+  than reasoning about it in the abstract.
+
+---
+
 ## OkuMoney.sol
 
 **Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `UUPSUpgradeable`, plus the four ERC-8056 interfaces.
@@ -558,6 +1175,7 @@ outside a field's range reverts rather than silently truncating.
 |---|---|---|
 | `setOkuMYieldRate(newRate, endTimestamp)` | `OKUM_REBASER` | Snapshots the current multiplier into `okuMBaseMultiplier`, resets `okuMLastAccrualTime` to now, sets the active rate + window, and **clears any armed pending rate**. Continuous across the write — no step, so it does NOT stamp `lastYieldDistributionBlock`. `endTimestamp` must be 0 when `newRate == PRECISION` (halting) and strictly future otherwise — every yielding rate carries a bounded window. Pause-gated for INCREASES only (`newRate > current` reverts while paused); decreases (including zeroing) remain available for incident response. |
 | `setNextOkuMYieldRate(newRate, pendingEndTimestamp)` | `OKUM_REBASER` | Pre-stages the successor. Activates off the absolute `okuMRateEnd` with **no transaction at the boundary**. Requires a bounded active window (`NoRateEndSet` if `okuMRateEnd == 0`) that has not elapsed (`RateAlreadyExpired`), and `pendingEndTimestamp` strictly after `okuMRateEnd` — bounding how long the successor can compound unattended. |
+| `setOkuMYieldRateWithSuccessor(newRate, endTimestamp, nextRate, nextEndTimestamp)` | `OKUM_REBASER` | Atomically composes `setOkuMYieldRate` then `setNextOkuMYieldRate` in ONE transaction — every check/event/pause-gate of both applies unchanged, in order. Exists to close the atomicity gap of calling them separately under the base+settlement epoch model (see § Rear-Facing Epoch Accounting), where doing so twice per epoch, forever, otherwise risks landing the first call with the second failing/delayed — leaving NO successor staged and accrual silently halting at `endTimestamp`. |
 | `setOkuMMultiplier(newMultiplier)` | `OKUM_REBASER` | **Emergency discrete override.** Writes `okuMBaseMultiplier = newMultiplier`, resets `okuMLastAccrualTime` to now, and collapses the rate schedule to halted (`okuMRatePerSecond`/`okuMPendingRatePerSecond` = `PRECISION`, `okuMRateEnd`/`okuMPendingRateEnd` = 0) — an operator must re-arm via `setOkuMYieldRate`. Enforces `newMultiplier > current` and `<= MAX_MULTIPLIER`. Pause-gated. Stamps `lastYieldDistributionBlock`. |
 
 `setOkuMMultiplier` is the **sole remaining reason** `lastYieldDistributionBlock`
@@ -579,6 +1197,12 @@ interface IOkuMoney is IERC20 {
     function okuMMultiplier() external view returns (uint256);
     function setOkuMYieldRate(uint256 newRate, uint256 endTimestamp) external;
     function setNextOkuMYieldRate(uint256 newRate, uint256 pendingEndTimestamp) external;
+    function setOkuMYieldRateWithSuccessor(
+        uint256 newRate,
+        uint256 endTimestamp,
+        uint256 nextRate,
+        uint256 nextEndTimestamp
+    ) external;
     function okuMRatePerSecond() external view returns (uint256);
     function okuMEffectiveRatePerSecond() external view returns (uint256);
     function okuMRateEnd() external view returns (uint256);
@@ -1010,7 +1634,7 @@ both EVM and SVM. EVM-specific notes:
 | `VAULT_RESCUER` | Cold Multisig | Withdraw OkuM **donated** directly to the vault | Cannot touch backing — anything at or below `totalUsdShares` is off limits (`NoDonationAvailable`). See the 1-wei-per-unwrap caveat in Accepted Risks |
 | `PSM_PAUSER` / `VAULT_PAUSER` / `OKUM_PAUSER` | Warm Multisig | Halt minting, redemption, wrapping, transfers | Cannot unpause — that requires cold multisig (`*_UNPAUSER`) |
 | `OKUM_BLACKLISTER` | Warm Multisig | Block any address from OkuMoney and OkuDollar operations | Cannot unblacklist (cold only); cannot access funds |
-| `OKUM_REBASER` | Orchestrator | Set the shared yield-rate schedule (`setOkuMYieldRate`, `setNextOkuMYieldRate`) and the discrete emergency override (`setOkuMMultiplier`) | Rate bounded to `[PRECISION, MAX_RATE]` (`InvalidRate` / `RateTooHigh`), so it can never drive the multiplier backwards; multiplier hard capped at `MAX_MULTIPLIER` (1e24); `setOkuMMultiplier` cannot decrease (`MultiplierCannotDecrease`) and is pause-gated. **Not** bounded on-chain against other chains' schedules — see Accepted Risks |
+| `OKUM_REBASER` | Orchestrator | Set the shared yield-rate schedule (`setOkuMYieldRate`, `setNextOkuMYieldRate`, `setOkuMYieldRateWithSuccessor`) and the discrete emergency override (`setOkuMMultiplier`) | Rate bounded to `[PRECISION, MAX_RATE]` (`InvalidRate` / `RateTooHigh`), so it can never drive the multiplier backwards; multiplier hard capped at `MAX_MULTIPLIER` (1e24); `setOkuMMultiplier` cannot decrease (`MultiplierCannotDecrease`) and is pause-gated. **Not** bounded on-chain against other chains' schedules — see Accepted Risks |
 | `PSM_QUEUE_PROCESSOR` | Orchestrator | Process queue entries — burns OkuM, pays USDC to users | Payment destination is fixed to the queue entry's `user` address; cannot reroute |
 | `PSM_BUFFER_DEPOSITOR` | Orchestrator | Deposit USDC to buffer from caller's wallet | Caller must hold the USDC; no damage possible |
 | `OKUM_MINTER` | LitePSM + RedemptionQueue (contracts) | Call `OkuMoney.mint()` inside swap/processQueue paths | Bounded by per-minter `minterAllowance` and global `maxSupply`; never callable by EOA |
@@ -1323,72 +1947,77 @@ Risk 1.
 ## Testing
 
 ```bash
-forge test                                         # All unit + invariant tests (520 total)
+forge test                                         # All unit + invariant tests (576 total)
 forge test --match-path "test/invariants/*"        # Invariant suite (256 runs × 500 depth by default)
 forge test --match-contract OkuMoneyTest -vv       # OkuMoney unit tests (incl. rate-schedule suite)
 forge test --match-contract VaultInvariants        # OkuDollar backing invariants
 forge test --match-contract HandlerSanityTest      # Handler success-rate sanity checks
+forge test --match-contract MathLibTest            # MathLib branch coverage (rpow, compoundFor, computeMultiplier)
+forge fmt --check                                  # CI gate — formatting
+forge coverage --no-match-coverage 'test/|script/' --report summary  # CI gate — 95% per-file line coverage
 
+npm run test:unit                                  # Off-chain math + simulation + drills
+                                                    # (150 tests). NOTE: needs fork RPC — the
+                                                    # drills deploy against the forked chain.
 npx hardhat compile                                # Regenerates typechain before fork tests
-npx hardhat test                                   # Fork + happyPath + scenarios
+npx hardhat test                                   # Everything (177 tests), incl. fork tests
+npx hardhat test test/hardhat/drill/*.ts           # Deploy drill + operator drill only
 npx hardhat test test/hardhat/scenarios/RealWorldUsage.ts  # 365-day simulation + 7 edge cases
 ```
 
-The Foundry suite is the authoritative functional coverage. The Hardhat suite exists for three specific purposes:
+The Foundry suite is the authoritative functional coverage. The Hardhat suite covers five areas:
 1. **Fork tests** (`test/hardhat/fork/`): exercise the protocol against real mainnet / Sepolia state that Foundry can't reach in CI.
 2. **Happy-path integration** (`test/hardhat/happyPath/`): full deposit/yield/withdraw walk-through against the OZ upgrades plugin's real proxy machinery.
 3. **Real-world scenario simulation** (`test/hardhat/scenarios/RealWorldUsage.ts`): 365-day stochastic simulation (seeded PRNG, 7 action categories, daily `evm_increaseTime` steps) plus 7 deterministic edge-case suites covering round-trips, queued redeems, multiplier divergence, blacklist/freeze, pause windows, yield-lock, and cap exhaustion.
+4. **Off-chain rate/epoch math + rear-facing accounting simulation** (`test/hardhat/unit/`, `test/hardhat/simulation/`): pure-TS unit tests for `yieldRate.ts` / `epochDistribution.ts` / `epochSchedule.ts` / `globalValue.ts` / `carryLedger.ts`, plus the base+settlement accuracy simulation — see § Rear-Facing Epoch Accounting.
+5. **Deploy + operator drills** (`test/hardhat/drill/`): `deployDrill.test.ts` runs the **real** `scripts/deploy/index.ts` against a local fork and asserts the resulting chain (all five proxies deployed, address book written, the complete 21-grant role matrix present, privileged roles *not* held by outsiders, and a live PSM mint succeeding). `operatorDrill.test.ts` then exercises **every operator-script lever** in-process against that same deploy, so the scripts are tested against the production role topology rather than a bespoke fixture.
 
-Any new unit or invariant test should be added to the Foundry suite; Hardhat is reserved for fork-dependent or multi-contract scenario work.
+> `npm run test:unit` runs groups 4 and 5. It was previously described as an
+> RPC-free fast path; that stopped being true when the drills were added, since
+> they reset and deploy against the configured fork. Use
+> `npx hardhat test test/hardhat/unit/*.ts test/hardhat/simulation/*.ts` for the
+> genuinely offline subset.
+
+Any new unit or invariant test should be added to the Foundry suite; Hardhat is reserved for fork-dependent, multi-contract scenario work, or off-chain script/simulation logic that has no Solidity counterpart.
 
 ---
 
 ## Forge coverage notes
 
-> **Status after the streaming-accrual / single-multiplier refactor:
-> 499 / 520 forge tests passing, 21 failing.** The failures are all
-> **test-side fallout from the refactor**, not contract regressions, and are
-> being cleaned up in a follow-up pass. They fall into three groups:
->
-> 1. **`AccessControlUnauthorizedAccount(..., OKUM_REBASER)`** (18 tests, in
->    `LitePSM.t.sol` / `OkuDollar.t.sol`) — yield-lock tests reach
->    `setOkuMMultiplier` through a path whose signer no longer holds
->    `OKUM_REBASER` on OkuMoney. A grant/prank fix, not a guard defect.
-> 2. **`MultiplierCannotDecrease`** (3 tests) — helpers that used to set the
->    two multipliers independently now drive a single shared, monotonic value,
->    so the "elevated usdMultiplier vs. lower okuMMultiplier" fixtures are
->    unreachable states by construction.
-> 3. **Stale single-multiplier assertions** —
->    `test_UsdMultiplier_IndependentOfNotePrice` and
->    `testFuzz_OkuUsdBalanceUnchangedByNotePrice` assert *independence* between
->    `usdMultiplier()` and `okuMMultiplier()`, which is no longer a property:
->    they are the same value. These tests should be deleted, and the file
->    comment at `test/token/OkuDollar.t.sol:636` already says so.
->
-> The per-file coverage table below is the **pre-refactor** baseline and has not
-> been regenerated.
+**Current status: 576 / 576 forge tests passing, 177 / 177 hardhat tests
+passing.** The post-refactor fallout previously recorded here (21 failing forge
+tests across three groups: `OKUM_REBASER` grant/prank issues,
+`MultiplierCannotDecrease` fixtures made unreachable by the single shared
+multiplier, and assertions claiming `usdMultiplier()` / `okuMMultiplier()`
+independence) has been fully cleaned up, as has the separate hardhat-side
+fallout (stale `OkuDollar.initialize` deploy args across 5 fixtures, plus four
+content-level stale assertions). See `TRACKER.md` for the per-item history.
 
-**Pre-refactor baseline:** **564 / 564 forge tests passing**
-plus **27 / 27 hardhat tests** (fork + happy-path + scenarios). Per-file
-coverage:
+Per-file coverage (regenerated — `forge coverage --no-match-coverage 'test/|script/'`):
 
 | File | Lines | Statements | Branches | Funcs |
 |---|---|---|---|---|
-| `src/lib/MathLib.sol` | **100 %** | 96 % | 40 % | 100 % |
-| `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** | 100 % | 100 % | 100 % |
-| `src/lib/SafeApprove.sol` | **100 %** | 100 % | 100 % | 100 % |
-| `src/lib/YieldSandwichGuard.sol` | **100 %** | 100 % | 100 % | 100 % |
-| `src/psm/LitePSM.sol` | **97.95 %** | 96.05 % | 73.08 % | 100 % |
-| `src/psm/RedemptionQueue.sol` | **100 %** | 99.25 % | 93.33 % | 100 % |
-| `src/token/OkuDollar.sol` | **98.34 %** | 97.26 % | 90.00 % | 97.50 % |
-| `src/token/OkuMoney.sol` | **100 %** | 100 % | 100 % | 100 % |
-| **Total** | **98.95 %** | 97.73 % | 86.32 % | 99.17 % |
+| `src/lib/MathLib.sol` | **100 %** (53/53) | 97.47 % | 75.00 % | 100 % |
+| `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** (17/17) | 100 % | 100 % | 100 % |
+| `src/lib/SafeApprove.sol` | **100 %** (4/4) | 100 % | 100 % | 100 % |
+| `src/lib/YieldSandwichGuard.sol` | **100 %** (3/3) | 100 % | 100 % | 100 % |
+| `src/psm/LitePSM.sol` | **97.92 %** (141/144) | 96.02 % | 74.07 % | 100 % |
+| `src/psm/RedemptionQueue.sol` | **100 %** (106/106) | 99.25 % | 93.33 % | 100 % |
+| `src/token/OkuDollar.sol` | **97.91 %** (187/191) | 95.73 % | 81.25 % | 97.78 % |
+| `src/token/OkuMoney.sol` | **99.53 %** (211/212) | 99.19 % | 97.22 % | 100 % |
+| **Total** | **98.90 %** (722/730) | 97.57 % | **85.48 %** | 99.32 % |
 
 A CI gate in `.github/workflows/test.yml` fails the build if any `src/` file
-or the overall total drops below **95 % line coverage**. The refactor added new
-surface not reflected above — `MathLib.computeMultiplier` / `compoundFor`, the
-OkuMoney rate-schedule setters, the ERC-8056 views, and the OkuDollar ERC-4626
-surface — so the table must be regenerated once the 21 failing tests are fixed.
+or the overall total drops below **95 % line coverage**. Every file clears it;
+the worst is `OkuDollar.sol` at 97.91 %.
+
+> **Branch coverage is the weak spot and is _not_ gated.** At 85.48 % overall —
+> `LitePSM.sol` 74.07 %, `MathLib.sol` 75.00 %, `OkuDollar.sol` 81.25 % — it is
+> materially below the line figure. `LitePSM` being lowest is worth noting:
+> `_redeemOkuMShared` is already flagged as the densest control flow in the
+> suite (see § Auditor checklist), so the branchiest function is also among the
+> least branch-covered. Most uncovered branches are the defensive guards listed
+> below, but this is where audit attention will land. Tracked in `TRACKER.md`.
 
 ### Uncovered lines (intentional)
 
@@ -1428,7 +2057,7 @@ judged not worth the maintenance cost.
    - Backed by `MockUSDC.setBlocked` (`test/mocks/MockUSDC.sol`) which mirrors Circle USDC's revert-on-blacklist semantics.
 
 4. **`OkuMoney.setNextOkuMYieldRate` boundary conditions (`block.timestamp >= okuMRateEnd`)**
-   - `test_SetNextOkuMYieldRate_RevertsWhenNoRateEnd` — open-ended active rate → `NoRateEndSet`.
+   - `test_SetNextOkuMYieldRate_RevertsWhenNoRateEnd` — halted active rate → `NoRateEndSet`.
    - `test_SetNextOkuMYieldRate_RevertsWhenAlreadyExpired` — window elapsed → `RateAlreadyExpired`.
    - `test_SetNextOkuMYieldRate_SucceedsOneSecondBeforeEnd` — `block.timestamp == okuMRateEnd - 1` → success.
    - `test_SetNextOkuMYieldRate_ActivatesWithoutTransaction` — the cross-chain-critical property: the successor takes effect with **no transaction at the boundary**.

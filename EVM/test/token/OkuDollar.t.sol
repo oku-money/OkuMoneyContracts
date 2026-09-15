@@ -517,6 +517,98 @@ contract OkuDollarTest is BaseTest {
         assertEq(shares, okuDollar.balanceOf(user1));
     }
 
+    /// @notice The ERC-4626 `mint(shares, receiver)` entry point (previously
+    ///         zero test coverage) — distinct from `deposit`: caller specifies
+    ///         the desired SHARE output, and `mint` derives the asset input via
+    ///         `previewMint` (ceil-rounded) before routing through `wrap`.
+    function test_Mint_SharesEntryPoint() public {
+        _mintOkuMoney(user1, 1000e18);
+        _approveOkuMoney(user1, address(okuDollar), 1000e18);
+        _setOkuMMultiplierAndRoll(PRECISION + PRECISION / 3); // non-trivial multiplier
+
+        uint256 desiredShares = 500e18;
+        uint256 expectedAssets = okuDollar.previewMint(desiredShares);
+
+        vm.prank(user1);
+        uint256 assetsSpent = okuDollar.mint(desiredShares, user1);
+
+        assertEq(assetsSpent, expectedAssets, "mint must spend exactly previewMint's quote");
+        // `balanceOf` is DOLLAR-denominated (not raw OkuM), so minting
+        // `desiredShares` dollars of UsdOku must produce (up to the ceil
+        // rounding baked into previewMint's asset quote) exactly
+        // `desiredShares` in the receiver's balance — NOT `assetsSpent`,
+        // which is the raw OkuM amount, a different unit at this multiplier.
+        assertEq(okuDollar.balanceOf(user1), desiredShares);
+    }
+
+    /// @notice totalAssets() reports the vault's OkuM reserves, matching
+    ///         totalOkuMReserves() exactly — the two must never diverge since
+    ///         totalAssets is defined as a thin alias.
+    function test_TotalAssets_MatchesOkuMReserves() public {
+        _mintUsdOku(user1, 1000e18);
+        assertEq(okuDollar.totalAssets(), okuDollar.totalOkuMReserves());
+        assertGt(
+            okuDollar.totalAssets(), 0, "must be non-trivial for this assertion to be meaningful"
+        );
+    }
+
+    /// @notice convertToShares / convertToAssets are inverses at the base
+    ///         multiplier (single-multiplier design: 1:1), and convertToShares
+    ///         rounds DOWN per spec.
+    function test_ConvertToShares_ConvertToAssets_Inverse() public view {
+        uint256 assets = 12_345e17;
+        uint256 shares = okuDollar.convertToShares(assets);
+        assertEq(shares, assets, "at base multiplier (1e18), conversion is the identity");
+        assertEq(okuDollar.convertToAssets(shares), assets);
+    }
+
+    /// @notice At a non-trivial multiplier, convertToShares rounds down and
+    ///         previewMint (its up-rounding counterpart for the mint path)
+    ///         never returns LESS than the floor-rounded equivalent.
+    function test_ConvertToShares_RoundsDown_AtElevatedMultiplier() public {
+        _setOkuMMultiplierAndRoll(PRECISION + PRECISION / 3);
+        uint256 assets = 1000e18 + 1; // deliberately non-round to expose rounding
+        uint256 shares = okuDollar.convertToShares(assets);
+        uint256 mult = okuDollar.usdMultiplier();
+        // Manual floor computation must match exactly.
+        assertEq(shares, Math.mulDiv(assets, mult, PRECISION, Math.Rounding.Floor));
+    }
+
+    /// @notice previewDeposit is a pure alias for convertToShares (spec
+    ///         requires them to agree when no fees are charged, as here).
+    function test_PreviewDeposit_MatchesConvertToShares() public {
+        _setOkuMMultiplierAndRoll(PRECISION + PRECISION / 3);
+        uint256 assets = 777e18;
+        assertEq(okuDollar.previewDeposit(assets), okuDollar.convertToShares(assets));
+    }
+
+    /// @notice previewRedeem is a pure alias for convertToAssets.
+    function test_PreviewRedeem_MatchesConvertToAssets() public {
+        _setOkuMMultiplierAndRoll(PRECISION + PRECISION / 3);
+        uint256 shares = 777e18;
+        assertEq(okuDollar.previewRedeem(shares), okuDollar.convertToAssets(shares));
+    }
+
+    /// @notice previewMint rounds UP — the caller must never be quoted less
+    ///         than the true asset cost of minting `shares`.
+    function test_PreviewMint_RoundsUp() public {
+        _setOkuMMultiplierAndRoll(PRECISION + PRECISION / 3);
+        uint256 shares = 1000e18 + 1; // non-round, to expose rounding direction
+        uint256 mult = okuDollar.usdMultiplier();
+        uint256 expectedCeil = Math.mulDiv(shares, PRECISION, mult, Math.Rounding.Ceil);
+        assertEq(okuDollar.previewMint(shares), expectedCeil);
+    }
+
+    /// @notice maxRedeem(owner) returns the owner's raw UsdOku balance
+    ///         (shares), NOT the OkuM asset equivalent — mirroring
+    ///         maxWithdraw's asset-vs-shares distinction from the other side.
+    function test_MaxRedeem_ReturnsSharesNotAssets() public {
+        _mintUsdOku(user1, 1000e18);
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
+
+        assertEq(okuDollar.maxRedeem(user1), okuDollar.balanceOf(user1));
+    }
+
     function test_SupportsInterface_ERC8056() public view {
         // OkuDollar itself does not implement ERC-8056 (OkuMoney does); this pins
         // the ERC-165 surface OkuDollar DOES advertise so a future accidental

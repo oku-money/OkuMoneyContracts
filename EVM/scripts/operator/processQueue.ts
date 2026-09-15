@@ -3,50 +3,49 @@
  *
  * Calls `LitePSM.processQueue(startIndex, endIndex, approveAmount)` in
  * configurable batch sizes, looping until the queue is empty or a --limit is
- * reached. Reads queue state on-chain before each batch.
+ * reached. Also calls `RedemptionQueue.advanceHead(maxSlots)` after each batch
+ * — `processQueue` no longer auto-advances the cursor, so the next
+ * iteration's pending-count check needs the explicit advance.
  *
- * After each `processQueue` call this script also calls
- * `RedemptionQueue.advanceHead(maxSlots)` to drive `queueHead` forward past
- * the now-cleared slots — `processQueue` no longer auto-advances the cursor,
- * so the next iteration's pending-count check needs the explicit advance to
- * see an accurate count.
- *
- * Usage:
- *   NETWORK=base npx hardhat run scripts/operator/processQueue.ts --network base
- *   NETWORK=base npx hardhat run scripts/operator/processQueue.ts --network base \
- *       --batch-size 25 --limit 3    # up to 3 batches of 25 entries
- *   DRY_RUN=true NETWORK=base npx hardhat run scripts/operator/processQueue.ts --network base
+ * Usage (env vars — NOT `--flags`; see scripts/utils/cli.ts for why
+ * `hardhat run` rejects custom flags with HH305/HH310):
+ *   NETWORK=base BATCH_SIZE=25 LIMIT=3 \
+ *       npx hardhat run scripts/operator/processQueue.ts --network base
  *
  * Environment:
- *   DRY_RUN=true   Print intent without submitting
- *   BATCH_SIZE     Entries per processQueue call (default 50)
- *   LIMIT          Maximum number of batches (default unlimited)
+ *   DRY_RUN=true      Print intent without submitting
+ *   BATCH_SIZE        Entries per processQueue call (default 50)
+ *   LIMIT             Maximum number of batches (default unlimited)
+ *   YES_MAINNET=true  Required to broadcast on a mainnet network
+ *
+ * Also exported as `runProcessQueue()` for in-process callers (e.g. the drill).
  */
 
 import { ethers } from "hardhat";
-import { resolveNetworkContext } from "../utils/networkContext";
+import { Signer } from "ethers";
+import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
+import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
 
-function parseArg(name: string): string | undefined {
-  const a = process.argv.find((x) => x.startsWith(`--${name}=`) || x.startsWith(`--${name} `));
-  return a ? a.split(/[= ]/)[1] : process.env[name.toUpperCase().replace(/-/g, '_')];
+export interface ProcessQueueResult {
+  batches: number;
+  totalDrained: number;
+  finalHead: bigint;
+  finalTail: bigint;
 }
 
-const YES_MAINNET = process.argv.includes("--yes-mainnet");
-const DRY_RUN = process.env.DRY_RUN === "true";
-
-async function main() {
-  const ctx = await resolveNetworkContext();
-  logger.header(`processQueue (${ctx.networkName})`);
-
-  mainnetGuard(ctx.networkName, { yesMainnet: YES_MAINNET, dryRun: DRY_RUN });
-
-  const batchSize = parseInt(parseArg("batch-size") ?? process.env.BATCH_SIZE ?? "50", 10);
-  const limit = parseInt(parseArg("limit") ?? process.env.LIMIT ?? "1000", 10);
-  if (batchSize < 1 || batchSize > 200) throw new Error("--batch-size must be 1–200");
+export async function runProcessQueue(
+  ctx: NetworkContext,
+  signer: Signer,
+  opts: { batchSize?: number; limit?: number; dryRun?: boolean } = {}
+): Promise<ProcessQueueResult> {
+  const batchSize = opts.batchSize ?? 50;
+  const limit = opts.limit ?? 1000;
+  const dryRun = opts.dryRun ?? false;
+  if (batchSize < 1 || batchSize > 200) throw new Error("batchSize must be 1-200");
 
   const psmAddr = loadAddress(ctx.bookKey, "LitePSM");
   const queueAddr = loadAddress(ctx.bookKey, "RedemptionQueue");
@@ -55,7 +54,6 @@ async function main() {
     throw new Error(`Missing LitePSM/RedemptionQueue/USDC in address book for ${ctx.bookKey}`);
   }
 
-  const [signer] = await ethers.getSigners();
   const psm = (await getDeployedContract("LitePSM", psmAddr)).connect(signer);
   const queue = (await getDeployedContract("RedemptionQueue", queueAddr)).connect(signer);
   const usdc = (await ethers.getContractAt("IERC20", usdcAddr)).connect(signer);
@@ -69,7 +67,7 @@ async function main() {
     const pending = tail - head;
     if (pending.toString() === "0") {
       logger.success(`Queue empty after ${batches} batch(es), ${totalDrained} entries drained.`);
-      return;
+      return { batches, totalDrained, finalHead: head, finalTail: tail };
     }
 
     const thisBatch = pending > BigInt(batchSize) ? BigInt(batchSize) : pending;
@@ -78,8 +76,8 @@ async function main() {
 
     logger.info(`Batch ${i + 1}: head=${head} end=${endIndex} pending=${pending} buffer=${Number(psmUsdcBalance) / 1e6} USDC`);
 
-    if (DRY_RUN) {
-      logger.success("DRY_RUN=true — would call processQueue(" + head + ", " + endIndex + ", " + psmUsdcBalance + ")");
+    if (dryRun) {
+      logger.success(`DRY_RUN=true — would call processQueue(${head}, ${endIndex}, ${psmUsdcBalance})`);
       totalDrained += Number(thisBatch);
       batches++;
       break;
@@ -89,9 +87,6 @@ async function main() {
     const receipt = await tx.wait(1);
     logger.success(`Batch ${i + 1} tx: ${receipt.hash} (${thisBatch} entries)`);
 
-    // processQueue no longer auto-advances queueHead. Advance the cursor so the
-    // next iteration sees an accurate pending count (and the loop's `pending == 0`
-    // exit condition can actually fire).
     const advTx = await (queue as any).advanceHead(thisBatch);
     await advTx.wait(1);
 
@@ -99,12 +94,23 @@ async function main() {
     batches++;
   }
 
-  const head = await (queue as any).queueHead();
-  const tail = await (queue as any).queueTail();
-  logger.info(`Final queue state: head=${head} tail=${tail} remaining=${tail - head}`);
+  const finalHead = await (queue as any).queueHead();
+  const finalTail = await (queue as any).queueTail();
+  logger.info(`Final queue state: head=${finalHead} tail=${finalTail} remaining=${finalTail - finalHead}`);
   logger.success(`Done: ${batches} batch(es), ${totalDrained} entries processed.`);
+  return { batches, totalDrained, finalHead, finalTail };
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((e) => { logger.error(e.message ?? String(e)); process.exit(1); });
+if (require.main === module) {
+  runMain(async () => {
+    const ctx = await resolveNetworkContext();
+    logger.header(`processQueue (${ctx.networkName})`);
+    mainnetGuard(ctx.networkName, { yesMainnet: isYesMainnet(), dryRun: isDryRun() });
+
+    const batchSize = parseInt(parseArg("batch-size") ?? "50", 10);
+    const limit = parseInt(parseArg("limit") ?? "1000", 10);
+
+    const [signer] = await ethers.getSigners();
+    await runProcessQueue(ctx, signer, { batchSize, limit, dryRun: isDryRun() });
+  });
+}

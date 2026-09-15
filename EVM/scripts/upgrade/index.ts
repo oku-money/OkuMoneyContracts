@@ -1138,18 +1138,23 @@ function parseTargets(): string[] {
 
 // ---- Mainnet safety gate (WS5.3) ----
 const UPGRADE_DRY_RUN = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
-const UPGRADE_YES_MAINNET = process.argv.includes("--yes-mainnet") || process.env.YES_MAINNET === "true";
+const UPGRADE_YES_MAINNET =
+  process.argv.includes("--yes-mainnet") ||
+  process.env.YES_MAINNET === "1" ||
+  process.env.YES_MAINNET === "true";
 const UPGRADE_MAINNET_NETWORKS = new Set(["base", "bsc", "mainnet", "ethereum"]);
 function assertNotMainnetUpgrade(networkName: string) {
   if (!UPGRADE_MAINNET_NETWORKS.has(networkName)) return;
   if (UPGRADE_YES_MAINNET) {
-    logger.warning(`--yes-mainnet passed; proceeding with upgrade on ${networkName}`);
+    logger.warning(`YES_MAINNET set; proceeding with upgrade on ${networkName}`);
     return;
   }
   if (UPGRADE_DRY_RUN) return;
+  // Must be the ENV form: `hardhat run` rejects unknown CLI flags (HH305)
+  // before this script ever executes, so `--yes-mainnet` can never arrive.
   throw new Error(
-    `Refusing to broadcast upgrade on ${networkName} without --yes-mainnet flag.\n` +
-    `Re-run with: TARGETS=... npx hardhat run scripts/upgrade/index.ts --network ${networkName} --yes-mainnet`
+    `Refusing to broadcast upgrade on ${networkName} without YES_MAINNET.\n` +
+    `Re-run with: YES_MAINNET=true TARGETS=... npx hardhat run scripts/upgrade/index.ts --network ${networkName}`
   );
 }
 // ---- end mainnet safety gate ----

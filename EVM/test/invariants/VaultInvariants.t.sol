@@ -58,9 +58,7 @@ contract VaultInvariantsTest is BaseTest {
         uint256 shareBacking = okuDollar.totalUsdShares();
 
         assertGe(
-            reserves,
-            shareBacking,
-            "Vault OkuM reserves must cover outstanding share backing 1:1"
+            reserves, shareBacking, "Vault OkuM reserves must cover outstanding share backing 1:1"
         );
 
         // Dollar-denominated restatement: reserves valued at the shared multiplier

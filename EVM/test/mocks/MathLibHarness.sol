@@ -14,6 +14,37 @@ contract MathLibHarness {
         return MathLib.rpow(x, n, b);
     }
 
+    function compoundFor(
+        uint256 base,
+        uint256 rate,
+        uint256 elapsed
+    )
+        external
+        pure
+        returns (uint256)
+    {
+        return MathLib.compoundFor(base, rate, elapsed);
+    }
+
+    function computeMultiplier(
+        uint256 base,
+        uint256 rate,
+        uint256 anchor,
+        uint256 rateEnd,
+        uint256 pendingRate,
+        uint256 pendingRateEnd,
+        uint256 nowTs
+    )
+        external
+        pure
+        returns (uint256)
+    {
+        return
+            MathLib.computeMultiplier(
+                base, rate, anchor, rateEnd, pendingRate, pendingRateEnd, nowTs
+            );
+    }
+
     function okuMToDollars(
         uint256 okuMAmount,
         uint256 okuMMultiplier

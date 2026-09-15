@@ -4,50 +4,47 @@
  * Calls `LitePSM.depositBuffer(amount)`, which pulls USDC from the caller's
  * wallet into the PSM's reserve buffer so instant redemptions can proceed.
  *
- * Usage:
- *   NETWORK=base npx hardhat run scripts/operator/depositBuffer.ts --network base \
- *       --amount 1000000000    # 1000 USDC (6 decimals)
- *   DRY_RUN=true NETWORK=base npx hardhat run scripts/operator/depositBuffer.ts --network base \
- *       --amount 1000000000
+ * Usage (env vars — NOT `--flags`; see scripts/utils/cli.ts for why
+ * `hardhat run` rejects custom flags with HH305/HH310):
+ *   NETWORK=base AMOUNT=1000000000 \
+ *       npx hardhat run scripts/operator/depositBuffer.ts --network base   # 1000 USDC (6 dec)
  *
  * Environment:
- *   AMOUNT         6-decimal USDC amount (alternative to CLI flag)
- *   DRY_RUN=true   Simulate without submitting
+ *   AMOUNT            6-decimal USDC amount (required)
+ *   DRY_RUN=true      Simulate without submitting
+ *   YES_MAINNET=true  Required to broadcast on a mainnet network
+ *
+ * Also exported as `runDepositBuffer()` for in-process callers (e.g. the drill).
  */
 
 import { ethers } from "hardhat";
-import { resolveNetworkContext } from "../utils/networkContext";
+import { Signer } from "ethers";
+import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
+import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
 
-function parseArg(name: string): string | undefined {
-  const a = process.argv.find((x) => x.startsWith(`--${name}=`) || x.startsWith(`--${name} `));
-  return a ? a.split(/[= ]/)[1] : process.env[name.toUpperCase().replace(/-/g, '_')];
+export interface DepositBufferResult {
+  bufferBefore: bigint;
+  bufferAfter: bigint;
+  txHash?: string;
 }
 
-const YES_MAINNET = process.argv.includes("--yes-mainnet");
-const DRY_RUN = process.env.DRY_RUN === "true";
-
-async function main() {
-  const ctx = await resolveNetworkContext();
-  logger.header(`depositBuffer (${ctx.networkName})`);
-
-  mainnetGuard(ctx.networkName, { yesMainnet: YES_MAINNET, dryRun: DRY_RUN });
-
-  const amountStr = parseArg("amount") ?? parseArg("AMOUNT");
-  if (!amountStr) throw new Error("Required: --amount=<6-decimal USDC> or AMOUNT env var");
-  const amount = BigInt(amountStr);
-  if (amount <= 0n) throw new Error("--amount must be > 0");
+export async function runDepositBuffer(
+  ctx: NetworkContext,
+  signer: Signer,
+  amount: bigint,
+  dryRun = false
+): Promise<DepositBufferResult> {
+  if (amount <= 0n) throw new Error("amount must be > 0");
 
   const psmAddr = loadAddress(ctx.bookKey, "LitePSM");
   const usdcAddr = loadAddress(ctx.bookKey, "MockUSDC") ?? loadAddress(ctx.bookKey, "USDC");
   if (!psmAddr || !usdcAddr) throw new Error(`Missing LitePSM or USDC in address book for ${ctx.bookKey}`);
 
-  const [signer] = await ethers.getSigners();
   const signerAddr = await signer.getAddress();
-
   const psm = (await getDeployedContract("LitePSM", psmAddr)).connect(signer);
   const usdc = (await ethers.getContractAt("IERC20", usdcAddr)).connect(signer);
 
@@ -62,10 +59,9 @@ async function main() {
   if (signerBalance < amount) {
     throw new Error(`Insufficient USDC: have ${Number(signerBalance) / 1e6}, need ${Number(amount) / 1e6}`);
   }
-
-  if (DRY_RUN) {
+  if (dryRun) {
     logger.success("DRY_RUN=true — not submitting");
-    return;
+    return { bufferBefore, bufferAfter: bufferBefore };
   }
 
   const approveTx = await usdc.approve(psmAddr, amount);
@@ -78,8 +74,19 @@ async function main() {
 
   const bufferAfter = await usdc.balanceOf(psmAddr);
   logger.success(`PSM buffer after: ${Number(bufferAfter) / 1e6} (+${Number(bufferAfter - bufferBefore) / 1e6})`);
+  return { bufferBefore, bufferAfter, txHash: receipt.hash };
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((e) => { logger.error(e.message ?? String(e)); process.exit(1); });
+if (require.main === module) {
+  runMain(async () => {
+    const ctx = await resolveNetworkContext();
+    logger.header(`depositBuffer (${ctx.networkName})`);
+    mainnetGuard(ctx.networkName, { yesMainnet: isYesMainnet(), dryRun: isDryRun() });
+
+    const amountStr = parseArg("amount") ?? parseArg("AMOUNT");
+    if (!amountStr) throw new Error("Required: --amount=<6-decimal USDC> or AMOUNT env var");
+
+    const [signer] = await ethers.getSigners();
+    await runDepositBuffer(ctx, signer, BigInt(amountStr), isDryRun());
+  });
+}

@@ -84,7 +84,6 @@ const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
 
 const MAX_SUPPLY = parseEther("1000000000")
 const MINTER_ALLOWANCE = parseEther("1000000000")
-const MIN_COLLATERAL_RATIO = parseEther("1")
 
 // 5% continuous APY = (1.05)^(1/31536000) per second ≈ 1_000_000_001_546_857_e3
 const FIVE_PCT_APY_RATE = 1_000_000_001_546_857_000n // per-second rate (1e18 precision)
@@ -122,7 +121,6 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
             `OkuDollar ${label}`,
             "usdOku",
             adminAddr,
-            MIN_COLLATERAL_RATIO,
         ],
         { kind: "uups", unsafeAllow: ["constructor"] }
     )) as unknown as OkuDollar

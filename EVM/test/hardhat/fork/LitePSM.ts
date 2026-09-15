@@ -131,7 +131,7 @@ describe("LitePSM Scenarios", () => {
 
         okuUsd = await upgrades.deployProxy(
             new OkuDollar__factory(Frank),
-            [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
+            [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as OkuDollar
         await okuUsd.waitForDeployment()

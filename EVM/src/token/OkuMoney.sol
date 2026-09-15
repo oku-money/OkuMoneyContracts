@@ -340,7 +340,8 @@ contract OkuMoney is
         return _getOkuMoneyStorage().okuMLastAccrualTime;
     }
 
-    /// @notice Timestamp the active rate expires (0 = open-ended).
+    /// @notice Timestamp the active rate expires (0 = accrual halted; open-ended
+    ///         yielding rates are rejected — see {setOkuMYieldRate}).
     function okuMRateEnd() external view returns (uint256) {
         return _getOkuMoneyStorage().okuMRateEnd;
     }
@@ -359,8 +360,13 @@ contract OkuMoney is
     /// @param newRate Per-second rate, in [PRECISION, MAX_RATE]. PRECISION halts accrual.
     /// @param endTimestamp Unix timestamp the rate expires. Must be 0 when
     ///        `newRate == PRECISION` (halted); must be strictly future otherwise —
-    ///        every yielding rate carries a bounded window, so `okuMMultiplier`'s
-    ///        `rpow` compounding can never run over an unbounded elapsed time.
+    ///        every yielding rate carries a bounded window. An open-ended rate
+    ///        would only stop when the next transaction happens to land, and that
+    ///        transaction lands at different wall-clock times on different chains —
+    ///        reintroducing exactly the cross-chain divergence streaming accrual
+    ///        exists to eliminate (see EVM/README.md § Streaming Accrual). The
+    ///        `rpow` overflow bound (~30 years at MAX_RATE) is a secondary benefit
+    ///        of the same requirement, not the primary reason for it.
     /// @dev Snapshots the current multiplier into `okuMBaseMultiplier` and resets
     ///      `okuMLastAccrualTime` to now, so the curve is CONTINUOUS across the
     ///      write — there is no step, and nothing to sandwich. This is why the
@@ -375,6 +381,11 @@ contract OkuMoney is
     ///
     ///      OPERATIONAL NOTE: for rear-facing epochs, prefer {setNextOkuMYieldRate}
     ///      to pre-stage the successor — see EVM/README.md for the epoch pipeline.
+    ///      Under the base+settlement epoch model, prefer
+    ///      {setOkuMYieldRateWithSuccessor} instead of calling this and
+    ///      {setNextOkuMYieldRate} as two separate transactions — see that
+    ///      function's NatSpec for the atomicity hazard doing so separately
+    ///      creates.
     function setOkuMYieldRate(
         uint256 newRate,
         uint256 endTimestamp
@@ -382,6 +393,11 @@ contract OkuMoney is
         external
         onlyRole(Roles.OKUM_REBASER)
     {
+        _setOkuMYieldRate(newRate, endTimestamp);
+    }
+
+    /// @dev Shared body for {setOkuMYieldRate} and {setOkuMYieldRateWithSuccessor}.
+    function _setOkuMYieldRate(uint256 newRate, uint256 endTimestamp) private {
         if (newRate < Constants.PRECISION) revert InvalidRate();
         if (newRate > Constants.MAX_RATE) revert RateTooHigh();
         if (newRate == Constants.PRECISION) {
@@ -427,14 +443,25 @@ contract OkuMoney is
     }
 
     /// @dev Emits {IScaledUIAmount-UIMultiplierUpdateCancelled} if a successor rate
-    ///      is currently staged, using the schedule state as it stands BEFORE the
-    ///      caller mutates it. Shared by every writer that clears
-    ///      `okuMPendingRatePerSecond` ({setOkuMYieldRate}, {setOkuMMultiplier}) or
-    ///      replaces it ({setNextOkuMYieldRate}).
+    ///      is currently staged AND HAS NOT YET ACTIVATED, using the schedule state
+    ///      as it stands BEFORE the caller mutates it. Shared by every writer that
+    ///      clears `okuMPendingRatePerSecond` ({setOkuMYieldRate}, {setOkuMMultiplier})
+    ///      or replaces it ({setNextOkuMYieldRate}).
+    ///
+    ///      The `block.timestamp < rateEnd` guard matters once `rateEnd` has already
+    ///      elapsed: at that point the "pending" rate has already ACTIVATED (see
+    ///      {MathLib.computeMultiplier} branch 2) and this call is promoting or
+    ///      re-anchoring the schedule, not cancelling a still-future successor.
+    ///      Without this guard, a re-anchor performed any time after `rateEnd` would
+    ///      spuriously emit `UIMultiplierUpdateCancelled` every time — wrong
+    ///      ERC-8056 semantics, and misleading to any indexer or monitor that reads
+    ///      the event as "an operator changed their mind before the successor took
+    ///      effect."
     function _emitPendingRateCancelledIfArmed(OkuMoneyStorage storage $) private {
         uint256 pendingRate = $.okuMPendingRatePerSecond;
         uint256 rateEnd = $.okuMRateEnd;
         if (pendingRate <= Constants.PRECISION || rateEnd == 0) return;
+        if (block.timestamp >= rateEnd) return;
 
         uint256 cancelledMultiplier = MathLib.computeMultiplier(
             $.okuMBaseMultiplier,
@@ -476,6 +503,11 @@ contract OkuMoney is
         external
         onlyRole(Roles.OKUM_REBASER)
     {
+        _setNextOkuMYieldRate(newRate, pendingEndTimestamp);
+    }
+
+    /// @dev Shared body for {setNextOkuMYieldRate} and {setOkuMYieldRateWithSuccessor}.
+    function _setNextOkuMYieldRate(uint256 newRate, uint256 pendingEndTimestamp) private {
         if (newRate < Constants.PRECISION) revert InvalidRate();
         if (newRate > Constants.MAX_RATE) revert RateTooHigh();
 
@@ -492,6 +524,48 @@ contract OkuMoney is
         $.okuMPendingRateEnd = SafeCast.toUint48(pendingEndTimestamp);
 
         emit NextOkuMYieldRateSet(newRate, rateEnd, pendingEndTimestamp);
+    }
+
+    /// @notice Atomically re-anchor the active rate AND stage its successor in one
+    ///         transaction — {setOkuMYieldRate} followed by {setNextOkuMYieldRate}
+    ///         with no observable state in between.
+    /// @param newRate Per-second rate for the window starting now, in
+    ///        [PRECISION, MAX_RATE]. See {setOkuMYieldRate}.
+    /// @param endTimestamp Unix timestamp `newRate` expires. See {setOkuMYieldRate}.
+    /// @param nextRate Per-second rate for the successor window, in
+    ///        [PRECISION, MAX_RATE]. See {setNextOkuMYieldRate}.
+    /// @param nextEndTimestamp Unix timestamp `nextRate` itself expires; must be
+    ///        strictly after `endTimestamp`. See {setNextOkuMYieldRate}.
+    /// @dev MOTIVATION: the base+settlement epoch model (EVM/README.md § Rear-Facing
+    ///      Epoch Accounting) re-anchors to a new rate AND stages its successor at
+    ///      every epoch boundary — twice per epoch, forever. Doing that as two
+    ///      separate transactions has a real failure window: {setOkuMYieldRate}
+    ///      unconditionally clears any pending rate (see its NatSpec), so if the
+    ///      first transaction lands and the second fails or is delayed, the chain
+    ///      is left with NO successor staged. Accrual then silently halts at
+    ///      `endTimestamp` (see {MathLib.computeMultiplier}) until the operator
+    ///      notices and re-arms — exactly the accrual-gap failure mode
+    ///      `checkMultiplierDrift.ts` now treats as an error rather than a warning.
+    ///      This function closes that window entirely: both writes land in one
+    ///      transaction or neither does.
+    ///
+    ///      Pure composition of the two shared bodies — every check, event, and
+    ///      pause-gate behavior of {setOkuMYieldRate} and {setNextOkuMYieldRate}
+    ///      applies unchanged, in the same order, including that the first call's
+    ///      `_emitPendingRateCancelledIfArmed` observes the schedule as it stood
+    ///      before EITHER write (so a previously-armed successor is correctly
+    ///      reported cancelled, then the new one is armed by the second call).
+    function setOkuMYieldRateWithSuccessor(
+        uint256 newRate,
+        uint256 endTimestamp,
+        uint256 nextRate,
+        uint256 nextEndTimestamp
+    )
+        external
+        onlyRole(Roles.OKUM_REBASER)
+    {
+        _setOkuMYieldRate(newRate, endTimestamp);
+        _setNextOkuMYieldRate(nextRate, nextEndTimestamp);
     }
 
     /// @notice Emergency discrete override — re-anchors the accrual base.
@@ -548,12 +622,22 @@ contract OkuMoney is
     /// @inheritdoc IScaledUIAmountNewUIMultiplier
     /// @dev OkuMoney schedules a pending *rate*, not a pending *value*. This
     ///      returns the multiplier projected to be in effect at {effectiveAt}.
-    ///      When no window or no pending rate is armed, returns the current
-    ///      multiplier (nothing scheduled).
+    ///      When no window OR no pending rate is armed, returns the current
+    ///      multiplier (nothing scheduled) — this must check BOTH conditions:
+    ///      a bounded window with no successor staged is not a scheduled
+    ///      change, it's just the current rate continuing (fixed regression;
+    ///      an earlier version only checked `rateEnd`, so it reported a
+    ///      "scheduled" multiplier — really just the current rate's natural
+    ///      continuation to `rateEnd` — even when nothing was actually armed).
     function newUIMultiplier() external view returns (uint256) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 rateEnd = $.okuMRateEnd;
-        if (rateEnd == 0 || block.timestamp >= rateEnd) return okuMMultiplier();
+        if (
+            rateEnd == 0 || block.timestamp >= rateEnd
+                || $.okuMPendingRatePerSecond <= Constants.PRECISION
+        ) {
+            return okuMMultiplier();
+        }
         return MathLib.computeMultiplier(
             $.okuMBaseMultiplier,
             $.okuMRatePerSecond,
@@ -566,8 +650,22 @@ contract OkuMoney is
     }
 
     /// @inheritdoc IScaledUIAmountNewUIMultiplier
+    /// @dev Returns 0 ("nothing scheduled") unless a successor rate is
+    ///      actually armed AND its window hasn't already elapsed — matching
+    ///      {newUIMultiplier}'s condition exactly, so the two views never
+    ///      disagree about whether a change is scheduled (fixed regression;
+    ///      an earlier version returned `okuMRateEnd` whenever a bounded
+    ///      window existed, regardless of whether a successor was armed).
     function effectiveAt() external view returns (uint256) {
-        return _getOkuMoneyStorage().okuMRateEnd;
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        uint256 rateEnd = $.okuMRateEnd;
+        if (
+            rateEnd == 0 || block.timestamp >= rateEnd
+                || $.okuMPendingRatePerSecond <= Constants.PRECISION
+        ) {
+            return 0;
+        }
+        return rateEnd;
     }
 
     /// @inheritdoc IScaledUIAmountConversion

@@ -5,50 +5,45 @@
  * below current totalSupply. Cap raises are the typical operation; cap
  * lowers are only safe when totalSupply has room.
  *
- * See ../../README.md § Authority model.
+ * Usage (env vars — NOT `--flags`; see scripts/utils/cli.ts for why
+ * `hardhat run` rejects custom flags with HH305/HH310):
+ *   NETWORK=base MAX_SUPPLY=1000000000000000000000000000 \
+ *       npx hardhat run scripts/operator/setMaxSupply.ts --network base   # 1B OkuM (18-dec)
  *
- * Usage:
- *   NETWORK=base npx hardhat run scripts/operator/setMaxSupply.ts --network base \
- *       --maxSupply 1000000000000000000000000000      # 1B OkuM (18-dec)
- *   DRY_RUN=true MAX_SUPPLY=1000000000000000000000000000 NETWORK=base \
- *       npx hardhat run scripts/operator/setMaxSupply.ts --network base
- *
- * Environment / flags:
- *   --maxSupply=<wei> | MAX_SUPPLY    18-decimal OkuM amount (required)
+ * Environment:
+ *   MAX_SUPPLY=<wei>                  18-decimal OkuM amount (required)
  *   DRY_RUN=true                      simulate without submitting
- *   --yes-mainnet                     bypass mainnet guard
+ *   YES_MAINNET=true                  bypass mainnet guard
+ *
+ * Also exported as `runSetMaxSupply()` for in-process callers (e.g. the drill).
  */
 
 import { ethers } from "hardhat";
-import { Contract } from "ethers";
-import { resolveNetworkContext } from "../utils/networkContext";
+import { Contract, Signer } from "ethers";
+import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
+import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
 
-function parseArg(name: string): string | undefined {
-  const a = process.argv.find((x) => x.startsWith(`--${name}=`) || x.startsWith(`--${name} `));
-  return a ? a.split(/[= ]/)[1] : process.env[name.toUpperCase().replace(/-/g, "_")];
+export interface SetMaxSupplyResult {
+  previousMax: bigint;
+  newMax: bigint;
+  txHash?: string;
 }
 
-const YES_MAINNET = process.argv.includes("--yes-mainnet");
-const DRY_RUN = process.env.DRY_RUN === "true";
-
-async function main() {
-  const ctx = await resolveNetworkContext();
-  logger.header(`setMaxSupply (${ctx.networkName})`);
-  mainnetGuard(ctx.networkName, { yesMainnet: YES_MAINNET, dryRun: DRY_RUN });
-
-  const newMaxStr = parseArg("maxSupply") ?? parseArg("MAX_SUPPLY");
-  if (!newMaxStr) throw new Error("Required: --maxSupply=<18-dec OkuM> or MAX_SUPPLY env var");
-  const newMaxSupply = BigInt(newMaxStr);
-  if (newMaxSupply <= 0n) throw new Error("--maxSupply must be > 0");
+export async function runSetMaxSupply(
+  ctx: NetworkContext,
+  signer: Signer,
+  newMaxSupply: bigint,
+  dryRun = false
+): Promise<SetMaxSupplyResult> {
+  if (newMaxSupply <= 0n) throw new Error("newMaxSupply must be > 0");
 
   const okuMoneyAddr = loadAddress(ctx.bookKey, "OkuMoney");
   if (!okuMoneyAddr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
 
-  const [signer] = await ethers.getSigners();
   const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer) as Contract;
 
   const currentMax = await (okuMoney as any).maxSupply();
@@ -64,10 +59,9 @@ async function main() {
       `New maxSupply (${ethers.formatEther(newMaxSupply)}) < totalSupply (${ethers.formatEther(currentSupply)}) — would brick mint`
     );
   }
-
-  if (DRY_RUN) {
+  if (dryRun) {
     logger.success("DRY_RUN=true — not submitting");
-    return;
+    return { previousMax: currentMax, newMax: currentMax };
   }
 
   const tx = await (okuMoney as any).setMaxSupply(newMaxSupply);
@@ -76,11 +70,19 @@ async function main() {
 
   const confirmed = await (okuMoney as any).maxSupply();
   logger.success(`Confirmed maxSupply: ${ethers.formatEther(confirmed)} OkuM`);
+  return { previousMax: currentMax, newMax: confirmed, txHash: receipt.hash };
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((e) => {
-    logger.error(e.message ?? String(e));
-    process.exit(1);
+if (require.main === module) {
+  runMain(async () => {
+    const ctx = await resolveNetworkContext();
+    logger.header(`setMaxSupply (${ctx.networkName})`);
+    mainnetGuard(ctx.networkName, { yesMainnet: isYesMainnet(), dryRun: isDryRun() });
+
+    const newMaxStr = parseArg("maxSupply");
+    if (!newMaxStr) throw new Error("Required: --maxSupply=<18-dec OkuM>");
+
+    const [signer] = await ethers.getSigners();
+    await runSetMaxSupply(ctx, signer, BigInt(newMaxStr), isDryRun());
   });
+}

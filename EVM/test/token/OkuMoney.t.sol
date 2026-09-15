@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {
@@ -763,6 +764,138 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.uiMultiplier(), okuMoney.okuMMultiplier());
     }
 
+    // ============ ERC-8056 value surface (previously zero coverage) ============
+
+    /// @notice REGRESSION: with a bounded active window but NO successor
+    ///         armed, effectiveAt() must return 0 ("nothing scheduled") — not
+    ///         okuMRateEnd. Before the fix, this returned the active window's
+    ///         end timestamp even with nothing staged, falsely signaling a
+    ///         scheduled change to any indexer/UI reading the ERC-8056 surface.
+    function test_EffectiveAt_ReturnsZero_WhenNoSuccessorArmed() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
+
+        assertEq(okuMoney.effectiveAt(), 0, "no successor armed -> nothing scheduled");
+    }
+
+    /// @notice effectiveAt() returns the active window's end ONLY once a
+    ///         successor is actually staged via setNextOkuMYieldRate.
+    function test_EffectiveAt_ReturnsRateEnd_WhenSuccessorArmed() public {
+        uint256 endTime = block.timestamp + 60 days;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
+        vm.prank(rebaser);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
+
+        assertEq(
+            okuMoney.effectiveAt(), endTime, "successor armed -> reports the activation timestamp"
+        );
+    }
+
+    /// @notice effectiveAt() returns 0 when accrual is halted (rateEnd == 0).
+    function test_EffectiveAt_ReturnsZero_WhenHalted() public view {
+        assertEq(okuMoney.effectiveAt(), 0, "halted at init -> nothing scheduled");
+    }
+
+    /// @notice effectiveAt() returns 0 once the active window has already
+    ///         elapsed, even if a successor WAS armed — the successor has
+    ///         ACTIVATED by then (it's the current rate now), not "scheduled".
+    function test_EffectiveAt_ReturnsZero_AfterWindowElapsed() public {
+        uint256 endTime = block.timestamp + 60 days;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
+        vm.prank(rebaser);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
+
+        vm.warp(endTime + 1);
+        assertEq(okuMoney.effectiveAt(), 0, "successor already activated -> nothing PENDING");
+    }
+
+    /// @notice REGRESSION companion to effectiveAt(): newUIMultiplier() must
+    ///         equal the current uiMultiplier() (not a fabricated projection)
+    ///         whenever effectiveAt() reports nothing scheduled.
+    function test_NewUIMultiplier_EqualsCurrent_WhenNoSuccessorArmed() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
+        vm.warp(block.timestamp + 10 days);
+
+        assertEq(okuMoney.newUIMultiplier(), okuMoney.uiMultiplier());
+    }
+
+    /// @notice newUIMultiplier() projects the multiplier value AT the
+    ///         successor's activation instant when one IS armed.
+    function test_NewUIMultiplier_ProjectsValueAtActivation_WhenSuccessorArmed() public {
+        uint256 endTime = block.timestamp + 60 days;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
+        vm.prank(rebaser);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
+
+        uint256 projected = okuMoney.newUIMultiplier();
+        vm.warp(endTime);
+        assertEq(
+            projected,
+            okuMoney.okuMMultiplier(),
+            "projection must match the value actually reached at activation"
+        );
+    }
+
+    /// @notice toUIAmount / fromUIAmount are exact inverses at a non-trivial
+    ///         multiplier, and both delegate to okuMMultiplier() correctly.
+    function test_ToUIAmount_FromUIAmount_RoundTrip() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
+        vm.warp(block.timestamp + 30 days);
+
+        uint256 rawAmount = 12_345e18;
+        uint256 uiAmount = okuMoney.toUIAmount(rawAmount);
+        assertEq(uiAmount, (rawAmount * okuMoney.okuMMultiplier()) / PRECISION);
+        assertEq(
+            okuMoney.fromUIAmount(uiAmount),
+            rawAmount,
+            "floor rounding round-trips exactly at these magnitudes"
+        );
+    }
+
+    /// @notice toUIAmount(0) == 0 and fromUIAmount(0) == 0 (no division-by-zero
+    ///         or off-by-one at the boundary).
+    function test_ToUIAmount_FromUIAmount_ZeroAmount() public view {
+        assertEq(okuMoney.toUIAmount(0), 0);
+        assertEq(okuMoney.fromUIAmount(0), 0);
+    }
+
+    /// @notice balanceOfUI scales an account's raw balance() by the current
+    ///         multiplier, exactly matching toUIAmount(balanceOf(account)).
+    function test_BalanceOfUI_MatchesToUIAmountOfBalance() public {
+        _mintOkuMoney(user1, 5000e18);
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
+        vm.warp(block.timestamp + 30 days);
+
+        assertGt(
+            okuMoney.balanceOf(user1),
+            0,
+            "test fixture must fund user1 for this assertion to be meaningful"
+        );
+        assertEq(okuMoney.balanceOfUI(user1), okuMoney.toUIAmount(okuMoney.balanceOf(user1)));
+    }
+
+    /// @notice totalSupplyUI scales totalSupply() by the current multiplier,
+    ///         exactly matching toUIAmount(totalSupply()).
+    function test_TotalSupplyUI_MatchesToUIAmountOfTotalSupply() public {
+        _mintOkuMoney(user1, 5000e18);
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
+        vm.warp(block.timestamp + 30 days);
+
+        assertGt(
+            okuMoney.totalSupply(),
+            0,
+            "test fixture must have non-zero supply for this assertion to be meaningful"
+        );
+        assertEq(okuMoney.totalSupplyUI(), okuMoney.toUIAmount(okuMoney.totalSupply()));
+    }
+
     /// @notice Regression: staging a successor via `setNextOkuMYieldRate`, then
     ///         overwriting the schedule with a fresh `setOkuMYieldRate` call, must
     ///         emit `UIMultiplierUpdateCancelled` for the superseded successor.
@@ -794,6 +927,187 @@ contract OkuMoneyTest is BaseTest {
 
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
+    }
+
+    /// @notice Regression: re-anchoring via `setOkuMYieldRate` AFTER the staged
+    ///         successor's `rateEnd` has already elapsed must NOT emit
+    ///         `UIMultiplierUpdateCancelled` — the successor has already ACTIVATED
+    ///         by that point (see {MathLib.computeMultiplier} branch 2), so this is
+    ///         a promotion/re-anchor, not a cancellation of a still-future rate.
+    ///         Before the `block.timestamp < rateEnd` guard was added, this call
+    ///         spuriously emitted the cancellation event every single epoch under a
+    ///         fixed-epoch operating model — wrong ERC-8056 semantics and a false
+    ///         signal to any indexer/monitor reading the event stream.
+    function test_SetOkuMYieldRate_DoesNotEmitCancelledForAlreadyActivatedSuccessor() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
+        vm.prank(rebaser);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
+
+        // Warp PAST rateEnd: the staged successor is now the active, accruing
+        // rate (per computeMultiplier branch 2), not a pending future one.
+        vm.warp(endTime + 1);
+
+        vm.recordLogs();
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 3e10, block.timestamp + 90 days);
+
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        bytes32 cancelledTopic = keccak256("UIMultiplierUpdateCancelled(uint256,uint256)");
+        for (uint256 i = 0; i < entries.length; i++) {
+            assertTrue(
+                entries[i].topics[0] != cancelledTopic,
+                "UIMultiplierUpdateCancelled must not fire for an already-activated successor"
+            );
+        }
+    }
+
+    // ============ setOkuMYieldRateWithSuccessor ============
+
+    /// @notice Baseline: the combined call produces IDENTICAL state to calling
+    ///         setOkuMYieldRate then setNextOkuMYieldRate as two transactions.
+    function test_SetOkuMYieldRateWithSuccessor_MatchesTwoSeparateCalls() public {
+        uint256 endTime = block.timestamp + 30 days;
+        uint256 nextEnd = endTime + 30 days;
+
+        // Reference: two separate calls, on a fork of state via snapshot.
+        uint256 snapshotId = vm.snapshotState();
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
+        vm.prank(rebaser);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6, nextEnd);
+        uint256 refRate = okuMoney.okuMRatePerSecond();
+        uint256 refRateEnd = okuMoney.okuMRateEnd();
+        uint256 refPending = okuMoney.okuMPendingRatePerSecond();
+        uint256 refPendingEnd = okuMoney.okuMPendingRateEnd();
+        uint256 refMultiplier = okuMoney.okuMMultiplier();
+        vm.revertToState(snapshotId);
+
+        // Combined call, from identical starting state.
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            PRECISION + 1393e6, endTime, PRECISION + 2000e6, nextEnd
+        );
+
+        assertEq(okuMoney.okuMRatePerSecond(), refRate, "active rate matches");
+        assertEq(okuMoney.okuMRateEnd(), refRateEnd, "rateEnd matches");
+        assertEq(okuMoney.okuMPendingRatePerSecond(), refPending, "pending rate matches");
+        assertEq(okuMoney.okuMPendingRateEnd(), refPendingEnd, "pendingRateEnd matches");
+        assertEq(okuMoney.okuMMultiplier(), refMultiplier, "multiplier matches");
+    }
+
+    /// @notice The successor activates with no transaction, identically to the
+    ///         two-call path — the combined function doesn't change that guarantee.
+    function test_SetOkuMYieldRateWithSuccessor_SuccessorActivatesWithoutTransaction() public {
+        uint256 endTime = block.timestamp + 30 days;
+        uint256 nextEnd = endTime + 30 days;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            PRECISION + 1393e6, endTime, PRECISION + 2000e6, nextEnd
+        );
+
+        vm.warp(endTime);
+        uint256 atBoundary = okuMoney.okuMMultiplier();
+        vm.warp(endTime + 30 days);
+
+        assertGt(okuMoney.okuMMultiplier(), atBoundary, "successor accrued with no tx");
+    }
+
+    /// @notice Regression: this is the atomicity hazard the function exists to close.
+    ///         Calling setOkuMYieldRate alone (the first half of the old two-tx
+    ///         pattern) leaves NO successor armed — accrual halts at endTime with
+    ///         nothing staged, until a human notices. setOkuMYieldRateWithSuccessor
+    ///         must never leave the schedule in this state after a successful call.
+    function test_SetOkuMYieldRateWithSuccessor_NeverLeavesNoSuccessorArmed() public {
+        uint256 endTime = block.timestamp + 30 days;
+        uint256 nextEnd = endTime + 30 days;
+
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            PRECISION + 1393e6, endTime, PRECISION + 2000e6, nextEnd
+        );
+
+        // Both halves landed: a successor IS armed (in contrast to the bare
+        // setOkuMYieldRate path, where okuMPendingRatePerSecond would be PRECISION
+        // / "none armed" until a second transaction lands).
+        assertGt(okuMoney.okuMPendingRatePerSecond(), PRECISION, "successor is armed");
+        assertEq(okuMoney.okuMPendingRateEnd(), nextEnd, "successor window recorded");
+    }
+
+    /// @notice Reverts propagate from the FIRST half (active-rate validation) exactly
+    ///         as setOkuMYieldRate alone would, with the second half's writes never
+    ///         applied (state fully reverts atomically on any failure).
+    function test_SetOkuMYieldRateWithSuccessor_RevertsFromFirstHalfLeavesStateUnchanged() public {
+        uint256 endTime = block.timestamp + 30 days;
+        uint256 nextEnd = endTime + 30 days;
+
+        uint256 rateBefore = okuMoney.okuMRatePerSecond();
+        uint256 pendingBefore = okuMoney.okuMPendingRatePerSecond();
+
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.RateTooHigh.selector);
+        okuMoney.setOkuMYieldRateWithSuccessor(MAX_RATE + 1, endTime, PRECISION + 2000e6, nextEnd);
+
+        assertEq(okuMoney.okuMRatePerSecond(), rateBefore, "active rate unchanged after revert");
+        assertEq(
+            okuMoney.okuMPendingRatePerSecond(),
+            pendingBefore,
+            "pending rate unchanged after revert"
+        );
+    }
+
+    /// @notice Reverts propagate from the SECOND half (successor validation) too,
+    ///         and roll back the FIRST half's writes — no partial application.
+    function test_SetOkuMYieldRateWithSuccessor_RevertsFromSecondHalfRollsBackFirstHalf() public {
+        uint256 endTime = block.timestamp + 30 days;
+        uint256 rateBefore = okuMoney.okuMRatePerSecond();
+        uint256 rateEndBefore = okuMoney.okuMRateEnd();
+
+        // nextEndTimestamp <= endTimestamp violates PendingEndNotAfterRateEnd —
+        // the FIRST half (setOkuMYieldRate's body) would otherwise have succeeded
+        // in isolation.
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.PendingEndNotAfterRateEnd.selector);
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            PRECISION + 1393e6, endTime, PRECISION + 2000e6, endTime
+        );
+
+        assertEq(okuMoney.okuMRatePerSecond(), rateBefore, "first half's rate write rolled back");
+        assertEq(okuMoney.okuMRateEnd(), rateEndBefore, "first half's rateEnd write rolled back");
+    }
+
+    /// @notice A previously-armed successor is correctly reported cancelled when
+    ///         superseded via the combined call, exactly as it would be via
+    ///         setOkuMYieldRate alone — the shared _emitPendingRateCancelledIfArmed
+    ///         path observes pre-mutation state regardless of which entry point
+    ///         invoked it.
+    function test_SetOkuMYieldRateWithSuccessor_EmitsCancelledForSupersededPendingRate() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
+        vm.prank(rebaser);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
+
+        vm.expectEmit(false, false, false, false);
+        emit IScaledUIAmount.UIMultiplierUpdateCancelled(0, 0);
+
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            PRECISION + 3e10,
+            block.timestamp + 90 days,
+            PRECISION + 4e10,
+            block.timestamp + 120 days
+        );
+    }
+
+    /// @notice Only OKUM_REBASER may call the combined function.
+    function test_SetOkuMYieldRateWithSuccessor_RevertsIfNotRebaser() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.expectRevert();
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            PRECISION + 1e10, endTime, PRECISION + 2e10, endTime + 30 days
+        );
     }
 
     /// @dev Reachable simply from the default (halted) post-initialize state — under

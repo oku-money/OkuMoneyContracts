@@ -598,7 +598,9 @@ on-chain bridge.
 >
 > Per-chain working address book is at
 > [`EVM/scripts/config/addresses.json`](EVM/scripts/config/addresses.json)
-> (live `<chain>` keys + `fork:<chain>` namespaces for local-fork runs).
+> (tracked, live `<chain>` keys only). Local-fork runs write `fork:<chain>`
+> entries to the gitignored `EVM/scripts/config/addresses.local.json`, so
+> ephemeral fork addresses never dirty the tracked file.
 
 ### Prerequisites
 
@@ -648,8 +650,9 @@ hh run scripts/test/test-onchain.ts --network localhost
 Deploys MockUSDC, OkuMoney, OkuDollar, RedemptionQueue, LitePSM;
 configures all roles + minter allowances (LitePSM + RedemptionQueue
 hold `OKUM_MINTER` / `OKUM_BURNER`); verifies deployment state.
-Fork-deployed addresses land under `addresses.json["fork:<chain>"]`
-so they never collide with live entries.
+Fork-deployed addresses land under `fork:<chain>` in the gitignored
+`addresses.local.json`, so they never collide with live entries or
+dirty the tracked address book.
 
 **SVM local fork (Surfpool):**
 

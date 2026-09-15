@@ -32,6 +32,9 @@ export function mainnetGuard(networkName: string, opts: GuardOptions = {}): void
     return;
   }
   throw new Error(
-    `Refusing to broadcast on ${networkName}. Pass --yes-mainnet to confirm, or set DRY_RUN=true.`
+    `Refusing to broadcast on ${networkName}. Set YES_MAINNET=true to confirm, ` +
+      `or DRY_RUN=true to simulate.\n` +
+      `  (Use the env var, not --yes-mainnet: \`hardhat run\` rejects unknown ` +
+      `CLI flags with HH305 before the script ever runs.)`
   );
 }

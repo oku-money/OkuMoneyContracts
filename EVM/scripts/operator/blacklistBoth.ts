@@ -8,42 +8,44 @@
  * The role hash is shared but role grants are per-contract: the signer must
  * already hold the role on EACH contract. See scripts/operator/grantRoles*.ts.
  *
- * Usage:
- *   NETWORK=base npx hardhat run scripts/operator/blacklistBoth.ts --network base \
- *       --account 0xBadActor --action blacklist
- *   NETWORK=base npx hardhat run scripts/operator/blacklistBoth.ts --network base \
- *       --account 0xRehabilitated --action unblacklist
- *   DRY_RUN=true ACCOUNT=0xBadActor ACTION=blacklist NETWORK=base npx hardhat run ...
+ * Usage (env vars — NOT `--flags`; see scripts/utils/cli.ts for why
+ * `hardhat run` rejects custom flags with HH305/HH310):
+ *   NETWORK=base ACCOUNT=0xBadActor ACTION=blacklist \
+ *       npx hardhat run scripts/operator/blacklistBoth.ts --network base
+ *   NETWORK=base ACCOUNT=0xRehabilitated ACTION=unblacklist \
+ *       npx hardhat run scripts/operator/blacklistBoth.ts --network base
  *
- * Environment / flags:
- *   --account=0x... | ACCOUNT       address to (un)blacklist (required)
- *   --action=blacklist|unblacklist | ACTION
- *                                   default: blacklist
- *   DRY_RUN=true                    simulate without submitting
- *   --yes-mainnet                   bypass mainnet guard
+ * Environment:
+ *   ACCOUNT=0x...                  address to (un)blacklist (required)
+ *   ACTION=blacklist|unblacklist   default: blacklist
+ *   DRY_RUN=true                   simulate without submitting
+ *   YES_MAINNET=true               bypass mainnet guard
+ *
+ * Also exported as `runBlacklistBoth()` for in-process callers (e.g. the drill).
  */
 
 import { ethers } from "hardhat";
-import { isAddress, Contract } from "ethers";
-import { resolveNetworkContext } from "../utils/networkContext";
+import { isAddress, Contract, Signer } from "ethers";
+import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
+import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
 
-function parseArg(name: string): string | undefined {
-  const a = process.argv.find((x) => x.startsWith(`--${name}=`) || x.startsWith(`--${name} `));
-  return a ? a.split(/[= ]/)[1] : process.env[name.toUpperCase().replace(/-/g, "_")];
+export type BlacklistAction = "blacklist" | "unblacklist";
+
+export interface BlacklistBothResult {
+  okuMoneyState: boolean;
+  okuDollarState: boolean;
 }
-
-const YES_MAINNET = process.argv.includes("--yes-mainnet");
-const DRY_RUN = process.env.DRY_RUN === "true";
 
 async function applyOne(
   label: string,
   contract: Contract,
   account: string,
-  action: "blacklist" | "unblacklist"
+  action: BlacklistAction,
+  dryRun: boolean
 ): Promise<void> {
   // Idempotency: the underlying contracts revert with AlreadyBlacklisted /
   // NotBlacklisted on duplicate calls. Skip-with-log instead of letting the
@@ -58,7 +60,7 @@ async function applyOne(
     logger.info(`  [${label}] not blacklisted — skipping`);
     return;
   }
-  if (DRY_RUN) {
+  if (dryRun) {
     logger.info(`  [${label}] [dry-run] WOULD ${action}`);
     return;
   }
@@ -69,27 +71,20 @@ async function applyOne(
   logger.success(`  [${label}] ${action} tx: ${receipt.hash}`);
 }
 
-async function main() {
-  const ctx = await resolveNetworkContext();
-  logger.header(`blacklistBoth (${ctx.networkName})`);
-  mainnetGuard(ctx.networkName, { yesMainnet: YES_MAINNET, dryRun: DRY_RUN });
-
-  const account = parseArg("account");
-  if (!account || !isAddress(account)) {
-    throw new Error("Required: --account=<address> or ACCOUNT env var");
-  }
-  const actionRaw = (parseArg("action") ?? "blacklist").toLowerCase();
-  if (actionRaw !== "blacklist" && actionRaw !== "unblacklist") {
-    throw new Error("--action must be 'blacklist' or 'unblacklist'");
-  }
-  const action = actionRaw as "blacklist" | "unblacklist";
+export async function runBlacklistBoth(
+  ctx: NetworkContext,
+  signer: Signer,
+  account: string,
+  action: BlacklistAction,
+  dryRun = false
+): Promise<BlacklistBothResult> {
+  if (!isAddress(account)) throw new Error(`Invalid account: ${account}`);
 
   const okuMoneyAddr = loadAddress(ctx.bookKey, "OkuMoney");
   const okuDollarAddr = loadAddress(ctx.bookKey, "OkuDollar");
   if (!okuMoneyAddr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
   if (!okuDollarAddr) throw new Error(`Missing OkuDollar in address book for ${ctx.bookKey}`);
 
-  const [signer] = await ethers.getSigners();
   const signerAddr = await signer.getAddress();
   const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer) as Contract;
   const okuDollar = (await getDeployedContract("OkuDollar", okuDollarAddr)).connect(signer) as Contract;
@@ -100,26 +95,39 @@ async function main() {
   logger.info(`OkuMoney:  ${okuMoneyAddr}`);
   logger.info(`OkuDollar: ${okuDollarAddr}`);
 
-  await applyOne("OkuMoney", okuMoney, account, action);
-  await applyOne("OkuDollar", okuDollar, account, action);
+  await applyOne("OkuMoney", okuMoney, account, action, dryRun);
+  await applyOne("OkuDollar", okuDollar, account, action, dryRun);
 
-  // Post-state verification — read each side and ensure both match the target.
   const okuMoneyState: boolean = await (okuMoney as any).isBlacklisted(account);
   const okuDollarState: boolean = await (okuDollar as any).isBlacklisted(account);
   const expected = action === "blacklist";
   logger.info(`Post-state OkuMoney.isBlacklisted:  ${okuMoneyState}`);
   logger.info(`Post-state OkuDollar.isBlacklisted: ${okuDollarState}`);
-  if (!DRY_RUN && (okuMoneyState !== expected || okuDollarState !== expected)) {
+  if (!dryRun && (okuMoneyState !== expected || okuDollarState !== expected)) {
     throw new Error(
       `Post-state mismatch: OkuMoney=${okuMoneyState}, OkuDollar=${okuDollarState}, expected=${expected}`
     );
   }
   logger.success(`Done — both contracts in sync (isBlacklisted=${expected})`);
+  return { okuMoneyState, okuDollarState };
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((e) => {
-    logger.error(e.message ?? String(e));
-    process.exit(1);
+if (require.main === module) {
+  runMain(async () => {
+    const ctx = await resolveNetworkContext();
+    logger.header(`blacklistBoth (${ctx.networkName})`);
+    mainnetGuard(ctx.networkName, { yesMainnet: isYesMainnet(), dryRun: isDryRun() });
+
+    const account = parseArg("account");
+    if (!account || !isAddress(account)) {
+      throw new Error("Required: --account=<address> or ACCOUNT env var");
+    }
+    const actionRaw = (parseArg("action") ?? "blacklist").toLowerCase();
+    if (actionRaw !== "blacklist" && actionRaw !== "unblacklist") {
+      throw new Error("--action must be 'blacklist' or 'unblacklist'");
+    }
+
+    const [signer] = await ethers.getSigners();
+    await runBlacklistBoth(ctx, signer, account, actionRaw as BlacklistAction, isDryRun());
   });
+}

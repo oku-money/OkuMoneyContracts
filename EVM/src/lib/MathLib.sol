@@ -68,13 +68,17 @@ library MathLib {
 
     /**
      * @notice Compound `base` by `rate^elapsed`, capped at {Constants.MAX_MULTIPLIER}.
-     * @dev Identity when `elapsed == 0`. The `MAX_MULTIPLIER` cap only bounds the
-     *      OUTPUT — it cannot prevent `rpow` from reverting internally on a huge
-     *      `elapsed` (at `MAX_RATE`, `rpow` itself overflows past ~30 years).
-     *      Overflow safety therefore depends on every caller bounding `elapsed`,
-     *      which {computeMultiplier} does via the mandatory rate-window
-     *      timestamps enforced in `OkuMoney.setOkuMYieldRate` /
-     *      `setNextOkuMYieldRate` (every yielding rate carries a bounded window).
+     * @dev Identity when `elapsed == 0`. Every caller bounds `elapsed` via the
+     *      mandatory rate-window timestamps enforced in `OkuMoney.setOkuMYieldRate` /
+     *      `setNextOkuMYieldRate` — every yielding rate carries a bounded window.
+     *      That requirement exists primarily so an open-ended rate can never end
+     *      at a transaction-dependent, per-chain moment (which would reintroduce
+     *      the cross-chain divergence streaming accrual exists to eliminate — see
+     *      EVM/README.md § Streaming Accrual). A secondary benefit of the same
+     *      bound: the `MAX_MULTIPLIER` cap only bounds the OUTPUT — it cannot
+     *      prevent `rpow` from reverting internally on a huge `elapsed` (at
+     *      `MAX_RATE`, `rpow` itself overflows past ~30 years) — so the mandatory
+     *      window also keeps `rpow` in its safe range.
      * @param base Starting multiplier (PRECISION-scaled)
      * @param rate Per-second rate (PRECISION = no yield)
      * @param elapsed Seconds to compound over

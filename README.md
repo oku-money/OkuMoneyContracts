@@ -126,7 +126,7 @@ multiplier to a value that already accounts for the protocol take).
 │  ┌────────────────────────────────────────────────────┐         │
 │  │  lite-psm (BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCG…) │         │
 │  │  ─ mint_oku_m / redeem_oku_m (buffer-only)         │         │
-│  │  ─ set_multiplier / distribute_yield               │         │
+│  │  ─ set_okum_yield_rate / _with_successor           │         │
 │  │  ─ mint_oku_m_direct / burn_oku_m_direct           │         │
 │  └────────────────────────────────────────────────────┘         │
 │                          │                                       │
@@ -166,11 +166,16 @@ parity.
   if executed in the same block as that override. OkuDollar has no
   multiplier of its own to update — `usdMultiplier()` reads OkuMoney's
   directly, so it inherits the same continuity and the same guard.
-- **SVM:** `set_multiplier()` / `distribute_yield()` on lite-psm still
-  write the multiplier in discrete ticks. Both set
-  `last_yield_distribution_slot`, and PSM operations revert if
-  executed in the same slot as an update. The lock auto-releases in
-  the next slot.
+- **SVM:** identical model. `lite-psm` computes its multiplier from
+  the same six-field rate schedule using a line-for-line port of
+  `MathLib.sol`, at the same `PRECISION = 1e18`, so both stacks return
+  bit-identical values from identical schedule state. As on EVM, only
+  the emergency override (`set_okum_multiplier`) stamps
+  `last_yield_distribution_slot`, and it also halts the schedule.
+  Wallet display is the one thing that still steps: Token-2022's
+  `ScaledUiAmount` extension cannot stream, so it is maintained as a
+  lagging, permissionlessly-cranked mirror that is always at or below
+  the canonical value — nothing prices against it.
 
 ---
 
@@ -320,22 +325,31 @@ to fund the queue, then `processQueue`.
 | Source redeem was queued | Don't mint on destination until USDC is in hand. Poll queue state every ~30 s; call `depositBuffer` + `processQueue` to accelerate. |
 | Orchestrator process crashes between legs | On restart, inspect orchestrator USDC + OkuM balances on both chains. Source USDC > expected float → leg-2 (dest mint) didn't run. Destination OkuM > 0 → leg-3 (forward to recipient) didn't run. All zero → verify on-chain event logs. **Orchestrator OkuM float must be zero between completed bridges**; non-zero for > 1 batch cycle indicates a stuck bridge. |
 
-#### Multiplier-tick sequencing across chains
+#### Schedule broadcast across chains
 
-The multiplier (`okuMMultiplier` EVM / `multiplier` SVM) is updated
-discretely by `OKUM_REBASER`. To prevent chain divergence from
-causing accounting errors:
+The multiplier is no longer "ticked" anywhere. `OKUM_REBASER`
+publishes a per-second rate and a bounded window, and every chain
+computes the same multiplier from it. The operational rules follow
+from that:
 
-1. Fire `setOkuMMultiplier` (EVM) / `set_multiplier` (SVM) on **all
-   chains in the same off-chain batch**, within one slot/block of
-   each other.
-2. If sequencing diverges, **per-bridge dollar value is still
-   conserved** — the PSM uses the current multiplier at redemption
-   time on source and at mint time on destination. The recipient
-   may receive a slightly different raw token amount; dollar value
-   is equivalent.
-3. After a price tick, wait one slot (SVM) / one block (EVM) before
-   bridging to avoid `YieldDistributionInProgress`.
+1. Broadcast **byte-identical integers** to every chain — EVM and SVM.
+   Derive the rate once and reuse it; never hand-enter it twice. This
+   is the only real failure mode left, and nothing on-chain can detect
+   it.
+2. **The broadcast is not time-critical.** A pre-staged successor
+   activates off an absolute timestamp with no transaction, so staging
+   may land on different chains hours or days apart and the handover is
+   still simultaneous to the second.
+3. If a broadcast is **missed entirely**, that chain's accrual HALTS at
+   `rateEnd` rather than diverging. Safe and recoverable — but silent,
+   so monitor for it (`admin:read-schedule` on SVM exits non-zero when
+   halted).
+4. Divergence is **one-way**: the multiplier is monotonic, so a chain
+   that ran hot cannot be corrected downward. The only remedy is to run
+   the laggards hot until they catch up.
+5. The "wait one slot/block after a price tick before bridging" rule is
+   **retired** — there is no tick. It applies only around the emergency
+   override, which still stamps the sandwich lock.
 
 #### Minter allowance rotation policy
 

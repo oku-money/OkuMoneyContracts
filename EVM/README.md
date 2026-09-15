@@ -1868,13 +1868,35 @@ schedule.
 that ran hot cannot be corrected downward — the only remedy is to run
 the laggards hot until they catch up.
 
-**This "no messaging needed" property holds across EVM chains only.**
-SVM's `lite-psm` still writes its multiplier in discrete ticks
-(`set_multiplier` / `distribute_yield`), not from this streaming rate
-schedule — porting SVM to the same model is tracked as an open item
-in `TRACKER.md`. Until then, EVM↔SVM multiplier agreement (where it
-matters, e.g. cross-stack bridge pricing) is an off-chain orchestrator
-responsibility like every other cross-chain invariant in v1.
+**This property now extends to SVM.** `lite-psm` has been ported to
+the same streaming rate schedule: `oku-shared/src/rate.rs` is a
+line-for-line port of `MathLib.sol`'s `rpow` / `compoundFor` /
+`computeMultiplier`, at the same `PRECISION = 1e18`, over a 256-bit
+`mul_div` that reproduces MakerDAO's half-up rounding exactly. SVM
+stores the same six schedule fields and activates a pre-staged
+successor off the same absolute `rateEnd`, so a schedule broadcast to
+every chain — EVM and SVM alike — yields the same multiplier at the
+same wall-clock second with no messaging.
+
+Two caveats specific to SVM:
+
+- **Wallet display still ticks.** Token-2022's `ScaledUiAmount`
+  extension is a step function and cannot stream, so the SVM
+  deployment maintains it as a lagging, permissionlessly-cranked
+  display mirror, always at or below the canonical value. Only the
+  *display* is discrete; nothing prices against it.
+- **`Clock::unix_timestamp` can lag wall clock.** Because the
+  multiplier is a pure function of that timestamp this is a
+  self-correcting lag rather than a permanent drift, but
+  `checkMultiplierDrift.ts` must compare at equal *chain* timestamps
+  rather than equal wall-clock instants or it will false-positive
+  against SVM.
+
+**Still not enforced on-chain, on either stack.** Bit-identical math
+removes the likeliest source of divergence; it does not detect one.
+The cross-language differential harness that would hold the three
+implementations (Solidity, Rust, TypeScript) honest is not yet built —
+tracked in `SVM/DECISIONS.md` D-05.
 
 ### 11. Known issues
 

@@ -598,29 +598,47 @@ entirely manual.
 monitor (extend `checkMultiplierDrift.ts` or a new script) and decide the
 response threshold/automation level (alert-only vs. auto-halt).
 
-### EVM/SVM yield-model divergence: SVM still ticks discretely `[SVM]`
+### EVM/SVM yield-model divergence — RESOLVED `[SVM]`
 
-EVM's `4626+8056` refactor moved OkuMoney to continuous streaming
-accrual (a per-second rate schedule computed on read, no discrete
-multiplier write) specifically to eliminate the MEV window around
-discrete multiplier ticks and to get cross-chain agreement "for free"
-(no messaging — every chain holding the same schedule returns the
-same value at the same wall-clock instant). SVM's `lite-psm` was
-**not** ported: it still writes the multiplier discretely via
-`set_multiplier` / `distribute_yield`, so the exact unfairness/MEV
-window the EVM refactor set out to remove still exists on SVM, and
-the "no messaging needed" cross-chain property only holds among EVM
-chains today. Porting SVM to the same rate-schedule model is
-complicated by Token-2022's `InterestBearingConfig` using a 365.24-day
-year (vs. EVM's 365-day protocol convention), already noted as a
-source of EVM/SVM parity friction elsewhere. See `EVM/README.md`
-§ Streaming Accrual and § Accepted Risks (10) for the EVM-side
-rationale and scope note.
+SVM's `lite-psm` has been ported to EVM's streaming rate-schedule
+model. The multiplier is no longer stored or bumped: it is computed on
+read from six schedule fields on `PsmConfig` plus
+`Clock::unix_timestamp`, via a line-for-line port of `MathLib.sol` in
+`crates/oku-shared/src/rate.rs`.
 
-**Follow-up required before this can be closed:** decide whether SVM
-gets the same streaming model or the divergence is accepted
-permanently; if accepted, state that explicitly in `SVM/README.md`
-rather than leaving it implicit.
+What this closed:
+
+- **The MEV window.** There is no longer a discrete tick to straddle,
+  which is what the EVM refactor set out to remove and what widening
+  the sandwich lock could never fix.
+- **The "no messaging" carve-out.** Both stacks now run the same
+  `rpow` at the same `PRECISION = 1e18` with the same half-up
+  rounding, so a schedule broadcast everywhere produces the same
+  multiplier at the same wall-clock second. The sandwich lock is
+  re-scoped to the emergency override only, which also retires the
+  "wait one slot after a price tick before bridging" rule.
+- **The 365.24-day friction.** Moot: Token-2022's
+  `InterestBearingConfig` is not used, so no token-program rate math
+  happens on our behalf. Both stacks consume the same derived
+  per-second integer under the same 365-day convention.
+
+`PRECISION` moved 1e9 → 1e18, which was forced rather than cosmetic —
+at 1e9 one ulp of a per-second rate is 3.2% APY, so the schedule was
+literally inexpressible.
+
+**What remains (see `SVM/DECISIONS.md`):**
+
+- **D-05** the cross-language differential harness (Solidity → JSON →
+  Rust/TS) is not built. Parity currently rests on review of the port
+  plus per-stack tests. This is the highest-value remaining item.
+- **D-03** `checkMultiplierDrift.ts` and `globalValue.ts` do not yet
+  include SVM. The latter matters economically: SVM supply is a real
+  term in the denominator of every derived rate, and omitting it
+  systematically over-pays yield.
+- **D-01** no `MAX_ACCRUAL_WINDOW` on either stack.
+- Wallet display remains a lagging staircase — unavoidable, since
+  `ScaledUiAmount` cannot stream and `InterestBearingConfig` is
+  mutually exclusive with it.
 
 ### SVM devnet needs a fresh re-deploy (not an in-place upgrade) `[SVM]`
 

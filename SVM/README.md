@@ -136,17 +136,25 @@ Wallets and explorers that support `ScaledUiAmount` render the
 scaled dollar-value balance automatically (e.g. 1 000 000 raw OkuM
 tokens at multiplier 1.05 displays as a "1.05" usdOku value — the
 mint's on-chain symbol is still OkuM; "usdOku" is the UI label for
-the scaled figure). The multiplier on the mint extension is the
-**single source of truth** — there is no `oku_m_price` PDA field or
-dual-write path.
+the scaled figure).
 
-**`read_multiplier()` helper and zero-init guard.** The helper at
-`lite-psm/src/helpers/scaled_ui.rs` reads the multiplier from the
-mint's `ScaledUiAmountConfig` extension via
-`get_extension::<ScaledUiAmountConfig>()`. Before `set_multiplier`
-has ever been called, the extension field is zero-initialized (f64
-`0.0`); the helper treats `0.0` as `1.0` to prevent division-by-zero
-in price-aware instructions.
+**The mint extension is NOT the source of truth.** It used to be. Since
+the streaming-accrual port it is a **write-only display mirror**: the
+program pushes values into it for wallets to render and never reads
+them back. The canonical multiplier is computed on read from the rate
+schedule on `PsmConfig` — see § Streaming accrual below.
+
+The reason is structural. `ScaledUiAmountConfig::current_multiplier()`
+is a step function with exactly one pre-armable future step, so it
+cannot represent a continuously-accruing value. The extension that
+*can* (`InterestBearingConfig`) is mutually exclusive with it on-chain
+(`spl-token-2022-interface` `extension/mod.rs:1359-1361`) and would
+cost the bounded rate window, the pre-staged successor, and the ability
+to re-anchor — three correctness properties traded for one cosmetic
+one.
+
+`helpers/scaled_ui.rs` and its `read_multiplier()` were deleted with
+the port, taking the zero-init edge case with them.
 
 **f64 precision characteristics.** The `ScaledUiAmountConfig`
 extension stores the multiplier as an IEEE 754 `f64`. f64 has ~15.9
@@ -156,10 +164,12 @@ precision. The `MAX_MULTIPLIER` constant documents the upper bound
 where precision degrades, but the practical operating range is well
 within f64's capabilities.
 
-**Discrete multiplier bumps.** The orchestrator calls
-`set_multiplier` to update the `ScaledUiAmountConfig` scalar. There
-is no continuous compounding — `ScaledUiAmount` stores a flat scalar,
-not a rate. Economic effect is identical between orchestrator calls.
+**Continuous accrual, discrete display.** The canonical multiplier
+compounds every second with no transactions at all. The display mirror
+is a staircase refreshed roughly every 60 seconds by a permissionless
+crank, always at or below the canonical value — so a redeem pays at
+least what the wallet showed. At 20% APY the under-read is about $0.35
+per $1,000,000.
 
 **DeFi compatible by construction.** Raw token amounts are static —
 AMMs, lending protocols, and orderbooks operate on raw balances that
@@ -168,8 +178,8 @@ derived from the `ScaledUiAmount` extension. Raydium CPMM/CLMM
 explicitly allow `ScaledUiAmount` tokens; Jupiter routes through
 them natively.
 
-**Single-slot yield distribution lock.** `set_multiplier()` and
-`distribute_yield()` set `last_yield_distribution_slot =
+**Single-slot sandwich lock.** Only `set_okum_multiplier()` (the
+emergency override) sets `last_yield_distribution_slot =
 Clock::get().slot`. PSM operations check `current_slot !=
 last_yield_distribution_slot` before executing. Self-fence prevents
 same-slot re-entry by the rebaser. Mirrors EVM's
@@ -210,7 +220,8 @@ programs/
       roles.rs                     # AuthorityRole enum (12 roles)
       constants.rs                 # Re-exports oku_shared::*
       helpers/
-        scaled_ui.rs               # read_multiplier() — reads ScaledUiAmountConfig extension from mint
+        multiplier.rs              # canonical multiplier — computed from the PsmConfig rate schedule
+        display_sync.rs            # write-only ScaledUiAmount display mirror (cosmetic)
         yield_lock.rs              # check_yield_lock (delegates to shared yield_lock_engaged)
         math.rs                    # Anchor-error-flavoured wrappers over oku_shared::math
       instructions/
@@ -225,7 +236,7 @@ programs/
                                    # set_direct_minter_allowance, set_direct_burner_allowance
         direct_mint.rs             # mint_oku_m_direct (bridge/fiat on-ramp)
         direct_burn.rs             # burn_oku_m_direct (bridge off-ramp)
-        yield_ops.rs               # set_multiplier, distribute_yield (CPI to Token-2022 UpdateMultiplier)
+        yield_ops.rs               # rate-schedule writers + emergency override + display crank
       contexts/                    # Per-instruction account contexts
 
 tests/
@@ -292,22 +303,45 @@ Operators keep the buffer topped up via `deposit_buffer` /
 
 ## Core operations
 
-### Yield (ScaledUiAmount multiplier)
+### Yield (streaming rate schedule)
 
 ```rust
-// Set the ScaledUiAmount multiplier on the OkuM mint — REBASER only, monotonic
-// CPIs into Token-2022 UpdateMultiplier
-pub fn set_multiplier(new_multiplier: f64)
+// Set the active per-second rate and its bounded window — REBASER only.
+// EVM: OkuMoney.setOkuMYieldRate
+pub fn set_okum_yield_rate(new_rate: u64, end_timestamp: i64)
 
-// Dollar-denominated yield distribution — REBASER only
-// Computes new multiplier from yield_amount and total supply, then CPIs UpdateMultiplier
-pub fn distribute_yield(yield_amount: u64)
+// Pre-stage the successor that takes over at `okum_rate_end` with NO
+// transaction at the boundary — REBASER only.
+// EVM: OkuMoney.setNextOkuMYieldRate
+pub fn set_next_okum_yield_rate(new_rate: u64, pending_end_timestamp: i64)
+
+// Both atomically. This is what the epoch orchestrator uses.
+// EVM: OkuMoney.setOkuMYieldRateWithSuccessor
+pub fn set_okum_yield_rate_with_successor(
+    new_rate: u64, end_timestamp: i64, next_rate: u64, next_end_timestamp: i64)
+
+// EMERGENCY ONLY: force the multiplier and halt the schedule — REBASER only.
+// The one instruction that produces a discrete jump, and therefore the only
+// one that stamps the sandwich lock.
+// EVM: OkuMoney.setOkuMMultiplier
+pub fn set_okum_multiplier(new_multiplier: u128)
+
+// Refresh the wallet display mirror. PERMISSIONLESS — the value written is
+// fully determined by on-chain state. No EVM counterpart.
+pub fn sync_display_multiplier()
 ```
 
-Both set `last_yield_distribution_slot = Clock::get().slot` for
-sandwich prevention, and self-fence to reject same-slot re-entry.
+Rates are WAD-scaled (1e18), identical to EVM. `distribute_yield` no
+longer exists: under rear-facing epochs the operator measures realised
+yield off-chain and publishes a *rate*, so there is no on-chain
+"distribute N dollars" primitive.
 
-The multiplier is read back from the mint via `read_multiplier()`
+Only `set_okum_multiplier` stamps `last_yield_distribution_slot`.
+Routine accrual produces no discrete jump to sandwich, and the display
+sync deliberately does not stamp it — doing so would make the PSM
+unavailable for one slot per sync interval for no security benefit.
+
+The multiplier is computed from the rate schedule via `helpers::multiplier`
 (in `helpers/scaled_ui.rs`), which calls
 `get_extension::<ScaledUiAmountConfig>()` on the mint account data.
 This is the only path for reading the current multiplier — there is
@@ -429,7 +463,7 @@ SVM-specific table:
 | `unpauser` | Cold Multisig | Clear `is_paused` | — |
 | `freezer` | Warm Multisig | CPI-freeze any OkuM ATA via Token-2022 freeze authority | Cannot drain or redirect frozen tokens. |
 | `unfreezer` | Cold Multisig | CPI-thaw a frozen ATA | — |
-| `rebaser` | Orchestrator (KMS) | Update ScaledUiAmount multiplier (non-decreasing) and call `distribute_yield` | Cannot decrease; capped at `MAX_MULTIPLIER`. Self-fenced (same-slot re-entry rejected). |
+| `rebaser` | Orchestrator (KMS) | Publish the rate schedule; emergency multiplier override | Rates must be >= PRECISION (monotonic) and <= `MAX_RATE`; yielding rates must carry a bounded future window. Override is strict-increase, capped at `MAX_MULTIPLIER`, and self-fenced. |
 | `buffer_depositor` | Orchestrator | Transfer USDC from caller's ATA into the PSM vault | Caller must hold USDC; no damage possible. |
 | `buffer_withdrawer` | Cold Multisig | Drain USDC from the PSM vault | Cannot withdraw more than the vault's current USDC balance. |
 | `cap_manager` | Cold Multisig | Set `max_supply` | Cannot set below current circulating supply. |
@@ -468,7 +502,9 @@ Full list (26 variants) in `programs/lite-psm/src/errors.rs`. Key errors:
 - `InsufficientBuffer` — PSM USDC vault can't cover a redeem or withdraw_buffer.
 - `ZeroOutput` — redeem output rounds down to zero.
 - `SlippageExceeded` — redeem output is below the caller's `min_usdc_out` floor.
-- `YieldTooSmall` — `distribute_yield` amount truncates to zero.
+- `InvalidRate` / `RateTooHigh` — rate outside `[PRECISION, MAX_RATE]`.
+- `EndTimestampInPast` / `EndTimestampNotAllowed` — window rails.
+- `NoRateEndSet` / `RateAlreadyExpired` / `PendingEndNotAfterRateEnd` — successor rails.
 - `Paused` — operation attempted while system is paused.
 - `Unauthorized` — caller lacks the required role.
 
@@ -564,25 +600,43 @@ make fetch-token-2022
 
 This downloads the mainnet Token-2022 `.so` and places it where
 bankrun can load it at test startup. Without this override,
-`set_multiplier` and `distribute_yield` tests will fail with an
+the streaming-accrual and display-mirror tests will fail with an
 "invalid instruction" error from the Token-2022 program.
 
-### ScaledUiAmount test suite
+### Streaming-accrual test suites
 
-The `tests/bankrun/scaled-ui-amount.ts` file contains 7 dedicated
-tests for ScaledUiAmount behaviour:
+`tests/bankrun/streaming-accrual.ts` (18 tests) covers the model:
 
-- Multiplier initialization (starts at 0.0, treated as 1.0)
-- `set_multiplier` updates the on-chain extension
-- `distribute_yield` computes and applies a new multiplier
-- Monotonicity enforcement (decrease rejected)
-- Yield-lock interaction with multiplier updates
-- `readMultiplierFromMint()` TS helper round-trip verification
+- The multiplier advances with **no transaction** as time passes
+- A pre-staged successor activates at `rateEnd` with **no transaction**
+- Accrual **halts** at `rateEnd` / `pendingRateEnd` when unattended —
+  a missed epoch stops paying rather than running on or diverging
+- Redeem payout tracks the streamed multiplier exactly
+- On-chain state matches the TypeScript mirror across both boundaries
+- Every write rail: sub-PRECISION rate, above `MAX_RATE`, yielding rate
+  without a window, halted rate with one, successor against an expired
+  or missing window, non-rebaser
+- Pause gate blocks rate increases but permits decreases and halts
+
+`tests/bankrun/display-mirror.ts` (8 tests) covers the mirror:
+
+- `display <= canonical` across a full sync interval
+- Permissionless cranking
+- The pre-armed step advancing with no further transaction
+- The sync NOT stamping the sandwich lock
+- The emergency override force-syncing, leaving no stale armed step
+
+`rate-over-time.ts` and `scaled-ui-amount.ts` were deleted as
+superseded. The former is worth noting: its central assertion was that
+wall-clock progression alone does *not* move the multiplier. That was
+correct for the discrete model and is now exactly backwards.
 
 The `readMultiplierFromMint()` helper in the test shared code reads
 the `ScaledUiAmountConfig` extension directly from a mint account's
 data, parsing the TLV structure to extract the f64 multiplier. This
-mirrors the on-chain `read_multiplier()` Rust helper.
+mirrors `ScaledUiAmountConfig::current_multiplier()`. For the CANONICAL
+value use `computeCanonicalMultiplier()`, which recomputes from the rate
+schedule via `scripts/utils/multiplier.ts`.
 
 ### Runner notes
 
@@ -597,7 +651,7 @@ window in `@solana/web3.js@1.x` and wall-clock waits for slot rollover.
 slot by 1 before submission. This handles two unrelated annoyances:
 
 - `check_yield_lock` rejects any op in the same slot as the last
-  `set_multiplier` / `distribute_yield` — without auto-bump, any
+  `set_okum_multiplier` — without auto-bump, any
   test ordering that follows a yield op hits `YieldDistributionInProgress`.
 - Bankrun caches identical-byte transactions and replays the prior
   result ("This transaction has already been processed") — auto-bump
@@ -724,8 +778,9 @@ All admin scripts live under `scripts/admin/`. Each:
 | `admin:set-direct-minter-allowance` / `admin:set-direct-burner-allowance` | `set_direct_minter_allowance` / `set_direct_burner_allowance` | `allowance_manager` |
 | `admin:mint-oku-m` / `admin:redeem-oku-m` | `mint_oku_m` / `redeem_oku_m` — standalone orchestrator bridge-leg CLIs | permissionless / caller |
 | `admin:mint-oku-m-direct` | `mint_oku_m_direct` — permissioned fiat on-ramp | `direct_minter` |
-| `admin:set-multiplier` | `set_multiplier` | `rebaser` (stamps yield-distribution slot) |
-| `admin:distribute-yield` | `distribute_yield` | `rebaser` |
+| `admin:set-yield-rate` | `set_okum_yield_rate` / `_next_` / `_with_successor` | `rebaser` |
+| `admin:read-schedule` | (read-only) | none — exits non-zero if accrual has HALTED |
+| `admin:sync-display` | `sync_display_multiplier` | none — permissionless |
 | `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |
 | `admin:deposit-buffer` / `admin:withdraw-buffer` | `deposit_buffer` / `withdraw_buffer` | `buffer_depositor` / `buffer_withdrawer` |
 | `admin:close-programs` | `solana program close` (BPF loader) — recover rent from stale program deployments. | BPF upgrade authority (deployer wallet) |
@@ -770,13 +825,15 @@ EVM stores `okumPrice` as a `uint256` in the PSM contract storage.
 SVM stores the multiplier as an `f64` in the Token-2022
 `ScaledUiAmountConfig` extension on the mint itself. There is no
 PsmConfig field for the price — the mint extension is the single
-source of truth. `read_multiplier()` reads it; `set_multiplier()`
-and `distribute_yield()` write it via CPI to the Token-2022 program.
+a WRITE-ONLY display mirror. The canonical multiplier is computed from
+the `PsmConfig` rate schedule; nothing reads the extension back.
 
 ### Rebasing model
 
 EVM `OkuMoney` accrues USD yield continuously between calls via
-`MathLib._rpow`. SVM uses discrete `set_multiplier` updates driven
+`MathLib.rpow`. SVM now uses the SAME `rpow`, ported line-for-line into
+`oku-shared/src/rate.rs` over a 256-bit `mul_div`, so both stacks return
+bit-identical multipliers from identical schedule state.
 by the orchestrator. Solana's Token-2022 `ScaledUiAmount` extension
 stores a flat scalar (no per-second compounding), so wallets cannot
 show continuously-growing balances. Discrete updates are
@@ -792,7 +849,6 @@ multiplier, wasting the sandwich-lock window for the entire
 block/slot.
 
 - EVM: `OkuMoney.distributeYield` reverts `YieldTooSmall()`.
-- SVM: `distribute_yield` reverts `LitePsmError::YieldTooSmall`.
 
 ### Pause-bypass deltas
 

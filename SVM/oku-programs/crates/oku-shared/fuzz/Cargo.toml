@@ -40,3 +40,21 @@ name = "mul_div_ceil"
 path = "fuzz_targets/mul_div_ceil.rs"
 test = false
 doc = false
+
+# --- streaming-accrual targets (added with the 1e18 / rate-schedule port) ---
+
+# The 256-bit WAD multiply-divide underneath every multiplier operation.
+# Checked against a 32-bit-limb oracle of deliberately different shape.
+[[bin]]
+name = "wad_mul_div"
+path = "fuzz_targets/wad_mul_div.rs"
+test = false
+doc = false
+
+# The streaming accrual function itself: monotonicity, clamping, bounded
+# overhang, and the never-panics property its EVM counterpart is fuzzed for.
+[[bin]]
+name = "compute_multiplier"
+path = "fuzz_targets/compute_multiplier.rs"
+test = false
+doc = false

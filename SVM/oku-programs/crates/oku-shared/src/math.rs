@@ -52,26 +52,37 @@ pub fn mul_div_floor(a: u64, b: u64, divisor: u64) -> Option<u64> {
 
 /// Convert OkuM raw amount → dollar value using a multiplier.
 ///
-/// Formula: `dollar_value = (raw_amount * multiplier) / PRECISION`.
+/// Formula: `dollar_value = floor(raw_amount * multiplier / PRECISION)`.
 ///
-/// Returns `None` if the intermediate `u128` product overflows or the
-/// result doesn't fit in `u64`. `PRECISION` is never zero so there's
-/// no division-by-zero path.
+/// `multiplier` is `u128` because at `PRECISION = 1e18` it ranges up to
+/// `MAX_MULTIPLIER = 1e24`, which does not fit `u64`. The product
+/// `u64 × 1e24 ≈ 1.8e43` does not fit `u128` either, so this routes through
+/// [`crate::wad::mul_div_wad_floor`] and its 256-bit intermediate.
+///
+/// Returns `None` if the result doesn't fit in `u64`. `PRECISION` is never
+/// zero so there's no division-by-zero path.
 #[inline]
-pub fn raw_to_dollars(raw_amount: u64, multiplier: u64) -> Option<u64> {
-    mul_div_floor(raw_amount, multiplier, PRECISION)
+pub fn raw_to_dollars(raw_amount: u64, multiplier: u128) -> Option<u64> {
+    let dollars = crate::wad::mul_div_wad_floor(raw_amount as u128, multiplier)?;
+    u64::try_from(dollars).ok()
 }
 
 /// Convert dollar value → OkuM raw amount using a multiplier.
 ///
-/// Formula: `raw_amount = (dollar_value * PRECISION) / multiplier`.
+/// Formula: `raw_amount = floor(dollar_value * PRECISION / multiplier)`.
 ///
-/// Returns `None` if the intermediate product overflows, the result
-/// doesn't fit in `u64`, OR if `multiplier == 0` (caller should reject
-/// before calling this).
+/// Unlike [`raw_to_dollars`] the divisor here is the multiplier (which can
+/// exceed `u64`), so the small-divisor long division in [`crate::wad`] does
+/// not apply. It does not need to: the numerator is `u64 × 1e18 ≤ 1.8e37`,
+/// comfortably inside `u128`. Bound proven by
+/// `wad::proofs::proof_narrow_path_safe_for_u64_times_precision`.
+///
+/// Returns `None` if the result doesn't fit in `u64`, OR if
+/// `multiplier == 0` (caller should reject before calling this).
 #[inline]
-pub fn dollars_to_raw(dollar_value: u64, multiplier: u64) -> Option<u64> {
-    mul_div_floor(dollar_value, PRECISION, multiplier)
+pub fn dollars_to_raw(dollar_value: u64, multiplier: u128) -> Option<u64> {
+    let raw = crate::wad::mul_div_floor_u128(dollar_value as u128, PRECISION, multiplier)?;
+    u64::try_from(raw).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -184,26 +195,25 @@ mod verification {
 
     /// Proof: at multiplier == PRECISION, output equals input (identity).
     ///
-    /// Domain bound: `amount ∈ [0, u16::MAX]` (= 65535).
+    /// Unbounded in `amount` — the 256-bit intermediate makes this hold for
+    /// the whole `u64` range, unlike the pre-1e18 version which needed a
+    /// `u16` bound to stay tractable.
     #[kani::proof]
     fn proof_raw_to_dollars_identity_at_precision() {
         let amount: u64 = kani::any();
-        kani::assume(amount <= u16::MAX as u64);
         let result = raw_to_dollars(amount, PRECISION);
         assert_eq!(result, Some(amount));
     }
 
-    /// Proof: consistent with mul_div_floor(amount, multiplier, PRECISION).
+    /// Proof: consistent with the underlying WAD primitive.
     #[kani::proof]
-    fn proof_raw_to_dollars_consistent_with_mul_div() {
+    fn proof_raw_to_dollars_consistent_with_wad() {
         let amount: u64 = kani::any();
-        let multiplier: u64 = kani::any();
-        kani::assume(amount <= u16::MAX as u64);
-        kani::assume(multiplier <= u16::MAX as u64);
-        assert_eq!(
-            raw_to_dollars(amount, multiplier),
-            mul_div_floor(amount, multiplier, PRECISION)
-        );
+        let multiplier: u128 = kani::any();
+        kani::assume(multiplier <= crate::constants::MAX_MULTIPLIER);
+        let via_wad = crate::wad::mul_div_wad_floor(amount as u128, multiplier)
+            .and_then(|v| u64::try_from(v).ok());
+        assert_eq!(raw_to_dollars(amount, multiplier), via_wad);
     }
 
     // -----------------------------------------------------------------------
@@ -223,10 +233,10 @@ mod verification {
     #[kani::proof]
     fn proof_dollars_to_raw_round_trip_monotone() {
         let dollar_value: u64 = kani::any();
-        let multiplier: u64 = kani::any();
+        let multiplier: u128 = kani::any();
         kani::assume(dollar_value <= u16::MAX as u64); // tight bound for CBMC
         kani::assume(multiplier > 0);
-        kani::assume(multiplier <= u16::MAX as u64);
+        kani::assume(multiplier <= crate::constants::MAX_MULTIPLIER);
 
         if let Some(raw) = dollars_to_raw(dollar_value, multiplier) {
             if let Some(dollars_back) = raw_to_dollars(raw, multiplier) {
@@ -309,15 +319,18 @@ mod verification {
 mod tests {
     use super::*;
 
+    /// `1.10` at WAD scale. The pre-1e18 tests used `1_100_000_000`; every
+    /// literal multiplier in this file had to be rescaled by 1e9.
+    const M_1_10: u128 = 1_100_000_000_000_000_000;
+    /// `1.05` at WAD scale.
+    const M_1_05: u128 = 1_050_000_000_000_000_000;
+
     #[test]
     fn mul_div_floor_basics() {
-        // 1.00 token at $1.10 = $1.10
-        assert_eq!(
-            mul_div_floor(1_000_000, 1_100_000_000, PRECISION),
-            Some(1_100_000)
-        );
-        // Floor rounding: 1 * 3 / 2 == 1, not 2.
+        // Generic u64 helper — unchanged by the WAD migration, still used for
+        // non-multiplier ratios. Floor rounding: 1 * 3 / 2 == 1, not 2.
         assert_eq!(mul_div_floor(1, 3, 2), Some(1));
+        assert_eq!(mul_div_floor(10, 10, 4), Some(25));
     }
 
     #[test]
@@ -335,12 +348,9 @@ mod tests {
         // At $1.00 price, 1 OkuM = $1.00
         assert_eq!(raw_to_dollars(1_000_000, PRECISION), Some(1_000_000));
         // At $1.10 price, 1 OkuM = $1.10
-        assert_eq!(raw_to_dollars(1_000_000, 1_100_000_000), Some(1_100_000));
+        assert_eq!(raw_to_dollars(1_000_000, M_1_10), Some(1_100_000));
         // At $1.05 price, 100 OkuM = $105.00
-        assert_eq!(
-            raw_to_dollars(100_000_000, 1_050_000_000),
-            Some(105_000_000)
-        );
+        assert_eq!(raw_to_dollars(100_000_000, M_1_05), Some(105_000_000));
     }
 
     #[test]
@@ -348,9 +358,50 @@ mod tests {
         // At $1.00 price, $1.00 = 1 OkuM
         assert_eq!(dollars_to_raw(1_000_000, PRECISION), Some(1_000_000));
         // At $1.10 price, $1.10 = 1 OkuM
-        assert_eq!(dollars_to_raw(1_100_000, 1_100_000_000), Some(1_000_000));
+        assert_eq!(dollars_to_raw(1_100_000, M_1_10), Some(1_000_000));
         // Zero price → None
         assert_eq!(dollars_to_raw(1_000_000, 0), None);
+    }
+
+    /// The whole point of the 256-bit intermediate: a large supply at a large
+    /// multiplier used to be unrepresentable. `1e15` raw ($1B at par) times a
+    /// 1e24 multiplier is ~1e39, past `u128::MAX`.
+    #[test]
+    fn raw_to_dollars_survives_the_old_overflow_region() {
+        let raw = 1_000_000_000_000_000u64; // 1e15 raw = $1B at par
+        let mult = 2 * PRECISION; // 2.0x
+        assert_eq!(raw_to_dollars(raw, mult), Some(2_000_000_000_000_000));
+        // And reports honestly when the *result* genuinely exceeds u64.
+        assert_eq!(raw_to_dollars(u64::MAX, crate::constants::MAX_MULTIPLIER), None);
+    }
+
+    /// Round-trip never gains value, and loses at most `ceil(m/PRECISION)+1`
+    /// units — the same bound the `dollars_to_raw` fuzz target asserts.
+    ///
+    /// Two chained floors are involved (`dollars→raw` then `raw→dollars`),
+    /// so the loss scales with the multiplier: at `m = 1.037` the bound is 2,
+    /// not 1. The direction is what matters — it must always favour the
+    /// protocol, never the caller.
+    #[test]
+    fn round_trip_never_gains_and_loses_within_bound() {
+        for mult in [
+            PRECISION,
+            1_037_419_283_746_192_837u128, // ~1.037x
+            2 * PRECISION,
+            1_000 * PRECISION,
+        ] {
+            let bound = mult.div_ceil(PRECISION) as u64 + 1;
+            for dollars in [1u64, 999, 1_000_000, 123_456_789, 999_999_999_999] {
+                let raw = dollars_to_raw(dollars, mult).unwrap();
+                let back = raw_to_dollars(raw, mult).unwrap();
+                assert!(back <= dollars, "round trip GAINED value: {back} > {dollars} at m={mult}");
+                assert!(
+                    dollars - back <= bound,
+                    "lost {} units at m={mult}, bound {bound}",
+                    dollars - back
+                );
+            }
+        }
     }
 
     #[test]

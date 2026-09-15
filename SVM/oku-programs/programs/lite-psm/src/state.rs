@@ -65,9 +65,65 @@ pub struct PsmConfig {
     /// Whether the PSM is paused
     pub is_paused: bool,
 
-    /// Solana slot of last yield distribution (sandwich prevention).
-    /// Operations like mint/redeem are blocked in the same slot as yield distribution.
+    /// Solana slot of the last EMERGENCY multiplier override
+    /// (`set_okum_multiplier`), for sandwich prevention. PSM operations are
+    /// blocked in the same slot.
+    ///
+    /// Under streaming accrual the multiplier advances continuously, so there
+    /// is no discrete jump for a searcher to sandwich — that is the entire
+    /// point of the model. This lock therefore fires ONLY on the explicit
+    /// override path, and in particular is NOT stamped by the routine display
+    /// sync. Mirrors EVM, where `YieldSandwichGuard` keys on
+    /// `lastYieldDistributionBlock`, which only `setOkuMMultiplier` writes
+    /// (`EVM/src/token/OkuMoney.sol:107`, `EVM/src/lib/YieldSandwichGuard.sol:21-26`).
     pub last_yield_distribution_slot: u64,
+
+    // ===== Streaming accrual rate schedule =====
+    //
+    // The OkuM multiplier is NOT stored. It is computed on read from the six
+    // fields below plus `Clock::unix_timestamp`, via
+    // `oku_shared::rate::compute_multiplier`. Because the function has no
+    // supply term, every chain holding the same schedule returns the same
+    // value at the same wall-clock second — with no messaging, and with no
+    // transaction at the epoch boundary.
+    //
+    // 1:1 with the EVM accrual storage at `EVM/src/token/OkuMoney.sol:78-96`.
+    // EVM bit-packs these into two slots (uint96/uint64/uint48); SVM has no
+    // equivalent pressure, so each field gets its natural width.
+    /// Multiplier snapshot taken at `okum_last_accrual_time`, WAD-scaled.
+    /// Starts at `PRECISION`. Re-snapshotted on every schedule write so
+    /// accrual is continuous across the write.
+    pub okum_base_multiplier: u128,
+
+    /// Active per-second rate, WAD-scaled. `PRECISION` means "no yield".
+    pub okum_rate_per_second: u64,
+
+    /// Timestamp `okum_base_multiplier` was snapshotted at.
+    pub okum_last_accrual_time: i64,
+
+    /// Timestamp `okum_rate_per_second` expires. `0` ONLY when halted.
+    ///
+    /// Every yielding rate carries a bounded window so that an unattended
+    /// schedule HALTS (safe, recoverable, monotonic) rather than compounding
+    /// forever, and so a rate can never end at a transaction-dependent,
+    /// per-chain moment.
+    pub okum_rate_end: i64,
+
+    /// Pre-staged successor rate. Activates at `okum_rate_end` with NO
+    /// transaction — which is what keeps multi-chain epoch handovers
+    /// simultaneous to the second even when the staging transactions land
+    /// days apart. `PRECISION` means "none armed".
+    pub okum_pending_rate_per_second: u64,
+
+    /// The successor's own expiry, bounding the overhang. `0` = none armed.
+    pub okum_pending_rate_end: i64,
+
+    /// Unix timestamp of the last `sync_display_multiplier`.
+    ///
+    /// Display-only bookkeeping: drives the staleness threshold for the
+    /// opportunistic piggyback sync on PSM instructions. Has no influence on
+    /// pricing — the canonical multiplier is always computed fresh.
+    pub last_display_sync_ts: i64,
 
     /// Pending `role_admin` rotation target — the two-step admin-transfer
     /// model (OpenZeppelin `Ownable2Step` pattern). `set_authority(RoleAdmin,
@@ -113,9 +169,8 @@ impl PsmConfig {
     pub const SEED: &'static [u8] = b"psm_config";
 
     /// Space needed for PsmConfig account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned to 562 bytes by the
-    /// compile-time assertion below; if a reviewer changes a field's
-    /// width the assertion fires.
+    /// `InitSpace`-derived field sum. Pinned by the compile-time assertion
+    /// below; if a reviewer changes a field's width the assertion fires.
     pub const LEN: usize = 8 + Self::INIT_SPACE;
 
     /// PDA signer seeds for CPIs signed by the config PDA.
@@ -138,7 +193,7 @@ impl PsmConfig {
 }
 
 // Compile-time assertion: if the PsmConfig layout changes, this fails to
-// compile. Byte breakdown (562 total):
+// compile. Byte breakdown (626 total):
 //
 //   8   account discriminator
 //   1   bump (u8)
@@ -151,4 +206,13 @@ impl PsmConfig {
 //   40  5 u64 * 8 (max_supply, minter_allowance, last_yield_distribution_slot,
 //         direct_minter_allowance, direct_burner_allowance)
 //   1   is_paused (bool)
-const _: () = assert!(PsmConfig::LEN == 562);
+//  --- streaming accrual (added with the rate-schedule port) ---
+//   16  okum_base_multiplier (u128)
+//   16  2 u64 * 8 (okum_rate_per_second, okum_pending_rate_per_second)
+//   32  4 i64 * 8 (okum_last_accrual_time, okum_rate_end,
+//         okum_pending_rate_end, last_display_sync_ts)
+//
+// The 562 -> 626 growth means existing accounts cannot be reallocated in
+// place. SVM is devnet-only (`deployments/` has no mainnet entry), so this
+// is a fresh deploy — already tracked in TRACKER.md and SVM/DECISIONS.md D-07.
+const _: () = assert!(PsmConfig::LEN == 626);

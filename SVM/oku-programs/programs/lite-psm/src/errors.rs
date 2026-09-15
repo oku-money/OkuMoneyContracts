@@ -93,9 +93,51 @@ pub enum LitePsmError {
     #[msg("New multiplier must strictly increase")]
     MultiplierCannotDecrease,
 
-    /// Yield amount too small to affect the multiplier (truncates to zero).
-    #[msg("Yield amount too small to affect multiplier (truncates to zero)")]
-    YieldTooSmall,
+    // ===== Rate schedule =====
+    //
+    // Mirrors the rails at `EVM/src/token/OkuMoney.sol:401-406` and `:516-518`.
+    /// Rate below `PRECISION`. The multiplier is monotonic — there is no
+    /// on-chain representation of a loss, so a sub-unity rate is meaningless.
+    /// Over-payment is corrected by publishing a SLOWER rate next epoch.
+    /// EVM: InvalidRate()
+    #[msg("Rate must be >= PRECISION (the multiplier cannot decrease)")]
+    InvalidRate,
+
+    /// Rate above `MAX_RATE` (~2242% APY). A sanity bound on `rpow` inputs.
+    /// EVM: RateTooHigh()
+    #[msg("Rate exceeds MAX_RATE")]
+    RateTooHigh,
+
+    /// A halting rate (`== PRECISION`) was given a non-zero window. Halted
+    /// rates carry no window by construction.
+    /// EVM: EndTimestampNotAllowed()
+    #[msg("A halted rate must not carry an end timestamp")]
+    EndTimestampNotAllowed,
+
+    /// A yielding rate was given an end timestamp at or before now.
+    ///
+    /// Every yielding rate MUST carry a bounded window in the future, so that
+    /// an unattended schedule halts rather than compounding forever, and so a
+    /// rate can never expire at a transaction-dependent, per-chain moment.
+    /// EVM: EndTimestampInPast()
+    #[msg("A yielding rate requires an end timestamp in the future")]
+    EndTimestampInPast,
+
+    /// Tried to stage a successor while no active window exists.
+    /// EVM: NoRateEndSet()
+    #[msg("Cannot stage a successor: no active rate window is set")]
+    NoRateEndSet,
+
+    /// Tried to stage a successor against an already-expired window, which
+    /// would snapshot unearned yield.
+    /// EVM: RateAlreadyExpired()
+    #[msg("Cannot stage a successor: the active rate window has already expired")]
+    RateAlreadyExpired,
+
+    /// The successor's expiry is not strictly after the active window's.
+    /// EVM: PendingEndNotAfterRateEnd()
+    #[msg("Successor expiry must be strictly after the active rate end")]
+    PendingEndNotAfterRateEnd,
 
     /// Proposed multiplier exceeds the configured ceiling. A math-sanity
     /// bound that keeps downstream `u64 * u64 -> u128` multiplications inside

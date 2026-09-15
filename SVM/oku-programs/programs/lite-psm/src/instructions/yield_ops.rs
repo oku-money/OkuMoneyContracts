@@ -1,172 +1,399 @@
-//! Yield distribution / multiplier-update instructions.
+//! Rate-schedule instructions — the streaming accrual writer set.
 //!
-//! The OkuM multiplier lives on the mint itself via the Token-2022
-//! `ScaledUiAmountConfig` extension. These instructions read the current
-//! multiplier from the extension, compute the new value, and CPI to
-//! Token-2022's `UpdateMultiplier` to write it back.
+//! ## What changed, and why
 //!
-//! Discrete (per-call) multiplier accrual modelled on MakerDAO's `chi` / `_rpow`
-//! pattern from sDAI. SVM uses a discrete bump per orchestrator call rather than
-//! continuous on-read accrual to avoid recomputing on every PSM mint/redeem.
-//! Taken from https://github.com/makerdao/sdai/blob/master/src/SavingsDai.sol
+//! This used to be a two-instruction discrete model: `set_multiplier` wrote a
+//! new scalar, and `distribute_yield` bumped the scalar by
+//! `yield_amount * PRECISION / total_supply`. Both wrote directly into the
+//! mint's `ScaledUiAmountConfig`.
+//!
+//! That model is gone. It had the flaw EVM's refactor set out to remove: a
+//! discrete jump in the multiplier is a riskless, perfectly-predictable profit
+//! for anyone who mints immediately before it and redeems immediately after.
+//! Widening the sandwich lock cannot fix this — the searcher only has to
+//! straddle the tick by one slot on each side.
+//!
+//! Under streaming accrual there is no tick to straddle. The multiplier is a
+//! continuous function of time, so the operator's transactions carry no
+//! economic event at all: they merely change the *slope* of a curve, always at
+//! a bounded, pre-announced instant.
+//!
+//! `distribute_yield` has no successor here. Under rear-facing epochs the
+//! operator measures realised yield off-chain and derives a *rate*; there is
+//! no on-chain "distribute N dollars" primitive to port.
+//!
+//! ## The writer set
+//!
+//! | Instruction | EVM counterpart |
+//! |---|---|
+//! | `set_okum_yield_rate` | `OkuMoney.setOkuMYieldRate` (`:389`) |
+//! | `set_next_okum_yield_rate` | `OkuMoney.setNextOkuMYieldRate` (`:499`) |
+//! | `set_okum_yield_rate_with_successor` | `OkuMoney.setOkuMYieldRateWithSuccessor` (`:558`) |
+//! | `set_okum_multiplier` (emergency) | `OkuMoney.setOkuMMultiplier` (`:587`) |
+//! | `sync_display_multiplier` | *(none — SVM-specific display mirror)* |
+//!
+//! Every write re-snapshots `okum_base_multiplier` at the current computed
+//! value first, so accrual is continuous across the write and no yield is
+//! ever created or destroyed by re-scheduling.
 
-use crate::constants::{MAX_MULTIPLIER, PRECISION};
-use crate::contexts::{DistributeYield, SetMultiplier};
+use crate::contexts::{SetOkuMMultiplier, SetYieldRate, SyncDisplayMultiplier};
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::check_yield_lock;
+use crate::helpers::display_sync::{
+    write_display_multiplier, DISPLAY_SYNC_INTERVAL,
+};
+use crate::helpers::{check_yield_lock, multiplier};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
-use anchor_spl::token_2022::spl_token_2022::extension::scaled_ui_amount::instruction::update_multiplier;
+use oku_shared::{MAX_MULTIPLIER, MAX_RATE, PRECISION};
 
-/// Write a new multiplier to the OkuM mint's ScaledUiAmountConfig extension
-/// via CPI, and stamp the yield-distribution slot on PsmConfig.
+// ---------------------------------------------------------------------------
+// Shared validation
+// ---------------------------------------------------------------------------
+
+/// Validate a `(rate, end_timestamp)` pair against the rails EVM enforces at
+/// `OkuMoney.sol:401-406`.
 ///
-/// Shared by `set_multiplier` and `distribute_yield` to ensure both paths
-/// use identical CPI construction and slot-stamping logic.
-fn write_multiplier_and_stamp<'info>(
-    new_multiplier: u64,
-    config: &mut Account<'info, PsmConfig>,
-    oku_m_mint: &AccountInfo<'info>,
-    token_2022_program: &AccountInfo<'info>,
-) -> Result<Clock> {
-    let new_multiplier_f64 = new_multiplier as f64 / PRECISION as f64;
+/// The two asymmetric rules are the important ones:
+///
+/// - **A yielding rate MUST carry a window.** Without it the rate would end
+///   whenever an operator happened to land a transaction — a per-chain,
+///   transaction-dependent moment, which is precisely the cross-chain
+///   divergence streaming accrual exists to eliminate.
+/// - **A halted rate MUST NOT carry one.** A window against a halted rate is
+///   meaningless and would put branch 1 of `compute_multiplier` into its
+///   defensive fallback.
+fn validate_rate_window(rate: u64, end_timestamp: i64, now_ts: i64) -> Result<()> {
+    let rate = rate as u128;
 
-    let ix = update_multiplier(
-        &token_2022_program.key(),
-        &oku_m_mint.key(),
-        &config.key(),
-        &[],
-        new_multiplier_f64,
-        0, // effective_timestamp = 0 (immediate)
-    )
-    .map_err(|_| error!(LitePsmError::MultiplierUpdateFailed))?;
+    // Monotonicity: the multiplier can never decrease, so a sub-unity rate is
+    // not representable. There is no on-chain representation of a loss.
+    require!(rate >= PRECISION, LitePsmError::InvalidRate);
+    require!(rate <= MAX_RATE, LitePsmError::RateTooHigh);
 
-    let bump = [config.bump];
-    let seeds = PsmConfig::signer_seeds(&bump);
-    let signer = &[&seeds[..]];
-    anchor_lang::solana_program::program::invoke_signed(
-        &ix,
-        &[oku_m_mint.clone(), config.to_account_info()],
-        signer,
-    )
-    .map_err(|_| error!(LitePsmError::MultiplierUpdateFailed))?;
+    if rate == PRECISION {
+        // Halting.
+        require!(end_timestamp == 0, LitePsmError::EndTimestampNotAllowed);
+    } else {
+        // Yielding.
+        require!(end_timestamp > now_ts, LitePsmError::EndTimestampInPast);
+    }
 
-    let clock = Clock::get()?;
-    config.last_yield_distribution_slot = clock.slot;
-    Ok(clock)
+    Ok(())
 }
 
-/// Set OkuM multiplier directly
+/// Re-snapshot the base multiplier at `now_ts` so accrual is continuous across
+/// a schedule write.
 ///
-/// REBASER only. Sets last_yield_distribution_slot for sandwich prevention.
-/// `new_multiplier` must be strictly greater than the current multiplier
-/// (read from the mint's ScaledUiAmountConfig extension).
+/// EVM does the same at `OkuMoney.sol:421`. Skipping this would either strand
+/// or double-count everything accrued since the last anchor.
+fn reanchor(config: &mut PsmConfig, now_ts: i64) -> Result<u128> {
+    let snapshot = multiplier::at(config, now_ts)?;
+    config.okum_base_multiplier = snapshot;
+    config.okum_last_accrual_time = now_ts;
+    Ok(snapshot)
+}
+
+/// Reject a rate INCREASE while the protocol is paused.
 ///
-/// This is the SVM equivalent of EVM's `setOkuMMultiplier(uint256)`.
+/// Decreases — including halting outright — stay available while paused,
+/// because that is the incident-response lever and must never be blocked by
+/// the incident itself. Inflating the multiplier while users cannot exit is
+/// the thing being prevented.
 ///
-/// Rejects `new_multiplier == current` so a no-op call cannot stamp
-/// the sandwich-lock slot without actually moving the multiplier (which
-/// would waste the lock window for the entire slot). Mirrors the
-/// `YieldTooSmall` guard on `distribute_yield`.
-pub fn set_multiplier(ctx: Context<SetMultiplier>, new_multiplier: u64) -> Result<()> {
-    // Self-fence on the yield slot. Two yield-affecting writes in the same
-    // slot would otherwise be legal (strict-increase admits the second),
-    // defeating the "one yield event per slot" invariant. Strict-increase
-    // alone catches no-op writes; this catches near-no-op writes that would
-    // still consume the same-slot lock budget.
-    check_yield_lock(&ctx.accounts.config)?;
+/// Compares against the EFFECTIVE rate, not the stored one. Once the active
+/// window has closed the stored rate is stale and higher than what is actually
+/// accruing, so comparing against storage would let an operator dress an
+/// increase up as a decrease. EVM closes the same hole at `OkuMoney.sol:420`.
+fn check_pause_gate(config: &PsmConfig, new_rate: u64, now_ts: i64) -> Result<()> {
+    if config.is_paused && (new_rate as u128) > multiplier::effective_rate(config, now_ts) {
+        return err!(LitePsmError::Paused);
+    }
+    Ok(())
+}
 
-    // Read current multiplier from the OkuM mint's ScaledUiAmountConfig extension
-    let current_multiplier =
-        crate::helpers::scaled_ui::read_multiplier(&ctx.accounts.oku_m_mint.to_account_info())?;
+// ---------------------------------------------------------------------------
+// set_okum_yield_rate
+// ---------------------------------------------------------------------------
 
-    // Strict increase — see fn-level doc for rationale.
-    require!(
-        new_multiplier > current_multiplier,
-        LitePsmError::MultiplierCannotDecrease
-    );
+/// Set the active per-second rate and its window.
+///
+/// Re-anchors the base multiplier first, so the switch is continuous. Clears
+/// any armed successor: a fresh active rate invalidates a successor that was
+/// staged against the old window.
+///
+/// Mirrors `EVM/src/token/OkuMoney.sol:389-397`.
+pub fn set_okum_yield_rate(
+    ctx: Context<SetYieldRate>,
+    new_rate: u64,
+    end_timestamp: i64,
+) -> Result<()> {
+    let now_ts = Clock::get()?.unix_timestamp;
+    let config = &mut ctx.accounts.config;
 
-    // Math-sanity ceiling — keeps the downstream `u64 * u64 -> u128`
-    // multiplications inside the overflow-safe region. Not a guard against
-    // a malicious operator (which is out of scope per the centralized
-    // trust model) but a math bound. See `MAX_MULTIPLIER` in
-    // `oku-shared/constants.rs`.
-    require!(
-        new_multiplier <= MAX_MULTIPLIER,
-        LitePsmError::MultiplierAboveMax
-    );
+    validate_rate_window(new_rate, end_timestamp, now_ts)?;
+    check_pause_gate(config, new_rate, now_ts)?;
 
-    let clock = write_multiplier_and_stamp(
-        new_multiplier,
-        &mut ctx.accounts.config,
-        &ctx.accounts.oku_m_mint.to_account_info(),
-        &ctx.accounts.token_2022_program.to_account_info(),
-    )?;
+    let old_rate = config.okum_rate_per_second;
+    let snapshot = reanchor(config, now_ts)?;
 
-    emit!(MultiplierUpdated {
-        old_multiplier: current_multiplier,
-        new_multiplier,
-        total_supply: ctx.accounts.oku_m_mint.supply,
-        timestamp: clock.unix_timestamp,
+    config.okum_rate_per_second = new_rate;
+    config.okum_rate_end = end_timestamp;
+    // A new active window invalidates any successor staged against the old one.
+    config.okum_pending_rate_per_second = PRECISION as u64;
+    config.okum_pending_rate_end = 0;
+
+    emit!(YieldRateUpdated {
+        old_rate,
+        new_rate,
+        rate_end: end_timestamp,
+        base_multiplier: snapshot,
+        timestamp: now_ts,
     });
 
     Ok(())
 }
 
-/// Distribute dollar-denominated yield across all OkuM holders
+// ---------------------------------------------------------------------------
+// set_next_okum_yield_rate
+// ---------------------------------------------------------------------------
+
+/// Pre-stage the successor rate that takes over at `okum_rate_end`.
 ///
-/// new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
+/// This is the instruction that makes cross-chain epoch handovers free: the
+/// successor activates off the ABSOLUTE `okum_rate_end` inside the multiplier
+/// computation, not off a transaction. Staging may therefore land on different
+/// chains at different times — even days apart — and the activation is still
+/// simultaneous to the second.
 ///
-/// REBASER only. Sets last_yield_distribution_slot for sandwich prevention.
+/// Deliberately does NOT re-anchor: re-anchoring here would snapshot the
+/// multiplier mid-window and is unnecessary, since the active rate and its
+/// window are untouched.
 ///
-/// This is the SVM equivalent of EVM's `distributeYield(uint256 yieldAmount)`.
-pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
-    // Self-fence on the yield slot. See `set_multiplier` for rationale.
+/// Mirrors `EVM/src/token/OkuMoney.sol:499-507`.
+pub fn set_next_okum_yield_rate(
+    ctx: Context<SetYieldRate>,
+    new_rate: u64,
+    pending_end_timestamp: i64,
+) -> Result<()> {
+    let now_ts = Clock::get()?.unix_timestamp;
+    let config = &mut ctx.accounts.config;
+
+    let rate = new_rate as u128;
+    require!(rate >= PRECISION, LitePsmError::InvalidRate);
+    require!(rate <= MAX_RATE, LitePsmError::RateTooHigh);
+
+    // A successor only means anything relative to a live active window.
+    require!(config.okum_rate_end != 0, LitePsmError::NoRateEndSet);
+    // Staging against an already-expired window would snapshot unearned yield.
+    require!(now_ts < config.okum_rate_end, LitePsmError::RateAlreadyExpired);
+    require!(
+        pending_end_timestamp > config.okum_rate_end,
+        LitePsmError::PendingEndNotAfterRateEnd
+    );
+
+    check_pause_gate(config, new_rate, now_ts)?;
+
+    let old_rate = config.okum_pending_rate_per_second;
+    config.okum_pending_rate_per_second = new_rate;
+    config.okum_pending_rate_end = pending_end_timestamp;
+
+    emit!(PendingYieldRateUpdated {
+        old_rate,
+        new_rate,
+        pending_rate_end: pending_end_timestamp,
+        timestamp: now_ts,
+    });
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// set_okum_yield_rate_with_successor
+// ---------------------------------------------------------------------------
+
+/// Set the active rate and its successor atomically.
+///
+/// This is the instruction the epoch orchestrator actually uses. Doing both
+/// writes in one transaction matters because the settlement-window handover
+/// re-anchors at the SAME rate — which is exactly skew-free — while
+/// simultaneously arming the next epoch's base rate. Splitting it into two
+/// transactions would leave a window in which one chain has the successor and
+/// another does not.
+///
+/// Mirrors `EVM/src/token/OkuMoney.sol:558-569`.
+pub fn set_okum_yield_rate_with_successor(
+    ctx: Context<SetYieldRate>,
+    new_rate: u64,
+    end_timestamp: i64,
+    next_rate: u64,
+    next_end_timestamp: i64,
+) -> Result<()> {
+    let now_ts = Clock::get()?.unix_timestamp;
+    let config = &mut ctx.accounts.config;
+
+    validate_rate_window(new_rate, end_timestamp, now_ts)?;
+
+    let next = next_rate as u128;
+    require!(next >= PRECISION, LitePsmError::InvalidRate);
+    require!(next <= MAX_RATE, LitePsmError::RateTooHigh);
+    require!(
+        next_end_timestamp > end_timestamp,
+        LitePsmError::PendingEndNotAfterRateEnd
+    );
+
+    check_pause_gate(config, new_rate, now_ts)?;
+    check_pause_gate(config, next_rate, now_ts)?;
+
+    let old_rate = config.okum_rate_per_second;
+    let snapshot = reanchor(config, now_ts)?;
+
+    config.okum_rate_per_second = new_rate;
+    config.okum_rate_end = end_timestamp;
+    config.okum_pending_rate_per_second = next_rate;
+    config.okum_pending_rate_end = next_end_timestamp;
+
+    emit!(YieldRateUpdated {
+        old_rate,
+        new_rate,
+        rate_end: end_timestamp,
+        base_multiplier: snapshot,
+        timestamp: now_ts,
+    });
+    emit!(PendingYieldRateUpdated {
+        old_rate: PRECISION as u64,
+        new_rate: next_rate,
+        pending_rate_end: next_end_timestamp,
+        timestamp: now_ts,
+    });
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// set_okum_multiplier (emergency override)
+// ---------------------------------------------------------------------------
+
+/// Emergency: force the multiplier to an explicit value.
+///
+/// This is the ONLY instruction that produces a discrete multiplier jump, and
+/// therefore the only one that engages the sandwich lock. It exists for
+/// incident response — correcting a mis-derived schedule that has already
+/// accrued, or re-anchoring a chain that fell out of step — not for routine
+/// operation.
+///
+/// Halts accrual as a side effect: an explicit override is an admission that
+/// the schedule was wrong, so continuing to run it would be incoherent. The
+/// operator must publish a fresh schedule afterwards.
+///
+/// Mirrors `EVM/src/token/OkuMoney.sol:587-610`.
+pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128) -> Result<()> {
+    // Self-fence: two overrides in one slot would defeat the lock.
     check_yield_lock(&ctx.accounts.config)?;
 
-    require!(yield_amount > 0, LitePsmError::ZeroAmount);
+    let clock = Clock::get()?;
+    let now_ts = clock.unix_timestamp;
+    let config = &mut ctx.accounts.config;
 
-    let total_supply = ctx.accounts.oku_m_mint.supply;
-    require!(total_supply > 0, LitePsmError::ZeroAmount);
+    // Pausing must not become a way to freeze the emergency lever.
+    require!(!config.is_paused, LitePsmError::Paused);
 
-    // Read current multiplier from the OkuM mint's ScaledUiAmountConfig extension
-    let current_multiplier =
-        crate::helpers::scaled_ui::read_multiplier(&ctx.accounts.oku_m_mint.to_account_info())?;
+    let current = multiplier::at(config, now_ts)?;
 
-    // Per-token yield increment: `(yield_amount * PRECISION) / total_supply`,
-    // floored via the shared `mul_div_floor` primitive (u128 widening +
-    // try_from narrowing).
-    let yield_per_token = oku_shared::mul_div_floor(yield_amount, PRECISION, total_supply)
-        .ok_or(LitePsmError::Overflow)?;
-
-    // Prevent no-op distributions that waste the yield lock slot
-    // This can happen when yield_amount is tiny relative to total_supply
-    require!(yield_per_token > 0, LitePsmError::YieldTooSmall);
-
-    let new_multiplier = current_multiplier
-        .checked_add(yield_per_token)
-        .ok_or(LitePsmError::Overflow)?;
-
-    // Sanity ceiling — see `set_multiplier` for rationale.
+    // Strict increase. A no-op override would stamp the sandwich lock without
+    // moving anything, burning a slot of PSM availability for free.
+    require!(
+        new_multiplier > current,
+        LitePsmError::MultiplierCannotDecrease
+    );
     require!(
         new_multiplier <= MAX_MULTIPLIER,
         LitePsmError::MultiplierAboveMax
     );
 
-    let clock = write_multiplier_and_stamp(
+    config.okum_base_multiplier = new_multiplier;
+    config.okum_last_accrual_time = now_ts;
+    // Halt: see fn-level doc.
+    config.okum_rate_per_second = PRECISION as u64;
+    config.okum_rate_end = 0;
+    config.okum_pending_rate_per_second = PRECISION as u64;
+    config.okum_pending_rate_end = 0;
+
+    config.last_yield_distribution_slot = clock.slot;
+
+    emit!(MultiplierUpdated {
+        old_multiplier: current,
         new_multiplier,
-        &mut ctx.accounts.config,
-        &ctx.accounts.oku_m_mint.to_account_info(),
-        &ctx.accounts.token_2022_program.to_account_info(),
+        total_supply: ctx.accounts.oku_m_mint.supply,
+        timestamp: now_ts,
+    });
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// sync_display_multiplier
+// ---------------------------------------------------------------------------
+
+/// Refresh the wallet-facing display mirror. **Permissionless.**
+///
+/// Permissionless is safe and deliberate: the value written is fully
+/// determined by on-chain state, so a caller has no degrees of freedom to
+/// abuse. The `PsmConfig` PDA signs the CPI, not the caller. Making this
+/// rebaser-gated would turn display freshness into an operator liveness
+/// dependency for no security gain.
+///
+/// Writes two points: the value NOW (effective immediately) and the value one
+/// [`DISPLAY_SYNC_INTERVAL`] ahead (pre-armed at its own effective timestamp).
+/// The pre-arm means the display keeps advancing for a full interval even if
+/// the next crank never arrives.
+///
+/// ## Why two CPIs rather than one
+///
+/// A single write of the future value would be enough IF Token-2022's
+/// processor resolves the standing `multiplier` field to
+/// `current_multiplier(now)` before overwriting `new_multiplier`. That
+/// behaviour lives in the processor, not in `spl-token-2022-interface`, and is
+/// not yet verified here (`SVM/DECISIONS.md` D-02). If it does NOT resolve,
+/// a single write would leave the display pinned to the *previous* pre-armed
+/// value for a full interval — a lag of two intervals instead of one.
+///
+/// Two writes are correct under either semantics, so the ambiguity is not on
+/// the correctness path. The cost is one extra CPI per minute.
+///
+/// Does NOT stamp the sandwich lock — see `PsmConfig::last_yield_distribution_slot`.
+pub fn sync_display_multiplier(ctx: Context<SyncDisplayMultiplier>) -> Result<()> {
+    let now_ts = Clock::get()?.unix_timestamp;
+
+    let next_ts = now_ts
+        .checked_add(DISPLAY_SYNC_INTERVAL)
+        .ok_or(LitePsmError::Overflow)?;
+
+    let current = multiplier::at(&ctx.accounts.config, now_ts)?;
+    let next_multiplier = multiplier::at(&ctx.accounts.config, next_ts)?;
+
+    let mint = ctx.accounts.oku_m_mint.to_account_info();
+    let token_program = ctx.accounts.token_2022_program.to_account_info();
+
+    // 1. Land the display exactly on the curve right now.
+    write_display_multiplier(current, now_ts, &ctx.accounts.config, &mint, &token_program)?;
+
+    // 2. Pre-arm the next step so the staircase advances unattended.
+    write_display_multiplier(
+        next_multiplier,
+        next_ts,
+        &ctx.accounts.config,
+        &mint,
+        &token_program,
     )?;
 
-    emit!(YieldDistributed {
-        yield_amount,
-        old_multiplier: current_multiplier,
-        new_multiplier,
-        total_supply,
-        timestamp: clock.unix_timestamp,
+    ctx.accounts.config.last_display_sync_ts = now_ts;
+
+    emit!(DisplayMultiplierSynced {
+        multiplier: current,
+        pre_armed_multiplier: next_multiplier,
+        pre_armed_effective_ts: next_ts,
+        timestamp: now_ts,
     });
 
     Ok(())

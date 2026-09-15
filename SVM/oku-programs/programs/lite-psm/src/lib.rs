@@ -176,17 +176,74 @@ pub mod lite_psm {
         instructions::psm_admin::update_token_metadata(ctx)
     }
 
-    // ===== Yield Operations =====
+    // ===== Yield Operations (streaming accrual) =====
+    //
+    // The multiplier is computed on read from a rate schedule, not stored and
+    // not bumped. These instructions change the SLOPE of a continuous curve;
+    // none of them produces a discrete jump except the emergency override.
+    //
+    // `distribute_yield` was removed with the streaming port: under
+    // rear-facing epochs the operator derives a RATE off-chain from measured
+    // realised yield, so there is no on-chain "distribute N dollars" primitive.
 
-    /// Set OkuM multiplier directly (REBASER only)
-    /// Sets last_yield_distribution_slot for sandwich prevention
-    pub fn set_multiplier(ctx: Context<SetMultiplier>, new_multiplier: u64) -> Result<()> {
-        instructions::yield_ops::set_multiplier(ctx, new_multiplier)
+    /// Set the active per-second rate and its bounded window (REBASER only).
+    ///
+    /// EVM: `OkuMoney.setOkuMYieldRate(uint256,uint256)`.
+    pub fn set_okum_yield_rate(
+        ctx: Context<SetYieldRate>,
+        new_rate: u64,
+        end_timestamp: i64,
+    ) -> Result<()> {
+        instructions::yield_ops::set_okum_yield_rate(ctx, new_rate, end_timestamp)
     }
 
-    /// Distribute yield across all OkuM holders (REBASER only)
-    /// new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
-    pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
-        instructions::yield_ops::distribute_yield(ctx, yield_amount)
+    /// Pre-stage the successor rate that takes over at `okum_rate_end` with NO
+    /// transaction at the boundary (REBASER only).
+    ///
+    /// EVM: `OkuMoney.setNextOkuMYieldRate(uint256,uint256)`.
+    pub fn set_next_okum_yield_rate(
+        ctx: Context<SetYieldRate>,
+        new_rate: u64,
+        pending_end_timestamp: i64,
+    ) -> Result<()> {
+        instructions::yield_ops::set_next_okum_yield_rate(ctx, new_rate, pending_end_timestamp)
+    }
+
+    /// Set the active rate and its successor atomically (REBASER only).
+    /// This is the instruction the epoch orchestrator uses.
+    ///
+    /// EVM: `OkuMoney.setOkuMYieldRateWithSuccessor(uint256,uint256,uint256,uint256)`.
+    pub fn set_okum_yield_rate_with_successor(
+        ctx: Context<SetYieldRate>,
+        new_rate: u64,
+        end_timestamp: i64,
+        next_rate: u64,
+        next_end_timestamp: i64,
+    ) -> Result<()> {
+        instructions::yield_ops::set_okum_yield_rate_with_successor(
+            ctx,
+            new_rate,
+            end_timestamp,
+            next_rate,
+            next_end_timestamp,
+        )
+    }
+
+    /// EMERGENCY: force the multiplier to an explicit value and halt accrual
+    /// (REBASER only). The only instruction that engages the sandwich lock.
+    ///
+    /// EVM: `OkuMoney.setOkuMMultiplier(uint256)`.
+    pub fn set_okum_multiplier(
+        ctx: Context<SetOkuMMultiplier>,
+        new_multiplier: u128,
+    ) -> Result<()> {
+        instructions::yield_ops::set_okum_multiplier(ctx, new_multiplier)
+    }
+
+    /// Refresh the wallet-facing ScaledUiAmount display mirror.
+    /// **Permissionless** — the written value is fully determined by on-chain
+    /// state, so the caller has no discretion. No EVM counterpart.
+    pub fn sync_display_multiplier(ctx: Context<SyncDisplayMultiplier>) -> Result<()> {
+        instructions::yield_ops::sync_display_multiplier(ctx)
     }
 }

@@ -46,24 +46,22 @@ equivalents. Epochs are 7–30 days, so 90 days is 3–13× headroom.
 
 ---
 
-## D-02 · Token-2022 `update_multiplier` future-timestamp semantics — `OPEN` (must verify empirically)
+## D-02 · Token-2022 `update_multiplier` future-timestamp semantics — `RESOLVED by design` (verification still wanted)
 
-The display mirror pre-arms the next staircase step by calling
-`update_multiplier(new_multiplier = m(t+T), effective_timestamp = t+T)`.
+The display mirror pre-arms the next staircase step. Whether Token-2022's
+processor resolves the standing `multiplier` field to `current_multiplier(now)`
+before overwriting `new_multiplier` lives in the **processor**, which is not
+part of `spl-token-2022-interface` (the only crate vendored here), and was not
+verified during this pass.
 
-Whether the standing `multiplier` field is first resolved to
-`current_multiplier(now)` before `new_multiplier` is overwritten lives in the
-Token-2022 **processor**, which is not part of `spl-token-2022-interface`
-(the only crate vendored here). It was not verified during this pass.
+**Worked around rather than blocked on:** `sync_display_multiplier` issues
+**two** CPIs — `m(now)` effective immediately, then `m(now+T)` pre-armed — which
+is correct under either processor semantics. The ambiguity is therefore off the
+correctness path; the cost is one extra CPI per sync.
 
-- If it **does** resolve → the single-CPI pre-arm is correct as designed.
-- If it **does not** → the display would jump backwards at the moment of
-  sync, violating the "display ≤ canonical, monotonic" invariant, and the
-  pre-arm must become a two-CPI sequence (write `m(now)` immediate, then
-  write `m(now+T)` scheduled).
-
-**Action:** assert this directly in `tests/bankrun/display-mirror.ts` against
-the real `spl_token_2022.so` dump before relying on the single-CPI form.
+**Still worth doing:** assert the actual behaviour in
+`tests/bankrun/display-mirror.ts` against the real `spl_token_2022.so` dump. If
+the processor *does* resolve, the first CPI can be dropped for a small saving.
 
 ---
 
@@ -154,6 +152,63 @@ they are not lost:
 
 Several of these self-resolve: `distribute_yield` and `read_multiplier` are
 both deleted by this refactor, taking their stale docs and scripts with them.
+
+---
+
+## D-10 · Display mirror is not monotonic across an emergency override — `OPEN`
+
+`set_okum_multiplier` writes a new base to `PsmConfig` but does **not** touch
+the extension, so the display mirror only catches up on the next sync (≤60s).
+Since the override is strict-increase, display stays `<=` canonical throughout,
+which is the safe direction.
+
+But there is a subtler case: the override also **halts** the schedule. If a
+sync had previously pre-armed a step at `m(t+T)` computed under the *old*
+(still-running) schedule, that pre-armed value could exceed the new canonical
+value if the override lands at a lower point than the old curve would have
+reached. The override's strict-increase check is against the current canonical
+value, not against the outstanding pre-armed one.
+
+**Consequence:** for up to one sync interval after an emergency override, the
+display could read slightly *above* canonical — the unsafe direction.
+
+**Proposed fix:** have `set_okum_multiplier` write the display mirror
+synchronously (immediate value, no pre-arm), collapsing the window to zero.
+This requires adding the mint + token program to `SetOkuMMultiplier`'s accounts,
+which it already has for the supply read.
+
+Not done in this pass. Low severity (emergency-only path, bounded by the sync
+interval, bounded in magnitude by one interval of yield) but it is a genuine
+inversion of the invariant the mirror is supposed to maintain.
+
+---
+
+## D-11 · Piggyback sync swallows errors — `ACCEPTED`
+
+`try_sync_display` in `instructions/psm.rs` is deliberately infallible: a
+display-mirror failure must never block a user's mint or redeem. The trade-off
+is that a persistently failing CPI would be invisible from the PSM path.
+
+Mitigation is that the same failure would also surface on the permissionless
+crank, which *does* propagate errors, and the `DisplayMultiplierSynced` event
+makes staleness observable off-chain.
+
+---
+
+## D-12 · No on-chain multiplier view for integrators — `OPEN`
+
+Solana has no view functions. Integrators who want the canonical multiplier
+must either recompute `compute_multiplier` client-side from `PsmConfig`, or
+read the lagging display mirror.
+
+Options, none implemented:
+- Add a `get_okum_multiplier` instruction that returns via `set_return_data`,
+  callable through simulation.
+- Ship the TS mirror as part of `@okumoney/yield-tooling` (planned anyway for
+  `checkMultiplierDrift`), and document it as the supported path.
+
+The TS mirror will exist regardless, so this is mostly a question of what we
+tell third parties to use.
 
 ---
 

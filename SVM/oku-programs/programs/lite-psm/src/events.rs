@@ -45,9 +45,10 @@ pub struct MintEvent {
     pub raw_oku_m_amount: u64,
     /// Dollar value of the minted amount (raw_oku_m_amount * multiplier / PRECISION)
     pub dollar_value: u64,
-    /// OkuM multiplier at time of mint (1e9 = $1.00)
+    /// Canonical OkuM multiplier at time of mint, WAD-scaled (1e18 = $1.00).
+    /// Computed from the rate schedule, NOT read from the display mirror.
     /// EVM equivalent: multiplier
-    pub multiplier: u64,
+    pub multiplier: u128,
     /// OkuM supply after the mint completed.
     pub new_total_supply: u64,
 }
@@ -64,9 +65,10 @@ pub struct RedeemEvent {
     pub usdc_amount: u64,
     /// Dollar value of the redeemed amount
     pub dollar_value: u64,
-    /// OkuM multiplier at time of redeem (1e9 = $1.00)
+    /// Canonical OkuM multiplier at time of redeem, WAD-scaled (1e18 = $1.00).
+    /// Computed from the rate schedule, NOT read from the display mirror.
     /// EVM equivalent: multiplier
-    pub multiplier: u64,
+    pub multiplier: u128,
     /// OkuM supply after the burn completed.
     pub new_total_supply: u64,
 }
@@ -150,8 +152,8 @@ pub struct DirectMintEvent {
     pub recipient: Pubkey,
     /// OkuM raw amount minted (6 decimals)
     pub raw_oku_m_amount: u64,
-    /// OkuM multiplier at time of mint (1e9 = $1.00)
-    pub multiplier: u64,
+    /// Canonical OkuM multiplier at time of mint, WAD-scaled (1e18 = $1.00).
+    pub multiplier: u128,
     /// Dollar value of the minted amount
     pub dollar_value: u64,
     /// OkuM supply AFTER the mint completed
@@ -177,35 +179,80 @@ pub struct DirectBurnEvent {
     pub direct_burner: Pubkey,
     /// OkuM raw amount burned (6 decimals)
     pub raw_oku_m_amount: u64,
-    /// OkuM multiplier at time of burn (1e9 = $1.00)
-    pub multiplier: u64,
+    /// Canonical OkuM multiplier at time of burn, WAD-scaled (1e18 = $1.00).
+    pub multiplier: u128,
     /// Dollar value of the burned amount
     pub dollar_value: u64,
     /// OkuM supply AFTER the burn completed
     pub new_total_supply: u64,
 }
 
-/// Emitted when OkuM multiplier is updated directly.
+/// Emitted by the EMERGENCY multiplier override only.
+///
+/// Under streaming accrual this is a rare, incident-response event — not the
+/// routine yield mechanism it used to be. Its presence in the log means an
+/// operator forced a discrete jump and halted the schedule.
+///
 /// EVM equivalent: `MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`
 #[event]
 pub struct MultiplierUpdated {
-    pub old_multiplier: u64,
-    pub new_multiplier: u64,
+    /// WAD-scaled (1e18). Widened from `u64` with the PRECISION migration.
+    pub old_multiplier: u128,
+    pub new_multiplier: u128,
     /// Total OkuM supply at time of update
     pub total_supply: u64,
     pub timestamp: i64,
 }
 
-/// Emitted when yield is distributed across all OkuM holders.
-/// EVM equivalent: `YieldDistributed(uint256 yieldAmount, uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`
+/// Emitted when the ACTIVE per-second rate or its window changes.
+///
+/// Replaces `YieldDistributed`. There is no longer a dollar-denominated
+/// distribution event because there is no dollar-denominated instruction —
+/// the operator publishes a rate, and the yield follows from it continuously.
+///
+/// EVM equivalent: `OkuMYieldRateUpdated`.
 #[event]
-pub struct YieldDistributed {
-    /// Dollar yield distributed (6 decimals)
-    pub yield_amount: u64,
-    pub old_multiplier: u64,
-    pub new_multiplier: u64,
-    /// Total OkuM supply at time of distribution
-    pub total_supply: u64,
+pub struct YieldRateUpdated {
+    /// Previous active per-second rate, WAD-scaled.
+    pub old_rate: u64,
+    /// New active per-second rate, WAD-scaled. `PRECISION` means halted.
+    pub new_rate: u64,
+    /// Absolute expiry of the new rate. `0` when halting.
+    pub rate_end: i64,
+    /// The multiplier snapshot taken at this write, so indexers can
+    /// reconstruct `m(t)` for any `t` without replaying from genesis.
+    pub base_multiplier: u128,
+    pub timestamp: i64,
+}
+
+/// Emitted when the PRE-STAGED successor rate changes.
+///
+/// The successor activates at `rate_end` with no transaction, so this event is
+/// the only on-chain record of the handover being armed. Cross-chain
+/// monitoring compares these across deployments.
+///
+/// EVM equivalent: `OkuMPendingYieldRateUpdated`.
+#[event]
+pub struct PendingYieldRateUpdated {
+    pub old_rate: u64,
+    pub new_rate: u64,
+    /// Absolute expiry of the successor itself, bounding the overhang.
+    pub pending_rate_end: i64,
+    pub timestamp: i64,
+}
+
+/// Emitted when the wallet-facing display mirror is refreshed.
+///
+/// Purely informational — no economic meaning. Useful for monitoring how far
+/// the display has drifted from canonical and whether the crank is alive.
+#[event]
+pub struct DisplayMultiplierSynced {
+    /// Canonical multiplier written as immediately effective.
+    pub multiplier: u128,
+    /// Pre-armed next step.
+    pub pre_armed_multiplier: u128,
+    /// When the pre-armed step becomes effective.
+    pub pre_armed_effective_ts: i64,
     pub timestamp: i64,
 }
 

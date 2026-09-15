@@ -261,8 +261,26 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     config.minter_allowance = params.minter_allowance;
     config.is_paused = false;
 
-    // Yield distribution lock - starts at 0 (no lock)
+    // Sandwich lock — starts at 0 (no lock). Only the emergency multiplier
+    // override ever stamps this under streaming accrual.
     config.last_yield_distribution_slot = 0;
+
+    // Rate schedule — flat and HALTED. The multiplier reads 1.0 and does not
+    // move until the operator publishes a rate, which is the correct initial
+    // state: a freshly deployed chain has earned nothing.
+    //
+    // Mirrors `EVM/src/token/OkuMoney.sol:195-199`.
+    let init_schedule = oku_shared::rate::Schedule::halted_at(Clock::get()?.unix_timestamp);
+    config.okum_base_multiplier = init_schedule.base_multiplier;
+    config.okum_rate_per_second = init_schedule.rate_per_second as u64;
+    config.okum_last_accrual_time = init_schedule.last_accrual_time;
+    config.okum_rate_end = init_schedule.rate_end;
+    config.okum_pending_rate_per_second = init_schedule.pending_rate_per_second as u64;
+    config.okum_pending_rate_end = init_schedule.pending_rate_end;
+
+    // Display mirror starts in sync: the extension is initialized to 1.0
+    // above, which is exactly the canonical multiplier of a halted schedule.
+    config.last_display_sync_ts = init_schedule.last_accrual_time;
 
     // Two-step `role_admin` transfer slot — empty until
     // `set_authority(RoleAdmin, ...)` proposes a rotation.

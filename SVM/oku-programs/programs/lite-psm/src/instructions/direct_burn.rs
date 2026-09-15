@@ -11,7 +11,7 @@
 use crate::contexts::direct_burn::BurnOkuMDirect;
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{check_yield_lock, raw_to_dollars, read_multiplier};
+use crate::helpers::{check_yield_lock, multiplier, raw_to_dollars};
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
 
@@ -69,7 +69,7 @@ pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, raw_amount: u64) -> Resul
     )?;
 
     // Read multiplier from mint to compute dollar value for event
-    let multiplier = read_multiplier(&ctx.accounts.oku_m_mint.to_account_info())?;
+    let multiplier = multiplier::current(&ctx.accounts.config)?;
     let dollar_value = raw_to_dollars(raw_amount, multiplier)?;
 
     ctx.accounts.oku_m_mint.reload()?;

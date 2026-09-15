@@ -31,9 +31,15 @@ pub struct SetYieldRate<'info> {
 
 /// Context for the emergency multiplier override.
 ///
-/// Takes the mint read-only, purely to report `total_supply` in the event.
-/// The override writes to `PsmConfig`, not to the extension — the display
-/// mirror catches up on the next sync like any other schedule change.
+/// The mint is MUTABLE because this instruction force-syncs the display
+/// mirror rather than waiting for the next crank. That is not an
+/// optimisation — it closes a real inversion of the mirror's safety
+/// invariant. An earlier sync may have pre-armed a step computed under the
+/// old, still-running schedule; the override halts that schedule, so the
+/// outstanding pre-armed value can exceed the new canonical multiplier. The
+/// strict-increase check guards against the CURRENT canonical value, not
+/// against an already-armed future one. Writing the display immediately (with
+/// no pre-arm) overwrites the stale step and collapses the window to zero.
 #[derive(Accounts)]
 pub struct SetOkuMMultiplier<'info> {
     pub rebaser: Signer<'info>,
@@ -47,6 +53,7 @@ pub struct SetOkuMMultiplier<'info> {
     pub config: Account<'info, PsmConfig>,
 
     #[account(
+        mut,
         address = config.oku_m_mint,
         mint::token_program = token_2022_program
     )]

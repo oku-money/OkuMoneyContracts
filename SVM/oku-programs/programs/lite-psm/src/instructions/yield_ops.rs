@@ -321,6 +321,22 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
 
     config.last_yield_distribution_slot = clock.slot;
 
+    // Force-sync the display mirror, effective immediately and with NO
+    // pre-arm. This is a correctness step, not a nicety: a previous sync may
+    // have pre-armed a step computed under the schedule we just halted, and
+    // that stale step could read ABOVE the new canonical value — the one
+    // direction the mirror must never take. Writing an immediate value
+    // overwrites it. Unlike the piggyback sync this is NOT best-effort: if the
+    // display cannot be corrected, the override must not proceed.
+    write_display_multiplier(
+        new_multiplier,
+        now_ts,
+        &ctx.accounts.config,
+        &ctx.accounts.oku_m_mint.to_account_info(),
+        &ctx.accounts.token_2022_program.to_account_info(),
+    )?;
+    ctx.accounts.config.last_display_sync_ts = now_ts;
+
     emit!(MultiplierUpdated {
         old_multiplier: current,
         new_multiplier,

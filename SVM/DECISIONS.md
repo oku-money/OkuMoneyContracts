@@ -46,22 +46,27 @@ equivalents. Epochs are 7–30 days, so 90 days is 3–13× headroom.
 
 ---
 
-## D-02 · Token-2022 `update_multiplier` future-timestamp semantics — `RESOLVED by design` (verification still wanted)
+## D-02 · Token-2022 `update_multiplier` future-timestamp semantics — `RESOLVED`
 
-The display mirror pre-arms the next staircase step. Whether Token-2022's
-processor resolves the standing `multiplier` field to `current_multiplier(now)`
-before overwriting `new_multiplier` lives in the **processor**, which is not
-part of `spl-token-2022-interface` (the only crate vendored here), and was not
-verified during this pass.
+**Verified empirically** against the real `spl_token_2022.so` dump in
+`tests/bankrun/display-mirror.ts`. After the two-CPI sync the extension holds:
 
-**Worked around rather than blocked on:** `sync_display_multiplier` issues
-**two** CPIs — `m(now)` effective immediately, then `m(now+T)` pre-armed — which
-is correct under either processor semantics. The ambiguity is therefore off the
-correctness path; the cost is one extra CPI per sync.
+```
+multiplier    = 1.0                 <- first CPI, effective immediately
+newMultiplier = 1.0000057924871757  <- second CPI, pre-armed
+effectiveTs   = t0 + 60
+```
 
-**Still worth doing:** assert the actual behaviour in
-`tests/bankrun/display-mirror.ts` against the real `spl_token_2022.so` dump. If
-the processor *does* resolve, the first CPI can be dropped for a small saving.
+So the processor **does** resolve the standing `multiplier` field to
+`current_multiplier(now)` before overwriting `new_multiplier`, and it preserves
+the immediate write. Both orderings behave as intended.
+
+`sync_display_multiplier` keeps the two-CPI form regardless: it is correct under
+either semantics, costs one extra CPI per minute, and does not depend on an
+undocumented processor detail that could change in a future Token-2022 release.
+
+**Possible optimisation, not taken:** the first CPI could be dropped now that the
+resolve behaviour is confirmed. Not worth coupling to the detail.
 
 ---
 
@@ -155,31 +160,40 @@ both deleted by this refactor, taking their stale docs and scripts with them.
 
 ---
 
-## D-10 · Display mirror is not monotonic across an emergency override — `OPEN`
+## D-10 · Display mirror could read above canonical after an emergency override — `FIXED`
 
-`set_okum_multiplier` writes a new base to `PsmConfig` but does **not** touch
-the extension, so the display mirror only catches up on the next sync (≤60s).
-Since the override is strict-increase, display stays `<=` canonical throughout,
-which is the safe direction.
+The override halts the schedule, but a previous sync may have pre-armed a step
+`m(t+T)` computed under the *old, still-running* schedule. That armed value can
+exceed the new canonical multiplier, because the override's strict-increase
+check compares against the CURRENT canonical value, not against an
+already-armed future one. For up to one sync interval the display would then
+read *above* canonical — the one direction the mirror must never take.
 
-But there is a subtler case: the override also **halts** the schedule. If a
-sync had previously pre-armed a step at `m(t+T)` computed under the *old*
-(still-running) schedule, that pre-armed value could exceed the new canonical
-value if the override lands at a lower point than the old curve would have
-reached. The override's strict-increase check is against the current canonical
-value, not against the outstanding pre-armed one.
+**Fixed** by having `set_okum_multiplier` write the display mirror
+synchronously (immediate effective timestamp, no pre-arm), which overwrites the
+stale armed step and collapses the window to zero. Unlike the piggyback sync
+this write is NOT best-effort — if the display cannot be corrected the override
+fails.
 
-**Consequence:** for up to one sync interval after an emergency override, the
-display could read slightly *above* canonical — the unsafe direction.
+Needs a bankrun regression test: sync → arm a step → override below the armed
+value → assert display `<=` canonical immediately.
 
-**Proposed fix:** have `set_okum_multiplier` write the display mirror
-synchronously (immediate value, no pre-arm), collapsing the window to zero.
-This requires adding the mint + token program to `SetOkuMMultiplier`'s accounts,
-which it already has for the supply read.
+---
 
-Not done in this pass. Low severity (emergency-only path, bounded by the sync
-interval, bounded in magnitude by one interval of yield) but it is a genuine
-inversion of the invariant the mirror is supposed to maintain.
+## D-13 · `npm run test:bankrun` does not rebuild the program — `OPEN`
+
+Bankrun loads `target/deploy/lite_psm.so`, but `test:bankrun` is just
+`mocha`. Run it after editing Rust without an intervening `anchor build` and
+you silently test the **previous** binary.
+
+This is not hypothetical: it masked a real failure during this pass. The D-10
+fix (emergency override force-syncing the display mirror) appeared not to work
+because the suite was running a `.so` built before the fix. The test was
+correct and the code was correct; only the artifact was stale.
+
+**Proposed:** make `test:bankrun` depend on `anchor build`, or have
+`startBankrun` assert the `.so` mtime is newer than the newest file under
+`programs/`. The second is cheaper and fails loudly with a useful message.
 
 ---
 

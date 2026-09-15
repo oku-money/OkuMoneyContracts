@@ -28,6 +28,9 @@
 import { startAnchor, BankrunProvider } from 'anchor-bankrun';
 import * as anchor from '@anchor-lang/core';
 import { Program, Idl, BN } from '@anchor-lang/core';
+// The canonical multiplier is computed, not stored, so tests need the same
+// math the program uses. This is the shared TS mirror, not a test-local copy.
+import { computeMultiplier, scheduleFromConfig } from '../../scripts/utils/multiplier';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -428,26 +431,43 @@ export async function tryProcess(
   return h.context.banksClient.tryProcessTransaction(tx);
 }
 
+/** Raw contents of a mint's `ScaledUiAmountConfig` extension. */
+export interface DisplayMultiplierState {
+  /** Standing multiplier, as the f64 ratio the extension actually stores. */
+  multiplier: number;
+  /** Pre-armed successor value (0 when never written). */
+  newMultiplier: number;
+  /** When `newMultiplier` becomes effective. */
+  effectiveTs: number;
+  /** What a wallet renders right now, per `current_multiplier(unix_timestamp)`. */
+  effective: number;
+}
+
 /**
- * Read the current effective multiplier from a OkuM mint's
- * ScaledUiAmountConfig extension. Returns the multiplier as a BN
- * scaled by PRECISION (1e9), matching the on-chain representation.
+ * Read the DISPLAY multiplier from a OkuM mint's ScaledUiAmountConfig.
  *
- * The ScaledUiAmountConfig extension (ExtensionType 25 = 0x19) stores:
- *   - authority (32 bytes)
- *   - multiplier (f64, 8 bytes)
- *   - new_multiplier_effective_timestamp (i64, 8 bytes)
- *   - new_multiplier (f64, 8 bytes)
+ * ## This is not the canonical multiplier
  *
- * Uses the same zero-init guard as the on-chain `read_multiplier`:
- * if `new_multiplier > 0` and current time >= effective_timestamp,
- * returns new_multiplier; otherwise returns base multiplier.
+ * Since the streaming-accrual port the extension is a **write-only display
+ * mirror**: the program pushes values into it for wallets and never reads them
+ * back. It lags the canonical multiplier by up to one `DISPLAY_SYNC_INTERVAL`
+ * and is only guaranteed to satisfy `display <= canonical`.
+ *
+ * Use {@link computeCanonicalMultiplier} for anything that asserts on price.
+ * Use this only to assert properties OF THE MIRROR (staleness, monotonicity,
+ * the `<=` invariant).
+ *
+ * Returns the f64 values verbatim rather than a WAD-scaled BN: a WAD-scaled
+ * multiplier can exceed 2^53, so round-tripping through `number` would lose
+ * precision and manufacture spurious test failures.
+ *
+ * The extension (ExtensionType 25) stores:
+ *   authority (32) | multiplier f64 (8) | effective_ts i64 (8) | new_multiplier f64 (8)
  */
-export async function readMultiplierFromMint(
+export async function readDisplayMultiplier(
   h: BankrunHarness,
   mintPubkey: PublicKey,
-): Promise<BN> {
-  const PRECISION = 1_000_000_000;
+): Promise<DisplayMultiplierState> {
   const SCALED_UI_AMOUNT_TYPE = 25; // ExtensionType::ScaledUiAmount
 
   const acct = await h.provider.connection.getAccountInfo(mintPubkey);
@@ -466,19 +486,41 @@ export async function readMultiplierFromMint(
       const effectiveTs = Number(Buffer.from(extData.slice(40, 48)).readBigInt64LE(0));
       const newMultiplier = Buffer.from(extData.slice(48, 56)).readDoubleLE(0);
 
-      // Get current cluster time
       const clock = await h.context.banksClient.getClock();
       const unixTimestamp = Number(clock.unixTimestamp);
 
-      // Same zero-init guard as the on-chain read_multiplier
-      const effective = (newMultiplier > 0 && unixTimestamp >= effectiveTs)
-        ? newMultiplier
-        : multiplier;
+      // Exactly `ScaledUiAmountConfig::current_multiplier` — this is what a
+      // wallet renders. Note it does NOT have the zero-init guard the old
+      // on-chain `read_multiplier` carried; that helper is gone, and the
+      // program now initialises the extension to 1.0 at init.
+      const effective = unixTimestamp >= effectiveTs ? newMultiplier : multiplier;
 
-      return new BN(Math.round(effective * PRECISION));
+      return { multiplier, newMultiplier, effectiveTs, effective };
     }
   }
   throw new Error("ScaledUiAmountConfig extension not found on mint");
+}
+
+/**
+ * The CANONICAL multiplier — computed from the on-chain rate schedule exactly
+ * the way the program does, via the shared TS mirror.
+ *
+ * This is what every price in the PSM is derived from, so it is what
+ * assertions about mint/redeem amounts must use.
+ *
+ * @param atTs Optional evaluation timestamp. Defaults to the cluster clock.
+ */
+export async function computeCanonicalMultiplier(
+  h: BankrunHarness,
+  program: { account: { psmConfig: { fetch(a: PublicKey): Promise<unknown> } } },
+  psmConfig: PublicKey,
+  atTs?: bigint,
+): Promise<bigint> {
+  const cfg = (await program.account.psmConfig.fetch(psmConfig)) as Parameters<
+    typeof scheduleFromConfig
+  >[0];
+  const ts = atTs ?? (await h.context.banksClient.getClock()).unixTimestamp;
+  return computeMultiplier(scheduleFromConfig(cfg), BigInt(ts));
 }
 
 /**

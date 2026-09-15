@@ -11,6 +11,7 @@ import {
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
+import { ratePerSecondForApy } from "../../scripts/utils/multiplier";
 import {
   coldMultisig,
   warmMultisig,
@@ -29,7 +30,7 @@ import {
   createMintViaBankrun,
   mintToViaBankrun,
   ensureAtaViaBankrun,
-  readMultiplierFromMint,
+  computeCanonicalMultiplier,
   warpSlots,
   expectBankrunError,
 } from "../shared/bankrun";
@@ -598,20 +599,22 @@ describe("lite-psm", () => {
           .rpc();
       });
 
-      it("deposit_buffer fails in the same slot as a yield distribution", async () => {
-        // Isolated bankrun harness: `setMultiplier` only ever increases the
-        // multiplier, and it's shared module-level state (this describe
-        // block's `program`/`configPda`/`okuMMint` are reused by later
-        // tests in this file — e.g. "rebaser can set okuM multiplier" —
-        // that assume the multiplier is still near PRECISION). Running
-        // this check against a throwaway harness avoids bumping the
-        // shared multiplier and breaking those later assertions.
+      it("deposit_buffer fails in the same slot as an emergency multiplier override", async () => {
+        // The sandwich lock is now stamped ONLY by `set_okum_multiplier`, the
+        // emergency override. Routine yield no longer touches it, because
+        // streaming accrual produces no discrete jump to sandwich — which is
+        // the whole reason the model was adopted. The display sync
+        // deliberately does not stamp it either (see `display-mirror.ts`).
+        //
+        // Isolated bankrun harness: the override only ever increases the
+        // multiplier and HALTS the schedule, and this describe block's
+        // `program`/`configPda`/`okuMMint` are shared module-level state
+        // reused by later tests. A throwaway harness keeps that state clean.
         //
         // `autoBumpSlot: false` — the default harness advances the slot
         // by 1 before every `.rpc()` (see `startBankrun` doc comment),
         // which would make the two calls below land in different slots
-        // and defeat the same-slot assertion. Mirrors the override used
-        // by `rate-over-time.ts`'s own same-slot test.
+        // and defeat the same-slot assertion.
         const h2 = await startBankrun({ autoBumpSlot: false });
         const program2 = h2.program;
         const payer2 = h2.payer;
@@ -647,11 +650,11 @@ describe("lite-psm", () => {
         );
         await warpSlots(h2, 1);
 
-        // Stamp the yield-lock slot via set_multiplier.
-        const m0 = await readMultiplierFromMint(h2, okuMMint2);
-        const m1 = m0.add(m0.div(new BN(100))); // +1%
+        // Stamp the sandwich-lock slot via the emergency override.
+        const m0 = await computeCanonicalMultiplier(h2, program2 as any, configPda2);
+        const m1 = m0 + m0 / 100n; // +1%
         await program2.methods
-          .setMultiplier(m1)
+          .setOkumMultiplier(new BN(m1.toString()))
           .accountsPartial({
             rebaser: orchestrator.publicKey,
             config: configPda2,
@@ -740,12 +743,14 @@ describe("lite-psm", () => {
         }
       });
 
-      it("rebaser can set okuM multiplier", async () => {
-        // Multiplier starts at PRECISION (1e9) = $1.00. Set to PRECISION + 1.
-        const newMultiplier = new BN(1_000_000_001);
+      it("rebaser can force the multiplier via the emergency override", async () => {
+        // Multiplier is WAD-scaled (1e18) since the PRECISION migration.
+        // Nudge it one unit above whatever has accrued so far.
+        const current = await computeCanonicalMultiplier(h, program as any, configPda);
+        const newMultiplier = new BN((current + 1n).toString());
 
         await program.methods
-          .setMultiplier(newMultiplier)
+          .setOkumMultiplier(newMultiplier)
           .accountsPartial({
             rebaser: orchestrator.publicKey,
             config: configPda,
@@ -761,10 +766,10 @@ describe("lite-psm", () => {
         // Note: Multiplier cannot be reset - it can only increase (yield accrual model)
       });
 
-      it("non-rebaser CANNOT set okuM price", async () => {
+      it("non-rebaser CANNOT force the multiplier", async () => {
         try {
           await program.methods
-            .setMultiplier(new BN(1_100_000_000)) // Doesn't matter, should fail auth
+            .setOkumMultiplier(new BN("1100000000000000000")) // value irrelevant, auth must fail
             .accountsPartial({
               rebaser: warmMultisig.publicKey, // Wrong role
               config: configPda,
@@ -784,143 +789,44 @@ describe("lite-psm", () => {
   // ==========================================================================
   // Yield Operations (okuM Price Model)
   // ==========================================================================
-  describe("yield operations", () => {
-    it("rebaser can distribute yield via multiplier increase", async () => {
-      // Multiplier has been bumped by previous tests. Set to a higher value.
-      const newMultiplier = new BN(1_010_000_000); // ~$1.01
-      
+  describe("yield operations (streaming rate schedule)", () => {
+    // The old tests here drove `distribute_yield`, which no longer exists.
+    // Under rear-facing epochs the operator measures realised yield off-chain
+    // and publishes a RATE; there is no on-chain "distribute N dollars"
+    // primitive, and therefore no `YieldTooSmall` / supply-proportional-bump
+    // behaviour left to assert.
+    //
+    // The full streaming model -- transaction-free accrual, transaction-free
+    // successor handover, halting on a missed epoch, and every write rail --
+    // lives in `tests/bankrun/streaming-accrual.ts`. What remains here is the
+    // role check, which belongs with the rest of this file's authority matrix.
+
+    it("rebaser can publish a rate schedule", async () => {
+      const now = Number((await h.context.banksClient.getClock()).unixTimestamp);
       await program.methods
-        .setMultiplier(newMultiplier)
-        .accountsPartial({
-          rebaser: orchestrator.publicKey,
-          config: configPda,
-          okuMMint: okuMMint,
-          token2022Program: TOKEN_2022_PROGRAM_ID,
-        })
+        .setOkumYieldRate(
+          new BN(ratePerSecondForApy(0.05).toString()),
+          new BN(now + 30 * 86_400)
+        )
+        .accountsPartial({ rebaser: orchestrator.publicKey, config: configPda })
         .signers([orchestrator])
         .rpc();
 
-      const configAfter = await program.account.psmConfig.fetch(configPda);
-      // lastYieldDistributionSlot should be set
-      expect(Number(configAfter.lastYieldDistributionSlot)).to.be.greaterThan(0);
-    });
-
-    it("non-rebaser CANNOT distribute yield", async () => {
-      try {
-        await program.methods
-          .setMultiplier(new BN(1_100_000_000))
-          .accountsPartial({
-            rebaser: warmMultisig.publicKey, // Wrong role
-            config: configPda,
-            okuMMint: okuMMint,
-            token2022Program: TOKEN_2022_PROGRAM_ID,
-          })
-          .signers([warmMultisig])
-          .rpc();
-        expect.fail("Should have failed");
-      } catch (err: any) {
-        expect(err.error.errorCode.code).to.equal("Unauthorized");
-      }
-    });
-
-    // ------------------------------------------------------------------
-    // distribute_yield: dollar-denominated yield → proportional price bump
-    // ------------------------------------------------------------------
-
-    it("distribute_yield: rebaser bumps multiplier proportional to yield/supply", async () => {
-      // Need okuM supply > 0 so that yield_per_token computes non-zero.
-      const mintInfo = await getMint(
-        provider.connection,
-        okuMMint,
-        undefined,
-        TOKEN_2022_PROGRAM_ID
-      );
-      if (Number(mintInfo.supply) === 0) {
-        // Bail out cleanly — earlier tests should have minted; if not, skip.
-        // Don't fail; this test runs after `mint` describe blocks.
-        return;
-      }
-
-      const cfgBefore = await program.account.psmConfig.fetch(configPda);
-      const supply = BigInt(mintInfo.supply.toString());
-      const PRECISION_BI = 1_000_000_000n;
-
-      // Distribute $0.001 worth of yield (1000 base units of dollars).
-      // Picked deliberately small so yield_per_token > 0 even at high supply
-      // but doesn't push price near MAX_OKU_M_PRICE.
-      const yieldAmount = 1_000n;
-      const expectedBump = (yieldAmount * PRECISION_BI) / supply;
-      // If expected bump truncates to 0 (e.g. tiny yield vs huge supply), the
-      // program returns YieldTooSmall — exercise both branches.
-      if (expectedBump === 0n) {
-        try {
-          await program.methods
-            .distributeYield(new BN(yieldAmount.toString()))
-            .accountsPartial({
-              rebaser: orchestrator.publicKey,
-              config: configPda,
-              okuMMint: okuMMint,
-              token2022Program: TOKEN_2022_PROGRAM_ID,
-            })
-            .signers([orchestrator])
-            .rpc();
-          expect.fail("Should have rejected with YieldTooSmall");
-        } catch (err: any) {
-          expect(err?.error?.errorCode?.code).to.equal("YieldTooSmall");
-        }
-        return;
-      }
-
-      const currentMultiplier = await readMultiplierFromMint(h, okuMMint);
-      const oldPrice = BigInt(currentMultiplier.toString());
-      const expectedNew = oldPrice + expectedBump;
-
-      await program.methods
-        .distributeYield(new BN(yieldAmount.toString()))
-        .accountsPartial({
-          rebaser: orchestrator.publicKey,
-          config: configPda,
-          okuMMint: okuMMint,
-          token2022Program: TOKEN_2022_PROGRAM_ID,
-        })
-        .signers([orchestrator])
-        .rpc();
-
-      const cfgAfter = await program.account.psmConfig.fetch(configPda);
-      // Yield-distribution slot must advance (confirms the on-chain update happened)
-      expect(Number(cfgAfter.lastYieldDistributionSlot)).to.be.greaterThan(
-        Number(cfgBefore.lastYieldDistributionSlot)
+      const cfg: any = await program.account.psmConfig.fetch(configPda);
+      expect(cfg.okumRatePerSecond.toString()).to.equal(
+        ratePerSecondForApy(0.05).toString()
       );
     });
 
-    it("distribute_yield: zero yield_amount rejected", async () => {
+    it("non-rebaser CANNOT publish a rate schedule", async () => {
+      const now = Number((await h.context.banksClient.getClock()).unixTimestamp);
       try {
         await program.methods
-          .distributeYield(new BN(0))
-          .accountsPartial({
-            rebaser: orchestrator.publicKey,
-            config: configPda,
-            okuMMint: okuMMint,
-            token2022Program: TOKEN_2022_PROGRAM_ID,
-          })
-          .signers([orchestrator])
-          .rpc();
-        expect.fail("Should have rejected zero yield");
-      } catch (err: any) {
-        expect(err?.error?.errorCode?.code).to.equal("ZeroAmount");
-      }
-    });
-
-    it("distribute_yield: non-rebaser is rejected with Unauthorized", async () => {
-      try {
-        await program.methods
-          .distributeYield(new BN(1_000))
-          .accountsPartial({
-            rebaser: warmMultisig.publicKey, // wrong role
-            config: configPda,
-            okuMMint: okuMMint,
-            token2022Program: TOKEN_2022_PROGRAM_ID,
-          })
+          .setOkumYieldRate(
+            new BN(ratePerSecondForApy(0.05).toString()),
+            new BN(now + 30 * 86_400)
+          )
+          .accountsPartial({ rebaser: warmMultisig.publicKey, config: configPda })
           .signers([warmMultisig])
           .rpc();
         expect.fail("Should have rejected non-rebaser");
@@ -1092,13 +998,24 @@ describe("lite-psm", () => {
 
       // okuM burned from user
       expect(Number(userOkuMBefore.amount) - Number(userOkuMAfter.amount)).to.equal(redeemAmount.toNumber());
-      // USDC sent to user -- multiplier > PRECISION so user gets more
-      // USDC than raw tokens redeemed (yield accrual from prior tests).
-      const usdcReceived = Number(userUsdcAfter.amount) - Number(userUsdcBefore.amount);
-      expect(usdcReceived).to.be.greaterThan(redeemAmount.toNumber());
+
+      // USDC sent to user == floor(raw * canonicalMultiplier / PRECISION).
+      //
+      // This used to assert `> redeemAmount` on the grounds that "prior tests
+      // accrued yield" -- an implicit dependency on earlier tests having
+      // mutated shared multiplier state. That was fragile before and is simply
+      // wrong now: publishing a rate schedule does not move the multiplier,
+      // elapsed time does, and bankrun's clock is sticky. Assert the actual
+      // pricing rule instead, which holds at any multiplier.
+      const usdcReceived = BigInt(userUsdcAfter.amount) - BigInt(userUsdcBefore.amount);
+      const m = await computeCanonicalMultiplier(h, program as any, configPda);
+      const expectedOut = (BigInt(redeemAmount.toString()) * m) / 1_000_000_000_000_000_000n;
+      expect(usdcReceived.toString()).to.equal(expectedOut.toString());
+      // Never below par: the multiplier is monotonic and starts at 1.0.
+      expect(usdcReceived >= BigInt(redeemAmount.toString())).to.be.true;
       // Vault USDC decreased by the same amount the user received
-      const vaultDecrease = Number(vaultUsdcBefore.amount) - Number(vaultUsdcAfter.amount);
-      expect(vaultDecrease).to.equal(usdcReceived);
+      const vaultDecrease = BigInt(vaultUsdcBefore.amount) - BigInt(vaultUsdcAfter.amount);
+      expect(vaultDecrease.toString()).to.equal(usdcReceived.toString());
     });
 
     it("fails to redeem when paused", async () => {

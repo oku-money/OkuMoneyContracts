@@ -38,6 +38,7 @@ import {
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
+import { ratePerSecondForApy } from "../../scripts/utils/multiplier";
 import {
   coldMultisig,
   warmMultisig,
@@ -54,7 +55,9 @@ import {
   mintToViaBankrun,
   ensureAtaViaBankrun,
   warpSlots,
-  readMultiplierFromMint,
+  computeCanonicalMultiplier,
+  warpBy,
+  getClock,
 } from "../shared/bankrun";
 
 const { Keypair, SystemProgram, PublicKey, Transaction } = anchor.web3;
@@ -341,8 +344,9 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
     const aliceOkuM = await ataAmount(aliceOkuMAta, TOKEN_2022_PROGRAM_ID);
     const bobStart = await ataAmount(bobOkuMAta, TOKEN_2022_PROGRAM_ID);
 
-    // Snapshot starting multiplier from the mint extension.
-    const multiplier0 = await readMultiplierFromMint(h, okuMMint);
+    // Snapshot the starting CANONICAL multiplier (computed from the rate
+    // schedule, not read from the display mirror).
+    const multiplier0 = await computeCanonicalMultiplier(h, psm as any, psmConfigPda);
 
     // Alice -> orchestrator (pull).
     const bridgeAmount = new BN(Number(aliceOkuM));
@@ -375,21 +379,24 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
       .signers([orchestrator])
       .rpc();
 
-    // ===== Multiplier tick BETWEEN the legs =====
-    // Simulate a rebase that lands while the orchestrator is in flight.
-    // Bump the multiplier by 1%.
-    const multiplier1 = multiplier0.mul(new BN(101)).div(new BN(100));
+    // ===== Multiplier ACCRUES between the legs =====
+    // Under streaming accrual there is no "tick" to simulate: the multiplier
+    // moves because time passes, with no transaction at all. That is what
+    // makes this test stronger than its predecessor -- the bridge now has to
+    // be correct across a continuously-moving multiplier rather than across a
+    // single discrete jump the orchestrator controls.
+    //
+    // Publish a fast rate, then simply warp. Nothing is submitted in between.
+    const nowTs = Number((await getClock(h)).unixTimestamp);
     await psm.methods
-      .setMultiplier(multiplier1)
-      .accountsPartial({
-        rebaser: orchestrator.publicKey,
-        config: psmConfigPda,
-        okuMMint,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-      })
+      .setOkumYieldRate(new BN(ratePerSecondForApy(2.0).toString()), new BN(nowTs + 30 * 86_400))
+      .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
       .signers([orchestrator])
       .rpc();
-    await warpSlots(h, 1);
+    await warpBy(h, 2 * 86_400);
+
+    const multiplier1 = await computeCanonicalMultiplier(h, psm as any, psmConfigPda);
+    expect(multiplier1 > multiplier0, "multiplier should have streamed upward").to.be.true;
 
     // Mint on "chain B" — same raw amount, regardless of multiplier.
     await psm.methods

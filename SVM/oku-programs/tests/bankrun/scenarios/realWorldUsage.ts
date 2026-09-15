@@ -44,6 +44,7 @@ import {
 import { Transaction } from "@solana/web3.js";
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
+import { PRECISION, ratePerSecondForApy } from "../../../scripts/utils/multiplier";
 import {
   coldMultisig,
   warmMultisig,
@@ -63,7 +64,8 @@ import {
   ensureAtaViaBankrun,
   warpSlots,
   warpBy,
-  readMultiplierFromMint,
+  computeCanonicalMultiplier,
+  getClock,
 } from "../../shared/bankrun";
 
 const { Keypair, SystemProgram, PublicKey } = anchor.web3;
@@ -90,7 +92,6 @@ const DURATION_DAYS = parseInt(
   10
 );
 const DAY_SECS = 86400;
-const PRECISION = new BN(1_000_000_000); // 1e9
 
 // 5% APY ~ +0.0137% per day. In 1e9 precision: 1e9 * 1.000137 ~ 1_000_137_000
 const DAILY_MULTIPLIER_TICK_BPS = 14; // ~0.014% per tick day
@@ -406,22 +407,27 @@ describe(
             await mintUsdc(ctx.h, ctx.vaultUsdcAta, ctx.usdcMint, 10_000_000_000);
 
           } else if (r < 0.80) {
-            // 5%: rebaser ticks the multiplier (simulating yield event)
-            const curMultiplier = await readMultiplierFromMint(ctx.h, ctx.okuMMint);
-            const bump = curMultiplier.muln(DAILY_MULTIPLIER_TICK_BPS).divn(100_000);
-            const newMultiplier = curMultiplier.add(bump);
+            // 5%: rebaser rolls the epoch by republishing a rate schedule.
+            //
+            // Note this is NOT a "yield event" any more. Yield accrues
+            // continuously from elapsed time; this transaction only changes
+            // the SLOPE. The simulation therefore accrues yield on every warp
+            // below, whether or not this branch is taken -- which is a
+            // strictly more realistic model of the protocol than the old
+            // discrete tick.
             try {
+              const nowTs = Number((await getClock(ctx.h)).unixTimestamp);
               await ctx.psm.methods
-                .setMultiplier(newMultiplier)
+                .setOkumYieldRate(
+                  new BN(ratePerSecondForApy(0.05).toString()),
+                  new BN(nowTs + 30 * DAY_SECS)
+                )
                 .accountsPartial({
                   rebaser: psmOrchestrator.publicKey,
                   config: ctx.configPda,
-                  okuMMint: ctx.okuMMint,
-                  token2022Program: TOKEN_2022_PROGRAM_ID,
                 })
                 .signers([psmOrchestrator])
                 .rpc();
-              await warpSlots(ctx.h, 1); // advance past yield lock
             } catch { /* soft */ }
 
           } else if (r < 0.83) {
@@ -479,9 +485,12 @@ describe(
         assertLte(cumulativeDrift, BigInt(totalBridges) * 2n + 10n, `day ${day} I4: cumulative drift`);
       }
 
-      // Final: multiplier should be at or above PRECISION
-      const finalMultiplier = await readMultiplierFromMint(ctx.h, ctx.okuMMint);
-      assertGte(BigInt(finalMultiplier.toString()), BigInt(PRECISION.toString()), "final multiplier >= PRECISION");
+      // Final: the canonical multiplier must be at or above PRECISION.
+      // Monotonicity is structural -- rates below PRECISION are rejected at
+      // write time -- so this is a check that nothing in the simulation found
+      // a path around that.
+      const finalMultiplier = await computeCanonicalMultiplier(ctx.h, ctx.psm as any, ctx.configPda);
+      assertGte(finalMultiplier, PRECISION, "final multiplier >= PRECISION");
     });
   }
 );
@@ -511,14 +520,16 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const { usdcOut } = await orchestratorBridge(ctx, 0, 1, bridgeAmt);
       assertEq(await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID), 0n, "float after A->B");
 
-      // Multiplier tick between legs (simulates rebase on source chain)
-      await warpBy(ctx.h, DAY_SECS * 30); // 30 days
-      await warpSlots(ctx.h, 1);
-      const curMultiplierE1 = await readMultiplierFromMint(ctx.h, ctx.okuMMint);
-      const newMultiplier = curMultiplierE1.muln(102).divn(100); // +2%
-      await ctx.psm.methods.setMultiplier(newMultiplier)
-        .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda, okuMMint: ctx.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
+      // Multiplier ACCRUES between legs -- with no transaction at all.
+      // Publish a ~26% APY schedule, then warp 30 days: the multiplier climbs
+      // roughly 2% purely from elapsed time. The old version had to submit a
+      // `set_multiplier` here; that it is no longer needed is the point.
+      const e1Now = Number((await getClock(ctx.h)).unixTimestamp);
+      await ctx.psm.methods
+        .setOkumYieldRate(new BN(ratePerSecondForApy(0.27).toString()), new BN(e1Now + 60 * DAY_SECS))
+        .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda })
         .signers([psmOrchestrator]).rpc();
+      await warpBy(ctx.h, DAY_SECS * 30); // 30 days
       await warpSlots(ctx.h, 1);
 
       // Bridge leg B: user 1 -> user 0 (back again)
@@ -572,14 +583,15 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const orchUsdcAfter = await tokenBalance(ctx.h, ctx.orchUsdcAta, TOKEN_PROGRAM_ID);
       const usdcFromRedeem = orchUsdcAfter - orchUsdcBefore;
 
-      // Multiplier tick (+1%) between legs
-      await warpSlots(ctx.h, 1);
-      const curMultiplierE3 = await readMultiplierFromMint(ctx.h, ctx.okuMMint);
-      const newMultiplier = curMultiplierE3.muln(101).divn(100);
-      await ctx.psm.methods.setMultiplier(newMultiplier)
-        .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda, okuMMint: ctx.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
+      // Multiplier accrues (~+1%) between legs, transaction-free.
+      const e3Now = Number((await getClock(ctx.h)).unixTimestamp);
+      await ctx.psm.methods
+        .setOkumYieldRate(new BN(ratePerSecondForApy(0.13).toString()), new BN(e3Now + 60 * DAY_SECS))
+        .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda })
         .signers([psmOrchestrator]).rpc();
+      await warpBy(ctx.h, DAY_SECS * 30);
       await warpSlots(ctx.h, 1);
+      const newMultiplier = await computeCanonicalMultiplier(ctx.h, ctx.psm as any, ctx.configPda);
 
       // Destination leg: mint okuM with same USDC at new (higher) multiplier -> fewer okuM
       await mintUsdc(ctx.h, ctx.orchUsdcAta, ctx.usdcMint, Number(usdcFromRedeem));
@@ -592,9 +604,10 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const orchOkuMAfter = await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID);
       const okuMMinted = orchOkuMAfter - orchOkuMBefore;
 
-      // Dollar value check: okuMMinted * newMultiplier ~ usdcFromRedeem * 1e9 (within rounding)
-      const newMultiplierBig = BigInt(newMultiplier.toString());
-      const dollarValue = (okuMMinted * newMultiplierBig) / 1_000_000_000n;
+      // Dollar value check: okuMMinted * m ~ usdcFromRedeem (within rounding).
+      // Denominator is now PRECISION = 1e18, not 1e9.
+      const newMultiplierBig = newMultiplier;
+      const dollarValue = (okuMMinted * newMultiplierBig) / PRECISION;
       const drift = dollarValue > usdcFromRedeem ? dollarValue - usdcFromRedeem : usdcFromRedeem - dollarValue;
       assertLte(drift, 2n, "dollar value drift after multiplier tick");
 
@@ -783,10 +796,11 @@ describe("realWorldUsage (SVM) edge cases", () => {
       await mintToViaBankrun(h, usdcMint, setup.vaultUsdcAta, payer, 100_000_000, TOKEN_PROGRAM_ID);
       await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 10_000_000, TOKEN_PROGRAM_ID);
 
-      // Bump multiplier (slot N)
-      const curMultiplierE7 = await readMultiplierFromMint(h, okuMMint);
-      const newMultiplier = curMultiplierE7.addn(1000);
-      await psm.methods.setMultiplier(newMultiplier)
+      // Emergency override (slot N) -- the only instruction that still stamps
+      // the sandwich lock, because it is the only one producing a discrete
+      // jump. Routine yield no longer engages it.
+      const curMultiplierE7 = await computeCanonicalMultiplier(h, psm as any, configPda);
+      await psm.methods.setOkumMultiplier(new BN((curMultiplierE7 + 1000n).toString()))
         .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: configPda, okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
         .signers([psmOrchestrator]).rpc();
 

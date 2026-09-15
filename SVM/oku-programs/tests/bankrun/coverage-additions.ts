@@ -16,6 +16,11 @@ import {
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
 import {
+  computeMultiplier,
+  scheduleFromConfig,
+  ratePerSecondForApy,
+} from "../../scripts/utils/multiplier";
+import {
   coldMultisig,
   warmMultisig,
   psmOrchestrator,
@@ -69,26 +74,32 @@ describe("PSM coverage additions", () => {
     await fundKeypairs(h, [user], 10 * anchor.web3.LAMPORTS_PER_SOL);
   });
 
-  it("distribute_yield reverts ZeroAmount when okuM supply == 0", async () => {
-    try {
-      await psm.methods
-        .distributeYield(new BN(1_000_000))
-        .accountsPartial({
-          rebaser: orchestrator.publicKey,
-          config: configPda,
-          okuMMint,
-          token2022Program: TOKEN_2022_PROGRAM_ID,
-        })
-        .signers([orchestrator])
-        .rpc();
-      expect.fail("Should have reverted with ZeroAmount");
-    } catch (err: any) {
-      const code = err?.error?.errorCode?.code || err?.message || "";
-      expect(code).to.satisfy(
-        (c: string) => c === "ZeroAmount" || c.includes("ZeroAmount"),
-        `Expected ZeroAmount, got: ${code}`
-      );
-    }
+  // The old `distribute_yield reverts ZeroAmount when okuM supply == 0` test
+  // was deleted with the instruction it covered. Under streaming accrual the
+  // operator publishes a RATE, and a rate is well-defined at zero supply —
+  // nothing is divided by the supply, so there is no degenerate case to guard.
+  // That is the point of the model: the multiplier has no supply term, which
+  // is exactly what makes it identical across chains.
+  //
+  // The replacement property — that a schedule can be published and accrues
+  // correctly against an empty mint — is asserted here.
+  it("a rate schedule is valid at zero supply (no supply term in the multiplier)", async () => {
+    const clock = await h.context.banksClient.getClock();
+    const now = Number(clock.unixTimestamp);
+
+    await psm.methods
+      .setOkumYieldRate(new BN(ratePerSecondForApy(0.05).toString()), new BN(now + 30 * 86_400))
+      .accountsPartial({ rebaser: orchestrator.publicKey, config: configPda })
+      .signers([orchestrator])
+      .rpc();
+
+    const cfg: any = await psm.account.psmConfig.fetch(configPda);
+    expect(cfg.okumRatePerSecond.toString()).to.equal(ratePerSecondForApy(0.05).toString());
+
+    // Supply is zero, yet the multiplier advances — no division by supply.
+    const m0 = computeMultiplier(scheduleFromConfig(cfg), BigInt(now));
+    const m1 = computeMultiplier(scheduleFromConfig(cfg), BigInt(now + 86_400));
+    expect(m1 > m0).to.be.true;
   });
 
   it("lite-psm initialize fails if config PDA already exists", async () => {

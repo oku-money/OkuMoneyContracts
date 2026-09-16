@@ -503,10 +503,18 @@ reference-only in their own module docs:
 **Follow-up required before this can be closed:**
 - Move both stores to a durable, shared, ideally signed/versioned artifact —
   not local JSON files — before relying on them for real rate decisions across
-  multiple operators.
+  multiple operators. **Treated as a mainnet blocker** (`SVM/DECISIONS.md`
+  D-26): under a backend-controlled architecture these files ARE the
+  protocol's system of record, so the governing principle raises the stakes
+  here rather than lowering them.
 - Decide the V̄ sampling cadence (recommended: hourly) against actual AUM
   volatility, and confirm it's fine-grained enough that `samplesInWindow`'s
   ">= 2 samples" floor is never the binding constraint on measurement accuracy.
+- **`globalValue.ts` now includes SVM** and requires `SVM_RPC_URL`,
+  `SVM_LITE_PSM_PROGRAM_ID` and `SVM_OKU_M_MINT`. If unset, SVM is excluded
+  from V(t) and — since V is the DENOMINATOR — every derived rate comes out
+  too high. It warns, but consider failing hard once SVM is live.
+  See `SVM/DECISIONS.md` D-27.
 - Decide whether `checkMultiplierDrift.ts` should assert the published rate is
   consistent with a declared `(epochId, realisedYieldUsd, measuredAvgValueUsd,
   carryInUsd)` tuple per epoch (it currently only reports the ledger's
@@ -561,18 +569,24 @@ decision isn't forced by the tooling.
   characterized but not recommended; 7–30 days is the practical range.
   **Follow-up:** if a genuine accuracy-vs-length comparison is wanted, fix the
   shock's position to an ABSOLUTE time (not `atFraction`) so it doesn't scale
-  with the epoch under test.
-- Pick `conservativeFactor` (recommended: ~0.97 — simulation shows the
+  with the epoch under test. **Not worth doing first** — with on-chain grid
+  validation declined (D-22), epoch length is a backend constant and changing
+  it later is a config edit, not an upgrade. Recommendation is 30 days on the
+  operational argument alone. See `SVM/DECISIONS.md` D-23.
+- Pick `conservativeFactor` — see `SVM/DECISIONS.md` D-24 for the current
+  recommendation and its reasoning (0.97 *until the early-shock monitor is
+  live*, then revisit; the margin is buying protection against the one
+  irreversible failure mode). (recommended: ~0.97 — simulation shows the
   recommended and excessive settings now land almost exactly on
   `-(1-conservativeFactor)` post-fix: 0.97 → −3.00%, 0.5 → −50.00%, confirming
   the buffer costs exactly what it's designed to and no more).
 - Once decided, set the `EPOCH_ANCHOR_UNIX`/`EPOCH_LENGTH_SECONDS` env vars in
   the operator runbook so grid-drift on any one chain is caught automatically.
-- Consider whether the epoch grid should be validated ON-CHAIN (storing
-  `epochLength`/`epochAnchor` and checking `endTimestamp` alignment in the
-  setters) rather than only in the off-chain monitor — this would prevent a
-  fat-fingered timestamp on one chain from silently desynchronising that
-  chain's schedule, at the cost of added contract rigidity. Not decided.
+- ~~Consider whether the epoch grid should be validated ON-CHAIN~~ —
+  **DECIDED: no.** Pure business policy, and it would hard-code a still-open
+  parameter (epoch length) into six live contracts, turning a config choice
+  into an upgrade. Detection stays in `checkMultiplierDrift.ts`'s optional
+  grid check. See `SVM/DECISIONS.md` D-22 and the governing principle there.
 
 ### Early-shock detection: no automated monitoring for the "irreversible base-window overshoot" failure mode `[EVM]`
 
@@ -596,7 +610,12 @@ entirely manual.
 
 **Follow-up required before this can be closed:** build the continuous
 monitor (extend `checkMultiplierDrift.ts` or a new script) and decide the
-response threshold/automation level (alert-only vs. auto-halt).
+response threshold/automation level. Current recommendation — implement
+auto-halt but default it OFF, enabling once the monitor has run several
+epochs without false positives. The protocol is backend-controlled, so the
+backend should hold this lever; but an automated
+`setOkuMYieldRateWithSuccessor(PRECISION, ...)` across six chains warrants
+evidence before arming. See `SVM/DECISIONS.md` D-25.
 
 ### EVM/SVM yield-model divergence — RESOLVED `[SVM]`
 

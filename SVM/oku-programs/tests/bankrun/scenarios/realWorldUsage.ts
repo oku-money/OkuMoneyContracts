@@ -43,7 +43,7 @@ import {
 } from "@solana/spl-token";
 import { Transaction } from "@solana/web3.js";
 import { expect } from "chai";
-import { LitePsm } from "../../target/types/lite_psm";
+import { LitePsm } from "../../../target/types/lite_psm";
 import { PRECISION, ratePerSecondForApy } from "../../../scripts/utils/multiplier";
 import {
   coldMultisig,
@@ -93,8 +93,6 @@ const DURATION_DAYS = parseInt(
 );
 const DAY_SECS = 86400;
 
-// 5% APY ~ +0.0137% per day. In 1e9 precision: 1e9 * 1.000137 ~ 1_000_137_000
-const DAILY_MULTIPLIER_TICK_BPS = 14; // ~0.014% per tick day
 
 // ---------------------------------------------------------------------------
 // Chai BigInt helpers (chai doesn't support BigInt natively)

@@ -40,6 +40,12 @@ import * as path from 'path';
 import { detectNetwork, createProvider, isForkNetwork, getParentNetwork } from '../utils/network';
 import { NetworkName } from '../config/networks';
 import { logger } from '../utils/logger';
+import {
+  PRECISION,
+  computeMultiplier,
+  scheduleFromConfig,
+  ratePerSecondForApy,
+} from '../utils/multiplier';
 import { loadDeployment, loadDeploymentForFork, DeploymentAddresses } from '../utils/addressBook';
 import {
   derivePsmConfigPDA,
@@ -66,13 +72,20 @@ interface TestContext {
 }
 
 /**
- * Read the current ScaledUiAmount multiplier from the OkuM mint.
- * Returns the multiplier scaled by 1e9 (matching on-chain PRECISION),
- * applying the same zero-init / effective-timestamp guard as the
- * on-chain `read_multiplier` helper.
+ * The CANONICAL multiplier, WAD-scaled (1e18).
+ *
+ * Computed from the rate schedule on `PsmConfig`, exactly as the program does.
+ * Deliberately NOT read from the mint's ScaledUiAmountConfig: that extension is
+ * a write-only display mirror that lags by up to one sync interval, and pricing
+ * never touches it.
  */
-async function readMultiplier(ctx: TestContext): Promise<BN> {
-  const PRECISION = 1_000_000_000;
+async function readMultiplier(ctx: TestContext): Promise<bigint> {
+  const cfg: any = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  return computeMultiplier(scheduleFromConfig(cfg), BigInt(Math.floor(Date.now() / 1000)));
+}
+
+/** What wallets currently render — the lagging display mirror. */
+async function readDisplayMultiplier(ctx: TestContext): Promise<number> {
   const mint = await getMint(
     ctx.provider.connection,
     ctx.okuMMint,
@@ -81,14 +94,8 @@ async function readMultiplier(ctx: TestContext): Promise<BN> {
   );
   const cfg = getScaledUiAmountConfig(mint);
   if (!cfg) throw new Error('OkuM mint has no ScaledUiAmountConfig extension');
-
   const nowSec = Math.floor(Date.now() / 1000);
-  const effective =
-    cfg.newMultiplier > 0 && nowSec >= Number(cfg.newMultiplierEffectiveTimestamp)
-      ? cfg.newMultiplier
-      : cfg.multiplier;
-
-  return new BN(Math.round(effective * PRECISION));
+  return nowSec >= Number(cfg.newMultiplierEffectiveTimestamp) ? cfg.newMultiplier : cfg.multiplier;
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +277,7 @@ async function readState(ctx: TestContext) {
       'Direct Minter Allowance': fmtAmount(Number((config as any).directMinterAllowance)),
       'Direct Burner Allowance': fmtAmount(Number((config as any).directBurnerAllowance)),
       'Is Paused': String(config.isPaused),
-      'Multiplier (1e9)': multiplier.toString(),
+      'Multiplier (wad, canonical)': multiplier.toString(),
     });
   } catch (e: any) {
     logger.error(`Failed to fetch PSM config: ${e.message}`);
@@ -486,78 +493,101 @@ async function testRedeem(ctx: TestContext) {
 }
 
 // ---------------------------------------------------------------------------
-// Step: distributeYield
+// Step: streamingAccrual
 // ---------------------------------------------------------------------------
 
 /**
- * Distribute a small dollar-denominated yield amount across all OkuM holders.
- * Calls `lite_psm::distribute_yield` (rebaser-gated), which computes:
- *   new_multiplier = old + (yield_amount × PRECISION / total_supply_dollars)
- * and writes the new multiplier directly to the mint's ScaledUiAmountConfig
- * extension via CPI, stamping `last_yield_distribution_slot` so subsequent
- * same-slot ops revert.
+ * Exercise the streaming rate schedule end-to-end against a live cluster.
  *
- * Verifies the multiplier strictly increased and roughly matches the formula
- * (small f64 rounding tolerance).
+ * This replaces the old `distributeYield` step, which called an instruction
+ * that no longer exists. The difference is not cosmetic: there is nothing to
+ * "distribute" any more. The operator publishes a per-second RATE and the
+ * multiplier follows from elapsed wall-clock time, with no further
+ * transactions.
+ *
+ * That makes this the one check that cannot be faked by a test harness warping
+ * a simulated clock -- it uses the cluster's real time, so it verifies that
+ * accrual actually happens on a real validator.
+ *
+ * Also asserts the display-mirror invariant (`display <= canonical`) that the
+ * whole ScaledUiAmount design rests on.
  */
-async function testDistributeYield(ctx: TestContext) {
-  logger.section('Test: Distribute Yield');
+async function testStreamingAccrual(ctx: TestContext) {
+  logger.section('Test: Streaming Accrual');
 
-  const PRECISION = 1_000_000_000;
+  // Publish a deliberately fast rate so measurable yield accrues within the
+  // few seconds this test can afford to wait. 50,000% APY sounds absurd but is
+  // well under MAX_RATE and only runs for the length of this test.
+  const rate = ratePerSecondForApy(500);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const endTs = nowSec + 3600;
 
-  // The deployer must be the rebaser on the PSM config (true after grantRoles).
-  const multiplierBefore = await readMultiplier(ctx);
-  logger.info(`multiplier before: ${multiplierBefore.toString()}`);
-
-  // Fetch OkuM total supply to predict new multiplier.
-  const mintInfo = await getMint(
-    ctx.provider.connection,
-    ctx.okuMMint,
-    'confirmed',
-    TOKEN_2022_PROGRAM_ID
-  );
-  const totalSupply = mintInfo.supply;
-  if (totalSupply === 0n) {
-    logger.warning('okuM total supply is 0 — skipping distribute_yield (nothing to distribute).');
-    return;
-  }
-
-  // Dollar value of current supply = raw_supply * multiplier / PRECISION.
-  const supplyDollars = (totalSupply * BigInt(multiplierBefore.toString())) / BigInt(PRECISION);
-  if (supplyDollars === 0n) {
-    logger.warning('Dollar-denominated supply rounds to 0 — skipping distribute_yield.');
-    return;
-  }
-
-  // Yield = 1 USDC (6 decimals = 1_000_000).
-  const yieldAmount = new BN(1_000_000); // 1 USD
-  const expectedDelta = (BigInt(yieldAmount.toString()) * BigInt(PRECISION)) / supplyDollars;
-  logger.info(`Distributing ${Number(yieldAmount) / 1e6} USD across dollar-supply ${supplyDollars}`);
-  logger.info(`Expected multiplier delta (approx, f64 rounding applies): ${expectedDelta}`);
+  const before = await readMultiplier(ctx);
+  logger.info(`canonical multiplier before: ${before}`);
 
   const sig = await ctx.psm.methods
-    .distributeYield(yieldAmount)
+    .setOkumYieldRate(new BN(rate.toString()), new BN(endTs))
+    .accountsPartial({ rebaser: ctx.deployer.publicKey, config: ctx.psmConfig })
+    .rpc();
+  logger.success(`set_okum_yield_rate: ${sig}`);
+
+  // Confirm the schedule landed byte-for-byte.
+  const cfg: any = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  const schedule = scheduleFromConfig(cfg);
+  if (schedule.ratePerSecond !== rate) {
+    throw new Error(`rate mismatch: wrote ${rate}, read ${schedule.ratePerSecond}`);
+  }
+  if (schedule.rateEnd !== BigInt(endTs)) {
+    throw new Error(`rateEnd mismatch: wrote ${endTs}, read ${schedule.rateEnd}`);
+  }
+
+  // Wait on the cluster's real clock. NO transaction is sent in this window --
+  // that is the property under test.
+  const WAIT_SECONDS = 15;
+  logger.info(`waiting ${WAIT_SECONDS}s with NO transactions to observe accrual...`);
+  await new Promise((r) => setTimeout(r, WAIT_SECONDS * 1000));
+
+  const after = await readMultiplier(ctx);
+  logger.info(`canonical multiplier after:  ${after}`);
+
+  if (after <= before) {
+    throw new Error(
+      `multiplier did not stream: ${before} -> ${after}. Accrual should advance ` +
+        'from elapsed time alone, with no transaction.'
+    );
+  }
+  logger.success(`multiplier advanced by ${after - before} with zero transactions`);
+
+  // Display mirror: crank it, then assert it never reads above canonical.
+  const syncSig = await ctx.psm.methods
+    .syncDisplayMultiplier()
     .accountsPartial({
-      rebaser: ctx.deployer.publicKey,
+      cranker: ctx.deployer.publicKey,
       config: ctx.psmConfig,
       okuMMint: ctx.okuMMint,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
     .rpc();
-  await confirmTx(ctx, sig);
-  logger.success(`distribute_yield tx: ${explorerLink(ctx.network, sig)}`);
+  logger.success(`sync_display_multiplier: ${syncSig}`);
 
-  const multiplierAfter = await readMultiplier(ctx);
-  logger.info(`multiplier after: ${multiplierAfter.toString()}`);
-
-  if (multiplierAfter.lte(multiplierBefore)) {
+  const display = await readDisplayMultiplier(ctx);
+  const canonical = await readMultiplier(ctx);
+  const displayWad = BigInt(Math.floor(display * 1e18));
+  logger.info(`display ${display} vs canonical ${canonical}`);
+  if (displayWad > canonical) {
     throw new Error(
-      `Expected multiplier to increase, but went ${multiplierBefore.toString()} → ${multiplierAfter.toString()}.`
+      `INVARIANT VIOLATION: display ${displayWad} exceeds canonical ${canonical}. ` +
+        'Wallets would promise more than the PSM will pay.'
     );
   }
-  logger.success(
-    `Yield distributed — multiplier increased ${multiplierBefore.toString()} → ${multiplierAfter.toString()} (expected delta ≈${expectedDelta}, f64 rounding may vary).`
-  );
+  logger.success('display <= canonical holds');
+
+  // Leave the deployment halted rather than streaming at 500x APY.
+  const haltSig = await ctx.psm.methods
+    .setOkumYieldRate(new BN(PRECISION.toString()), new BN(0))
+    .accountsPartial({ rebaser: ctx.deployer.publicKey, config: ctx.psmConfig })
+    .rpc();
+  logger.success(`halted accrual after test: ${haltSig}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -758,7 +788,7 @@ const STEPS: Record<string, (ctx: TestContext) => Promise<void>> = {
   mint: testMint,
   transfer: testTransfer,
   redeem: testRedeem,
-  distributeYield: testDistributeYield,
+  streamingAccrual: testStreamingAccrual,
   pause: testPause,
   setAuthority: testSetAuthority,
 };
@@ -811,7 +841,7 @@ async function main() {
       'mint',
       'transfer',
       'redeem',
-      'distributeYield',
+      'streamingAccrual',
       'pause',
       'setAuthority',
     ];

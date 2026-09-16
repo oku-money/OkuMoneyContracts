@@ -319,81 +319,6 @@
       ]
     },
     {
-      "name": "distribute_yield",
-      "docs": [
-        "Distribute yield across all OkuM holders (REBASER only)",
-        "new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)"
-      ],
-      "discriminator": [
-        233,
-        92,
-        186,
-        157,
-        235,
-        238,
-        212,
-        114
-      ],
-      "accounts": [
-        {
-          "name": "rebaser",
-          "docs": [
-            "Rebaser role - authorized to distribute yield"
-          ],
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "docs": [
-            "PSM config - stores multiplier state and last_yield_distribution_slot"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_m_mint",
-          "docs": [
-            "OkuM mint - mutable (needed for UpdateMultiplier CPI) and to read total supply"
-          ],
-          "writable": true
-        },
-        {
-          "name": "token_2022_program",
-          "docs": [
-            "Token-2022 program"
-          ],
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-        }
-      ],
-      "args": [
-        {
-          "name": "yield_amount",
-          "type": "u64"
-        }
-      ]
-    },
-    {
       "name": "freeze_account",
       "discriminator": [
         253,
@@ -1521,26 +1446,29 @@
       ]
     },
     {
-      "name": "set_multiplier",
+      "name": "set_next_okum_yield_rate",
       "docs": [
-        "Set OkuM multiplier directly (REBASER only)",
-        "Sets last_yield_distribution_slot for sandwich prevention"
+        "Pre-stage the successor rate that takes over at `okum_rate_end` with NO",
+        "transaction at the boundary (REBASER only).",
+        "",
+        "EVM: `OkuMoney.setNextOkuMYieldRate(uint256,uint256)`."
       ],
       "discriminator": [
-        214,
-        246,
-        86,
-        131,
-        196,
-        139,
-        23,
-        91
+        92,
+        215,
+        167,
+        110,
+        100,
+        155,
+        226,
+        170
       ],
       "accounts": [
         {
           "name": "rebaser",
           "docs": [
-            "Rebaser role - authorized to update OkuM multiplier"
+            "Rebaser role — the single authority over yield on both stacks.",
+            "EVM mirror: `Roles.OKUM_REBASER`."
           ],
           "signer": true,
           "relations": [
@@ -1549,9 +1477,268 @@
         },
         {
           "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_rate",
+          "type": "u64"
+        },
+        {
+          "name": "pending_end_timestamp",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "set_okum_multiplier",
+      "docs": [
+        "EMERGENCY: force the multiplier to an explicit value and halt accrual",
+        "(REBASER only). The only instruction that engages the sandwich lock.",
+        "",
+        "EVM: `OkuMoney.setOkuMMultiplier(uint256)`."
+      ],
+      "discriminator": [
+        89,
+        177,
+        97,
+        177,
+        9,
+        168,
+        244,
+        240
+      ],
+      "accounts": [
+        {
+          "name": "rebaser",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_m_mint",
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_multiplier",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "set_okum_yield_rate",
+      "docs": [
+        "Set the active per-second rate and its bounded window (REBASER only).",
+        "",
+        "EVM: `OkuMoney.setOkuMYieldRate(uint256,uint256)`."
+      ],
+      "discriminator": [
+        72,
+        196,
+        127,
+        236,
+        51,
+        111,
+        254,
+        17
+      ],
+      "accounts": [
+        {
+          "name": "rebaser",
           "docs": [
-            "PSM config - stores multiplier state and last_yield_distribution_slot"
+            "Rebaser role — the single authority over yield on both stacks.",
+            "EVM mirror: `Roles.OKUM_REBASER`."
           ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_rate",
+          "type": "u64"
+        },
+        {
+          "name": "end_timestamp",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "set_okum_yield_rate_with_successor",
+      "docs": [
+        "Set the active rate and its successor atomically (REBASER only).",
+        "This is the instruction the epoch orchestrator uses.",
+        "",
+        "EVM: `OkuMoney.setOkuMYieldRateWithSuccessor(uint256,uint256,uint256,uint256)`."
+      ],
+      "discriminator": [
+        147,
+        106,
+        72,
+        68,
+        80,
+        116,
+        9,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "rebaser",
+          "docs": [
+            "Rebaser role — the single authority over yield on both stacks.",
+            "EVM mirror: `Roles.OKUM_REBASER`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_rate",
+          "type": "u64"
+        },
+        {
+          "name": "end_timestamp",
+          "type": "i64"
+        },
+        {
+          "name": "next_rate",
+          "type": "u64"
+        },
+        {
+          "name": "next_end_timestamp",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "sync_display_multiplier",
+      "docs": [
+        "Refresh the wallet-facing ScaledUiAmount display mirror.",
+        "**Permissionless** — the written value is fully determined by on-chain",
+        "state, so the caller has no discretion. No EVM counterpart."
+      ],
+      "discriminator": [
+        130,
+        206,
+        76,
+        127,
+        160,
+        220,
+        61,
+        177
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Anyone. Pays the transaction fee; gains nothing else."
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
           "writable": true,
           "pda": {
             "seeds": [
@@ -1576,24 +1763,16 @@
         {
           "name": "oku_m_mint",
           "docs": [
-            "OkuM mint - mutable (needed for UpdateMultiplier CPI) and to read total supply for event"
+            "Mutable: the `UpdateMultiplier` CPI writes the extension."
           ],
           "writable": true
         },
         {
           "name": "token_2022_program",
-          "docs": [
-            "Token-2022 program"
-          ],
           "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         }
       ],
-      "args": [
-        {
-          "name": "new_multiplier",
-          "type": "u64"
-        }
-      ]
+      "args": []
     },
     {
       "name": "thaw_account",
@@ -1958,6 +2137,19 @@
       ]
     },
     {
+      "name": "DisplayMultiplierSynced",
+      "discriminator": [
+        225,
+        77,
+        85,
+        226,
+        151,
+        208,
+        222,
+        195
+      ]
+    },
+    {
       "name": "FreezeEvent",
       "discriminator": [
         71,
@@ -2046,6 +2238,32 @@
         104,
         130,
         43
+      ]
+    },
+    {
+      "name": "PendingRateCancelled",
+      "discriminator": [
+        197,
+        48,
+        193,
+        249,
+        36,
+        80,
+        163,
+        78
+      ]
+    },
+    {
+      "name": "PendingYieldRateUpdated",
+      "discriminator": [
+        100,
+        109,
+        59,
+        83,
+        141,
+        177,
+        65,
+        99
       ]
     },
     {
@@ -2140,16 +2358,16 @@
       ]
     },
     {
-      "name": "YieldDistributed",
+      "name": "YieldRateUpdated",
       "discriminator": [
-        107,
-        100,
-        4,
-        71,
-        95,
-        176,
+        119,
+        6,
         248,
-        94
+        75,
+        216,
+        195,
+        215,
+        43
       ]
     }
   ],
@@ -2221,66 +2439,86 @@
     },
     {
       "code": 6013,
-      "name": "YieldTooSmall",
-      "msg": "Yield amount too small to affect multiplier (truncates to zero)"
+      "name": "InvalidRate",
+      "msg": "Rate must be >= PRECISION (the multiplier cannot decrease)"
     },
     {
       "code": 6014,
+      "name": "RateTooHigh",
+      "msg": "Rate exceeds MAX_RATE"
+    },
+    {
+      "code": 6015,
+      "name": "EndTimestampNotAllowed",
+      "msg": "A halted rate must not carry an end timestamp"
+    },
+    {
+      "code": 6016,
+      "name": "EndTimestampInPast",
+      "msg": "A yielding rate requires an end timestamp in the future"
+    },
+    {
+      "code": 6017,
+      "name": "NoRateEndSet",
+      "msg": "Cannot stage a successor: no active rate window is set"
+    },
+    {
+      "code": 6018,
+      "name": "RateAlreadyExpired",
+      "msg": "Cannot stage a successor: the active rate window has already expired"
+    },
+    {
+      "code": 6019,
+      "name": "PendingEndNotAfterRateEnd",
+      "msg": "Successor expiry must be strictly after the active rate end"
+    },
+    {
+      "code": 6020,
       "name": "MultiplierAboveMax",
       "msg": "Proposed multiplier exceeds MAX_MULTIPLIER ceiling"
     },
     {
-      "code": 6015,
-      "name": "MultiplierUnpackFailed",
-      "msg": "Failed to unpack OkuM mint account data"
-    },
-    {
-      "code": 6016,
-      "name": "ScaledUiExtensionMissing",
-      "msg": "OkuM mint is missing the ScaledUiAmount extension"
-    },
-    {
-      "code": 6017,
+      "code": 6021,
       "name": "MultiplierOutOfRange",
-      "msg": "Multiplier from ScaledUiAmount extension is zero or out of range"
+      "msg": "Multiplier could not be computed from the current rate schedule"
     },
     {
-      "code": 6018,
+      "code": 6022,
       "name": "MultiplierUpdateFailed",
       "msg": "Failed to update ScaledUiAmount multiplier"
     },
     {
-      "code": 6019,
+      "code": 6023,
       "name": "InvalidAuthority",
       "msg": "Authority pubkey is invalid (e.g. zero pubkey)"
     },
     {
-      "code": 6020,
+      "code": 6024,
       "name": "NoPendingRoleAdmin",
       "msg": "No pending role-admin transfer to accept"
     },
     {
-      "code": 6021,
+      "code": 6025,
       "name": "NotPendingRoleAdmin",
       "msg": "Caller is not the pending role admin"
     },
     {
-      "code": 6022,
+      "code": 6026,
       "name": "InvalidUsdcDecimals",
       "msg": "USDC mint must have exactly 6 decimals"
     },
     {
-      "code": 6023,
+      "code": 6027,
       "name": "AmountTooSmall",
       "msg": "Output amount too small (rounds to zero)"
     },
     {
-      "code": 6024,
+      "code": 6028,
       "name": "ZeroOutput",
       "msg": "Redeem output is zero"
     },
     {
-      "code": 6025,
+      "code": 6029,
       "name": "SlippageExceeded",
       "msg": "Redeem output is below min_usdc_out"
     }
@@ -2461,9 +2699,9 @@
           {
             "name": "multiplier",
             "docs": [
-              "OkuM multiplier at time of burn (1e9 = $1.00)"
+              "Canonical OkuM multiplier at time of burn, WAD-scaled (1e18 = $1.00)."
             ],
-            "type": "u64"
+            "type": "u128"
           },
           {
             "name": "dollar_value",
@@ -2543,9 +2781,9 @@
           {
             "name": "multiplier",
             "docs": [
-              "OkuM multiplier at time of mint (1e9 = $1.00)"
+              "Canonical OkuM multiplier at time of mint, WAD-scaled (1e18 = $1.00)."
             ],
-            "type": "u64"
+            "type": "u128"
           },
           {
             "name": "dollar_value",
@@ -2587,6 +2825,45 @@
           {
             "name": "new_allowance",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DisplayMultiplierSynced",
+      "docs": [
+        "Emitted when the wallet-facing display mirror is refreshed.",
+        "",
+        "Purely informational — no economic meaning. Useful for monitoring how far",
+        "the display has drifted from canonical and whether the crank is alive."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "multiplier",
+            "docs": [
+              "Canonical multiplier written as immediately effective."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "pre_armed_multiplier",
+            "docs": [
+              "Pre-armed next step."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "pre_armed_effective_ts",
+            "docs": [
+              "When the pre-armed step becomes effective."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -2773,10 +3050,11 @@
           {
             "name": "multiplier",
             "docs": [
-              "OkuM multiplier at time of mint (1e9 = $1.00)",
+              "Canonical OkuM multiplier at time of mint, WAD-scaled (1e18 = $1.00).",
+              "Computed from the rate schedule, NOT read from the display mirror.",
               "EVM equivalent: multiplier"
             ],
-            "type": "u64"
+            "type": "u128"
           },
           {
             "name": "new_total_supply",
@@ -2818,7 +3096,12 @@
     {
       "name": "MultiplierUpdated",
       "docs": [
-        "Emitted when OkuM multiplier is updated directly.",
+        "Emitted by the EMERGENCY multiplier override only.",
+        "",
+        "Under streaming accrual this is a rare, incident-response event — not the",
+        "routine yield mechanism it used to be. Its presence in the log means an",
+        "operator forced a discrete jump and halted the schedule.",
+        "",
         "EVM equivalent: `MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`"
       ],
       "type": {
@@ -2826,11 +3109,14 @@
         "fields": [
           {
             "name": "old_multiplier",
-            "type": "u64"
+            "docs": [
+              "WAD-scaled (1e18). Widened from `u64` with the PRECISION migration."
+            ],
+            "type": "u128"
           },
           {
             "name": "new_multiplier",
-            "type": "u64"
+            "type": "u128"
           },
           {
             "name": "total_supply",
@@ -2858,6 +3144,83 @@
           {
             "name": "pauser",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PendingRateCancelled",
+      "docs": [
+        "Emitted when an armed successor is discarded or replaced before it ever",
+        "activated.",
+        "",
+        "Without this, a chain that had a successor staged and then had it silently",
+        "dropped would be indistinguishable — from the event log alone — from a chain",
+        "that still has one armed. Since the handover itself emits nothing (it needs",
+        "no transaction), the arm/cancel pair is the whole audit trail.",
+        "",
+        "EVM equivalent: `PendingRateCancelled`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cancelled_rate",
+            "type": "u64"
+          },
+          {
+            "name": "cancelled_pending_rate_end",
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PendingYieldRateUpdated",
+      "docs": [
+        "Emitted when the PRE-STAGED successor rate changes.",
+        "",
+        "The successor activates at `rate_end` with no transaction, so this event is",
+        "the only on-chain record of the handover being armed. Cross-chain",
+        "monitoring compares these across deployments.",
+        "",
+        "EVM equivalent: `NextOkuMYieldRateSet(newRate, rateEnd, pendingEndTimestamp)`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_rate",
+            "type": "u64"
+          },
+          {
+            "name": "new_rate",
+            "type": "u64"
+          },
+          {
+            "name": "rate_end",
+            "docs": [
+              "The ACTIVE window's expiry — i.e. exactly when this successor takes",
+              "over. Carried because the handover needs no transaction, so this event",
+              "is the only on-chain record of when it will happen; cross-chain",
+              "monitoring compares this field across deployments."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "pending_rate_end",
+            "docs": [
+              "Absolute expiry of the successor itself, bounding the overhang."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -2999,10 +3362,82 @@
           {
             "name": "last_yield_distribution_slot",
             "docs": [
-              "Solana slot of last yield distribution (sandwich prevention).",
-              "Operations like mint/redeem are blocked in the same slot as yield distribution."
+              "Solana slot of the last EMERGENCY multiplier override",
+              "(`set_okum_multiplier`), for sandwich prevention. PSM operations are",
+              "blocked in the same slot.",
+              "",
+              "Under streaming accrual the multiplier advances continuously, so there",
+              "is no discrete jump for a searcher to sandwich — that is the entire",
+              "point of the model. This lock therefore fires ONLY on the explicit",
+              "override path, and in particular is NOT stamped by the routine display",
+              "sync. Mirrors EVM, where `YieldSandwichGuard` keys on",
+              "`lastYieldDistributionBlock`, which only `setOkuMMultiplier` writes",
+              "(`EVM/src/token/OkuMoney.sol:107`, `EVM/src/lib/YieldSandwichGuard.sol:21-26`)."
             ],
             "type": "u64"
+          },
+          {
+            "name": "okum_base_multiplier",
+            "docs": [
+              "Multiplier snapshot taken at `okum_last_accrual_time`, WAD-scaled.",
+              "Starts at `PRECISION`. Re-snapshotted on every schedule write so",
+              "accrual is continuous across the write."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "okum_rate_per_second",
+            "docs": [
+              "Active per-second rate, WAD-scaled. `PRECISION` means \"no yield\"."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "okum_last_accrual_time",
+            "docs": [
+              "Timestamp `okum_base_multiplier` was snapshotted at."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "okum_rate_end",
+            "docs": [
+              "Timestamp `okum_rate_per_second` expires. `0` ONLY when halted.",
+              "",
+              "Every yielding rate carries a bounded window so that an unattended",
+              "schedule HALTS (safe, recoverable, monotonic) rather than compounding",
+              "forever, and so a rate can never end at a transaction-dependent,",
+              "per-chain moment."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "okum_pending_rate_per_second",
+            "docs": [
+              "Pre-staged successor rate. Activates at `okum_rate_end` with NO",
+              "transaction — which is what keeps multi-chain epoch handovers",
+              "simultaneous to the second even when the staging transactions land",
+              "days apart. `PRECISION` means \"none armed\"."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "okum_pending_rate_end",
+            "docs": [
+              "The successor's own expiry, bounding the overhang. `0` = none armed."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "last_display_sync_ts",
+            "docs": [
+              "Unix timestamp of the last `sync_display_multiplier`.",
+              "",
+              "Display-only bookkeeping: drives the staleness threshold for the",
+              "opportunistic piggyback sync on PSM instructions. Has no influence on",
+              "pricing — the canonical multiplier is always computed fresh."
+            ],
+            "type": "i64"
           },
           {
             "name": "pending_role_admin",
@@ -3096,10 +3531,11 @@
           {
             "name": "multiplier",
             "docs": [
-              "OkuM multiplier at time of redeem (1e9 = $1.00)",
+              "Canonical OkuM multiplier at time of redeem, WAD-scaled (1e18 = $1.00).",
+              "Computed from the rate schedule, NOT read from the display mirror.",
               "EVM equivalent: multiplier"
             ],
-            "type": "u64"
+            "type": "u128"
           },
           {
             "name": "new_total_supply",
@@ -3235,35 +3671,47 @@
       }
     },
     {
-      "name": "YieldDistributed",
+      "name": "YieldRateUpdated",
       "docs": [
-        "Emitted when yield is distributed across all OkuM holders.",
-        "EVM equivalent: `YieldDistributed(uint256 yieldAmount, uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`"
+        "Emitted when the ACTIVE per-second rate or its window changes.",
+        "",
+        "Replaces `YieldDistributed`. There is no longer a dollar-denominated",
+        "distribution event because there is no dollar-denominated instruction —",
+        "the operator publishes a rate, and the yield follows from it continuously.",
+        "",
+        "EVM equivalent: `OkuMYieldRateUpdated`."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "yield_amount",
+            "name": "old_rate",
             "docs": [
-              "Dollar yield distributed (6 decimals)"
+              "Previous active per-second rate, WAD-scaled."
             ],
             "type": "u64"
           },
           {
-            "name": "old_multiplier",
-            "type": "u64"
-          },
-          {
-            "name": "new_multiplier",
-            "type": "u64"
-          },
-          {
-            "name": "total_supply",
+            "name": "new_rate",
             "docs": [
-              "Total OkuM supply at time of distribution"
+              "New active per-second rate, WAD-scaled. `PRECISION` means halted."
             ],
             "type": "u64"
+          },
+          {
+            "name": "rate_end",
+            "docs": [
+              "Absolute expiry of the new rate. `0` when halting."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "base_multiplier",
+            "docs": [
+              "The multiplier snapshot taken at this write, so indexers can",
+              "reconstruct `m(t)` for any `t` without replaying from genesis."
+            ],
+            "type": "u128"
           },
           {
             "name": "timestamp",

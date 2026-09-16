@@ -64,7 +64,6 @@ const { Keypair, SystemProgram, PublicKey, Transaction } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
 
-const PRECISION = new BN(1_000_000_000); // 1e9
 
 describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
   let h: BankrunHarness;

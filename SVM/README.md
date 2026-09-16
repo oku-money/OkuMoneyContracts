@@ -342,7 +342,7 @@ sync deliberately does not stamp it — doing so would make the PSM
 unavailable for one slot per sync interval for no security benefit.
 
 The multiplier is computed from the rate schedule via `helpers::multiplier`
-(in `helpers/scaled_ui.rs`), which calls
+(in `helpers/multiplier.rs`), which calls
 `get_extension::<ScaledUiAmountConfig>()` on the mint account data.
 This is the only path for reading the current multiplier — there is
 no duplicate field on `PsmConfig`.
@@ -404,27 +404,90 @@ operational procedures.
 ## Precision model
 
 ```rust
-const PRECISION: u64 = 1_000_000_000; // 1e9
+const PRECISION: u128 = 1_000_000_000_000_000_000; // 1e18 (WAD) — identical to EVM
 
-// ScaledUiAmount multiplier: f64, e.g. 1.0 = $1.00, 1.045 = $1.045
-// All intermediate u64 calculations use u128 to prevent overflow.
-// Rounding favours protocol (round DOWN throughout).
+// The multiplier is COMPUTED, not stored: a pure function of the six-field
+// rate schedule on PsmConfig plus Clock::unix_timestamp.
+// Token amounts remain u64 (6 decimals). Multipliers and rates are u128/u64
+// at WAD scale. All multiplier math carries a 256-bit intermediate.
+// Rounding favours the protocol (floor) everywhere except rpow, which
+// reproduces MakerDAO's half-up.
 ```
 
-**Why 1e9 on SVM vs 1e18 on EVM:** SVM uses `u64` for token amounts
-and BPF natively widens to `u128` for intermediates. `1e9 × u64`
-peaks around `1.8e28`, comfortably within `u128::MAX (≈ 3.4e38)`.
-A 1e18 precision would require either `u128` token amounts (no SPL
-Token-2022 support) or aggressive precision loss on every operation.
+**Why 1e18, and why it used to be 1e9.** This crate previously used
+`PRECISION = 1e9`, on the reasoning that `u64` token amounts times 1e9
+peak around `1.8e28` and stay comfortably inside `u128`. That reasoning
+was sound for a *static* multiplier an operator bumped in discrete
+ticks. It is fatal for a per-second rate:
 
-**f64 for ScaledUiAmount:** The Token-2022 `ScaledUiAmountConfig`
-extension stores the multiplier as IEEE 754 `f64`. For the practical
-stablecoin multiplier range (1.0 to ~2.0), f64 provides ~15 decimal
-digits of precision — more than sufficient for sub-micro-dollar
-accuracy. `MAX_MULTIPLIER` in `oku-shared/src/constants.rs` documents
-the upper bound where f64 precision would degrade.
+```text
+one ulp of a per-second rate at 1e9  = 3.20385 % APY
+one ulp of a per-second rate at 1e18 = 0.00000000315 % APY
+```
+
+At 1e9 the smallest expressible non-zero yield rate is over **3% APY**.
+The rate schedule is not merely imprecise at that scale — it is
+inexpressible. Moving to 1e18 was therefore forced by the streaming
+model, not chosen for elegance.
+
+It also buys something the old scale could not: because `PRECISION`,
+`MAX_RATE` and the `rpow` rounding now match EVM exactly, a schedule
+broadcast to every chain produces a **bit-identical** multiplier at the
+same wall-clock second, with no messaging.
+
+**The cost.** Every multiplier-bearing value widened from `u64` to
+`u128`, and `raw_amount x multiplier` (up to ~1.8e43) no longer fits
+`u128`. Multiplier math routes through
+[`crates/oku-shared/src/wad.rs`](oku-programs/crates/oku-shared/src/wad.rs),
+which carries a full 256-bit intermediate — `full_mul` plus a
+small-divisor long division, the same decomposition OpenZeppelin's
+`Math.mulDiv` implements. Because `1e18 < 2^60` the divisor fits a
+`u64`, so this is *not* general bignum division.
+
+**Compute cost is real and was measured, not estimated.** The multiplier
+is computed on every mint and redeem; `rpow` runs ~20-25 squaring
+iterations. See § Compute budget below — the first implementation cost
+over 150k CU and exceeded Solana's 200k limit outright after an epoch
+handover.
+
+**f64 for ScaledUiAmount.** The Token-2022 extension stores an IEEE 754
+`f64`. It is a **write-only display mirror** — the program pushes to it
+and never reads it back, so its precision is a display concern only. The
+conversion is biased ~4.4e-16 downward to keep `display <= canonical`;
+at 6 token decimals that bias cannot change a rendered figure below
+roughly $2.3B of balance, and costs under a cent even at the largest
+position a `u64` can express.
 
 ---
+
+## Compute budget
+
+Measured in `tests/bankrun/compute-budget.ts` and pinned there, so a
+regression fails CI rather than surfacing in production.
+
+| Path | CU |
+|---|---|
+| `mint_oku_m` (7-day window) | ~53,000 |
+| `mint_oku_m` (90-day window) | ~62,000 |
+| `mint_oku_m` (two-`rpow` overhang branch) | ~81,000 |
+| `redeem_oku_m` (two-`rpow` overhang branch) | ~74,000 |
+| `set_okum_yield_rate_with_successor` | ~6,800 |
+| `sync_display_multiplier` (2 CPIs) | ~104,000 |
+
+The overhang branch — active window closed, successor running — is the
+normal state of every chain between a handover and the next schedule
+write, so it is the number that matters, not the best case.
+
+Two things were necessary to get here:
+
+1. `wad.rs` types its limbs `u64` and widens at the multiply, so LLVM
+   emits native 64x64→128 multiplies instead of `__multi3` libcalls, and
+   takes a fast path (one multiply, one division) whenever the product
+   fits `u128` — which covers essentially every real operation.
+2. The opportunistic "piggyback" display sync was **removed** from
+   `mint_oku_m` / `redeem_oku_m`. It cost ~31k CU for a cosmetic refresh.
+   Display freshness is solely the permissionless crank's job now; an
+   idle PSM with no crank shows a stale (always low, never high) balance.
 
 ## Hardcoded constants
 
@@ -437,10 +500,11 @@ None can be changed without a program upgrade.
 
 | Constant | Value | Rationale |
 |---|---|---|
-| `PRECISION` | `1_000_000_000` (1e9) | Fixed-point base for all multiplier math. |
-| `BASIS_POINTS` | `10_000` | Universal bps denominator. |
-| `MAX_MULTIPLIER` | `1_000_000_000_000_000` (1e15, = $1M/token) | Overflow guard / f64 precision boundary. Math-sanity bound. |
-| `TOKEN_DECIMALS` | `6` | OkuM uses 6 decimals on SVM (matches USDC). Asserted at init. |
+| `PRECISION` | `1_000_000_000_000_000_000` (1e18, WAD) | Fixed-point base for multipliers and per-second rates. **Byte-identical to EVM `Constants.PRECISION`** — that equality is what makes cross-chain agreement work without messaging. |
+| `MAX_RATE` | `PRECISION + 1e11` (~2242% APY) | Sanity bound on `rpow` inputs. Mirrors EVM `Constants.MAX_RATE`. |
+| `BASIS_POINTS` | `10_000` | Universal bps denominator. Unused on-chain; retained for EVM constant parity. |
+| `MAX_MULTIPLIER` | `1_000_000_000_000_000_000_000_000` (1e24, = $1M/token) | Math-sanity bound. `compound_for` CLAMPS here; the emergency override REJECTS above it. Mirrors EVM `Constants.MAX_MULTIPLIER`. |
+| `TOKEN_DECIMALS` | `6` | OkuM uses 6 decimals on SVM (matches USDC). Asserted at init. Unrelated to `PRECISION` — these were confusingly adjacent at the old 1e9 scale and are now unambiguously distinct. |
 
 ### Lite-PSM
 
@@ -548,43 +612,29 @@ queue capacity limits, batch-drain SLAs, or spam-DoS considerations.
 Operators keep the buffer topped up via `deposit_buffer` /
 `withdraw_buffer`; there is nothing to drain or rescue.
 
-### 4. SVM ↔ EVM constant parity carries the 1e9 vs 1e18 scaling delta
+### 4. SVM ↔ EVM constant parity — RESOLVED
 
-SVM uses `PRECISION = 1e9` for the structural reason that `u64` token
-amounts × `1e9` precision peak around `1.8e28`, comfortably within
-`u128::MAX`. A `1e18` precision would require either `u128` token
-amounts (no SPL Token-2022 support) or aggressive precision loss on
-every operation. Every numeric constant has its SVM-scaled
-counterpart (e.g. `MAX_MULTIPLIER = 1e15` on SVM vs `MAX_MULTIPLIER =
-1e24` on EVM). The off-chain orchestrator handles the scale
-conversion when reflecting value across the EVM ↔ SVM boundary. See
-[`oku-programs/crates/oku-shared/src/constants.rs`](oku-programs/crates/oku-shared/src/constants.rs)
-and the EVM mirror in
-[`../EVM/src/lib/Constants.sol`](../EVM/src/lib/Constants.sol).
+This entry used to record SVM's `PRECISION = 1e9` against EVM's 1e18 as
+a permanent, structural divergence, justified by `u64` token amounts.
 
----
+It is gone. SVM now uses 1e18, because the streaming rate schedule is
+inexpressible at 1e9 (one ulp = 3.2% APY). `PRECISION`, `MAX_RATE`,
+`MAX_MULTIPLIER` and the `rpow` rounding are now byte-identical across
+the two stacks, which is what lets a single broadcast schedule produce
+the same multiplier everywhere with no messaging.
 
-## Testing
+What genuinely remains is narrower and documented in
+[`DECISIONS.md`](DECISIONS.md):
 
-```bash
-# Full bankrun suite — 94 bankrun tests + 20 Rust unit tests = 114 total
-npm test
-# or directly:
-npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'
-
-# Individual bankrun test files
-npx mocha --require tsx --timeout 60000 'tests/bankrun/lite-psm.ts'
-npx mocha --require tsx --timeout 60000 'tests/bankrun/direct-mint.ts'
-npx mocha --require tsx --timeout 60000 'tests/bankrun/direct-burn.ts'
-npx mocha --require tsx --timeout 60000 'tests/bankrun/scaled-ui-amount.ts'
-npx mocha --require tsx --timeout 60000 'tests/bankrun/rate-over-time.ts'
-
-# Cargo unit tests (math primitives, helpers)
-cargo test --workspace                # 20 unit tests
-
-# Anchor build
-anchor build
-```
+- **D-04** `rpow`'s overflow threshold differs in the far tail (EVM
+  reverts when an intermediate *product* exceeds `uint256`; SVM returns
+  `None` when a *quotient* exceeds `u128`). Both sit far outside the
+  reachable domain.
+- **D-03** `Clock::unix_timestamp` can lag wall clock. Because the
+  multiplier is a pure function of it, this is a self-correcting lag,
+  not a drift — but drift monitoring must compare at equal *chain*
+  timestamps.
+- Wallet *display* still steps, because `ScaledUiAmount` cannot stream.
 
 ### Token-2022 binary override for bankrun
 

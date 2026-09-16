@@ -26,7 +26,6 @@ import { LitePsm } from "../../target/types/lite_psm";
 import { startBankrun, BankrunHarness, createMintViaBankrun } from "../shared/bankrun";
 import { initializePsm, DECIMALS, MAX_SUPPLY, MINTER_ALLOWANCE } from "../shared/setup";
 
-const PRECISION = new BN(1_000_000_000);
 
 describe("init invariants (OkuM mint extensions)", () => {
   let h: BankrunHarness;

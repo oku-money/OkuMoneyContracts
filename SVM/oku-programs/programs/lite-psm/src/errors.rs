@@ -145,17 +145,15 @@ pub enum LitePsmError {
     #[msg("Proposed multiplier exceeds MAX_MULTIPLIER ceiling")]
     MultiplierAboveMax,
 
-    /// The OkuM mint account data could not be unpacked as a Token-2022 mint.
-    #[msg("Failed to unpack OkuM mint account data")]
-    MultiplierUnpackFailed,
-
-    /// The OkuM mint does not carry the `ScaledUiAmount` extension.
-    #[msg("OkuM mint is missing the ScaledUiAmount extension")]
-    ScaledUiExtensionMissing,
-
-    /// The multiplier read from the `ScaledUiAmount` extension is zero or
-    /// exceeds `MAX_MULTIPLIER` (e.g. an uninitialized, NaN, or corrupt f64).
-    #[msg("Multiplier from ScaledUiAmount extension is zero or out of range")]
+    /// `compute_multiplier` could not produce a value for the current schedule
+    /// and timestamp — an `rpow` intermediate exceeded `u128`, or a timestamp
+    /// was negative.
+    ///
+    /// Unreachable for any schedule the writers can produce: rates are bounded
+    /// by `MAX_RATE`, windows are bounded, and timestamps come from `Clock`.
+    /// Surfaced rather than swallowed because this is a view on the hot path —
+    /// a wrong number here would misprice every mint and redeem.
+    #[msg("Multiplier could not be computed from the current rate schedule")]
     MultiplierOutOfRange,
 
     /// Failed to update the `ScaledUiAmount` multiplier.

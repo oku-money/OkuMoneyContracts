@@ -113,28 +113,39 @@ fn check_pause_gate(config: &PsmConfig, new_rate: u64, now_ts: i64) -> Result<()
 }
 
 // ---------------------------------------------------------------------------
-// set_okum_yield_rate
+// Private writers
 // ---------------------------------------------------------------------------
+//
+// These two mirror `OkuMoney.sol`'s `_setOkuMYieldRate` (`:399`) and
+// `_setNextOkuMYieldRate` (`:509`). Keeping them as separate writers that each
+// perform their OWN validation, pause gate, and write is not stylistic: it is
+// what makes `set_okum_yield_rate_with_successor` behave identically to EVM,
+// where the atomic setter is literally the two private helpers called in
+// sequence (`OkuMoney.sol:570-571`).
+//
+// An earlier version of this file validated everything up front and then wrote
+// once. That looked cleaner and was wrong in two ways, both of which came from
+// the successor's checks not seeing the active rate's write:
+//
+//   1. `withSuccessor(PRECISION, 0, rate, end)` was accepted. On EVM the second
+//      helper reads `rateEnd == 0` and reverts `NoRateEndSet`, because a
+//      successor to a halted rate is meaningless.
+//   2. While paused, the successor's gate compared against the OLD effective
+//      rate instead of the rate just written, so `withSuccessor(3%, .., 4%, ..)`
+//      from a 5% baseline let a rate INCREASE through while paused — the exact
+//      thing the gate exists to stop.
+//
+// Do not re-merge these.
 
-/// Set the active per-second rate and its window.
+/// Write the active rate and its window, clearing any armed successor.
 ///
-/// Re-anchors the base multiplier first, so the switch is continuous. Clears
-/// any armed successor: a fresh active rate invalidates a successor that was
-/// staged against the old window.
-///
-/// Mirrors `EVM/src/token/OkuMoney.sol:389-397`.
-pub fn set_okum_yield_rate(
-    ctx: Context<SetYieldRate>,
-    new_rate: u64,
-    end_timestamp: i64,
-) -> Result<()> {
-    let now_ts = Clock::get()?.unix_timestamp;
-    let config = &mut ctx.accounts.config;
-
+/// Mirrors `EVM/src/token/OkuMoney.sol:399-427` (`_setOkuMYieldRate`).
+fn apply_active_rate(config: &mut PsmConfig, new_rate: u64, end_timestamp: i64, now_ts: i64) -> Result<()> {
     validate_rate_window(new_rate, end_timestamp, now_ts)?;
     check_pause_gate(config, new_rate, now_ts)?;
 
     let old_rate = config.okum_rate_per_second;
+    emit_pending_cancelled_if_armed(config, now_ts);
     let snapshot = reanchor(config, now_ts)?;
 
     config.okum_rate_per_second = new_rate;
@@ -154,6 +165,90 @@ pub fn set_okum_yield_rate(
     Ok(())
 }
 
+/// Stage the successor that takes over at the CURRENT `okum_rate_end`.
+///
+/// Reads `config.okum_rate_end` rather than taking it as a parameter — that is
+/// precisely what makes the atomic path see the active rate's write.
+///
+/// Mirrors `EVM/src/token/OkuMoney.sol:509-528` (`_setNextOkuMYieldRate`).
+fn apply_successor(
+    config: &mut PsmConfig,
+    new_rate: u64,
+    pending_end_timestamp: i64,
+    now_ts: i64,
+) -> Result<()> {
+    let rate = new_rate as u128;
+    require!(rate >= PRECISION, LitePsmError::InvalidRate);
+    require!(rate <= MAX_RATE, LitePsmError::RateTooHigh);
+
+    let rate_end = config.okum_rate_end;
+    // A successor only means anything relative to a live active window. This is
+    // also what rejects "halt AND arm a successor" in the atomic path.
+    require!(rate_end != 0, LitePsmError::NoRateEndSet);
+    // Staging against an already-expired window would snapshot unearned yield.
+    require!(now_ts < rate_end, LitePsmError::RateAlreadyExpired);
+    require!(
+        pending_end_timestamp > rate_end,
+        LitePsmError::PendingEndNotAfterRateEnd
+    );
+
+    // Compares against the effective rate AFTER any active-rate write in this
+    // same instruction — see the module note above.
+    check_pause_gate(config, new_rate, now_ts)?;
+
+    let old_rate = config.okum_pending_rate_per_second;
+    emit_pending_cancelled_if_armed(config, now_ts);
+
+    config.okum_pending_rate_per_second = new_rate;
+    config.okum_pending_rate_end = pending_end_timestamp;
+
+    emit!(PendingYieldRateUpdated {
+        old_rate,
+        new_rate,
+        rate_end,
+        pending_rate_end: pending_end_timestamp,
+        timestamp: now_ts,
+    });
+
+    Ok(())
+}
+
+/// Emit `PendingRateCancelled` if a successor was armed and is about to be
+/// discarded or replaced.
+///
+/// Cross-chain monitoring reconstructs each chain's schedule history from
+/// events; silently dropping an armed successor would make a chain look like it
+/// still has one staged. Mirrors `OkuMoney._emitPendingRateCancelledIfArmed`.
+fn emit_pending_cancelled_if_armed(config: &PsmConfig, now_ts: i64) {
+    if (config.okum_pending_rate_per_second as u128) > PRECISION {
+        emit!(PendingRateCancelled {
+            cancelled_rate: config.okum_pending_rate_per_second,
+            cancelled_pending_rate_end: config.okum_pending_rate_end,
+            timestamp: now_ts,
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// set_okum_yield_rate
+// ---------------------------------------------------------------------------
+
+/// Set the active per-second rate and its window.
+///
+/// Re-anchors the base multiplier first, so the switch is continuous. Clears
+/// any armed successor: a fresh active rate invalidates a successor that was
+/// staged against the old window.
+///
+/// Mirrors `EVM/src/token/OkuMoney.sol:389-397`.
+pub fn set_okum_yield_rate(
+    ctx: Context<SetYieldRate>,
+    new_rate: u64,
+    end_timestamp: i64,
+) -> Result<()> {
+    let now_ts = Clock::get()?.unix_timestamp;
+    apply_active_rate(&mut ctx.accounts.config, new_rate, end_timestamp, now_ts)
+}
+
 // ---------------------------------------------------------------------------
 // set_next_okum_yield_rate
 // ---------------------------------------------------------------------------
@@ -166,9 +261,8 @@ pub fn set_okum_yield_rate(
 /// chains at different times — even days apart — and the activation is still
 /// simultaneous to the second.
 ///
-/// Deliberately does NOT re-anchor: re-anchoring here would snapshot the
-/// multiplier mid-window and is unnecessary, since the active rate and its
-/// window are untouched.
+/// Deliberately does NOT re-anchor: the active rate and its window are
+/// untouched, so there is nothing to snapshot.
 ///
 /// Mirrors `EVM/src/token/OkuMoney.sol:499-507`.
 pub fn set_next_okum_yield_rate(
@@ -177,35 +271,7 @@ pub fn set_next_okum_yield_rate(
     pending_end_timestamp: i64,
 ) -> Result<()> {
     let now_ts = Clock::get()?.unix_timestamp;
-    let config = &mut ctx.accounts.config;
-
-    let rate = new_rate as u128;
-    require!(rate >= PRECISION, LitePsmError::InvalidRate);
-    require!(rate <= MAX_RATE, LitePsmError::RateTooHigh);
-
-    // A successor only means anything relative to a live active window.
-    require!(config.okum_rate_end != 0, LitePsmError::NoRateEndSet);
-    // Staging against an already-expired window would snapshot unearned yield.
-    require!(now_ts < config.okum_rate_end, LitePsmError::RateAlreadyExpired);
-    require!(
-        pending_end_timestamp > config.okum_rate_end,
-        LitePsmError::PendingEndNotAfterRateEnd
-    );
-
-    check_pause_gate(config, new_rate, now_ts)?;
-
-    let old_rate = config.okum_pending_rate_per_second;
-    config.okum_pending_rate_per_second = new_rate;
-    config.okum_pending_rate_end = pending_end_timestamp;
-
-    emit!(PendingYieldRateUpdated {
-        old_rate,
-        new_rate,
-        pending_rate_end: pending_end_timestamp,
-        timestamp: now_ts,
-    });
-
-    Ok(())
+    apply_successor(&mut ctx.accounts.config, new_rate, pending_end_timestamp, now_ts)
 }
 
 // ---------------------------------------------------------------------------
@@ -214,14 +280,17 @@ pub fn set_next_okum_yield_rate(
 
 /// Set the active rate and its successor atomically.
 ///
-/// This is the instruction the epoch orchestrator actually uses. Doing both
-/// writes in one transaction matters because the settlement-window handover
-/// re-anchors at the SAME rate — which is exactly skew-free — while
-/// simultaneously arming the next epoch's base rate. Splitting it into two
-/// transactions would leave a window in which one chain has the successor and
-/// another does not.
+/// This is the instruction the epoch orchestrator uses. Doing both writes in
+/// one transaction matters because the settlement-window handover re-anchors at
+/// the SAME rate — which is exactly skew-free — while simultaneously arming the
+/// next epoch's base rate. Splitting it would leave a window in which one chain
+/// has the successor and another does not.
 ///
-/// Mirrors `EVM/src/token/OkuMoney.sol:558-569`.
+/// Composition order is load-bearing, not incidental: `apply_successor` reads
+/// the `okum_rate_end` that `apply_active_rate` just wrote. See the module note
+/// above the private writers.
+///
+/// Mirrors `EVM/src/token/OkuMoney.sol:558-572`.
 pub fn set_okum_yield_rate_with_successor(
     ctx: Context<SetYieldRate>,
     new_rate: u64,
@@ -231,43 +300,8 @@ pub fn set_okum_yield_rate_with_successor(
 ) -> Result<()> {
     let now_ts = Clock::get()?.unix_timestamp;
     let config = &mut ctx.accounts.config;
-
-    validate_rate_window(new_rate, end_timestamp, now_ts)?;
-
-    let next = next_rate as u128;
-    require!(next >= PRECISION, LitePsmError::InvalidRate);
-    require!(next <= MAX_RATE, LitePsmError::RateTooHigh);
-    require!(
-        next_end_timestamp > end_timestamp,
-        LitePsmError::PendingEndNotAfterRateEnd
-    );
-
-    check_pause_gate(config, new_rate, now_ts)?;
-    check_pause_gate(config, next_rate, now_ts)?;
-
-    let old_rate = config.okum_rate_per_second;
-    let snapshot = reanchor(config, now_ts)?;
-
-    config.okum_rate_per_second = new_rate;
-    config.okum_rate_end = end_timestamp;
-    config.okum_pending_rate_per_second = next_rate;
-    config.okum_pending_rate_end = next_end_timestamp;
-
-    emit!(YieldRateUpdated {
-        old_rate,
-        new_rate,
-        rate_end: end_timestamp,
-        base_multiplier: snapshot,
-        timestamp: now_ts,
-    });
-    emit!(PendingYieldRateUpdated {
-        old_rate: PRECISION as u64,
-        new_rate: next_rate,
-        pending_rate_end: next_end_timestamp,
-        timestamp: now_ts,
-    });
-
-    Ok(())
+    apply_active_rate(config, new_rate, end_timestamp, now_ts)?;
+    apply_successor(config, next_rate, next_end_timestamp, now_ts)
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +344,8 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
         new_multiplier <= MAX_MULTIPLIER,
         LitePsmError::MultiplierAboveMax
     );
+
+    emit_pending_cancelled_if_armed(config, now_ts);
 
     config.okum_base_multiplier = new_multiplier;
     config.okum_last_accrual_time = now_ts;

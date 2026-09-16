@@ -55,6 +55,8 @@ import {
   getClock,
   expectBankrunError,
   computeCanonicalMultiplier,
+  simulateTx,
+  decodeEvents,
 } from "../shared/bankrun";
 import {
   PRECISION,
@@ -491,6 +493,95 @@ describe("streaming accrual (continuous rate schedule)", () => {
           .rpc(),
       "RateAlreadyExpired",
     );
+  });
+
+  // -------------------------------------------------------------------
+  // 5b. Atomic-setter composition — regressions for two EVM divergences
+  // -------------------------------------------------------------------
+  //
+  // Both of these passed before `set_okum_yield_rate_with_successor` was
+  // restructured to compose the same two private writers EVM composes. They
+  // exist to keep it that way.
+
+  it("rejects halting AND arming a successor in the same atomic call", async () => {
+    // EVM: `_setOkuMYieldRate(PRECISION, 0)` leaves `rateEnd == 0`, so the
+    // following `_setNextOkuMYieldRate` reverts NoRateEndSet. A successor to a
+    // halted rate is meaningless.
+    const t = await nowTs();
+    await expectBankrunError(
+      () => setRateWithSuccessor(PRECISION, 0, ratePerSecondForApy(0.05), t + 30 * DAY),
+      "NoRateEndSet",
+    );
+  });
+
+  it("while paused, rejects a successor that increases on the rate written in the same call", async () => {
+    // The subtle one. Paused with a 5% baseline, `withSuccessor(3%, .., 4%, ..)`
+    // must revert: the successor's pause gate has to compare against the 3%
+    // just written, NOT the 5% that was there before. Comparing against the old
+    // value lets a rate INCREASE through while users cannot exit — exactly what
+    // the gate exists to prevent.
+    const start = await nowTs();
+    await setRate(ratePerSecondForApy(0.05), start + 30 * DAY);
+
+    const { warmMultisig } = await import("../shared/setup");
+    await psm.methods
+      .pause()
+      .accountsPartial({ pauser: warmMultisig.publicKey, config: psmConfigPda })
+      .signers([warmMultisig])
+      .rpc();
+
+    const t = await nowTs();
+    await expectBankrunError(
+      () =>
+        setRateWithSuccessor(
+          ratePerSecondForApy(0.03), // decrease vs 5% -> active gate passes
+          t + 30 * DAY,
+          ratePerSecondForApy(0.04), // increase vs the 3% just written -> must fail
+          t + 60 * DAY,
+        ),
+      "Paused",
+    );
+
+    // Control: a successor at or below the newly-written rate is still allowed,
+    // so the gate is not simply rejecting everything while paused.
+    await setRateWithSuccessor(
+      ratePerSecondForApy(0.03),
+      t + 30 * DAY,
+      ratePerSecondForApy(0.02),
+      t + 60 * DAY,
+    );
+  });
+
+  it("emits PendingRateCancelled when an armed successor is discarded", async () => {
+    const start = await nowTs();
+    await setRateWithSuccessor(
+      ratePerSecondForApy(0.05),
+      start + 10 * DAY,
+      ratePerSecondForApy(0.08),
+      start + 20 * DAY,
+    );
+
+    // Overwriting the active rate discards the armed successor. Without an
+    // event, a chain that silently dropped one would look identical to a chain
+    // that still has it staged — the handover itself emits nothing.
+    const t = await nowTs();
+    const tx = await psm.methods
+      .setOkumYieldRate(new BN(ratePerSecondForApy(0.06).toString()), new BN(t + 30 * DAY))
+      .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+      .transaction();
+    const sim = await simulateTx(h, tx, [orchestrator]);
+    const events = decodeEvents(psm as any, sim.logs);
+    const names = events.map((e) => e.name);
+    expect(names).to.include(
+      "pendingRateCancelled",
+      `expected PendingRateCancelled, got: ${names.join(", ")}`,
+    );
+
+    // Now actually submit it and confirm the successor really is gone.
+    await setRate(ratePerSecondForApy(0.06), (await nowTs()) + 30 * DAY);
+    const cfg = await fetchSchedule();
+    expect(cfg.pendingRatePerSecond).to.equal(PRECISION, "successor must be cleared");
+    expect(cfg.pendingRateEnd).to.equal(0n);
   });
 
   it("rejects a non-rebaser", async () => {

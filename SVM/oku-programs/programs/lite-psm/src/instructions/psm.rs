@@ -124,60 +124,19 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         new_total_supply,
     });
 
-    // Opportunistic display refresh. Costs two CPIs at most once per
-    // DISPLAY_SYNC_INTERVAL, and means an actively-used PSM keeps its wallet
-    // display fresh without anyone running a crank. Best-effort by design:
-    // a display failure must never block a user's mint.
-    try_sync_display(
-        &mut ctx.accounts.config,
-        &ctx.accounts.oku_m_mint.to_account_info(),
-        &ctx.accounts.token_2022_program.to_account_info(),
-    );
-
     Ok(())
 }
 
-/// Refresh the display mirror if it is stale, swallowing any failure.
-///
-/// Deliberately infallible. The display mirror is cosmetic; if the CPI fails
-/// for any reason (an unexpected Token-2022 state, a clock anomaly) the user's
-/// mint or redeem must still succeed. The permissionless crank and the next
-/// PSM operation both get another chance.
-fn try_sync_display<'info>(
-    config: &mut Account<'info, PsmConfig>,
-    oku_m_mint: &AccountInfo<'info>,
-    token_2022_program: &AccountInfo<'info>,
-) {
-    use crate::helpers::display_sync::{
-        display_is_stale, write_display_multiplier, DISPLAY_SYNC_INTERVAL,
-    };
-
-    let Ok(clock) = Clock::get() else { return };
-    let now_ts = clock.unix_timestamp;
-
-    if !display_is_stale(config, now_ts) {
-        return;
-    }
-
-    let Some(next_ts) = now_ts.checked_add(DISPLAY_SYNC_INTERVAL) else {
-        return;
-    };
-    let (Ok(current), Ok(next)) = (
-        crate::helpers::multiplier::at(config, now_ts),
-        crate::helpers::multiplier::at(config, next_ts),
-    ) else {
-        return;
-    };
-
-    if write_display_multiplier(current, now_ts, config, oku_m_mint, token_2022_program).is_err() {
-        return;
-    }
-    if write_display_multiplier(next, next_ts, config, oku_m_mint, token_2022_program).is_err() {
-        return;
-    }
-
-    config.last_display_sync_ts = now_ts;
-}
+// NOTE: the opportunistic "piggyback" display sync that used to live here was
+// removed after measurement. It added ~31k compute units to a cold mint (and
+// more in the two-rpow overhang branch) for a purely cosmetic refresh, on a
+// hot path that was already uncomfortably close to Solana's 200k per-instruction
+// default. Display freshness is now solely the permissionless crank's job --
+// see `sync_display_multiplier` and `scripts/admin/sync-display.ts`.
+//
+// Consequence, stated plainly: an idle PSM with no crank running will show a
+// stale (always LOW, never high) wallet balance. Nothing about pricing changes,
+// because nothing ever priced against the mirror.
 
 /// Redeem OkuM for USDC (multiplier-aware, with slippage protection)
 ///
@@ -285,13 +244,6 @@ pub fn redeem_oku_m(
         multiplier,
         new_total_supply,
     });
-
-    // Opportunistic display refresh — see `try_sync_display`.
-    try_sync_display(
-        &mut ctx.accounts.config,
-        &ctx.accounts.oku_m_mint.to_account_info(),
-        &ctx.accounts.token_2022_program.to_account_info(),
-    );
 
     Ok(())
 }

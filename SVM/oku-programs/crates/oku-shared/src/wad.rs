@@ -73,18 +73,27 @@ const _: () = assert!(PRECISION < (1u128 << 64));
 ///
 /// Verified exhaustively at the boundary and by randomized differential test
 /// against a `u256` oracle in the test module.
+/// Limbs are typed `u64` and widened at the multiply, NOT held as `u128`.
+///
+/// This matters enormously on SBF. There is no 128-bit multiply instruction, so
+/// a `u128 * u128` lowers to a `__multi3` libcall. Writing the partial products
+/// as `(x as u128) * (y as u128)` with `x, y: u64` lets LLVM see a genuine
+/// 64x64 -> 128 widening multiply and emit a handful of native instructions
+/// instead. An earlier version of this function held the limbs as `u128`, which
+/// produced four `__multi3` calls per invocation and was a significant part of
+/// why `mint_oku_m` cost over 150k compute units.
 #[inline]
 const fn widening_mul(a: u128, b: u128) -> (u128, u128) {
-    let a_lo = a & M64;
-    let a_hi = a >> 64;
-    let b_lo = b & M64;
-    let b_hi = b >> 64;
+    let a_lo = a as u64;
+    let a_hi = (a >> 64) as u64;
+    let b_lo = b as u64;
+    let b_hi = (b >> 64) as u64;
 
     // Each partial product is at most (2^64 - 1)^2 < 2^128.
-    let ll = a_lo * b_lo;
-    let lh = a_lo * b_hi;
-    let hl = a_hi * b_lo;
-    let hh = a_hi * b_hi;
+    let ll = (a_lo as u128) * (b_lo as u128);
+    let lh = (a_lo as u128) * (b_hi as u128);
+    let hl = (a_hi as u128) * (b_lo as u128);
+    let hh = (a_hi as u128) * (b_hi as u128);
 
     let mid = (ll >> 64) + (lh & M64) + (hl & M64);
 
@@ -156,8 +165,25 @@ const fn div_wad(hi: u128, lo: u128) -> Option<u128> {
 /// true quotient exceeds `u128::MAX`.
 ///
 /// EVM equivalent: `Math.mulDiv(a, b, PRECISION, Math.Rounding.Floor)`.
+///
+/// ## The narrow fast path
+///
+/// When `a * b` fits in `u128` the answer is one multiply and one division —
+/// no limb decomposition, no four-step long division. This is not a rare case:
+/// it covers essentially every operation the protocol actually performs.
+/// `rpow`'s squaring keeps `x` near `1e18`, so `x * x` is around `1e36`, well
+/// inside `u128::MAX ≈ 3.4e38`; likewise the accumulator step and
+/// `raw_to_dollars` at any realistic multiplier.
+///
+/// The general path exists for correctness at the extremes, not for throughput.
+/// Skipping it when it is not needed took `mint_oku_m` from ~150k compute units
+/// to a small fraction of that — `div_wad` costs eight software-division
+/// libcalls, and this path costs one.
 #[inline]
 pub const fn mul_div_wad_floor(a: u128, b: u128) -> Option<u128> {
+    if let Some(product) = a.checked_mul(b) {
+        return Some(product / PRECISION);
+    }
     let (hi, lo) = widening_mul(a, b);
     div_wad(hi, lo)
 }
@@ -167,10 +193,20 @@ pub const fn mul_div_wad_floor(a: u128, b: u128) -> Option<u128> {
 /// This is MakerDAO `rpow`'s rounding, reproduced exactly. Used *only* by
 /// [`crate::rate::rpow`]; every other conversion in the protocol floors.
 ///
+/// Carries the same narrow fast path as [`mul_div_wad_floor`] — see there for
+/// why it covers the real workload. Note the rounding increment can itself
+/// carry the product out of `u128`, so the fast path requires BOTH the multiply
+/// and the add to stay in range.
+///
 /// EVM equivalent: the `xxRound` / `zxRound` steps of
 /// `EVM/src/lib/MathLib.sol:52-62`.
 #[inline]
 pub const fn mul_div_wad_half_up(a: u128, b: u128) -> Option<u128> {
+    if let Some(product) = a.checked_mul(b) {
+        if let Some(rounded) = product.checked_add(HALF_WAD) {
+            return Some(rounded / PRECISION);
+        }
+    }
     let (hi, lo) = widening_mul(a, b);
     match add_u128(hi, lo, HALF_WAD) {
         Some((hi, lo)) => div_wad(hi, lo),

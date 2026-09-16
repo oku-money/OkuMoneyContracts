@@ -231,13 +231,34 @@ pub struct YieldRateUpdated {
 /// the only on-chain record of the handover being armed. Cross-chain
 /// monitoring compares these across deployments.
 ///
-/// EVM equivalent: `OkuMPendingYieldRateUpdated`.
+/// EVM equivalent: `NextOkuMYieldRateSet(newRate, rateEnd, pendingEndTimestamp)`.
 #[event]
 pub struct PendingYieldRateUpdated {
     pub old_rate: u64,
     pub new_rate: u64,
+    /// The ACTIVE window's expiry — i.e. exactly when this successor takes
+    /// over. Carried because the handover needs no transaction, so this event
+    /// is the only on-chain record of when it will happen; cross-chain
+    /// monitoring compares this field across deployments.
+    pub rate_end: i64,
     /// Absolute expiry of the successor itself, bounding the overhang.
     pub pending_rate_end: i64,
+    pub timestamp: i64,
+}
+
+/// Emitted when an armed successor is discarded or replaced before it ever
+/// activated.
+///
+/// Without this, a chain that had a successor staged and then had it silently
+/// dropped would be indistinguishable — from the event log alone — from a chain
+/// that still has one armed. Since the handover itself emits nothing (it needs
+/// no transaction), the arm/cancel pair is the whole audit trail.
+///
+/// EVM equivalent: `PendingRateCancelled`.
+#[event]
+pub struct PendingRateCancelled {
+    pub cancelled_rate: u64,
+    pub cancelled_pending_rate_end: i64,
     pub timestamp: i64,
 }
 

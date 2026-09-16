@@ -554,3 +554,69 @@ export async function expectBankrunError(
   }
   throw new Error(`Expected error matching "${expectedCode}" but call succeeded`);
 }
+
+// ---------------------------------------------------------------------------
+// Simulation: log capture + compute-unit measurement
+// ---------------------------------------------------------------------------
+
+/** Result of simulating a built transaction against the bankrun VM. */
+export interface SimulationResult {
+  /** Raw program logs, including `Program data:` lines carrying Anchor events. */
+  logs: string[];
+  /** Compute units the transaction consumed. */
+  computeUnits: number;
+  /** Non-null if the transaction would have failed. */
+  error: unknown | null;
+}
+
+/**
+ * Simulate an Anchor-built transaction and return its logs and CU cost.
+ *
+ * `banksClient.getTransaction` does not exist in solana-bankrun 0.4.0, so this
+ * is the route to both event logs and compute-unit measurement. Simulation runs
+ * against current VM state without committing, so it is safe to call before or
+ * instead of the real send.
+ */
+export async function simulateTx(
+  h: BankrunHarness,
+  tx: anchor.web3.Transaction,
+  signers: anchor.web3.Keypair[] = [],
+): Promise<SimulationResult> {
+  const [blockhash] = await h.context.banksClient.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = h.payer.publicKey;
+  tx.sign(h.payer, ...signers);
+
+  const res = await h.context.banksClient.simulateTransaction(tx);
+  return {
+    logs: res.meta?.logMessages ?? [],
+    computeUnits: Number(res.meta?.computeUnitsConsumed ?? 0n),
+    error: res.result ?? null,
+  };
+}
+
+/**
+ * Decode every Anchor event emitted in a set of program logs.
+ *
+ * Anchor writes events as base64 on `Program data:` lines; `program.coder`
+ * turns those back into typed objects. Returns `{ name, data }` pairs in
+ * emission order.
+ */
+export function decodeEvents(
+  program: { coder: { events: { decode(log: string): { name: string; data: unknown } | null } } },
+  logs: string[],
+): Array<{ name: string; data: unknown }> {
+  const out: Array<{ name: string; data: unknown }> = [];
+  for (const line of logs) {
+    const marker = 'Program data: ';
+    const idx = line.indexOf(marker);
+    if (idx === -1) continue;
+    try {
+      const decoded = program.coder.events.decode(line.slice(idx + marker.length));
+      if (decoded) out.push({ name: decoded.name, data: decoded.data });
+    } catch {
+      // Not one of ours (or a log line that merely looks like one) — skip.
+    }
+  }
+  return out;
+}

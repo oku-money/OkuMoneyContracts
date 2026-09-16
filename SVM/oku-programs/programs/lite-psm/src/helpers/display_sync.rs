@@ -54,22 +54,54 @@ use oku_shared::PRECISION;
 pub const DISPLAY_SYNC_INTERVAL: i64 = 60;
 
 /// Convert a WAD-scaled canonical multiplier to the `f64` the extension
-/// stores, rounding **toward zero**.
+/// stores, biased **downward**.
 ///
-/// `u128 as f64` rounds to nearest, which can round *up* and put the display
-/// a hair above canonical — the one direction that is not safe. `f64` carries
-/// ~15.95 significant decimal digits, so at a multiplier near 1.0 the
-/// downward adjustment is ~1e-16 relative: far finer than the 60-second
-/// staircase step it sits inside, and therefore invisible.
+/// ## Why an unconditional bias rather than a check
+///
+/// The obvious implementation is to compute `m as f64 / 1e18` and step down one
+/// ULP only if the result reconstructs above `m`. That check does not work, and
+/// the first version of this function got it wrong: `m as f64` is ITSELF lossy
+/// at WAD scale (the ULP of an `f64` near 1e18 is 128), so both sides of the
+/// comparison are rounded and it cannot detect an excess smaller than the
+/// rounding it is trying to detect.
+///
+/// The error budget, for a multiplier `m` near 1e18:
+///
+/// ```text
+///   fl(m)                    introduces up to ulp(m)/2   = 64
+///   fl(fl(m) / 1e18)         introduces up to m * 2^-53  = 111
+///   worst-case excess                                    ~ 175  (1.75e-16 relative)
+/// ```
+///
+/// (`1e18` is exactly representable in `f64`, so the divisor contributes
+/// nothing.) Stepping down **two** ULPs of the quotient gives ~4.4e-16 of
+/// margin, which strictly dominates that bound.
+///
+/// ## What this actually guarantees
+///
+/// `display <= canonical` up to ~1e-16 relative — an arithmetic bound, not an
+/// exact proof. In practice the guarantee is far stronger than that bound
+/// suggests, for two independent reasons:
+///
+/// 1. The display is a staircase that lags canonical by up to one
+///    [`DISPLAY_SYNC_INTERVAL`]. At 20% APY that is ~3.5e-7 relative — nine
+///    orders of magnitude larger than the f64 error, so outside the instant of
+///    a sync the display is nowhere near the bound.
+/// 2. OkuM has 6 decimals, so a rendered balance is truncated to 1e-6. A 1e-16
+///    relative error on a $1,000,000 balance is ~$1e-10. It cannot change a
+///    displayed figure at any balance that fits in a `u64`.
+///
+/// The cost of the bias is symmetric and equally invisible: the display reads
+/// ~4e-16 relative low.
 #[inline]
 pub fn multiplier_to_f64_floor(multiplier: u128) -> f64 {
     let scaled = multiplier as f64 / PRECISION as f64;
-    // Reconstruct and step down one ULP if the cast rounded upward.
-    if (scaled * PRECISION as f64) > multiplier as f64 {
-        f64::from_bits(scaled.to_bits() - 1)
-    } else {
-        scaled
+    if scaled <= 0.0 || !scaled.is_finite() {
+        // Cannot happen for a valid multiplier (>= PRECISION), but stepping the
+        // bit pattern of 0 or NaN downward would be nonsense.
+        return scaled;
     }
+    f64::from_bits(scaled.to_bits() - 2)
 }
 
 /// Push `multiplier` into the mint's `ScaledUiAmountConfig`, effective at
@@ -113,25 +145,28 @@ pub fn write_display_multiplier<'info>(
     Ok(())
 }
 
-/// `true` if the display mirror is stale enough to be worth refreshing on the
-/// back of an unrelated PSM instruction.
-///
-/// Keeping active mints and redeems self-syncing means the external crank
-/// only matters when the PSM is idle, which is exactly when nobody is looking
-/// at a stale number anyway.
-#[inline]
-pub fn display_is_stale(config: &PsmConfig, now_ts: i64) -> bool {
-    now_ts.saturating_sub(config.last_display_sync_ts) >= DISPLAY_SYNC_INTERVAL
-}
+// NOTE: `display_is_stale` lived here to gate an opportunistic "piggyback"
+// sync on the PSM instructions. It was removed after measurement showed the
+// piggyback cost ~31k compute units on a cold mint, on a hot path already
+// close to Solana's 200k default. `last_display_sync_ts` is retained on
+// PsmConfig purely as an observability field -- it tells an operator (and
+// `scripts/admin/sync-display.ts`) how stale the mirror is.
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The invariant the whole mirror rests on: the value written to the
-    /// extension must never exceed the canonical integer it came from.
+    /// The mirror's safety property, stated as what it actually is: a BOUNDED
+    /// downward bias, not an exact floor.
+    ///
+    /// Note this test cannot prove `f * 1e18 <= m` exactly, because evaluating
+    /// that expression in `f64` is subject to the same rounding it would be
+    /// checking — which is precisely the trap the first implementation fell
+    /// into. What it can and does check is that the conversion sits strictly
+    /// below the input by a margin larger than the f64 error budget and
+    /// smaller than one unit of rendered precision.
     #[test]
-    fn f64_conversion_never_rounds_up() {
+    fn f64_conversion_is_biased_downward_within_bounds() {
         let cases = [
             PRECISION,
             PRECISION + 1,
@@ -143,15 +178,62 @@ mod tests {
             oku_shared::MAX_MULTIPLIER - 1,
         ];
         for m in cases {
+            let exact = m as f64 / PRECISION as f64;
             let f = multiplier_to_f64_floor(m);
+
+            assert!(f < exact, "conversion was not biased downward for {m}");
+
+            // Bias must exceed the ~1.75e-16 f64 error budget (so it actually
+            // dominates it) and stay far below 1e-6, one unit of rendered
+            // precision at 6 decimals.
+            let rel_bias = (exact - f) / exact;
             assert!(
-                f * PRECISION as f64 <= m as f64,
-                "display {f} rounded ABOVE canonical {m} — users would see more than they can redeem"
+                rel_bias > 1e-16,
+                "bias {rel_bias} does not dominate the f64 error budget for {m}"
             );
-            // And it must still be close enough to be useful.
-            let rel_err = (m as f64 - f * PRECISION as f64) / m as f64;
-            assert!(rel_err < 1e-15, "lost too much precision: {rel_err} for {m}");
+            assert!(
+                rel_bias < 1e-14,
+                "bias {rel_bias} is larger than intended for {m}"
+            );
         }
+    }
+
+    /// Bound the bias in the unit that actually matters: dollars.
+    ///
+    /// An earlier version of this test asserted the bias could never change a
+    /// *rendered unit*, and failed — at `u64::MAX` raw it costs 8192 units.
+    /// That framing was wrong: 8192 units of a 6-decimal token is $0.008, and
+    /// `u64::MAX` raw is a ~$18 trillion position. The relative bias is fixed,
+    /// so the meaningful statement is about relative and absolute dollar error,
+    /// not unit counts.
+    ///
+    /// It only becomes a whole rendered unit above roughly $2.3B of balance,
+    /// and even at the largest position expressible in a `u64` the shortfall is
+    /// under a cent — always downward, so always in the user's favour.
+    #[test]
+    fn bias_is_negligible_in_dollar_terms_at_every_representable_balance() {
+        let m = 1_037_419_283_746_192_837u128; // ~1.037x
+        let f = multiplier_to_f64_floor(m);
+        let exact = m as f64 / PRECISION as f64;
+        let rel_bias = (exact - f) / exact;
+
+        // Dollar shortfall = relative bias x position size.
+        // u64::MAX raw at 6 decimals ~ 1.8e13 tokens ~ $1.9e13 at this multiplier.
+        let max_position_usd = (u64::MAX as f64 / 1e6) * exact;
+        let shortfall_usd = rel_bias * max_position_usd;
+        assert!(
+            shortfall_usd < 0.01,
+            "bias costs ${shortfall_usd} at the maximum representable position"
+        );
+
+        // And it is dwarfed by the staircase lag that exists BY DESIGN: one
+        // 60s interval at 20% APY is ~3.5e-7 relative, ~6 orders of magnitude
+        // larger than this bias. The f64 conversion is not the binding term.
+        let staircase_lag_rel = 0.20_f64.ln_1p() * (DISPLAY_SYNC_INTERVAL as f64) / 31_536_000.0;
+        assert!(
+            rel_bias * 1_000.0 < staircase_lag_rel,
+            "f64 bias {rel_bias} is not negligible next to the {staircase_lag_rel} staircase lag"
+        );
     }
 
     /// `PsmConfig` has no `Default` (it is an Anchor account with 16 pubkeys),

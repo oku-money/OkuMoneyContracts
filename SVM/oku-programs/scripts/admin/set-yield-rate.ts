@@ -52,7 +52,7 @@ import {
   computeMultiplier,
   scheduleFromConfig,
   ratePerSecondForApy,
-} from '../utils/multiplier';
+} from "@okumoney/yield-tooling";
 
 function parseArg(name: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));

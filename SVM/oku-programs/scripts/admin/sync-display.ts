@@ -40,7 +40,7 @@ import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
 import { isDryRun, summaryBlock } from './_lib/confirm';
-import { PRECISION, computeMultiplier, scheduleFromConfig } from '../utils/multiplier';
+import { PRECISION, computeMultiplier, scheduleFromConfig } from "@okumoney/yield-tooling";
 
 function parseArg(name: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));

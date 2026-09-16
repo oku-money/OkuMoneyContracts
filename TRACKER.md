@@ -626,16 +626,30 @@ What this closed:
 at 1e9 one ulp of a per-second rate is 3.2% APY, so the schedule was
 literally inexpressible.
 
-**What remains (see `SVM/DECISIONS.md`):**
+**Since closed (see `SVM/DECISIONS.md`):**
 
-- **D-05** the cross-language differential harness (Solidity → JSON →
-  Rust/TS) is not built. Parity currently rests on review of the port
-  plus per-stack tests. This is the highest-value remaining item.
-- **D-03** `checkMultiplierDrift.ts` and `globalValue.ts` do not yet
-  include SVM. The latter matters economically: SVM supply is a real
-  term in the denominator of every derived rate, and omitting it
-  systematically over-pays yield.
-- **D-01** no `MAX_ACCRUAL_WINDOW` on either stack.
+- **D-05 DONE** — cross-language differential harness. 3,290 vectors
+  generated from the Solidity reference and replayed against Rust and
+  TypeScript, reverts included, all three agreeing exactly. Validated by
+  mutation: a one-ulp rounding slip fails 1,218 vectors.
+- **D-03 / D-04 handled** — `globalValue.ts` and `checkMultiplierDrift.ts`
+  now read SVM. The former mattered economically: SVM supply is a term in
+  the denominator of every derived rate, so omitting it systematically
+  over-paid yield.
+- **D-15 FIXED** — compute budget. The first implementation cost >200k CU
+  in the two-`rpow` overhang branch, i.e. mints and redeems would have
+  failed outright after every epoch handover. Now ~81k worst case, pinned
+  in CI.
+
+**Still open:**
+
+- **D-01** no `MAX_ACCRUAL_WINDOW` on either stack. Deferred because it is
+  the only item touching `OkuMoney.sol`, which is live on six networks, so
+  it needs a scheduled upgrade rather than a code change. Nothing depends
+  on it.
+- **D-16** wallet display freshness now depends entirely on the
+  permissionless crank. Bounded and safe (the mirror reads low, never
+  high), but an operational responsibility.
 - Wallet display remains a lagging staircase — unavoidable, since
   `ScaledUiAmount` cannot stream and `InterestBearingConfig` is
   mutually exclusive with it.

@@ -53,7 +53,7 @@ import {
   getClock,
   simulateTx,
 } from "../shared/bankrun";
-import { ratePerSecondForApy } from "../../scripts/utils/multiplier";
+import { ratePerSecondForApy } from "@okumoney/yield-tooling";
 
 const { Keypair } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;

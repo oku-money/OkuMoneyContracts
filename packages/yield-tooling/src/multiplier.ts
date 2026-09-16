@@ -10,9 +10,13 @@
  * cross-chain determinism rests entirely on every deployment returning the same
  * multiplier at the same wall-clock second, and there is no on-chain layer on
  * either stack that can detect a divergence (see `EVM/README.md` § Accepted
- * Risks (10)). The planned differential harness (`SVM/DECISIONS.md` D-05) is
- * what will hold the three honest; until it exists, changes here must be made
- * in lockstep with the other two by hand.
+ * Risks (10)).
+ *
+ * They are held honest by the differential harness: `EVM/test/differential`
+ * generates vectors from the Solidity, and both this file and the Rust replay
+ * them asserting exact equality. Run `npm run test:tooling` here and
+ * `cargo test --package oku-shared differential` there. If you change any one
+ * of the three, regenerate the vectors and run all three.
  *
  * ## Why a TS implementation is needed at all
  *

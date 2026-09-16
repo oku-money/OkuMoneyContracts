@@ -335,7 +335,8 @@ from that:
 1. Broadcast **byte-identical integers** to every chain — EVM and SVM.
    Derive the rate once and reuse it; never hand-enter it twice. This
    is the only real failure mode left, and nothing on-chain can detect
-   it.
+   it — `scripts/operator/checkMultiplierDrift.ts` (which covers SVM
+   too) is the detection layer.
 2. **The broadcast is not time-critical.** A pre-staged successor
    activates off an absolute timestamp with no transaction, so staging
    may land on different chains hours or days apart and the handover is

@@ -37,7 +37,7 @@ import {
   readDisplayMultiplier,
   computeCanonicalMultiplier,
 } from "../shared/bankrun";
-import { PRECISION, ratePerSecondForApy } from "../../scripts/utils/multiplier";
+import { PRECISION, ratePerSecondForApy } from "@okumoney/yield-tooling";
 
 const { Keypair } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;

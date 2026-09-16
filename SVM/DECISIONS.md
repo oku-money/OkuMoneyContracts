@@ -25,24 +25,36 @@ yet · `ACCEPTED` divergence we are knowingly living with.
 
 ---
 
-## D-01 · `MAX_ACCRUAL_WINDOW` — add to both stacks? — `OPEN`
+## D-01 · `MAX_ACCRUAL_WINDOW` — `DEFERRED` (needs a decision, blocks nothing)
 
-Neither stack currently caps how far `rateEnd` may be set into the future.
-EVM's only bound is `rpow` reverting on overflow (~30 years at `MAX_RATE`,
-per `EVM/src/lib/MathLib.sol:78-81`).
+Neither stack caps how far `rateEnd` may be set into the future. EVM's only
+bound is `rpow` reverting on overflow (~30 years at `MAX_RATE`, per
+`EVM/src/lib/MathLib.sol:78-81`).
 
-The user's direction was "keep it congruent with EVM, 30 years is more than
-fine, small tweaks to the EVM side are ok". The 256-bit `mul_div` removed the
-*correctness* need for a cap (see D-04 for the residual tail), so no cap has
-been added. It is still worth adding as **defence in depth** — it bounds the
-unattended-successor overhang and makes the halt semantics explicit rather
-than emergent from an overflow.
+**Deliberately not done this pass.** It is the only item that would touch
+`OkuMoney.sol`, which is **live on six networks**. Adding a `require` is
+storage-layout-neutral, but it is still a UUPS upgrade needing the full
+`checkLayout` / `preState` rehearsal on every one of them — a deployment
+decision, not a code one.
 
-**Proposed:** `MAX_ACCRUAL_WINDOW_SECS = 90 days`, enforced identically in
-`OkuMoney.setOkuMYieldRate` / `setOkuMYieldRateWithSuccessor` and in the SVM
-equivalents. Epochs are 7–30 days, so 90 days is 3–13× headroom.
+**Nothing depends on it.** All three reasons it was originally proposed have
+since been addressed another way:
 
-**Needs:** confirmation that touching `OkuMoney.sol` is in scope, and a value.
+- *Correctness*: the 256-bit `mul_div` already covers the whole reachable
+  domain (see D-04).
+- *Bounding the differential corpus*: the generator bounds its own domain at
+  90 days by construction, documented in its header.
+- *Compute cost*: `rpow` scales with `log2(elapsed)`, so a 90-day window costs
+  only ~3 more iterations than a 7-day one. Capping the window is a weak lever
+  on CU and is not what fixed D-15.
+
+**Still worth doing** as defence in depth: it bounds the unattended-successor
+overhang and makes halt semantics explicit rather than emergent from an
+overflow. Proposal stands at `MAX_ACCRUAL_WINDOW_SECS = 90 days` (3-13x the
+candidate epoch lengths), enforced identically in `OkuMoney._setOkuMYieldRate`
+/ `_setNextOkuMYieldRate` and the SVM equivalents.
+
+**Needs:** approval to schedule an EVM upgrade, and a value.
 
 ---
 
@@ -77,9 +89,16 @@ Because the multiplier is a pure function of that timestamp, this is a
 self-correcting **lag**, not a permanent drift — SVM catches up when the
 clock does.
 
-**Consequence for tooling:** `checkMultiplierDrift.ts` must compare multipliers
-at equal *chain timestamps*, not at equal wall-clock instants, or it will
-report false positives against SVM. Not yet implemented.
+**Handled.** `checkMultiplierDrift.ts` now reads SVM and records the timestamp
+each chain's multiplier was evaluated at (`evaluatedAtSec`), reporting the read
+skew alongside any spread. The schedule-field equality check — which is
+timestamp-independent and therefore exact — is the real catch-all; the
+multiplier spread is secondary and annotated so a clock lag is not mistaken
+for a divergence.
+
+`readSvmSchedule` uses `getBlockTime(getSlot())` for cluster time and warns
+loudly if it has to fall back to wall clock, since that reintroduces the very
+confusion the field exists to avoid.
 
 ---
 
@@ -95,28 +114,49 @@ clamps output at `1e24` (1e6×), while the SVM bound only engages above
 schedule where EVM succeeds and SVM errors — but this is an argument, not a
 proof.
 
-**To close properly:** extend the cross-language differential harness
-(D-05) to search the boundary region explicitly, or adopt D-01's window cap
-which makes the argument trivial.
+**Status after D-05.** The differential corpus deliberately does NOT generate
+vectors in this region — doing so would produce known-failing cases and
+devalue the whole corpus. So this remains an argument, not a proof. It is
+recorded in the generator's header so the exclusion is explicit rather than
+an accident of the chosen ranges.
+
+**To close properly:** adopt D-01's window cap, which makes the argument
+trivial, or add a dedicated boundary-search test that asserts the two
+thresholds bracket the reachable domain.
 
 ---
 
-## D-05 · Cross-language differential harness — `DEFERRED`
+## D-05 · Cross-language differential harness — `DONE`
 
-The strongest available evidence for the cross-chain-determinism claim, and
-the one thing that would catch a silent port divergence. Not yet built.
+Built. `EVM/test/differential/GenerateVectors.t.sol` drives the existing
+`MathLibHarness` over a structured grid — every `computeMultiplier` branch,
+both window boundaries sampled at ±1, `MAX_RATE`, the `MAX_MULTIPLIER` clamp,
+`elapsed == 0`, halted, `anchor > rateEnd`, zero base — plus 400 seeded fuzz
+cases and four deliberate revert cases. It writes
+`EVM/test/differential/vectors.jsonl` (committed).
 
-Design: a Foundry script drives the existing `EVM/test/mocks/MathLibHarness.sol`
-over the full 7-tuple input space — all three `computeMultiplier` branches,
-boundaries at `rateEnd`/`pendingRateEnd`, `MAX_RATE`, the `MAX_MULTIPLIER`
-clamp, `elapsed == 0`, halted — and emits a JSON vector file. A Rust
-`#[test]` and a TS test both replay it and assert **exact** equality. Corpus
-committed; runs in CI. Round-trips in both directions so a Rust fuzz finding
-can be replayed against Solidity.
+Both other implementations replay it:
 
-Until this exists, EVM↔SVM multiplier parity rests on code review of the
-port plus the per-stack unit tests.
+- `SVM/oku-programs/crates/oku-shared/tests/differential.rs`
+- `packages/yield-tooling/test/differential.test.ts`
 
+**3,290 vectors, 4 of them reverts, all three implementations agreeing
+exactly.** Reverts are checked as strictly as values: "one implementation
+accepts what another rejects" is as much a divergence as a wrong number, and
+exactly that class of bug was found by hand in the instruction layer during
+this pass.
+
+Run the whole loop with `npm run test:differential` from the repo root.
+
+**Validated by mutation.** Flipping `rpow`'s accumulator from half-up to floor
+in the TypeScript — a realistic one-ulp rounding slip — fails 1,218 of 3,290
+vectors. The harness detects the class of bug it exists for, rather than
+being green by construction.
+
+**Not covered:** the generator bounds its domain to what a compliant writer
+can produce, so the far-tail overflow divergence (D-04) is excluded by design.
+Only `computeMultiplier` is compared; `raw_to_dollars` / `dollars_to_raw` have
+their own per-stack fuzzing but no cross-language corpus.
 ---
 
 ## D-06 · `mul_div_ceil` still has no on-chain caller — `ACCEPTED` (pre-existing)
@@ -211,23 +251,25 @@ against a clean stash). Two categories:
   `psmConfig` in `tests/shared/setup.ts`.
 
 Tests pass because `tsx` transpiles without typechecking. Nothing here is a
-runtime bug, but it means TypeScript is not currently providing any safety net
-on the SVM tooling — worth fixing before the shared `@okumoney/yield-tooling`
-package lands, since that package's whole value is being a single trustworthy
-implementation.
+runtime bug, but it means TypeScript is providing no safety net on the SVM
+test suite.
+
+**Partly addressed.** `EVM/` and `packages/yield-tooling/` both typecheck
+clean, including all the new SVM-reading code. The remaining errors are
+confined to `SVM/oku-programs/tests/` and are unchanged in count and kind from
+before this work (verified by diffing against a clean stash).
 
 ---
 
-## D-11 · Piggyback sync swallows errors — `ACCEPTED`
+## D-11 · Piggyback sync swallowed errors — `OBSOLETE` (superseded by D-15)
 
-`try_sync_display` in `instructions/psm.rs` is deliberately infallible: a
-display-mirror failure must never block a user's mint or redeem. The trade-off
-is that a persistently failing CPI would be invisible from the PSM path.
+The opportunistic display sync on `mint_oku_m` / `redeem_oku_m` was
+deliberately infallible, so a persistently failing CPI would have been
+invisible from the PSM path.
 
-Mitigation is that the same failure would also surface on the permissionless
-crank, which *does* propagate errors, and the `DisplayMultiplierSynced` event
-makes staleness observable off-chain.
-
+Moot: the piggyback was removed entirely after compute-budget measurement
+(D-15). The user-facing instructions no longer touch the display mirror, so
+there is no swallowed-error path left on them.
 ---
 
 ## D-12 · No on-chain multiplier view for integrators — `OPEN`
@@ -260,3 +302,70 @@ derived per-second integer.
 
 **Remaining action:** delete the stale 365.24 friction note from `TRACKER.md`
 when the tracker entry is closed out.
+
+---
+
+## D-15 · Compute budget — `FIXED`, with headroom to reclaim if ever needed
+
+The streaming refactor shipped on an **estimate** of 15-40k CU for the
+multiplier computation. Measured, it was:
+
+| path | before | after |
+|---|---|---|
+| `mint_oku_m`, 7-day window | 151,225 | 53,473 |
+| `mint_oku_m`, 90-day window | 172,324 | 62,335 |
+| `mint_oku_m`, two-`rpow` overhang | **>200k — hard failure** | 80,883 |
+| `redeem_oku_m`, two-`rpow` overhang | **>200k — hard failure** | 74,359 |
+| `sync_display_multiplier` | 179,875 | 103,753 |
+
+The overhang branch is not an edge case — it is the state of every chain
+between an epoch handover and the next schedule write. **As committed, mints
+and redeems would have begun failing outright once a window closed.** That the
+estimate went unchecked for a full pass is the process lesson here: a
+user-facing hot path acquired a ~20-iteration `rpow` and nobody measured it.
+
+Causes and fixes, both in `crates/oku-shared/src/wad.rs`:
+
+1. `widening_mul` held its limbs as `u128`, so LLVM emitted four `__multi3`
+   libcalls per call instead of native 64x64→128 widening multiplies. Fixed by
+   typing the limbs `u64`.
+2. `div_wad` always ran the full four-limb long division — eight software
+   division libcalls — despite the product fitting `u128` for essentially every
+   real operation. Added a fast path: when `a * b` fits `u128`, one multiply
+   and one division. Provably identical; re-fuzzed 23.5M executions against the
+   independent oracle and re-verified against the 3,290-vector differential
+   corpus.
+3. Removed the opportunistic piggyback display sync from `mint_oku_m` /
+   `redeem_oku_m` (~31k CU for a cosmetic refresh).
+
+Pinned by `tests/bankrun/compute-budget.ts` at a 100k ceiling on user paths
+and 150k on the crank, so a regression fails CI.
+
+**Remaining headroom, if it is ever wanted.** The dominant cost is now a single
+`u128` division per `mul_div` (`__udivti3` is a software routine on SBF; there
+is no 128-bit divide instruction). Two options, neither taken because nothing
+currently needs them:
+
+- Division by the *constant* `PRECISION` via Granlund-Montgomery multiply-high,
+  turning the division into a 128x128 multiply-high plus a shift.
+- 128÷64 via three native `u64` divisions (SBF has a 64-bit divide instruction),
+  using the standard two-limb algorithm.
+
+Either would be new, subtle, security-critical code on the hottest path in the
+protocol. Not worth it at 80k against a 200k limit.
+
+---
+
+## D-16 · Display freshness now depends entirely on the crank — `ACCEPTED`
+
+Follows directly from D-15's removal of the piggyback. An idle PSM with nobody
+running `scripts/admin/sync-display.ts` will show a stale wallet balance.
+
+Bounded and safe: the mirror only ever reads **low**, never high, so a redeem
+always pays at least what was displayed. Nothing prices against it. But it does
+mean display freshness is an operational responsibility rather than a
+self-maintaining property, and `SVM/README.md` says so explicitly.
+
+If this proves annoying in practice, the cheapest fix is not to restore the
+piggyback but to have the crank run as part of whatever already monitors the
+deployment — it is permissionless, so it needs no key material.

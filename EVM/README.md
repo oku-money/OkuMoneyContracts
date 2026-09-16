@@ -1894,9 +1894,17 @@ Two caveats specific to SVM:
 
 **Still not enforced on-chain, on either stack.** Bit-identical math
 removes the likeliest source of divergence; it does not detect one.
-The cross-language differential harness that would hold the three
-implementations (Solidity, Rust, TypeScript) honest is not yet built —
-tracked in `SVM/DECISIONS.md` D-05.
+Detection lives in two off-chain layers:
+
+- `scripts/operator/checkMultiplierDrift.ts` now reads **SVM as well as**
+  every EVM chain. Schedule-field equality is the exact,
+  timestamp-independent check; the multiplier spread is reported with the
+  read skew annotated, so SVM's clock lag is not mistaken for a drift.
+- `test/differential/` holds the three implementations (Solidity, Rust,
+  TypeScript) to a committed corpus of 3,290 vectors generated from this
+  Solidity, reverts included. `npm run test:differential` from the repo
+  root regenerates and replays it. A one-ulp rounding change fails ~1,200
+  of them, so it detects the class of bug it exists for.
 
 ### 11. Known issues
 

@@ -45,6 +45,9 @@ import { logger } from "../utils/logger";
 import { describeRate } from "../utils/yieldRate";
 import { summarizeLedger } from "../utils/carryLedger";
 import { CHAIN_METADATA } from "../config/chains";
+import { readSvmSchedule } from "../utils/svmValue";
+import { SVM_CHAIN_KEY } from "../utils/globalValue";
+import { effectiveRate as mirrorEffectiveRate } from "@okumoney/yield-tooling";
 
 const TOLERANCE_BPS = BigInt(process.env.TOLERANCE_BPS ?? "1");
 const EXPIRY_WARN_HOURS = Number(process.env.EXPIRY_WARN_HOURS ?? "48");
@@ -73,6 +76,19 @@ type Reading = {
   pending: bigint;
   pendingRateEnd: bigint;
   totalSupply: bigint;
+  /**
+   * The chain's OWN clock at the instant the multiplier was evaluated.
+   *
+   * On EVM this equals wall clock for practical purposes. On SVM it does NOT:
+   * `Clock::unix_timestamp` is derived from validator vote timestamps and can
+   * trail. Since the multiplier is a pure function of that timestamp, a lagging
+   * clock produces a lagging multiplier — a SELF-CORRECTING lag, not a drift.
+   * Comparing SVM's multiplier against EVM's at the same WALL-CLOCK instant
+   * would therefore report a divergence that does not exist.
+   */
+  evaluatedAtSec: number;
+  /** SVM has no view functions, so its multiplier is recomputed client-side. */
+  computedOffChain?: boolean;
 };
 
 async function readChain(name: string, rpcUrl: string): Promise<Reading | null> {
@@ -91,9 +107,58 @@ async function readChain(name: string, rpcUrl: string): Promise<Reading | null> 
         c.okuMPendingRateEnd(),
         c.totalSupply(),
       ]);
-    return { chain: name, multiplier, rate, effectiveRate, rateEnd, pending, pendingRateEnd, totalSupply };
+    return {
+      chain: name,
+      multiplier,
+      rate,
+      effectiveRate,
+      rateEnd,
+      pending,
+      pendingRateEnd,
+      totalSupply,
+      evaluatedAtSec: Math.floor(Date.now() / 1000),
+    };
   } catch (e: any) {
     logger.warning(`${name}: read failed — ${e.message ?? e}`);
+    return null;
+  }
+}
+
+/**
+ * Read SVM's schedule and recompute its multiplier.
+ *
+ * Returns `null` when SVM is not configured — the same "omit, never assume"
+ * convention the EVM readers use.
+ */
+async function readSvm(): Promise<Reading | null> {
+  const rpcUrl = process.env.SVM_RPC_URL;
+  const programId = process.env.SVM_LITE_PSM_PROGRAM_ID;
+  const okuMMint = process.env.SVM_OKU_M_MINT;
+  if (!rpcUrl || !programId || !okuMMint) {
+    logger.warning(
+      "SVM not configured (need SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT) — " +
+        "it is NOT being checked for drift."
+    );
+    return null;
+  }
+
+  try {
+    const reading = await readSvmSchedule(rpcUrl, programId, okuMMint);
+    if (!reading) return null;
+    return {
+      chain: SVM_CHAIN_KEY,
+      multiplier: reading.multiplier,
+      rate: reading.schedule.ratePerSecond,
+      effectiveRate: mirrorEffectiveRate(reading.schedule, BigInt(reading.chainTimeSec)),
+      rateEnd: reading.schedule.rateEnd,
+      pending: reading.schedule.pendingRatePerSecond,
+      pendingRateEnd: reading.schedule.pendingRateEnd,
+      totalSupply: reading.rawSupply,
+      evaluatedAtSec: reading.chainTimeSec,
+      computedOffChain: true,
+    };
+  } catch (e: any) {
+    logger.warning(`${SVM_CHAIN_KEY}: read failed — ${e.message ?? e}`);
     return null;
   }
 }
@@ -106,9 +171,13 @@ async function main() {
     ([name]) => !requested || requested.includes(name)
   );
 
-  const readings = (
+  const evmReadings = (
     await Promise.all(targets.map(([name, cfg]) => (cfg.rpcUrl ? readChain(name, cfg.rpcUrl) : null)))
   ).filter((r): r is Reading => r !== null);
+
+  const includeSvm = !requested || requested.includes(SVM_CHAIN_KEY);
+  const svmReading = includeSvm ? await readSvm() : null;
+  const readings = svmReading ? [...evmReadings, svmReading] : evmReadings;
 
   if (readings.length === 0) {
     logger.error("No chains readable — check CHAINS and the address book");
@@ -117,7 +186,7 @@ async function main() {
 
   for (const r of readings) {
     logger.info(
-      `${r.chain.padEnd(14)} mult=${ethers.formatEther(r.multiplier)} ` +
+      `${r.chain.padEnd(14)}${r.computedOffChain ? "*" : " "}mult=${ethers.formatEther(r.multiplier)} ` +
         `rate=${describeRate(r.rate)} effective=${describeRate(r.effectiveRate)} ` +
         `end=${r.rateEnd === 0n ? "open" : new Date(Number(r.rateEnd) * 1000).toISOString()} ` +
         `pendingEnd=${r.pendingRateEnd === 0n ? "none" : new Date(Number(r.pendingRateEnd) * 1000).toISOString()}`
@@ -127,20 +196,37 @@ async function main() {
   let failed = false;
 
   // --- Multiplier spread ---
+  //
+  // Compared at each chain's own evaluation timestamp. That is exact for EVM
+  // chains (block.timestamp tracks wall clock) but NOT for SVM, whose clock can
+  // trail. The schedule-equality check below is the timestamp-independent one
+  // and is the real catch-all; this spread check is reported with the skew made
+  // explicit so a clock lag is not mistaken for a divergence.
+  const evaluatedAt = readings.map((r) => r.evaluatedAtSec);
+  const skewSec = Math.max(...evaluatedAt) - Math.min(...evaluatedAt);
+
   const mults = readings.map((r) => r.multiplier);
   const min = mults.reduce((a, b) => (a < b ? a : b));
   const max = mults.reduce((a, b) => (a > b ? a : b));
   const spreadBps = min === 0n ? 0n : ((max - min) * 10_000n) / min;
 
   if (spreadBps > TOLERANCE_BPS) {
+    const skewNote =
+      skewSec > 0
+        ? ` Readings span ${skewSec}s of clock skew; on SVM a lagging ` +
+          "Clock::unix_timestamp produces a LAGGING (self-correcting) multiplier, " +
+          "not a permanent drift — check the schedule equality below before acting."
+        : "";
     logger.error(
       `MULTIPLIER DRIFT: spread ${spreadBps} bps exceeds tolerance ${TOLERANCE_BPS} bps ` +
-        `(min ${ethers.formatEther(min)} / max ${ethers.formatEther(max)}). ` +
-        `Divergence is one-way — the multiplier is monotonic, so laggards must be run hot to catch up.`
+        `(min ${ethers.formatEther(min)} / max ${ethers.formatEther(max)}).` +
+        ` Divergence is one-way — the multiplier is monotonic, so laggards must be run hot to catch up.${skewNote}`
     );
     failed = true;
   } else {
-    logger.success(`Multiplier spread ${spreadBps} bps (within ${TOLERANCE_BPS} bps)`);
+    logger.success(
+      `Multiplier spread ${spreadBps} bps (within ${TOLERANCE_BPS} bps, ${skewSec}s read skew)`
+    );
   }
 
   // --- Rate config equality ---

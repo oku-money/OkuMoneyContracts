@@ -19,7 +19,7 @@ import {
   computeMultiplier,
   scheduleFromConfig,
   ratePerSecondForApy,
-} from "../../scripts/utils/multiplier";
+} from "@okumoney/yield-tooling";
 import {
   coldMultisig,
   warmMultisig,

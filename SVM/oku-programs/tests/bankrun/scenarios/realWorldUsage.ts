@@ -44,7 +44,7 @@ import {
 import { Transaction } from "@solana/web3.js";
 import { expect } from "chai";
 import { LitePsm } from "../../../target/types/lite_psm";
-import { PRECISION, ratePerSecondForApy } from "../../../scripts/utils/multiplier";
+import { PRECISION, ratePerSecondForApy } from "@okumoney/yield-tooling";
 import {
   coldMultisig,
   warmMultisig,

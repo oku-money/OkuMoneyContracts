@@ -38,7 +38,7 @@ import {
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
-import { ratePerSecondForApy } from "../../scripts/utils/multiplier";
+import { ratePerSecondForApy } from "@okumoney/yield-tooling";
 import {
   coldMultisig,
   warmMultisig,

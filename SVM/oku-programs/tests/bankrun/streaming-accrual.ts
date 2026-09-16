@@ -64,7 +64,7 @@ import {
   computeMultiplier,
   scheduleFromConfig,
   ratePerSecondForApy,
-} from "../../scripts/utils/multiplier";
+} from "@okumoney/yield-tooling";
 
 const { Keypair } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;

@@ -45,7 +45,7 @@ import {
   computeMultiplier,
   scheduleFromConfig,
   ratePerSecondForApy,
-} from '../utils/multiplier';
+} from "@okumoney/yield-tooling";
 import { loadDeployment, loadDeploymentForFork, DeploymentAddresses } from '../utils/addressBook';
 import {
   derivePsmConfigPDA,

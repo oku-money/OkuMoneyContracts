@@ -450,6 +450,18 @@ iterations. See § Compute budget below — the first implementation cost
 over 150k CU and exceeded Solana's 200k limit outright after an epoch
 handover.
 
+**Agreement with the other two implementations is enforced, not assumed.**
+`compute_multiplier` exists in Solidity, Rust and TypeScript, and nothing
+on-chain on either stack can detect a divergence. A committed corpus of
+3,290 vectors is generated from the Solidity reference and replayed
+against the other two, reverts included:
+
+```bash
+npm run test:differential   # from the repo root
+```
+
+See `EVM/test/differential/GenerateVectors.t.sol`.
+
 **f64 for ScaledUiAmount.** The Token-2022 extension stores an IEEE 754
 `f64`. It is a **write-only display mirror** — the program pushes to it
 and never reads it back, so its precision is a display concern only. The
@@ -485,9 +497,16 @@ Two things were necessary to get here:
    takes a fast path (one multiply, one division) whenever the product
    fits `u128` — which covers essentially every real operation.
 2. The opportunistic "piggyback" display sync was **removed** from
-   `mint_oku_m` / `redeem_oku_m`. It cost ~31k CU for a cosmetic refresh.
-   Display freshness is solely the permissionless crank's job now; an
-   idle PSM with no crank shows a stale (always low, never high) balance.
+   `mint_oku_m` / `redeem_oku_m`. It cost ~31k CU for a cosmetic refresh
+   on an already-tight path.
+
+**Operational consequence of (2):** display freshness is now entirely the
+permissionless crank's job. An idle PSM with nobody running
+`scripts/admin/sync-display.ts` shows a stale balance. This is bounded and
+safe in one direction only — the mirror reads **low**, never high, so a redeem
+always pays at least what the wallet showed — but it is an operational
+responsibility rather than a self-maintaining property. The crank needs no key
+material, so it can run anywhere the deployment is already monitored.
 
 ## Hardcoded constants
 

@@ -1,5 +1,9 @@
 [profile.default]
 src = "src"
+# Allow the differential-vector generator to write its corpus. Scoped to the
+# single directory it owns — see test/differential/GenerateVectors.t.sol.
+fs_permissions = [{ access = "read-write", path = "./test/differential" }]
+
 out = "out"
 libs = ["lib"]
 solc = "0.8.28"

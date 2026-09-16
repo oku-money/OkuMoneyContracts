@@ -1,0 +1,17 @@
+{
+  "name": "@okumoney/yield-tooling",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chain-agnostic yield/accrual tooling shared by the EVM and SVM stacks.",
+  "type": "commonjs",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.7.0"
+  }
+}

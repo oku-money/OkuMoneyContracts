@@ -30,7 +30,7 @@ import * as anchor from '@anchor-lang/core';
 import { Program, Idl, BN } from '@anchor-lang/core';
 // The canonical multiplier is computed, not stored, so tests need the same
 // math the program uses. This is the shared TS mirror, not a test-local copy.
-import { computeMultiplier, scheduleFromConfig } from '../../scripts/utils/multiplier';
+import { computeMultiplier, scheduleFromConfig } from "@okumoney/yield-tooling";
 import * as fs from 'fs';
 import * as path from 'path';
 import {

@@ -6,7 +6,13 @@
  * {@link realisedYieldToRatePerSecond} for why a TIME-WEIGHTED average across
  * all chains is required rather than a spot value on any single chain.
  *
- * V(t) = Σ_chains totalSupply(chain, t) * okuMMultiplier(chain, t)
+ * V(t) = Σ_chains totalSupply(chain, t) * multiplier(chain, t)
+ *
+ * "Chains" means EVM chains AND SVM. SVM was excluded while it ran a different
+ * yield model; both stacks now share one schedule, so leaving it out is an
+ * economic bug rather than an omission — V is the DENOMINATOR of every derived
+ * rate, so under-counting it makes the published rate too HIGH and the protocol
+ * over-pays yield on every chain, including the ones that were counted.
  *
  * Nothing on-chain aggregates this — it is inherently a cross-chain,
  * off-chain computation, same as the rate schedule itself. This module reads
@@ -31,6 +37,7 @@ import { loadAddress } from "./addressBook";
 import { logger } from "./logger";
 import { CHAIN_METADATA } from "../config/chains";
 import { distributedUsdOverWindow, RateSegment } from "./epochDistribution";
+import { readSvmValueUsd } from "./svmValue";
 
 const ABI = ["function totalSupply() view returns (uint256)", "function okuMMultiplier() view returns (uint256)"];
 
@@ -103,7 +110,49 @@ export async function sampleGlobalValueUsd(chains?: string[]): Promise<GlobalVal
     total += valueUsd;
   }
 
+  // SVM. Read separately because Solana has no view functions — the canonical
+  // multiplier is recomputed off-chain from `PsmConfig` via the shared mirror
+  // of the on-chain math. Omitted (not zeroed) if unreadable, same as any EVM
+  // chain: a transient RPC failure must never shrink V, because that would
+  // over-pay yield.
+  if (!chains || chains.includes(SVM_CHAIN_KEY)) {
+    const svm = await readSvmConfigured();
+    if (svm !== null) {
+      perChain[SVM_CHAIN_KEY] = svm;
+      total += svm;
+    }
+  }
+
   return { timestampSec: Math.floor(Date.now() / 1000), valueUsd: total, perChain };
+}
+
+/** Key used for SVM in {@link GlobalValueSample.perChain}. */
+export const SVM_CHAIN_KEY = "solana";
+
+/**
+ * Read SVM's contribution using environment-provided endpoints.
+ *
+ * Returns `null` — meaning "omit", never "zero" — when SVM is not configured.
+ * That is the correct behaviour pre-SVM-mainnet, but it is also indistinguishable
+ * from a misconfiguration, so it warns loudly: a silently-absent SVM inflates
+ * every derived rate.
+ */
+async function readSvmConfigured(): Promise<number | null> {
+  const rpcUrl = process.env.SVM_RPC_URL;
+  const programId = process.env.SVM_LITE_PSM_PROGRAM_ID;
+  const okuMMint = process.env.SVM_OKU_M_MINT;
+
+  if (!rpcUrl || !programId || !okuMMint) {
+    logger.warning(
+      "SVM not configured (need SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT). " +
+        "Its supply is EXCLUDED from V(t), which makes any rate derived from this " +
+        "sample too high. Set these before deriving a live rate."
+    );
+    return null;
+  }
+
+  const reading = await readSvmValueUsd(rpcUrl, programId, okuMMint);
+  return reading === null ? null : reading.valueUsd;
 }
 
 const DEFAULT_STORE_PATH = path.join(__dirname, "../config/globalValueSamples.json");

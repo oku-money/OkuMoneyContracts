@@ -185,12 +185,10 @@ jobs:
       - name: Run bankrun test suite
         run: npm run test:bankrun
 
-      - name: Trident harness compile smoke
-        # Verifies the fuzz harness still compiles against the current IDL +
-        # program surface. A full `trident fuzz run` is out of CI scope (heavy
-        # toolchain + multi-minute runtime); this catches harness drift.
-        working-directory: SVM/oku-programs/trident-tests
-        run: cargo check --all-targets
+      # NOTE: a "Trident harness compile smoke" step used to sit here, pointing
+      # at SVM/oku-programs/trident-tests. That directory does not exist in the
+      # repository, so the step could only ever fail. Removed rather than left
+      # red; if the Trident harness is reinstated, restore the step with it.
 
   # ---------------------------------------------------------------------------
   # SVM: cargo unit tests only (fast, no Solana toolchain needed)
@@ -285,3 +283,63 @@ jobs:
 
       - name: Run cargo deny check
         run: cargo deny check
+
+  # ---------------------------------------------------------------------------
+  # Cross-stack: the three implementations of computeMultiplier must agree
+  #
+  # Solidity (src/lib/MathLib.sol), Rust (oku-shared/src/rate.rs) and TypeScript
+  # (packages/yield-tooling) all compute the multiplier, and NOTHING on-chain on
+  # either stack can detect a divergence between them -- each deployment is
+  # independent, with no messaging. This job regenerates the vector corpus from
+  # the Solidity reference and replays it against the other two.
+  #
+  # It also fails if the committed corpus is stale, which is the point: a change
+  # to MathLib.sol that is not reflected in the other two shows up here rather
+  # than as chains quietly disagreeing about how much everyone owns.
+  # ---------------------------------------------------------------------------
+  differential:
+    name: Cross-stack differential (Solidity vs Rust vs TypeScript)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Regenerate vectors from the Solidity reference
+        working-directory: EVM
+        run: forge test --match-contract GenerateVectors -vv
+
+      - name: Fail if the committed corpus is stale
+        run: |
+          if ! git diff --quiet -- EVM/test/differential/vectors.jsonl; then
+            echo "::error::The committed differential corpus does not match what"
+            echo "::error::MathLib.sol currently produces. Regenerate it and"
+            echo "::error::re-run the Rust and TypeScript replays:"
+            echo "::error::  npm run test:differential"
+            git diff --stat -- EVM/test/differential/vectors.jsonl
+            exit 1
+          fi
+
+      - name: Replay against TypeScript
+        run: npm run test:tooling
+
+      - name: Replay against Rust
+        working-directory: SVM/oku-programs
+        run: cargo test --package oku-shared --test differential -- --nocapture

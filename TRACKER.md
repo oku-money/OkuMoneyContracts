@@ -501,12 +501,17 @@ reference-only in their own module docs:
   `samplesInWindow()` feeds `timeWeightedAverage()` for a given epoch.
 
 **Follow-up required before this can be closed:**
-- Move both stores to a durable, shared, ideally signed/versioned artifact —
-  not local JSON files — before relying on them for real rate decisions across
-  multiple operators. **Treated as a mainnet blocker** (`SVM/DECISIONS.md`
-  D-26): under a backend-controlled architecture these files ARE the
-  protocol's system of record, so the governing principle raises the stakes
-  here rather than lowering them.
+- **DECIDED** (`SVM/DECISIONS.md` D-26): a **signed off-chain ledger**, not
+  on-chain anchoring. Still a **mainnet prerequisite** — the stores must become
+  durable, versioned, append-only and signed before they back real rate
+  decisions. Under a backend-controlled architecture these files ARE the
+  protocol's system of record; losing them means the cumulative-conservation
+  identity cannot be reconstructed.
+  The trade-off (rate-derivation inputs are trusted, not provable from public
+  data) is documented for users in the root `README.md` § "What is and isn't
+  independently verifiable". Anchoring a per-epoch hash on-chain remains
+  available and additive if third-party verifiability ever becomes a
+  requirement; it needs no change to any deployed contract.
 - Decide the V̄ sampling cadence (recommended: hourly) against actual AUM
   volatility, and confirm it's fine-grained enough that `samplesInWindow`'s
   ">= 2 samples" floor is never the binding constraint on measurement accuracy.
@@ -519,7 +524,9 @@ reference-only in their own module docs:
   consistent with a declared `(epochId, realisedYieldUsd, measuredAvgValueUsd,
   carryInUsd)` tuple per epoch (it currently only reports the ledger's
   cumulative summary, it does not cross-check a given epoch's derivation
-  against on-chain state).
+  against on-chain state). Note this is the *internal* equivalent of the
+  third-party verifiability declined in D-26 — same cross-check, run by us
+  against our own ledger rather than by anyone against a published hash.
 - If `conservativeFactor < 1` is ever adopted (not the current default),
   confirm the steady-state carry buffer it implies
   (`realizedYieldPerEpoch × (1 − conservativeFactor)`) is an acceptable

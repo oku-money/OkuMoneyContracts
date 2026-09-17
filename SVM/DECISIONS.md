@@ -64,7 +64,7 @@ test and why.
 | [D-23](#d-23--epoch-length-and-anchor--decided) | Epoch length + anchor | `DECIDED` |
 | [D-24](#d-24--conservativefactor--decided) | `conservativeFactor` | `DECIDED` |
 | [D-25](#d-25--early-shock-detection--accepted-exposure) | Early-shock exposure | `ACCEPTED` |
-| [D-26](#d-26--carry-ledger--v-store-durability--open-mainnet-blocker) | Carry ledger + V̄ durability | `OPEN` |
+| [D-26](#d-26--carry-ledger--v-store-durability--decided) | Carry ledger + V̄ durability | `DECIDED` |
 | [D-27](#d-27--v-sampling-cadence--svm-environment-wiring--decided) | V̄ cadence + SVM env wiring | `DECIDED` |
 | [D-16](#d-16--display-freshness-depends-on-the-crank--accepted-interval-resolved) | Display crank dependency; pre-arm removed | `ACCEPTED` / interval `RESOLVED` |
 | [D-02](#d-02--token-2022-update_multiplier-future-timestamp-semantics--decided) | Token-2022 future-timestamp semantics | `DECIDED` |
@@ -73,7 +73,7 @@ test and why.
 | [D-05](#d-05--cross-language-differential-harness--decided) | Differential harness | `DECIDED` |
 | [D-06](#d-06--mul_div_ceil-has-no-on-chain-caller--accepted) | `mul_div_ceil` unused | `ACCEPTED` |
 | [D-07](#d-07--svm-needs-a-fresh-redeploy--deferred) | SVM fresh redeploy | `DEFERRED` |
-| [D-08](#d-08--pre-existing-svm-defects--mostly-resolved) | Pre-existing SVM defects | all resolved |
+| [D-08](#d-08--pre-existing-svm-defects--all-resolved) | Pre-existing SVM defects | `FIXED` |
 | [D-09](#d-09--seconds_per_year-convention--resolved) | `SECONDS_PER_YEAR` convention | `RESOLVED` |
 | [D-10](#d-10--display-could-read-above-canonical-after-an-emergency-override--fixed) | Display above canonical on override | `FIXED` |
 | [D-11](#d-11--piggyback-sync-swallowed-errors--obsolete) | Piggyback swallowed errors | `OBSOLETE` |
@@ -436,60 +436,72 @@ uncomfortable in practice.
 
 ---
 
-## D-26 · Carry ledger + V̄ store durability — `OPEN` (mainnet blocker)
+## D-26 · Carry ledger + V̄ store durability — `DECIDED`
 
-Both are **cross-chain-critical state with no on-chain representation**,
-currently local JSON files marked reference-only in their own module docs. The
-published rate is independently verifiable via `okuMRatePerSecond()`; the carry
-balance and the time-weighted average backing it are verifiable by nobody except
-whoever holds the files.
+**Signed off-chain ledger. No on-chain anchoring.**
 
-**The governing principle raises the stakes here rather than lowering them.**
-If the backend owns the levers, these files *are* the protocol's system of
-record.
+Both records are cross-chain-critical state with no on-chain
+representation. The published rate is independently verifiable via
+`okuMRatePerSecond()`; the carry balance and the time-weighted average backing
+it are not.
 
-### Can this be tracked on-chain via events?
+### Requirements (mainnet prerequisite either way)
 
-Asked, and worth answering precisely because the two stacks differ:
+- **Durable** — replicated and backed up. These are protocol state that happens
+  to live off-chain, not operational logs.
+- **Versioned and append-only** — a restated past epoch must be visible as a
+  restatement.
+- **Signed** — tamper-evident to anyone holding the key and able to see the
+  signatures.
+
+Losing them means the cumulative-conservation identity
+(`Σ achieved = Σ realised − outstandingCarry`) cannot be reconstructed.
+
+### Why not anchor a hash on-chain
+
+The alternative was a per-epoch `keccak(record)` emitted from a standalone
+~30-line attestation contract, making the ledger tamper-evident and letting a
+third party verify the arithmetic **without trusting us**.
+
+Declined, for the same reason as the rest of the architecture: this is an openly
+centralized product. Users already trust Oku Money to custody and manage the RWA
+backing — a far larger assumption than trusting the arithmetic derived from it.
+An anchor would harden a small link in a chain whose binding constraint is
+elsewhere, while adding a contract to deploy, audit and maintain.
+
+It would also have been an acknowledged exception to the governing decision
+rule: notarisation rather than logic, justified differently from everything else
+on-chain. Declining it keeps the rule intact.
+
+### What we give up, explicitly
+
+Nobody can prove from public data alone that a past epoch's carry balance was
+not restated. Auditors and counterparties verify by inspecting the signed ledger
+directly, as they would any other book.
+
+### Answering the cross-platform question
+
+For the record, since it was asked: emitted events would have worked on EVM but
+not well on SVM.
 
 | | EVM | SVM |
 |---|---|---|
-| Retention | Archive nodes; standard indexing | RPC prunes tx history (~days on public RPC); needs an archive/indexer |
-| Provable to a third party | **Yes** — logs are committed in the receipts trie, so a Merkle proof exists | **No** — Solana has no receipts trie. You can show a log; you cannot prove one |
+| Retention | Archive nodes; standard indexing | RPC prunes tx history (~days on public RPC) |
+| Provable to a third party | **Yes** — logs are committed in the receipts trie | **No** — Solana has no receipts trie; a log can be shown, not proven |
 
-The decisive point is that **the carry ledger and V̄ are global, not per-chain**.
-One record covers all six EVM chains plus SVM, so cross-platform emission is not
-needed at all — anchor once, wherever the property is strongest. That is EVM.
+Moot either way: the carry ledger and V̄ are **global, not per-chain**, so one
+record covers all six EVM chains plus SVM. Cross-platform emission was never
+needed — a single anchor would have sufficed, on EVM.
 
-### Recommendation
+### When to revisit
 
-**Signed off-chain ledger as canonical, plus a per-epoch hash anchored on one
-EVM chain.**
+If third-party verifiability of rate derivation becomes a product requirement —
+a partner, regulator or listing that wants to check the arithmetic without a
+trust relationship. The change is **additive and needs no modification to any
+deployed contract**.
 
-- Full record (`epochId`, `realisedYieldUsd`, `measuredAvgValueUsd`, `carryIn`,
-  `carryOut`, published rate, per-chain breakdown) stays off-chain, signed,
-  append-only. That is the working store.
-- Only `keccak(record)` goes on-chain — 12 transactions/year.
-- Gives tamper-evidence and third-party verifiability **without** publishing the
-  book.
-- Needs a standalone ~30-line `EpochAttestation` contract — one function, one
-  event, deployed once, never upgraded. **No change to `OkuMoney`.**
-
-**This is an acknowledged exception to the decision rule.** It is not
-key-compromise defence, not a maths invariant, not atomicity. The justification
-is different: the chain is being used as a **notarisation service**, not to run
-logic. Nothing can reject anything; there is no control flow. That is a use
-chains are genuinely good at and which no off-chain system replicates without a
-trusted third party.
-
-**If third-party verifiability is not a property you want** — if the consumers
-are internal plus auditors who accept your signature — then the signed
-off-chain ledger alone is sufficient and the contract should be skipped. That is
-the real question to settle.
-
-Either way, the minimum bar is: durable, versioned, append-only, signed. A lost
-or forked carry ledger means the cumulative-conservation identity cannot be
-reconstructed.
+Documented for users in the root `README.md` §
+"What is and isn't independently verifiable".
 
 ---
 
@@ -675,7 +687,7 @@ Already tracked in `TRACKER.md`.
 **Now unblocked earlier than expected:** with D-01 and D-22 both resolved as "no",
 there is no EVM upgrade to sequence behind.
 
-## D-08 · Pre-existing SVM defects — mostly resolved
+## D-08 · Pre-existing SVM defects — all resolved
 
 Recorded during the audit as out of scope. Five of seven self-resolved:
 
@@ -787,27 +799,32 @@ nothing currently needs at 80k against 200k.
 
 ## Status at a glance
 
-**One decision outstanding.**
+**No decisions outstanding.** All twenty-seven entries are settled.
 
-| # | Needs | Blocking? |
+| Status | Count | |
 |---|---|---|
-| **D-26** | Signed off-chain ledger only, or also a per-epoch hash anchored on one EVM chain? | **Mainnet blocker** either way — the stores must become durable regardless; only the on-chain anchor is undecided |
+| `DECIDED` | 10 | Settled and implemented |
+| `ACCEPTED` | 5 | Knowingly living with |
+| `FIXED` | 5 | Defects found and corrected during the work |
+| `RESOLVED` | 4 | Settled by the governing principle |
+| `REJECTED` | 1 | Considered and deliberately not done |
+| `DEFERRED` | 1 | Decided, work sequenced later |
+| `OBSOLETE` | 1 | Superseded |
 
-**Accepted, no action:**
+### Carried into delivery
+
+| # | Item | Note |
+|---|---|---|
+| D-26 | Durable, versioned, append-only, **signed** carry + V̄ stores | **Mainnet prerequisite.** The design is settled; building it is not done |
+| D-07 | SVM fresh redeploy | Unblocked — no EVM upgrade in the path |
+
+### Risks accepted, with numbers attached
 
 | # | Accepted |
 |---|---|
-| D-25 | Early-shock overshoot — worst *tested* 28.61 % of an epoch's yield, not a proven bound, irreversible. Mitigated by conservative liquidity and rate-setting rather than guards |
+| D-25 | Early-shock overshoot — worst *tested* 28.61 % of an epoch's yield (~$118k at $100M AUM), **not a proven bound**, and irreversible. Mitigated by conservative liquidity and rate-setting, not guards. Shorter epochs are the stronger lever if it bites |
+| D-26 | Rate-derivation inputs are trusted, not provable from public data |
+| D-16 | Wallet display freshness depends on the crank; stale-**low**, therefore safe |
 | D-03 | Solana clock lag — a self-correcting lag, handled in drift tooling |
-| D-04 | `rpow` far-tail threshold — now proven unreachable by ~17 orders of magnitude |
+| D-04 | `rpow` far-tail threshold — proven unreachable by ~17 orders of magnitude |
 | D-06 | `mul_div_ceil` retained without an on-chain caller |
-| D-16 | Display freshness depends on the crank; stale-low, therefore safe |
-
-**Deferred:**
-
-| # | Deferred |
-|---|---|
-| D-07 | SVM fresh redeploy — unblocked, since no EVM upgrade is in the path |
-
-Everything else in this log is `DECIDED`, `RESOLVED`, `FIXED`, `REJECTED` or
-`OBSOLETE`.

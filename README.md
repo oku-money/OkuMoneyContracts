@@ -21,7 +21,9 @@ agility:
   KMS-signed transactions.
 - **Trust model** — openly centralized product for safe government
   yield. Users trust Oku Money to manage RWA backing and operate
-  infrastructure responsibly.
+  infrastructure responsibly. See
+  [What is and isn't independently verifiable](#what-is-and-isnt-independently-verifiable)
+  for exactly where that trust is load-bearing in the yield mechanism.
 - **Legal framework** — registered with FinCEN as an MSB. Licensed
   as a money transmitter in states where we onboard users.
 
@@ -152,10 +154,11 @@ multiplier to a value that already accounts for the protocol take).
 
 ## Yield distribution & sandwich prevention
 
-**EVM and SVM diverge here** — EVM streams yield continuously (no
-per-tick MEV to sandwich); SVM still writes the multiplier in
-discrete ticks. See `TRACKER.md` for the open item tracking SVM
-parity.
+**Both stacks now run the same model.** Yield streams continuously from
+a per-second rate schedule, computed on read rather than written in
+discrete ticks — so there is no step for an arbitrageur to sandwich,
+and every chain returns the same multiplier at the same wall-clock
+second without any messaging between them.
 
 - **EVM:** `okuMMultiplier()` is computed continuously from a
   per-second rate schedule (`setOkuMYieldRate` /
@@ -176,6 +179,68 @@ parity.
   `ScaledUiAmount` extension cannot stream, so it is maintained as a
   lagging, permissionlessly-cranked mirror that is always at or below
   the canonical value — nothing prices against it.
+
+### What is and isn't independently verifiable
+
+The multiplier is derived off-chain and published on-chain. That split
+means some of the protocol's economics are independently checkable by
+anyone, and some rest on trusting Oku Money. The line is worth stating
+plainly.
+
+**Independently verifiable on-chain, by anyone:**
+
+- the published per-second rate and its window (`okuMRatePerSecond()`,
+  `okuMRateEnd()`, and the SVM `PsmConfig` equivalents)
+- the resulting multiplier at any timestamp — it is a pure function of
+  that schedule, so it can be recomputed and checked
+- total supply, and therefore the total dollar value of OkuM on each chain
+- that the multiplier only ever increases, and that every yielding rate
+  carries a bounded window
+
+**Not verifiable on-chain — trusted:**
+
+- **realised yield** for an epoch: what the RWA backing actually earned
+- **V̄**, the time-weighted average global value the rate is divided by
+- the **carry balance**: yield earned but not yet published, carried
+  forward to a later epoch
+
+These three are the *inputs* to the rate derivation. Anyone can confirm
+the published rate is internally consistent and that the multiplier
+follows from it; nobody outside Oku Money can confirm the rate was the
+*right* one for the yield actually earned.
+
+**The decision, and the trade.** These records are kept as a signed,
+versioned, append-only off-chain ledger. We considered anchoring a hash
+of each epoch's derivation on-chain, which would make the record
+tamper-evident and let a third party verify our arithmetic without
+trusting us. We chose not to.
+
+The reasoning is the same one behind the rest of the architecture: this
+is an openly centralized product. Users already trust Oku Money to
+custody and manage the RWA backing itself — a far larger trust
+assumption than trusting the yield arithmetic derived from it. An
+on-chain anchor would not remove that dependency; it would harden a
+small link in a chain whose binding constraint is elsewhere, while
+adding a contract to deploy, audit and maintain.
+
+**What we give up:** the ledger is tamper-evident only to whoever holds
+the signing key and can see the signatures. Nobody can prove, from
+public data alone, that a past epoch's carry balance was not restated.
+Auditors and counterparties verify it by inspecting the signed ledger
+directly, the same way they would verify any other book.
+
+**When we would revisit this:** if third-party verifiability of rate
+derivation becomes a product requirement — a partner, regulator or
+listing that wants to check our arithmetic without a trust relationship.
+The change is additive and needs no modification to any deployed
+contract: a standalone attestation contract, one hash per epoch. See
+`SVM/DECISIONS.md` D-26.
+
+Separately, and regardless of that choice: because the carry ledger and
+V̄ history have no on-chain representation, **losing them means the
+cumulative-conservation identity cannot be reconstructed.** They are
+protocol state that happens to live off-chain, and must be backed up and
+replicated as such — not treated as operational logs.
 
 ---
 

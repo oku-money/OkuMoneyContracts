@@ -470,6 +470,23 @@ at 6 token decimals that bias cannot change a rendered figure below
 roughly $2.3B of balance, and costs under a cent even at the largest
 position a `u64` can express.
 
+**The mirror is a pure lag.** Each sync writes exactly one point —
+`m(now)`, effective immediately — so the display is flat between cranks
+and steps up at each one, never ahead of a monotonically-increasing
+curve. `display <= canonical` therefore holds **unconditionally**.
+
+An earlier version also pre-armed `m(now + 60s)`, so the display kept
+advancing if the crank stopped. That was removed: a step armed under one
+schedule fires under whatever schedule is live when its timestamp
+arrives, so after a rate *decrease* — routine at an epoch roll — the
+armed value landed **above** the new canonical. Small ($0.25 per $1M on
+a 20%→5% roll) and self-correcting, but the wrong direction. Dropping
+the pre-arm made the invariant unconditional, halved the crank cost, and
+removed a dependency on Token-2022's future-timestamp resolve semantics.
+
+The crank cadence is **not a protocol constant** — nothing on-chain
+enforces or assumes one. 60s is the operational recommendation.
+
 ---
 
 ## Compute budget
@@ -484,7 +501,7 @@ regression fails CI rather than surfacing in production.
 | `mint_oku_m` (two-`rpow` overhang branch) | ~81,000 |
 | `redeem_oku_m` (two-`rpow` overhang branch) | ~74,000 |
 | `set_okum_yield_rate_with_successor` | ~6,800 |
-| `sync_display_multiplier` (2 CPIs) | ~104,000 |
+| `sync_display_multiplier` (1 CPI) | ~54,000 |
 
 The overhang branch — active window closed, successor running — is the
 normal state of every chain between a handover and the next schedule
@@ -499,6 +516,9 @@ Two things were necessary to get here:
 2. The opportunistic "piggyback" display sync was **removed** from
    `mint_oku_m` / `redeem_oku_m`. It cost ~31k CU for a cosmetic refresh
    on an already-tight path.
+3. The display mirror's pre-armed second step was removed, halving
+   `sync_display_multiplier` (103,753 → 54,309 CU). That change was made
+   for correctness rather than cost — see below.
 
 **Operational consequence of (2):** display freshness is now entirely the
 permissionless crank's job. An idle PSM with nobody running

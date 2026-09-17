@@ -5,9 +5,9 @@ setup:
 	rustup show
 	@echo "Installing Solana CLI (solana_version = 3.1.10, per Anchor.toml)..."
 	sh -c "$$(curl -sSfL https://release.anza.xyz/v3.1.10/install)"
-	@echo "Installing Anchor CLI 1.0.0..."
-	avm install --from-source 1.0.0
-	avm use 1.0.0
+	@echo "Installing Anchor CLI 1.0.2 (must match Anchor.toml anchor_version)..."
+	avm install --from-source 1.0.2
+	avm use 1.0.2
 	@echo "Installing Node dependencies..."
 	npm install
 	@echo "Setup complete. Run 'make build' to build programs."

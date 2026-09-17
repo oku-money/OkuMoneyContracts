@@ -13,11 +13,8 @@ import {
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
-  TOKEN_2022_PROGRAM_ID,
   createInitializeMintInstruction,
-  createInitializeInterestBearingMintInstruction,
   getMintLen,
-  ExtensionType,
 } from "@solana/spl-token";
 import { logger } from './logger';
 
@@ -55,83 +52,13 @@ async function sendWithRetry(
   throw lastError || new Error('Transaction failed after retries');
 }
 
-export interface CreateToken2022Params {
-  connection: Connection;
-  payer: Keypair;
-  decimals: number;
-  mintAuthority: PublicKey;
-  freezeAuthority: PublicKey | null;
-  rateAuthority: PublicKey;
-  initialRate: number; // In basis points
-}
+// NOTE: `createToken2022Mint` / `CreateToken2022Params` were removed here.
+// They initialised an `InterestBearingConfig` extension and had no callers —
+// the OkuM mint is created on-chain inside `initialize`, not by this helper.
+// That extension is also mutually exclusive with `ScaledUiAmount`, which OkuM
+// does use, so the code could never have applied to this protocol's mint
+// (`SVM/DECISIONS.md` D-18).
 
-/**
- * Create Token-2022 mint with Interest-Bearing extension
- */
-export async function createToken2022Mint(
-  params: CreateToken2022Params
-): Promise<PublicKey> {
-  const {
-    connection,
-    payer,
-    decimals,
-    mintAuthority,
-    freezeAuthority,
-    rateAuthority,
-    initialRate,
-  } = params;
-
-  const mintKeypair = Keypair.generate();
-  const mint = mintKeypair.publicKey;
-
-  // Calculate space needed for mint with extensions
-  const extensions = [ExtensionType.InterestBearingConfig];
-  const mintLen = getMintLen(extensions);
-
-  // Calculate minimum lamports for rent exemption
-  const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
-
-  const transaction = new Transaction().add(
-    // Create account
-    SystemProgram.createAccount({
-      fromPubkey: payer.publicKey,
-      newAccountPubkey: mint,
-      space: mintLen,
-      lamports,
-      programId: TOKEN_2022_PROGRAM_ID,
-    }),
-    // Initialize interest-bearing extension
-    createInitializeInterestBearingMintInstruction(
-      mint,
-      rateAuthority,
-      initialRate,
-      TOKEN_2022_PROGRAM_ID
-    ),
-    // Initialize mint
-    createInitializeMintInstruction(
-      mint,
-      decimals,
-      mintAuthority,
-      freezeAuthority,
-      TOKEN_2022_PROGRAM_ID
-    )
-  );
-
-  await sendWithRetry(connection, transaction, [payer, mintKeypair]);
-
-  logger.success(`Created Token-2022 mint: ${mint.toBase58()}`);
-  logger.info(`Decimals: ${decimals}`);
-  logger.info(`Mint Authority: ${mintAuthority.toBase58()}`);
-  logger.info(`Freeze Authority: ${freezeAuthority?.toBase58() || 'None'}`);
-  logger.info(`Rate Authority: ${rateAuthority.toBase58()}`);
-  logger.info(`Initial Rate: ${initialRate} bps`);
-
-  return mint;
-}
-
-/**
- * Create standard SPL Token mint
- */
 export async function createSPLTokenMint(
   connection: Connection,
   payer: Keypair,

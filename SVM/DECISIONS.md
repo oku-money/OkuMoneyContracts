@@ -61,24 +61,24 @@ test and why.
 | [D-01](#d-01--max_accrual_window-on-chain--resolved-no) | `MAX_ACCRUAL_WINDOW` on-chain | `RESOLVED` (no) |
 | [D-22](#d-22--on-chain-epoch-grid-validation--resolved-no) | On-chain epoch-grid validation | `RESOLVED` (no) |
 | [D-12](#d-12--integrator-access-to-the-canonical-multiplier--resolved) | Integrator multiplier access | `RESOLVED` |
-| [D-23](#d-23--epoch-length-and-anchor--open) | Epoch length + anchor | `OPEN` |
-| [D-24](#d-24--conservativefactor--open) | `conservativeFactor` | `OPEN` |
-| [D-25](#d-25--early-shock-detection--automation-posture--open) | Early-shock monitor automation | `OPEN` |
+| [D-23](#d-23--epoch-length-and-anchor--decided) | Epoch length + anchor | `DECIDED` |
+| [D-24](#d-24--conservativefactor--decided) | `conservativeFactor` | `DECIDED` |
+| [D-25](#d-25--early-shock-detection--accepted-exposure) | Early-shock exposure | `ACCEPTED` |
 | [D-26](#d-26--carry-ledger--v-store-durability--open-mainnet-blocker) | Carry ledger + V̄ durability | `OPEN` |
-| [D-27](#d-27--v-sampling-cadence--svm-environment-wiring--open) | V̄ cadence + SVM env wiring | `OPEN` |
-| [D-16](#d-16--display-freshness-depends-entirely-on-the-crank--accepted-interval-open) | Display crank dependency + interval | `ACCEPTED` / interval `OPEN` |
+| [D-27](#d-27--v-sampling-cadence--svm-environment-wiring--decided) | V̄ cadence + SVM env wiring | `DECIDED` |
+| [D-16](#d-16--display-freshness-depends-on-the-crank--accepted-interval-resolved) | Display crank dependency; pre-arm removed | `ACCEPTED` / interval `RESOLVED` |
 | [D-02](#d-02--token-2022-update_multiplier-future-timestamp-semantics--decided) | Token-2022 future-timestamp semantics | `DECIDED` |
 | [D-03](#d-03--solana-clock-lag-vs-evm-blocktimestamp--accepted-handled) | Solana clock lag | `ACCEPTED` |
-| [D-04](#d-04--rpow-overflow-threshold-differs-in-the-far-tail--accepted) | `rpow` far-tail threshold | `ACCEPTED` |
+| [D-04](#d-04--rpow-overflow-threshold-differs-in-the-far-tail--accepted-now-proven) | `rpow` far-tail threshold | `ACCEPTED` (proven) |
 | [D-05](#d-05--cross-language-differential-harness--decided) | Differential harness | `DECIDED` |
 | [D-06](#d-06--mul_div_ceil-has-no-on-chain-caller--accepted) | `mul_div_ceil` unused | `ACCEPTED` |
 | [D-07](#d-07--svm-needs-a-fresh-redeploy--deferred) | SVM fresh redeploy | `DEFERRED` |
-| [D-08](#d-08--pre-existing-svm-defects--mostly-resolved) | Pre-existing SVM defects | mostly resolved |
+| [D-08](#d-08--pre-existing-svm-defects--mostly-resolved) | Pre-existing SVM defects | all resolved |
 | [D-09](#d-09--seconds_per_year-convention--resolved) | `SECONDS_PER_YEAR` convention | `RESOLVED` |
 | [D-10](#d-10--display-could-read-above-canonical-after-an-emergency-override--fixed) | Display above canonical on override | `FIXED` |
 | [D-11](#d-11--piggyback-sync-swallowed-errors--obsolete) | Piggyback swallowed errors | `OBSOLETE` |
 | [D-13](#d-13--test-bankrun-did-not-rebuild-the-program--fixed) | Bankrun stale-binary trap | `FIXED` |
-| [D-14](#d-14--tsc---noemit-does-not-pass-on-the-svm-test-suite--open) | SVM `tsc` failures | `OPEN` |
+| [D-14](#d-14--tsc---noemit-on-the-svm-test-suite--fixed) | SVM `tsc` failures | `FIXED` |
 | [D-15](#d-15--compute-budget--fixed) | Compute budget | `FIXED` |
 
 ---
@@ -353,129 +353,248 @@ bounds stay on-chain; business policy moves to the backend.
 
 # Part 4 — Open: needs a decision
 
-## D-23 · Epoch length and anchor — `OPEN`
+## D-23 · Epoch length and anchor — `DECIDED`
 
-Full analysis in `TRACKER.md` § "Epoch-grid convention".
+**30 days, anchored 2026-01-01T00:00:00Z**, with one settlement window
+(2 days) of grid tolerance. Committed in `EVM/scripts/config/epoch.ts`;
+`checkMultiplierDrift.ts` now defaults to it, so the alignment check runs
+instead of being silently skipped.
 
-**Now low-stakes.** With D-22 resolved (no on-chain grid validation), this is a
-backend constant — changing it later is a config edit, not an upgrade.
+Chosen on operational grounds, not measured accuracy. At
+`DEFAULT_SETTLEMENT_FRACTION = 1/15`, 30 days gives a ~2-day window in which to
+land the settlement transaction on every chain. A 1-hour epoch gives 4 minutes,
+which is a race rather than a window.
 
-**Recommendation: 30 days**, anchored at a round UTC timestamp (e.g.
-`2026-01-01T00:00:00Z`) so grid arithmetic stays human-checkable.
+**The simulation's epoch-length axis is not evidence.** Its error was flat
+(2.27-2.29 %) from 1 hour to 90 days, almost certainly because the shock's
+position is specified as a fraction of the epoch and therefore scales with it.
+It is a mechanism smoke test.
 
-The decisive argument is operational: a 2-day settlement window at
-`DEFAULT_SETTLEMENT_FRACTION = 1/15` is comfortably wide for a reliable
-transaction; a 1-hour epoch leaves 4 minutes, which is not.
+**Low-stakes by construction.** With on-chain grid validation declined (D-22),
+these are backend constants — revising them is an edit to one file, not an
+upgrade. That is precisely why it was not worth reworking the simulation first.
 
-**Do not cite the simulation's epoch-length axis as evidence.** Its measured
-error was flat (2.27–2.29%) across all five lengths, almost certainly because
-the shock's position is specified as a fraction of the epoch and therefore
-scales with it. It is a mechanism smoke test, not an accuracy comparison. Since
-the decision is now cheap to revise, the previously-suggested simulation rework
-(repositioning the shock to an absolute time) is **not** worth doing first.
+**Recorded trade-off:** shorter epochs would bound the early-shock overshoot
+(D-25), because a shock has less time to compound before the next re-anchor.
+30 days maximises operational comfort and therefore maximises that exposure.
 
-## D-24 · `conservativeFactor` — `OPEN`
+---
 
-Purely off-chain; the governing principle is silent.
+## D-24 · `conservativeFactor` — `DECIDED`
 
-| Option | Effect |
-|---|---|
-| `1.0` (current default) | Pure rear-facing. No permanent float. Overshoot corrected by a slower next epoch |
-| `0.97` | Publishes 97 % of realised yield. Simulation confirms it costs exactly −3.00 %, no more. Implies a permanent carry buffer of `realizedYieldPerEpoch × 0.03` |
+**`1.0`** — pure rear-facing, no permanent float. Already the shipped default
+(`yieldRate.ts:196`, `runEpoch.ts:94`), so no change was needed.
 
-**Recommendation: `0.97` until D-25's monitor is live, then revisit.**
+Never an on-chain parameter: it is a scalar applied to the target before the
+rate is derived off-chain. Variance is absorbed by the carry ledger, which
+carries any shortfall into the next epoch, and by PSM liquidity.
 
-The reason is specific rather than general caution: a lower published rate
-reduces the chance of tripping the **irreversible** early-shock overshoot
-(D-25), so that 3 % margin is buying protection against the one failure mode
-that cannot be undone. Once the monitor is actively catching overshoot, the
-passive buffer is redundant and `1.0` — no permanent float — becomes preferable.
+**An earlier recommendation of 0.97 was withdrawn.** It was justified as
+protection against the early-shock overshoot (D-25), which does not hold up: a
+3 % margin against a ~28 % overshoot is not meaningful mitigation.
+`conservativeFactor` smooths ordinary epoch-to-epoch variance; it does not bound
+a shock. Keeping it at 1.0 avoids holding permanent float for a benefit that
+was overstated.
 
-## D-25 · Early-shock detection — automation posture — `OPEN`
+---
 
-The highest-severity unmitigated item in the design. Full analysis in
-`TRACKER.md` § "Early-shock detection".
+## D-25 · Early-shock detection — `ACCEPTED` exposure
 
 Because the multiplier is monotonic, an early long-duration supply shock can
 push actual distribution past the epoch target **before** the scheduled
 settlement-staging instant — after which settlement can only halt, never claw
-back. Simulation's worst case: **+28.61 %** error for a shock 5 % into the epoch,
-versus −0.82 % for the identical shock at 97 %.
+back.
 
-Detection and response are **entirely manual today.**
+**Decision: accept the exposure.** Supply shocks are part of the deal; the
+mitigation is conservative off-chain and on-chain liquidity plus conservative
+rate-setting, not additional guards.
 
-The governing principle argues *for* automation: the backend is trusted and
-should hold this lever.
+**What is being accepted, stated numerically** — $100M AUM, 5 % APY, 30-day
+epoch:
 
-**Recommendation: build the monitor, implement auto-halt, default it off.**
-Enable once it has run several epochs without false positives. An automated
-`setOkuMYieldRateWithSuccessor(PRECISION, …)` across six chains is powerful
-enough to want evidence before arming, but "a human will notice in time" is not
-a control for something that becomes irreversible the moment it is missed.
+```
+epoch yield target              $410,959
+worst TESTED overshoot 28.61%   $117,575 over-distributed, permanently
+```
+
+Two caveats that matter for reserve sizing:
+
+- **28.61 % is the worst case tested, not a proven bound.** Overshoot scales
+  with shock magnitude, so a larger shock is worse.
+- **It is irreversible.** Once distributed, the multiplier cannot be walked
+  back; the only response is to halt going forward.
+
+Worth noting the mitigation lever is weaker than it sounds:
+`conservativeFactor` moves the rate by single-digit percent, while a shock
+moves `V(t)` by tens of percent (see D-24). **Shorter epochs are the stronger
+lever**, which is the trade recorded in D-23.
+
+Nothing about this required a contract change either way — the monitor would
+have read `globalValue.ts` samples and used the existing
+`setOkuMYieldRateWithSuccessor`. It remains available if the exposure proves
+uncomfortable in practice.
+
+---
 
 ## D-26 · Carry ledger + V̄ store durability — `OPEN` (mainnet blocker)
 
 Both are **cross-chain-critical state with no on-chain representation**,
-currently local JSON files explicitly marked reference-only in their own module
-docs. The published rate is independently verifiable via `okuMRatePerSecond()`;
-the carry balance and the time-weighted average backing it are verifiable by
-nobody except whoever holds the files.
+currently local JSON files marked reference-only in their own module docs. The
+published rate is independently verifiable via `okuMRatePerSecond()`; the carry
+balance and the time-weighted average backing it are verifiable by nobody except
+whoever holds the files.
 
-**The governing principle raises the stakes here rather than lowering them.** If
-the backend owns the levers, these files *are* the protocol's system of record.
+**The governing principle raises the stakes here rather than lowering them.**
+If the backend owns the levers, these files *are* the protocol's system of
+record.
 
-**Recommendation: treat as a mainnet prerequisite.** Minimum bar: durable,
-versioned, append-only, ideally signed. A lost or forked carry ledger means the
-cumulative-conservation identity cannot be reconstructed.
+### Can this be tracked on-chain via events?
 
-## D-27 · V̄ sampling cadence + SVM environment wiring — `OPEN`
+Asked, and worth answering precisely because the two stacks differ:
 
-**Recommendation: hourly.** Confirm against real AUM volatility that
-`samplesInWindow`'s ">= 2 samples" floor is never the binding constraint on
-measurement accuracy.
+| | EVM | SVM |
+|---|---|---|
+| Retention | Archive nodes; standard indexing | RPC prunes tx history (~days on public RPC); needs an archive/indexer |
+| Provable to a third party | **Yes** — logs are committed in the receipts trie, so a Merkle proof exists | **No** — Solana has no receipts trie. You can show a log; you cannot prove one |
 
-**Operational hazard worth calling out separately:** `globalValue.ts` now reads
-SVM, and requires `SVM_RPC_URL`, `SVM_LITE_PSM_PROGRAM_ID` and `SVM_OKU_M_MINT`.
-**If they are unset, SVM is excluded from V(t) and every derived rate comes out
-too high** — V is the denominator. It warns, but a warning in a cron log is easy
-to miss. Consider making the sampler fail hard rather than warn once SVM is
-live.
+The decisive point is that **the carry ledger and V̄ are global, not per-chain**.
+One record covers all six EVM chains plus SVM, so cross-platform emission is not
+needed at all — anchor once, wherever the property is strongest. That is EVM.
 
-## D-14 · `tsc --noEmit` does not pass on the SVM test suite — `OPEN`
+### Recommendation
 
-21 errors, unchanged in count and kind from before this work (verified against a
-clean stash): ~12 Anchor generic-variance (`Program<LitePsm>` vs `Program<Idl>`)
-plus 9 miscellaneous (`accountsPartial` extra keys Anchor accepts at runtime,
-`AccountNamespace<Idl>` lacking `psmConfig`).
+**Signed off-chain ledger as canonical, plus a per-epoch hash anchored on one
+EVM chain.**
 
-Tests pass only because `tsx` transpiles without typechecking.
+- Full record (`epochId`, `realisedYieldUsd`, `measuredAvgValueUsd`, `carryIn`,
+  `carryOut`, published rate, per-chain breakdown) stays off-chain, signed,
+  append-only. That is the working store.
+- Only `keccak(record)` goes on-chain — 12 transactions/year.
+- Gives tamper-evidence and third-party verifiability **without** publishing the
+  book.
+- Needs a standalone ~30-line `EpochAttestation` contract — one function, one
+  event, deployed once, never upgraded. **No change to `OkuMoney`.**
 
-**`EVM/` and `packages/yield-tooling/` both typecheck clean**, including all the
-new SVM-reading code. The gap is confined to `SVM/oku-programs/tests/`.
+**This is an acknowledged exception to the decision rule.** It is not
+key-compromise defence, not a maths invariant, not atomicity. The justification
+is different: the chain is being used as a **notarisation service**, not to run
+logic. Nothing can reject anything; there is no control flow. That is a use
+chains are genuinely good at and which no off-chain system replicates without a
+trusted third party.
 
-**Recommendation: fix — and the governing principle raises its priority.** A
+**If third-party verifiability is not a property you want** — if the consumers
+are internal plus auditors who accept your signature — then the signed
+off-chain ledger alone is sufficient and the contract should be skipped. That is
+the real question to settle.
+
+Either way, the minimum bar is: durable, versioned, append-only, signed. A lost
+or forked carry ledger means the cumulative-conservation identity cannot be
+reconstructed.
+
+---
+
+## D-27 · V̄ sampling cadence + SVM environment wiring — `DECIDED`
+
+**Cadence: hourly.** ~720 samples per 30-day epoch, comfortably past
+`samplesInWindow`'s ">= 2 samples" floor.
+
+**The wiring hazard is now a hard error.** `globalValue.ts` reads SVM, and V is
+the DENOMINATOR of every derived rate:
+
+```text
+   rate  ~=  realisedYield / (V̄ x window)
+```
+
+A chain omitted from V does not make the sample incomplete — it makes the rate
+too **high**. If SVM held 20 % of supply and were silently excluded, V̄ would come
+out 20 % low and the rate 25 % high, every epoch, with nothing failing.
+
+`SVM_EXPECTED=true` now makes a missing or unreadable SVM configuration throw
+rather than warn. The flag exists because "SVM is absent" is a legitimate
+pre-launch state that must stay distinguishable from "SVM is misconfigured" —
+set it the moment SVM carries supply. A warning in a cron log is not a control.
+
+---
+
+## D-14 · `tsc --noEmit` on the SVM test suite — `FIXED`
+
+Was 21 errors, unchanged since before the streaming work. Now **zero**, and
+`npm run typecheck` is gated in CI across all three packages.
+
+Root cause was a single one: shared helpers in `tests/shared/setup.ts` were
+typed `Program<Idl>` while every caller passed `Program<LitePsm>`, which is not
+assignable due to variance in `addEventListener`. There is exactly one program
+in the workspace, so typing the helpers concretely fixed ~12 errors and let
+**19 `as any` casts** — which existed only to paper over that — be deleted.
+
+The remainder were dead account keys (`vaultOkuM`, plus `okuMMint` /
+`token2022Program` on `withdraw_buffer`) that Anchor silently ignores at
+runtime. Removed rather than suppressed: the instructions genuinely do not take
+them, and `vaultOkuM` is a leftover from a design where redeemed OkuM went to a
+vault instead of being burned.
+
+The governing principle is what raised this from hygiene to priority: a
 backend-controlled architecture makes the off-chain code *more* load-bearing,
-not less, and TypeScript is currently providing no safety net across the SVM
-suite.
+so it should not be the only part of the system without a type checker.
 
-## D-16 · Display freshness depends entirely on the crank — `ACCEPTED`, interval `OPEN`
+---
 
-Follows from D-15's removal of the piggyback sync. An idle PSM with nobody
-running `scripts/admin/sync-display.ts` shows a stale wallet balance.
+## D-16 · Display freshness depends on the crank — `ACCEPTED`, interval `RESOLVED`
 
-Bounded and safe: the mirror reads **low**, never high, so a redeem always pays
-at least what was displayed, and nothing prices against it. But display
-freshness is now an operational responsibility rather than a self-maintaining
-property, and `SVM/README.md` says so.
+An idle PSM with nobody running `scripts/admin/sync-display.ts` shows a stale
+wallet balance. Bounded and safe: the mirror reads **low**, never high, so a
+redeem always pays at least what was displayed, and nothing prices against it.
 
-**Open:** `DISPLAY_SYNC_INTERVAL` is 60 s, chosen when the piggyback existed as a
-backstop. It is now the only mechanism. 30 s costs ~0.014 SOL/day if tighter
-display is wanted.
+**Interval resolved: there is no on-chain interval any more.** Reviewing this
+question surfaced that the pre-armed second step was violating the mirror's one
+invariant, so it was removed (see below). `DISPLAY_SYNC_INTERVAL` went with it.
+The cadence is now purely an operator choice — nothing on-chain enforces or
+assumes one. 60 s remains the recommendation (~$0.35 under-read per $1M at
+20 % APY, ~0.007 SOL/day). The crank stays permissionless; the mechanism that
+runs it is out of scope for now.
 
-**Recommendation: keep 60 s, keep it permissionless** (the written value is fully
-determined by chain state, so there is nothing to gate), and run it from
-whatever already monitors the deployment — it needs no key material. If staleness
-proves annoying, shorten the interval rather than restoring the piggyback.
+### The pre-arm was removed, and why that matters
+
+The mirror used to write two points per sync: `m(now)`, and `m(now + 60s)`
+pre-armed at its own effective timestamp, so the display kept advancing for one
+interval if the crank stopped.
+
+A step armed under one schedule fires under whatever schedule is live when its
+timestamp arrives. After a rate **decrease** — routine at an epoch roll, where
+the settlement rate is usually below the base rate — the armed value is computed
+from the old, faster curve and lands **above** the new canonical value. Only
+`set_okum_multiplier` re-synced the display (D-10); the ordinary rate path did
+not, so this was live.
+
+Measured at the worst alignment (rate change immediately after a sync):
+
+| change | display excess |
+|---|---|
+| 20 % → 5 % APY (routine epoch roll) | $0.25 per $1M |
+| 100 % → 0 % (aggressive halt) | $1.32 per $1M |
+| `MAX_RATE` → 0 % (absolute worst) | $6.00 per $1M |
+
+Small and self-correcting within one crank, but the wrong direction — the
+display would briefly promise more than the PSM will pay.
+
+Closing it by having every rate write re-sync the display would have meant
+putting the mint back into `SetYieldRate`, re-coupling the one instruction that
+must land reliably at epoch boundaries to the token program. **Dropping the
+pre-arm instead was better on four counts:**
+
+- the invariant becomes **unconditional** — the mirror is a pure lag on a
+  monotonically-increasing curve, with no armed step that can go stale
+- `sync_display_multiplier` halved, 103,753 → **54,309 CU**
+- the dependency on Token-2022's future-timestamp resolve semantics (D-02)
+  disappears entirely
+- less on-chain machinery, in line with the governing principle
+
+Cost: if the crank stops, the display freezes rather than advancing one more
+step. Stale-**low**, therefore safe.
+
+Verified by mutation: with the pre-arm temporarily restored, all three new tests
+fail, reporting display `1.0000058` against canonical `1.0000000189` after a
+decrease and against exactly `1.0` after a halt.
 
 ---
 
@@ -497,24 +616,41 @@ secondary and annotated so a clock lag is not mistaken for a divergence.
 loudly on fallback to wall clock, since that reintroduces the exact confusion
 the field exists to avoid.
 
-## D-04 · `rpow` overflow threshold differs in the far tail — `ACCEPTED`
+## D-04 · `rpow` overflow threshold differs in the far tail — `ACCEPTED` (now proven)
 
 EVM reverts when an intermediate **product** exceeds `uint256` (`x < 2^128`).
 The Rust port returns `None` when an intermediate **quotient** exceeds `u128`
-(`x ≈ 1.84e28`). The SVM bound binds first.
+(`x ≈ 1.84e28`). The SVM bound binds first, so a band exists where EVM succeeds
+and SVM errors.
 
-Both sit far outside the reachable domain — `MAX_MULTIPLIER` clamps output at
-1e6×, while the SVM bound engages only above ~1.8e10× *within a single squaring
-step*. See D-01's table for where the boundary actually is in rate/window terms.
+**Previously an argument; now a test.** `crates/oku-shared/src/rate.rs`
+§ `reachability` sweeps the domain and the margin is far larger than expected:
 
-The differential corpus deliberately does **not** generate vectors here — doing
-so would produce known-failing cases and devalue the whole corpus. The exclusion
-is documented in the generator header so it is explicit rather than an accident
-of the chosen ranges.
+| rate | window | result | computes? |
+|---|---|---|---|
+| 20 % APY | 100 years | 8.3e7× | yes |
+| 100 % APY | 30 years | 1.1e9× | yes |
+| `MAX_RATE` | 3 years | — | yes |
+| 500 % APY | 30 years | 2.2e23× | **no** |
+| 100 % APY | 100 years | 1.3e30× | **no** |
 
-**Open verification debt:** with D-01 resolved as "no on-chain cap", this no
-longer closes for free. It needs a dedicated boundary-search test asserting the
-two thresholds bracket the reachable domain. Small and contained.
+`rpow` only fails where the multiplier would be ~**1e23×** or more, while
+`MAX_MULTIPLIER` already clamps it at **1e6×** ($1,000,000 per token).
+Roughly **seventeen orders of magnitude** separate the point where the value
+stops being economically meaningful from the point where the arithmetic stops
+working.
+
+The headline assertion is the one that matters: *anywhere the result is still
+inside `MAX_MULTIPLIER`, the arithmetic works* — swept across every rate the
+rails permit and windows from one day to a century.
+
+Failure is also an **error, never a wrong number**: the PSM refuses to price
+rather than mispricing, recoverable by republishing the schedule.
+
+The differential corpus still excludes this region by design (it would generate
+known-failing vectors); the reachability tests cover it instead.
+
+---
 
 ## D-06 · `mul_div_ceil` has no on-chain caller — `ACCEPTED`
 
@@ -550,11 +686,17 @@ Recorded during the audit as out of scope. Five of seven self-resolved:
 | README claimed `read_multiplier` treats `0.0` as `1.0` | **Resolved** — helper deleted |
 | `test-devnet.ts` used dollar supply where on-chain used raw | **Resolved** — step rewritten for streaming |
 | CI referenced non-existent `trident-tests` | **Resolved** — step removed |
-| Dead `InterestBearingConfig` mint helper, never invoked (`scripts/utils/tokenHelpers.ts`) | **Outstanding** |
-| Anchor version mismatch: `Anchor.toml` 1.0.2 vs `Makefile`/CI 1.0.0 | **Outstanding** |
+| Dead `InterestBearingConfig` mint helper, never invoked (`scripts/utils/tokenHelpers.ts`) | **Resolved** — deleted (77 lines), along with its now-unused imports and a stale reference in the cost estimator |
+| Anchor version mismatch: `Anchor.toml` 1.0.2 vs `Makefile`/CI 1.0.0 | **Resolved** — aligned to 1.0.2 |
 
-**Recommendation: fix both remaining.** Trivial, and the version mismatch is a
-genuine reproducibility risk on a program that is about to be redeployed.
+The version mismatch was the more serious of the two: `Anchor.toml`,
+`Cargo.toml` and `Cargo.lock` all declared **1.0.2** while the Makefile and CI
+installed **1.0.0**, so CI was verifying builds against a different compiler
+from the one developers and the lockfile use. Both are now 1.0.2, and CI
+asserts the installed CLI matches `Anchor.toml` rather than discovering drift
+through a behaviour difference.
+
+All seven items in this entry are now closed.
 
 ---
 
@@ -594,12 +736,11 @@ Not hypothetical: it masked the D-10 fix appearing not to work. The test was
 correct and the code was correct; only the artifact was stale, and the resulting
 "the fix doesn't work" conclusion was wrong.
 
-**Fixed** by prefixing `anchor build &&`. CI already built first, so this was a
-local-dev trap only.
-
-**Still worth doing:** have `startBankrun` assert the `.so` mtime is newer than
-the newest file under `programs/`, so the trap cannot reappear for anyone
-invoking mocha directly.
+**Fixed** twice over. `test:bankrun` now prefixes `anchor build &&`, and
+`startBankrun` asserts the `.so` is newer than the newest `.rs` / `Cargo.toml`
+under `programs/` and `crates/`, failing with an actionable message. The second
+guard matters because invoking mocha directly is the natural thing to do when
+iterating on a single suite, and that path bypassed the first.
 
 ## D-15 · Compute budget — `FIXED`
 
@@ -644,18 +785,29 @@ nothing currently needs at 80k against 200k.
 
 ---
 
-## Open items at a glance
+## Status at a glance
+
+**One decision outstanding.**
 
 | # | Needs | Blocking? |
 |---|---|---|
-| D-23 | Pick epoch length + anchor (rec. 30 d, round UTC) | Design finalisation |
-| D-24 | Pick `conservativeFactor` (rec. 0.97 for now) | Design finalisation |
-| D-25 | Build early-shock monitor; choose automation posture | **Highest severity** |
-| D-26 | Durable carry + V̄ stores | **Mainnet blocker** |
-| D-27 | V̄ cadence; SVM env wiring must not be silently absent | Rate correctness |
-| D-14 | Fix SVM test-suite `tsc` | Backend safety net |
-| D-16 | Confirm 60 s crank interval; assign an owner | Operational |
-| D-04 | Boundary-search test | Verification debt |
-| D-08 | Dead `tokenHelpers` helper; Anchor version mismatch | Hygiene |
-| D-07 | Sequence the SVM fresh redeploy | Now unblocked |
-| D-13 | Optional `.so` mtime guard in `startBankrun` | Hygiene |
+| **D-26** | Signed off-chain ledger only, or also a per-epoch hash anchored on one EVM chain? | **Mainnet blocker** either way — the stores must become durable regardless; only the on-chain anchor is undecided |
+
+**Accepted, no action:**
+
+| # | Accepted |
+|---|---|
+| D-25 | Early-shock overshoot — worst *tested* 28.61 % of an epoch's yield, not a proven bound, irreversible. Mitigated by conservative liquidity and rate-setting rather than guards |
+| D-03 | Solana clock lag — a self-correcting lag, handled in drift tooling |
+| D-04 | `rpow` far-tail threshold — now proven unreachable by ~17 orders of magnitude |
+| D-06 | `mul_div_ceil` retained without an on-chain caller |
+| D-16 | Display freshness depends on the crank; stale-low, therefore safe |
+
+**Deferred:**
+
+| # | Deferred |
+|---|---|
+| D-07 | SVM fresh redeploy — unblocked, since no EVM upgrade is in the path |
+
+Everything else in this log is `DECIDED`, `RESOLVED`, `FIXED`, `REJECTED` or
+`OBSOLETE`.

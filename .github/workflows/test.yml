@@ -107,7 +107,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # SVM: Anchor build + bankrun tests + cargo unit tests
   #
-  # Uses Solana v3.1.10 + Anchor CLI v1.0.0 to match Anchor.toml [toolchain].
+  # Uses Solana v3.1.10 + Anchor CLI v1.0.2 to match Anchor.toml [toolchain].
   # The bankrun suite (litesvm, in-process) does NOT require a running validator.
   # ---------------------------------------------------------------------------
   svm-tests:
@@ -161,11 +161,25 @@ jobs:
         id: anchor-cache
         with:
           path: ~/.cargo/bin/anchor
-          key: anchor-1.0.0
+          key: anchor-1.0.2
 
       - name: Install Anchor CLI
         if: steps.anchor-cache.outputs.cache-hit != 'true'
-        run: cargo install --git https://github.com/coral-xyz/anchor --tag v1.0.0 anchor-cli --locked --force
+        run: cargo install --git https://github.com/coral-xyz/anchor --tag v1.0.2 anchor-cli --locked --force
+
+      - name: Assert the Anchor CLI matches Anchor.toml
+        # CI installed 1.0.0 while Anchor.toml, Cargo.toml and Cargo.lock all
+        # declared 1.0.2, so builds were verified against a different compiler
+        # than the one developers and the lockfile use. Fail fast on drift
+        # rather than discovering it through a behaviour difference.
+        run: |
+          DECLARED=$(grep -oP 'anchor_version\s*=\s*"\K[^"]+' Anchor.toml)
+          INSTALLED=$(anchor --version | grep -oP 'anchor-cli \K\S+')
+          echo "Anchor.toml declares $DECLARED; installed $INSTALLED"
+          if [ "$DECLARED" != "$INSTALLED" ]; then
+            echo "::error::Anchor CLI $INSTALLED does not match Anchor.toml $DECLARED"
+            exit 1
+          fi
 
       - name: Show tool versions
         run: |

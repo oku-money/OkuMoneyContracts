@@ -108,9 +108,62 @@ export interface StartBankrunOptions {
  * arbitrary pre-existing on-chain state without having to fork a
  * remote cluster.
  */
+/**
+ * Fail if `target/deploy/lite_psm.so` is older than the Rust it was built from.
+ *
+ * Bankrun loads the compiled artifact, not the source. Editing a program and
+ * re-running mocha without an intervening `anchor build` therefore tests the
+ * PREVIOUS binary, silently and with every test still green.
+ *
+ * This is not hypothetical: it once made a correct fix look broken, and the
+ * conclusion drawn from that run ("the fix doesn't work") was wrong. `npm run
+ * test:bankrun` now builds first, but anyone invoking mocha directly — which is
+ * the natural thing to do when iterating on a single suite — would still hit it.
+ */
+function assertProgramArtifactIsFresh(): void {
+  const so = path.join(__dirname, '../../target/deploy/lite_psm.so');
+  if (!fs.existsSync(so)) {
+    throw new Error(`Missing ${so}. Run \`anchor build\` first.`);
+  }
+  const builtAt = fs.statSync(so).mtimeMs;
+
+  let newestSource = 0;
+  let newestPath = '';
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
+        const m = fs.statSync(full).mtimeMs;
+        if (m > newestSource) {
+          newestSource = m;
+          newestPath = full;
+        }
+      }
+    }
+  };
+  for (const dir of ['../../programs', '../../crates']) {
+    const abs = path.join(__dirname, dir);
+    if (fs.existsSync(abs)) walk(abs);
+  }
+
+  if (newestSource > builtAt) {
+    const stale = Math.round((newestSource - builtAt) / 1000);
+    throw new Error(
+      `Stale program artifact: target/deploy/lite_psm.so is ${stale}s older than ` +
+        `${path.relative(path.join(__dirname, '../..'), newestPath)}.\n` +
+        `Bankrun would run the PREVIOUS binary and your changes would appear to ` +
+        `have no effect. Run \`anchor build\` (or \`npm run test:bankrun\`, which ` +
+        `builds first).`
+    );
+  }
+}
+
 export async function startBankrun(
   opts: StartBankrunOptions = {}
 ): Promise<BankrunHarness> {
+  assertProgramArtifactIsFresh();
+
   // Override the built-in Token-2022 binary with a mainnet dump that
   // supports the ScaledUiAmount extension. The version bundled with
   // solana-bankrun 0.4.0 (solana-program-test 1.18.x) predates

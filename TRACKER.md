@@ -555,7 +555,9 @@ env vars) that is skipped entirely until these are set, specifically so this
 decision isn't forced by the tooling.
 
 **Follow-up required before this can be closed:**
-- Pick epoch length. The simulation's epoch-length axis is a MECHANISM smoke
+- ~~Pick epoch length~~ — **DECIDED: 30 days, anchored 2026-01-01T00:00:00Z**,
+  committed in `EVM/scripts/config/epoch.ts` (`SVM/DECISIONS.md` D-23).
+  Retained below for the reasoning. The simulation's epoch-length axis is a MECHANISM smoke
   test (confirms the contract/schedule work correctly from 1 hour to 90 days),
   **not an isolated accuracy comparison** — measured error came out flat
   (2.27–2.29%) across all five lengths, but this is very likely because the
@@ -573,15 +575,18 @@ decision isn't forced by the tooling.
   validation declined (D-22), epoch length is a backend constant and changing
   it later is a config edit, not an upgrade. Recommendation is 30 days on the
   operational argument alone. See `SVM/DECISIONS.md` D-23.
-- Pick `conservativeFactor` — see `SVM/DECISIONS.md` D-24 for the current
-  recommendation and its reasoning (0.97 *until the early-shock monitor is
-  live*, then revisit; the margin is buying protection against the one
-  irreversible failure mode). (recommended: ~0.97 — simulation shows the
+- ~~Pick `conservativeFactor`~~ — **DECIDED: 1.0**, already the shipped
+  default. An earlier 0.97 recommendation was withdrawn: it was justified as
+  protection against the early-shock overshoot, and a 3% margin against a ~28%
+  overshoot is not meaningful mitigation (`SVM/DECISIONS.md` D-24). Original
+  analysis retained: (recommended: ~0.97 — simulation shows the
   recommended and excessive settings now land almost exactly on
   `-(1-conservativeFactor)` post-fix: 0.97 → −3.00%, 0.5 → −50.00%, confirming
   the buffer costs exactly what it's designed to and no more).
-- Once decided, set the `EPOCH_ANCHOR_UNIX`/`EPOCH_LENGTH_SECONDS` env vars in
-  the operator runbook so grid-drift on any one chain is caught automatically.
+- ~~Once decided, set the `EPOCH_ANCHOR_UNIX`/`EPOCH_LENGTH_SECONDS` env vars~~ —
+  **DONE.** `checkMultiplierDrift.ts` now defaults to the committed grid, so
+  the alignment check runs rather than being silently skipped; env vars remain
+  as overrides.
 - ~~Consider whether the epoch grid should be validated ON-CHAIN~~ —
   **DECIDED: no.** Pure business policy, and it would hard-code a still-open
   parameter (epoch length) into six live contracts, turning a config choice
@@ -608,14 +613,14 @@ exceeds target, rather than waiting for the scheduled staging time — but it is
 **not implemented**. Today, detecting and responding to this failure mode is
 entirely manual.
 
-**Follow-up required before this can be closed:** build the continuous
-monitor (extend `checkMultiplierDrift.ts` or a new script) and decide the
-response threshold/automation level. Current recommendation — implement
-auto-halt but default it OFF, enabling once the monitor has run several
-epochs without false positives. The protocol is backend-controlled, so the
-backend should hold this lever; but an automated
-`setOkuMYieldRateWithSuccessor(PRECISION, ...)` across six chains warrants
-evidence before arming. See `SVM/DECISIONS.md` D-25.
+**DECIDED: the exposure is accepted** (`SVM/DECISIONS.md` D-25). Supply
+shocks are treated as part of the deal; the mitigation is conservative
+off-chain and on-chain liquidity plus conservative rate-setting, not
+additional guards. What is being accepted, numerically: at $100M AUM / 5% APY
+/ 30-day epochs, the worst TESTED overshoot of 28.61% is ~$118k
+over-distributed and irreversible — and 28.61% is the worst case tested, not a
+proven bound. The monitor remains available (it needs no contract change) if
+that proves uncomfortable.
 
 ### EVM/SVM yield-model divergence — RESOLVED `[SVM]`
 
@@ -695,7 +700,7 @@ Notable deployed-surface facts vs. any older devnet build:
 to devnet (new PDA + mint), re-verify with the bankrun/devnet suites,
 then mainnet-beta following the testnet-then-mainnet posture.
 
-### SVM test harness does not pass `tsc --noEmit` `[SVM]`
+### RESOLVED: SVM test harness now passes `tsc --noEmit` `[SVM]`
 
 `npx tsc --noEmit` reports ~35 type errors across the bankrun test files
 (`Program<LitePsm>` vs `Program<Idl>` generic-variance around

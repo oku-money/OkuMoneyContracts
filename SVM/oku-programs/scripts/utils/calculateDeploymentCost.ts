@@ -91,9 +91,8 @@ async function main() {
   console.log(`  ${'SUBTOTAL'.padEnd(46)} ${formatSOL(pdaTotal)}\n`);
 
   // ===== Token mints / ATAs =====
-  // Mint sizes: legacy SPL = 82, Token-2022 base = 82 + extension TLV
-  // (~165 bytes for InterestBearingConfig). The deploy script picks the
-  // exact extensions; we approximate.
+  // Mint sizes: legacy SPL = 82, Token-2022 base = 82 + extension TLV.
+  // The deploy script picks the exact extensions; we approximate.
   // Single-token model: OkuM mint with ScaledUiAmountConfig + MetadataPointer
   // + TokenMetadata extensions. No OkuMoney mint, no vault, no dead-shares.
   const tokenAccounts: SizedItem[] = [

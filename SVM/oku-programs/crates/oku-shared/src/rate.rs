@@ -674,3 +674,113 @@ mod proofs {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Reachability bound (SVM/DECISIONS.md D-04)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod reachability {
+    //! Proves the accepted EVM divergence (`SVM/DECISIONS.md` D-04) is
+    //! unreachable, rather than merely arguing it.
+    //!
+    //! Solidity's `rpow` reverts when an intermediate **product** exceeds
+    //! `uint256`; this port returns `None` when an intermediate **quotient**
+    //! exceeds `u128`. The SVM bound binds first, so a band exists where EVM
+    //! succeeds and SVM errors. The differential corpus deliberately does not
+    //! generate vectors there — doing so would produce known-failing cases and
+    //! devalue it — so the "unreachable" claim needed its own test.
+    //!
+    //! The result is stronger than expected. `rpow` only fails where the
+    //! multiplier would be on the order of **1e23x or more**, while
+    //! `MAX_MULTIPLIER` already clamps it at **1e6x** ($1,000,000 per token).
+    //! There are roughly seventeen orders of magnitude between the point at
+    //! which the value stops being economically meaningful and the point at
+    //! which the arithmetic stops working.
+
+    use super::*;
+    use crate::constants::MAX_RATE;
+
+    const YEAR: u64 = 31_536_000;
+
+    /// Per-second rate compounding to `apy` over a 365-day year.
+    fn rate_for_apy(apy: f64) -> u128 {
+        ((1.0_f64 + apy).powf(1.0 / YEAR as f64) * 1e18_f64).round() as u128
+    }
+
+    /// **The claim that matters.** Anywhere the multiplier is still inside the
+    /// protocol's own ceiling, the arithmetic works.
+    ///
+    /// Swept across every rate the rails permit and windows from one day to a
+    /// century — far beyond any schedule that would ever be published.
+    #[test]
+    fn computes_everywhere_the_result_is_within_max_multiplier() {
+        for apy in [0.0001, 0.01, 0.05, 0.20, 0.50, 1.00, 5.00, 20.00] {
+            let rate = rate_for_apy(apy).min(MAX_RATE);
+            for days in [1u64, 7, 30, 90, 365, 5 * 365, 30 * 365, 100 * 365] {
+                let elapsed = days * 86_400;
+                let unclamped = (1.0_f64 + apy).powf(elapsed as f64 / YEAR as f64);
+                // Only assert inside the meaningful domain: past MAX_MULTIPLIER
+                // the value is clamped and economically meaningless anyway.
+                if unclamped > 1e6 {
+                    continue;
+                }
+                assert!(
+                    compound_for(PRECISION, rate, elapsed).is_some(),
+                    "returned None at {}% APY over {days} days, where the result                      ({unclamped:.3e}x) is still inside MAX_MULTIPLIER",
+                    apy * 100.0
+                );
+            }
+        }
+    }
+
+    /// `MAX_RATE` (~2242% APY) is the most extreme rate the rails permit. It
+    /// computes over every window an epoch schedule would realistically use —
+    /// epochs are 7-30 days, so this covers a fat-fingered `rateEnd` by orders
+    /// of magnitude.
+    #[test]
+    fn max_rate_computes_over_realistic_windows() {
+        for days in [1u64, 7, 30, 90, 365, 3 * 365] {
+            assert!(
+                compound_for(PRECISION, MAX_RATE, days * 86_400).is_some(),
+                "MAX_RATE over {days} days returned None"
+            );
+        }
+    }
+
+    /// Pins where the boundary actually falls, so a change in `wad.rs` that
+    /// moved it would be visible rather than silent.
+    ///
+    /// Note how far past anything meaningful these are: the failing cases
+    /// produce multipliers of ~1e23x and ~1e30x against a 1e6x clamp.
+    #[test]
+    fn boundary_sits_far_beyond_the_clamp() {
+        // Safe side.
+        assert!(compound_for(PRECISION, MAX_RATE, 3 * YEAR).is_some());
+        assert!(compound_for(PRECISION, rate_for_apy(1.00), 30 * YEAR).is_some());
+        assert!(compound_for(PRECISION, rate_for_apy(0.20), 100 * YEAR).is_some());
+
+        // Failing side — both already ~17+ orders past MAX_MULTIPLIER.
+        assert!(
+            compound_for(PRECISION, rate_for_apy(5.00), 30 * YEAR).is_none(),
+            "boundary moved — D-04's reachability argument needs rechecking"
+        );
+        assert!(compound_for(PRECISION, rate_for_apy(1.00), 100 * YEAR).is_none());
+    }
+
+    /// Out of domain, the failure is an ERROR, never a wrong number. The PSM
+    /// refuses to price rather than mispricing, and the operator recovers by
+    /// republishing the schedule.
+    #[test]
+    fn out_of_domain_errors_rather_than_returning_a_wrong_value() {
+        let s = Schedule {
+            base_multiplier: PRECISION,
+            rate_per_second: rate_for_apy(5.00),
+            last_accrual_time: 0,
+            rate_end: (30 * YEAR) as i64,
+            pending_rate_per_second: PRECISION,
+            pending_rate_end: 0,
+        };
+        assert_eq!(s.multiplier_at((30 * YEAR) as i64), None);
+    }
+}

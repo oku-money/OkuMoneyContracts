@@ -15,7 +15,6 @@ import { BN, Program } from '@anchor-lang/core';
 import { PublicKey } from '@solana/web3.js';
 import {
   TOKEN_PROGRAM_ID,
-  TOKEN_2022_PROGRAM_ID,
   getAssociatedTokenAddressSync,
   getAccount,
 } from '@solana/spl-token';
@@ -111,12 +110,10 @@ async function main() {
     .accountsPartial({
       bufferWithdrawer: provider.wallet.publicKey,
       config: psmConfig,
-      okuMMint,
       withdrawerUsdcAta,
       vaultUsdc,
       usdcMint,
       tokenProgram: TOKEN_PROGRAM_ID,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
     })
     .rpc();
   logger.success(`tx: ${sig}`);

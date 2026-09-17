@@ -148,7 +148,10 @@ async function main() {
 
   // Verify — reads the latest persisted deployment file (post-ALT).
   const finalDeployment = loadDeployment(network)!;
-  await verifyDeployment(provider, finalDeployment);
+  const litePsmId = finalDeployment.programs?.litePsm
+    ? new PublicKey(finalDeployment.programs.litePsm)
+    : undefined;
+  await verifyDeployment(provider, finalDeployment, litePsmId);
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
   logger.log('');

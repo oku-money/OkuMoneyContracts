@@ -23,13 +23,13 @@ export interface AuthorityConfig {
     allowanceManager: PublicKey;
     rebaser: PublicKey;
     /**
-     * Operator / fiat gateway — can mint OkuMoney directly without USDC.
+     * Operator / fiat gateway — can mint OkuM directly without USDC.
      * Cannot be the same as roleAdmin (separation-of-duties guard).
      * `PublicKey.default` means "not configured / disabled".
      */
     directMinter: PublicKey;
     /**
-     * Operator / bridge backend — can burn OkuMoney directly without USDC
+     * Operator / bridge backend — can burn OkuM directly without USDC
      * payout. Cannot be the same as roleAdmin (separation-of-duties guard).
      * `PublicKey.default` means "not configured / disabled".
      */

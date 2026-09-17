@@ -22,7 +22,7 @@ test:
 #   npm run surfpool:devnet   (devnet fork)
 #   npm run surfpool:mainnet  (mainnet fork)
 test-fork:
-	npm run test:fork
+	npm run test:onchain:fork
 
 # Fetch the mainnet Token-2022 binary for bankrun tests.
 # Required because solana-bankrun 0.4.0 bundles an older Token-2022

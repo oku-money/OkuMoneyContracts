@@ -16,7 +16,7 @@
     "outDir": "./dist",
     "moduleResolution": "node"
   },
-  "include": ["tests/**/*"],
+  "include": ["tests/**/*", "scripts/**/*"],
   "exclude": ["node_modules"],
   "ts-node": {
     "esm": true,

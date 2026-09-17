@@ -140,24 +140,34 @@ async function readChain(name: string, rpcUrl: string): Promise<Reading | null> 
 /**
  * Read SVM's schedule and recompute its multiplier.
  *
- * Returns `null` when SVM is not configured — the same "omit, never assume"
- * convention the EVM readers use.
+ * `SVM_EXPECTED=true` makes a missing/unreadable SVM a HARD ERROR rather than
+ * a warning — matching `globalValue.ts`'s `readSvmConfigured`. Without it, an
+ * unset `SVM_RPC_URL` in a cron job would print "All chains in agreement"
+ * while SVM is entirely unchecked, which is worse than no monitor at all: it
+ * actively reports false confidence. Set the flag once SVM carries supply.
  */
 async function readSvm(): Promise<Reading | null> {
   const rpcUrl = process.env.SVM_RPC_URL;
   const programId = process.env.SVM_LITE_PSM_PROGRAM_ID;
   const okuMMint = process.env.SVM_OKU_M_MINT;
+  const expected = process.env.SVM_EXPECTED === "true";
+
   if (!rpcUrl || !programId || !okuMMint) {
-    logger.warning(
-      "SVM not configured (need SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT) — " +
-        "it is NOT being checked for drift."
-    );
+    const detail =
+      "SVM not configured (need SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT).";
+    if (expected) {
+      throw new Error(`${detail} SVM_EXPECTED=true, so this is a hard error, not a warning.`);
+    }
+    logger.warning(`${detail} It is NOT being checked for drift. Set SVM_EXPECTED=true once SVM carries supply.`);
     return null;
   }
 
   try {
     const reading = await readSvmSchedule(rpcUrl, programId, okuMMint);
-    if (!reading) return null;
+    if (!reading) {
+      if (expected) throw new Error("SVM configured and expected, but the schedule read returned nothing.");
+      return null;
+    }
     return {
       chain: SVM_CHAIN_KEY,
       multiplier: reading.multiplier,
@@ -171,6 +181,7 @@ async function readSvm(): Promise<Reading | null> {
       computedOffChain: true,
     };
   } catch (e: any) {
+    if (expected) throw e; // do not swallow when the caller demanded SVM be checked
     logger.warning(`${SVM_CHAIN_KEY}: read failed — ${e.message ?? e}`);
     return null;
   }

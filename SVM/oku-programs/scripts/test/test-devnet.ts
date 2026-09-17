@@ -22,6 +22,7 @@ import {
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
 import { Program, AnchorProvider, BN } from '@anchor-lang/core';
+import type { LitePsm } from '../../target/types/lite_psm';
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -60,7 +61,7 @@ interface TestContext {
   provider: AnchorProvider;
   deployer: Keypair;
   deployment: DeploymentAddresses;
-  psm: Program;
+  psm: Program<LitePsm>;
   // Mints — single-token model: only OkuM (Token-2022, ScaledUiAmount)
   usdcMint: PublicKey;
   okuMMint: PublicKey;
@@ -80,7 +81,7 @@ interface TestContext {
  * never touches it.
  */
 async function readMultiplier(ctx: TestContext): Promise<bigint> {
-  const cfg: any = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  const cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
   return computeMultiplier(scheduleFromConfig(cfg), BigInt(Math.floor(Date.now() / 1000)));
 }
 
@@ -212,7 +213,11 @@ async function buildContext(): Promise<TestContext> {
   // Set the address in the IDL for 2-arg Program constructor (Anchor 1.0 compatibility)
   psmIdl.address = litePsmId.toBase58();
 
-  const psm = new Program(psmIdl, provider);
+  // psmIdl is loaded from disk at runtime (not the statically-typed IDL
+  // import), so its generic infers as Program<Idl>. This cast is asserting
+  // that the on-disk IDL actually matches LitePsm's shape, which the deploy
+  // pipeline is responsible for keeping true.
+  const psm = new Program(psmIdl, provider) as unknown as Program<LitePsm>;
 
   // Mints — single token: OkuM (Token-2022, ScaledUiAmount)
   const usdcMint = new PublicKey(deployment.tokens.usdc!);
@@ -532,7 +537,7 @@ async function testStreamingAccrual(ctx: TestContext) {
   logger.success(`set_okum_yield_rate: ${sig}`);
 
   // Confirm the schedule landed byte-for-byte.
-  const cfg: any = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  const cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
   const schedule = scheduleFromConfig(cfg);
   if (schedule.ratePerSecond !== rate) {
     throw new Error(`rate mismatch: wrote ${rate}, read ${schedule.ratePerSecond}`);

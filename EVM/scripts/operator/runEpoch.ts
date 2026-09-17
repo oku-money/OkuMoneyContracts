@@ -1,4 +1,15 @@
 /**
+ * SINGLE-CHAIN path, kept for the operator drill and for hand-driving one
+ * chain at a time. For a REAL multi-chain broadcast — one derivation, byte-
+ * identical WAD integers on every EVM chain and SVM — use
+ * `deriveEpochSchedule.ts` + `broadcastSchedule.ts` instead, which also fixed
+ * a real bug this file used to have: `runRollEpoch` derived
+ * `measuredAvgValueUsd` from THIS chain's local `totalSupply()`, which
+ * `yieldRate.ts`'s own module doc says is exactly the mistake
+ * `distributeYield` was removed for. Patched below to sample the GLOBAL value
+ * instead; the newer files never had the bug because derivation happens once,
+ * not per chain.
+ *
  * Base + settlement (B3) epoch runner — the glue that makes the rear-facing
  * epoch accounting model (EVM/README.md § Rear-Facing Epoch Accounting)
  * executable, not just simulated. Two phases, both using the atomic
@@ -54,7 +65,7 @@ import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
 import { runSetOkuMYieldRate } from "./setOkuMYieldRate";
 import { deriveSettlementRate, distributedUsdOverWindow, RateSegment } from "../utils/epochDistribution";
 import { deriveBaseRate, floatRateToBigint, DEFAULT_SETTLEMENT_FRACTION, EpochGrid } from "../utils/epochSchedule";
-import { samplesInWindow, valueAt } from "../utils/globalValue";
+import { samplesInWindow, valueAt, sampleGlobalValueUsd } from "../utils/globalValue";
 import { reconcileActualPayout } from "../utils/yieldRate";
 import { appendLedgerEntry, buildLedgerEntry, summarizeLedger } from "../utils/carryLedger";
 
@@ -174,6 +185,19 @@ export interface RollEpochOpts {
   conservativeFactor?: number;
   epochId?: string;
   dryRun?: boolean;
+  /**
+   * Bypass the live `sampleGlobalValueUsd()` read with a supplied value.
+   *
+   * TEST-ONLY SEAM. `sampleGlobalValueUsd()` is inherently multi-chain
+   * (`CHAIN_METADATA`-driven, reads via `JsonRpcProvider` per configured
+   * chain) — it cannot be exercised against a local single-chain hardhat
+   * network, for the same reason `checkMultiplierDrift.ts` and the
+   * `globalValue` drill test aren't (see that test's own module doc). Without
+   * this seam, fixing the local-supply bug here would have made the operator
+   * drill's roll-epoch case unrunnable locally rather than just documenting
+   * an existing multi-chain-only limitation.
+   */
+  globalValueUsdOverride?: number;
 }
 
 export async function runRollEpoch(
@@ -190,6 +214,18 @@ export async function runRollEpoch(
   const okuM = (await getDeployedContract("OkuMoney", okuMAddr)).connect(signer) as any;
   const schedule = await readSchedule(okuM);
 
+  // GLOBAL value across every chain (EVM + SVM), NOT this chain's local
+  // totalSupply(). See the file-level doc: this is the bug fix.
+  const globalValueUsd =
+    opts.globalValueUsdOverride ?? (await sampleGlobalValueUsd()).valueUsd;
+  if (globalValueUsd <= 0) {
+    throw new Error(
+      "Global value sample is 0 or unreadable — refusing to derive a rate " +
+        "against an empty/unknown denominator."
+    );
+  }
+  const globalNow = { valueUsd: globalValueUsd };
+
   // Ex-post reconciliation of the JUST-COMPLETED (settlement) window: what was
   // it targeting, and what did it actually deliver? Best-effort — requires the
   // prior stage-settlement call's target to be in the ledger; if absent (e.g.
@@ -199,7 +235,13 @@ export async function runRollEpoch(
   let carryForwardUsd = 0;
   if (priorSummary.latestEntry) {
     const priorTargetUsd = priorSummary.latestEntry.realisedYieldUsd + priorSummary.latestEntry.carryInUsd;
-    const actualPaidUsd = schedule.totalSupplyFloat * (schedule.currentMultiplierFloat - schedule.baseMultiplierFloat);
+    // GLOBAL delta: the prior entry's own measuredAvgValueUsd was global, so
+    // the multiplier's relative change against it (identical on every chain
+    // by construction) times that same basis is the global actual payout —
+    // not this chain's local supply times the delta.
+    const actualPaidUsd =
+      priorSummary.latestEntry.measuredAvgValueUsd *
+      (schedule.currentMultiplierFloat / schedule.baseMultiplierFloat - 1);
     carryForwardUsd = reconcileActualPayout(priorTargetUsd, actualPaidUsd);
     logger.info(`Ex-post reconciliation: target=$${priorTargetUsd.toFixed(2)} actual=$${actualPaidUsd.toFixed(2)} carryForward=$${carryForwardUsd.toFixed(2)}`);
   }
@@ -209,7 +251,7 @@ export async function runRollEpoch(
   const { ratePerSecond: rBaseNextFloat } = deriveBaseRate({
     targetUsd: nextAdjustedTargetUsd,
     baseWindowFraction,
-    measuredAvgValueUsd: schedule.totalSupplyFloat * schedule.currentMultiplierFloat,
+    measuredAvgValueUsd: globalNow.valueUsd,
     grid,
   });
   const baseEndNextSec = Math.floor(schedule.rateEndSec + opts.epochLengthSec * (1 - settlementFraction));
@@ -230,7 +272,7 @@ export async function runRollEpoch(
       epochId: opts.epochId ?? new Date().toISOString().slice(0, 10),
       realisedYieldUsd: opts.nextRealisedYieldUsd,
       carryInUsd: carryForwardUsd,
-      measuredAvgValueUsd: schedule.totalSupplyFloat * schedule.currentMultiplierFloat,
+      measuredAvgValueUsd: globalNow.valueUsd,
       conservativeFactor,
       result: { ratePerSecond: floatRateToBigint(rBaseNextFloat), carryForwardUsd: 0 },
     });

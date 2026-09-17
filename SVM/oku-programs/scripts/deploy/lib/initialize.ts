@@ -14,7 +14,7 @@ import {
 import { logger } from '../../utils/logger';
 import { loadAuthorities } from '../../config/authorities';
 import { NetworkConfig } from '../../config/networks';
-import { DIRECT_MINTER_ALLOWANCE } from '../../config/constants';
+import { DIRECT_MINTER_ALLOWANCE, DIRECT_BURNER_ALLOWANCE } from '../../config/constants';
 import {
   derivePsmConfigPDA,
 } from '../../utils/pdaHelpers';
@@ -229,6 +229,63 @@ export async function initializePsm(
     }
   } else {
     logger.info('No directMinter configured in authorities -- skipping (configure via grant-roles).');
+  }
+
+  // ---- Step 5: Configure direct-burner role + allowance (mirrors Step 4) ----
+  // Previously left unwired here: `direct_burner` defaults to Pubkey::default()
+  // same as direct_minter, but only the minter side was set up post-init. The
+  // SVM->EVM bridge burn path was therefore dead until a separate grant-roles
+  // run, with no error to signal it -- a silent capability gap.
+  const directBurner = authorities.psm.directBurner;
+  if (directBurner && !directBurner.equals(PublicKey.default)) {
+    logger.info('Configuring direct-burner role...');
+    try {
+      const currentCfg: any = await program.account['psmConfig'].fetch(psmConfig);
+      const currentDirectBurner = currentCfg.directBurner as PublicKey;
+
+      if (currentDirectBurner.equals(directBurner)) {
+        logger.warning(
+          `direct_burner already set to ${directBurner.toBase58().slice(0, 12)}... — skipping`
+        );
+      } else {
+        await program.methods
+          .setAuthority({ directBurner: {} }, directBurner)
+          .accountsPartial({
+            roleAdmin: provider.wallet.publicKey,
+            config: psmConfig,
+          })
+          .rpc();
+        logger.success(`direct_burner set to ${directBurner.toBase58().slice(0, 12)}...`);
+      }
+
+      const currentAllowance = currentCfg.directBurnerAllowance;
+      const targetAllowance = new BN(DIRECT_BURNER_ALLOWANCE);
+      if (currentAllowance && currentAllowance.eq(targetAllowance)) {
+        logger.warning(
+          `direct_burner_allowance already ${targetAllowance.toString()} — skipping`
+        );
+      } else {
+        await program.methods
+          .setDirectBurnerAllowance(targetAllowance)
+          .accountsPartial({
+            allowanceManager: provider.wallet.publicKey,
+            config: psmConfig,
+          })
+          .rpc();
+        logger.success(
+          `direct_burner_allowance set to ${targetAllowance.toString()}`
+        );
+      }
+    } catch (error: any) {
+      logger.warning(
+        `Direct-burner setup failed (non-fatal): ${error.message?.slice(0, 80)}`
+      );
+      logger.info(
+        'Run NETWORK=<network> tsx scripts/admin/grant-roles.ts to configure separately.'
+      );
+    }
+  } else {
+    logger.info('No directBurner configured in authorities -- skipping (configure via grant-roles).');
   }
 
   return {

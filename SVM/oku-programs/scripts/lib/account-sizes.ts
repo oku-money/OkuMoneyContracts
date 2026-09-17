@@ -14,6 +14,6 @@
  */
 
 // lite_psm — programs/lite-psm/src/state.rs
+// Grew from 562 to 626 bytes with the streaming-accrual rate schedule
+// (six new fields on PsmConfig) — see SVM/DECISIONS.md D-19.
 export const PSM_CONFIG_LEN = 626;            // const _: () = assert!(PsmConfig::LEN == 626);
-                                              // Was 594 before queue removal (queue_processor pubkey
-                                              // removed = -32 bytes).

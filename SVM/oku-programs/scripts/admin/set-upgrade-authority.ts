@@ -12,16 +12,16 @@
  * Usage:
  *   # Transfer authority to a multisig
  *   NETWORK=devnet tsx scripts/admin/set-upgrade-authority.ts \
- *     --program=3CLDWj...YC7N --new-authority=<SQUADS_WALLET>
+ *     --program=<LITE_PSM_PROGRAM_ID> --new-authority=<SQUADS_WALLET>
  *
  *   # Disable upgrades (irreversible! program becomes immutable)
  *   NETWORK=mainnet-beta tsx scripts/admin/set-upgrade-authority.ts \
- *     --program=3CLDWj...YC7N --disable \
+ *     --program=<LITE_PSM_PROGRAM_ID> --disable \
  *     --yes-i-mean-it-on-mainnet
  *
  *   # Dry-run (inspect current authority without changing anything)
  *   NETWORK=devnet tsx scripts/admin/set-upgrade-authority.ts \
- *     --program=3CLDWj...YC7N --new-authority=<TARGET> --dry-run
+ *     --program=<LITE_PSM_PROGRAM_ID> --new-authority=<TARGET> --dry-run
  *
  * The script uses `solana program set-upgrade-authority` via a child process.
  * Ensure the active CLI keypair (WALLET_PATH or ~/.config/solana/id.json) holds

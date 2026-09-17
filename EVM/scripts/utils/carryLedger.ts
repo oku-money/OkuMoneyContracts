@@ -71,6 +71,49 @@ export function appendLedgerEntry(entry: CarryLedgerEntry, ledgerPath = DEFAULT_
   fs.writeFileSync(ledgerPath, JSON.stringify(existing, null, 2) + "\n");
 }
 
+/**
+ * Write one entry per EPOCH, not per invocation.
+ *
+ * `appendLedgerEntry` is a blind push — call it once per chain a broadcast
+ * touches (as the old single-chain `runEpoch.ts` did) and one logical epoch
+ * roll produces N ledger entries, with the carry balance drifting between the
+ * first chain's run and the last chain's run (§ `EpochScheduleArtifact` in
+ * `deriveEpochSchedule.ts`).
+ *
+ * This is the replacement `broadcastSchedule.ts` uses: keyed on `epochId`, it
+ * replaces an existing entry for that epoch rather than duplicating it, so
+ * calling it more than once for the same epoch (e.g. a re-run after a partial
+ * broadcast failure) is idempotent. It refuses to SILENTLY replace a
+ * DIFFERENT derivation for the same epochId — that would hide a real
+ * inconsistency (the schedule was re-derived with different inputs but kept
+ * the same label) behind an ordinary re-run.
+ */
+export function upsertLedgerEntry(entry: CarryLedgerEntry, ledgerPath = DEFAULT_LEDGER_PATH): void {
+  const existing = loadLedger(ledgerPath);
+  const idx = existing.findIndex((e) => e.epochId === entry.epochId);
+  if (idx === -1) {
+    existing.push(entry);
+  } else {
+    const prior = existing[idx];
+    const sameDerivation =
+      prior.realisedYieldUsd === entry.realisedYieldUsd &&
+      prior.carryInUsd === entry.carryInUsd &&
+      prior.measuredAvgValueUsd === entry.measuredAvgValueUsd &&
+      prior.conservativeFactor === entry.conservativeFactor &&
+      prior.ratePerSecond === entry.ratePerSecond;
+    if (!sameDerivation) {
+      throw new Error(
+        `upsertLedgerEntry: epochId=${entry.epochId} already has a DIFFERENT ` +
+          `recorded derivation. Overwriting it would hide a real inconsistency. ` +
+          `If the epoch genuinely needs re-deriving, use a new epochId or edit ` +
+          `the ledger file deliberately.`
+      );
+    }
+    existing[idx] = entry; // identical derivation — safe no-op replace (idempotent re-run)
+  }
+  fs.writeFileSync(ledgerPath, JSON.stringify(existing, null, 2) + "\n");
+}
+
 /** Load the full ledger, oldest first. Returns `[]` if it doesn't exist yet. */
 export function loadLedger(ledgerPath = DEFAULT_LEDGER_PATH): CarryLedgerEntry[] {
   if (!fs.existsSync(ledgerPath)) return [];

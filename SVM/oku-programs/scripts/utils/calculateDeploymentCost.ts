@@ -55,13 +55,25 @@ async function main() {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
   // ===== Programs (sizes from on-disk .so files) =====
+  //
+  // Only the programs this workspace actually deploys, NOT every .so under
+  // target/deploy/. That directory also carries the fetched
+  // `spl_token_2022.so` test fixture (~1.4MB, see Makefile's
+  // `fetch-token-2022`) and, historically, a leftover `oku_dollar.so` from a
+  // deleted second program (~470KB) -- globbing all of them overstated the
+  // estimate by roughly 13 SOL of rent that will never actually be paid.
   const deployDir = path.join(process.cwd(), 'target', 'deploy');
+  const DEPLOYED_PROGRAM_NAMES = ['lite_psm']; // keep in sync with scripts/deploy/lib/programs.ts
   const programs: SizedItem[] = [];
   if (fs.existsSync(deployDir)) {
-    const files = fs.readdirSync(deployDir).filter((f) => f.endsWith('.so'));
-    for (const file of files) {
-      const stats = fs.statSync(path.join(deployDir, file));
-      programs.push({ name: file.replace('.so', ''), size: stats.size });
+    for (const name of DEPLOYED_PROGRAM_NAMES) {
+      const file = `${name}.so`;
+      const full = path.join(deployDir, file);
+      if (!fs.existsSync(full)) {
+        console.log(`  (${file} not found — run \`anchor build\` first to size it)`);
+        continue;
+      }
+      programs.push({ name, size: fs.statSync(full).size });
     }
   } else {
     console.log('  (target/deploy/ not found — run `anchor build` first to size programs)');

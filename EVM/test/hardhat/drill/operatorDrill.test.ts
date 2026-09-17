@@ -299,11 +299,17 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         // test above, for the same reason.
         const supply = Number(ethers.formatEther(await okuMoney.totalSupply()));
         const nextRealisedYieldUsd = supply * 0.01;
+        const mult = Number(await okuMoney.okuMMultiplier()) / 1e18;
 
         const result = await runRollEpoch(ctx, admin, {
             nextRealisedYieldUsd,
             nextEndTimestamp: BigInt(await time.latest()) + BigInt(2 * 86400),
             epochLengthSec: 30 * 86400,
+            // Single-chain local drill: "global" value IS this chain's value.
+            // sampleGlobalValueUsd() is CHAIN_METADATA-driven and cannot be
+            // exercised here for the same reason the globalValue test above
+            // isn't — see runEpoch.ts's `globalValueUsdOverride` doc.
+            globalValueUsdOverride: supply * mult,
         });
         expect(result.rBaseNextFloat).to.be.greaterThan(1);
     });

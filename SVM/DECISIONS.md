@@ -66,6 +66,7 @@ test and why.
 | [D-25](#d-25--early-shock-detection--accepted-exposure) | Early-shock exposure | `ACCEPTED` |
 | [D-26](#d-26--carry-ledger--v-store-durability--decided) | Carry ledger + V̄ durability | `DECIDED` |
 | [D-27](#d-27--v-sampling-cadence--svm-environment-wiring--decided) | V̄ cadence + SVM env wiring | `DECIDED` |
+| [D-28](#d-28--cross-stack-epoch-orchestration--decided-partial) | runEpoch local-supply bug; derive/broadcast split | `DECIDED` (partial) |
 | [D-16](#d-16--display-freshness-depends-on-the-crank--accepted-interval-resolved) | Display crank dependency; pre-arm removed | `ACCEPTED` / interval `RESOLVED` |
 | [D-02](#d-02--token-2022-update_multiplier-future-timestamp-semantics--decided) | Token-2022 future-timestamp semantics | `DECIDED` |
 | [D-03](#d-03--solana-clock-lag-vs-evm-blocktimestamp--accepted-handled) | Solana clock lag | `ACCEPTED` |
@@ -78,7 +79,7 @@ test and why.
 | [D-10](#d-10--display-could-read-above-canonical-after-an-emergency-override--fixed) | Display above canonical on override | `FIXED` |
 | [D-11](#d-11--piggyback-sync-swallowed-errors--obsolete) | Piggyback swallowed errors | `OBSOLETE` |
 | [D-13](#d-13--test-bankrun-did-not-rebuild-the-program--fixed) | Bankrun stale-binary trap | `FIXED` |
-| [D-14](#d-14--tsc---noemit-on-the-svm-test-suite--fixed) | SVM `tsc` failures | `FIXED` |
+| [D-14](#d-14--tsc---noemit-on-the-svm-test-suite--fixed) | SVM `tsc` failures (tests AND scripts) | `FIXED` |
 | [D-15](#d-15--compute-budget--fixed) | Compute budget | `FIXED` |
 
 ---
@@ -526,7 +527,92 @@ rather than warn. The flag exists because "SVM is absent" is a legitimate
 pre-launch state that must stay distinguishable from "SVM is misconfigured" —
 set it the moment SVM carries supply. A warning in a cron log is not a control.
 
+**`checkMultiplierDrift.ts` given the same parity.** It previously warned and
+returned `null` on an unset SVM config, same class of hazard: a cron job with
+`SVM_RPC_URL` unset would print "all chains in agreement" while SVM was
+entirely unchecked. Now takes `SVM_EXPECTED=true` identically.
+
 ---
+
+## D-28 · Cross-stack epoch orchestration — `DECIDED` (partial)
+
+Audited during the deploy-readiness pass: **`runEpoch.ts` derived
+`measuredAvgValueUsd` from the LOCAL chain's `totalSupply() *
+okuMMultiplier()`** in `runRollEpoch` (and its ex-post reconciliation used the
+same local delta). `yieldRate.ts`'s own module doc states the rule this
+violated — the denominator must be GLOBAL, never a single chain's local
+supply, "that is precisely why `distributeYield` was removed: it produced a
+different multiplier delta on every chain." Running the script once per EVM
+chain, as its own usage doc instructs, would have derived a **different rate
+on every chain** — silently defeating the cross-chain parity the whole
+streaming-accrual design exists to provide.
+
+**Fixed at the root** rather than patched: `runRollEpoch` now reads
+`sampleGlobalValueUsd()` (already SVM-inclusive, D-27) instead of the
+reference chain's local supply, and its ex-post reconciliation is derived from
+the *prior ledger entry's* recorded `measuredAvgValueUsd` (which was global)
+times the multiplier ratio, rather than local supply times the multiplier
+delta. `stage-settlement`'s silent local-supply fallback (used whenever the
+V̄ sample store was empty — which it is today, since the store has never been
+bootstrapped) was also removed; a missing sample window is now a hard error.
+
+**New architecture, not just a patch.** `runEpoch.ts` derived and submitted in
+one function body and was never callable more than once per chain — there was
+no artifact containing the derived WAD integers for a second stack to consume,
+only a logged float. Split into:
+
+- `deriveEpochSchedule.ts` — pure derivation (one call, one chain read for the
+  CURRENT on-chain schedule as reference, one global V̄ sample), writing a
+  versioned JSON artifact (`EVM/scripts/config/epochs/<epochId>.json`) with the
+  actual WAD integers and absolute timestamps.
+- `applyScheduleSingleChain.ts` — applies one artifact to whichever EVM chain
+  the Hardhat process is bound to. Split out because `resolveNetworkContext()`
+  reads Hardhat's already-bound network runtime and cannot be redirected
+  mid-process; broadcasting to N chains is N subprocess invocations of this
+  file, the same pattern `runEpoch.ts` already required by hand.
+- `broadcastSchedule.ts` — the orchestrator. Shells out to
+  `applyScheduleSingleChain.ts` per EVM chain and to SVM's own
+  `set-yield-rate.ts --mode=atomic` in its Anchor workspace (a genuine process
+  boundary — different provider, different signer model, different
+  toolchain). Records each chain's receipt back into the artifact as it
+  confirms, so a partial failure is resumed by re-running the same command
+  rather than left ambiguous. Writes the carry ledger entry exactly ONCE, after
+  every chain confirms — not once per chain, which is what made six EVM
+  chain-runs previously produce six ledger entries with the carry balance
+  drifting between the first and the last.
+- `carryLedger.upsertLedgerEntry` — keyed on `epochId`, idempotent on a
+  matching re-run, and refuses to silently overwrite a DIFFERENT recorded
+  derivation for the same epoch label.
+
+**Old `runEpoch.ts` kept, not deleted.** `test/hardhat/drill/operatorDrill.test.ts`
+exercises `runStageSettlement` / `runRollEpoch` directly, and rewriting that
+test was out of scope for this pass per its own scoping instruction. The local-
+supply bug is patched in place there too (same fix, smaller diff), so both
+paths are now correct; the artifact/broadcast split is the one to use for a
+real multi-chain rollout.
+
+### What remains for a future pass (marked partial deliberately)
+
+- **`deriveRollEpoch`'s ex-post reconciliation is an approximation.** It infers
+  the global actual-paid delta from the prior ledger entry's recorded
+  `measuredAvgValueUsd` times the reference chain's multiplier ratio, rather
+  than a fresh global sample at the settlement window's own close. This is
+  exact if `measuredAvgValueUsd` was itself correctly time-weighted when
+  recorded (which it is, structurally) and the multiplier ratio is identical
+  across chains (which cross-chain drift monitoring is supposed to guarantee) —
+  but it has not been exercised against a live multi-chain deployment.
+- **The V̄ sample store has never been bootstrapped.** `sampleGlobalValueUsd`
+  and the persistence half exist and are unit-tested, but nothing runs the
+  sampler on a schedule yet. `deriveRollEpoch` will hard-error on an empty
+  store today, which is correct (see above) but means the new path cannot
+  actually be exercised end-to-end until the sampler is wired into a cron.
+- **`broadcastSchedule.ts`'s SVM leg has not been run against a live SVM
+  deployment** — verified by code review and by the shape of SVM's own
+  `set-yield-rate.ts --mode=atomic` CLI, not by an integration test.
+- **No test coverage for the new files themselves** (`deriveEpochSchedule.ts`,
+  `applyScheduleSingleChain.ts`, `broadcastSchedule.ts`). The math they call
+  (`epochSchedule`/`epochDistribution`/`yieldRate`) is unit-tested where it
+  lives now (`packages/yield-tooling`); the orchestration glue is not.
 
 ## D-14 · `tsc --noEmit` on the SVM test suite — `FIXED`
 
@@ -548,6 +634,14 @@ vault instead of being burned.
 The governing principle is what raised this from hygiene to priority: a
 backend-controlled architecture makes the off-chain code *more* load-bearing,
 so it should not be the only part of the system without a type checker.
+
+**Extended to `scripts/**` in the deploy-readiness pass.** `tsconfig.json`'s
+`include` was `["tests/**/*"]` only, so `npm run typecheck` covered zero
+scripts despite being gated in CI — it was hiding a real error the whole time.
+Fixed the same way: `withdraw-buffer.ts` had two dead account keys (`okuMMint`,
+`token2022Program`) the instruction doesn't take, and `test-devnet.ts` had the
+same `Program<Idl>` vs `Program<LitePsm>` variance as the tests did, fixed by
+typing it concretely. `include` now covers both.
 
 ---
 
@@ -799,11 +893,13 @@ nothing currently needs at 80k against 200k.
 
 ## Status at a glance
 
-**No decisions outstanding.** All twenty-seven entries are settled.
+**No decisions outstanding.** All twenty-eight entries are settled; D-28 is
+marked partial because its remaining work is explicitly scoped (see its own
+"what remains" section), not because the decision itself is undecided.
 
 | Status | Count | |
 |---|---|---|
-| `DECIDED` | 10 | Settled and implemented |
+| `DECIDED` | 11 | Settled and implemented |
 | `ACCEPTED` | 5 | Knowingly living with |
 | `FIXED` | 5 | Defects found and corrected during the work |
 | `RESOLVED` | 4 | Settled by the governing principle |
@@ -816,7 +912,8 @@ nothing currently needs at 80k against 200k.
 | # | Item | Note |
 |---|---|---|
 | D-26 | Durable, versioned, append-only, **signed** carry + V̄ stores | **Mainnet prerequisite.** The design is settled; building it is not done |
-| D-07 | SVM fresh redeploy | Unblocked — no EVM upgrade in the path |
+| D-28 | Bootstrap the V̄ sampler on a schedule; end-to-end test the derive/broadcast split against a live multi-chain deployment (EVM testnets + SVM) | Blocks actually running the new orchestration for real, not the internal-MVP deploy itself |
+| D-07 | SVM fresh redeploy | Unblocked — no EVM upgrade in the path (see also: EVM needs a v0.3 redeploy too, since the currently-live contracts predate streaming accrual entirely) |
 
 ### Risks accepted, with numbers attached
 

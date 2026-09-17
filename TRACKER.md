@@ -685,35 +685,104 @@ literally inexpressible.
   `ScaledUiAmount` cannot stream and `InterestBearingConfig` is
   mutually exclusive with it.
 
-### SVM devnet needs a fresh re-deploy (not an in-place upgrade) `[SVM]`
+### Deploy readiness — internal testing MVP `[both]`
 
-The program builds and passes all tests, but **the devnet program has
-not been rebuilt/redeployed** against the current source. On-chain state
-is out of scope for review/audit; the internal devnet instance should
-eventually be refreshed for testing. An in-place BPF upgrade is **not**
-sufficient — the config PDA seed is `psm_config`, so if any prior devnet
-deploy used a different seed a fresh deploy (new PDA + mint) is required.
+Audited both stacks' deploy pipelines end to end ahead of an internal-testing
+deploy (testnets: sepolia/baseSepolia/arbSepolia + SVM devnet). Findings below;
+the code-level fixes are recorded in `SVM/DECISIONS.md` D-28 (cross-stack
+epoch orchestration) and D-14 (extended `tsc` coverage). This entry is the
+deploy-specific summary.
 
-Notable deployed-surface facts vs. any older devnet build:
+**EVM contracts currently live on all six networks predate the
+streaming-accrual refactor entirely** — at the last live redeploy commit,
+`OkuMoney.sol` had zero references to `setOkuMYieldRate`/`okuMRatePerSecond`.
+A fresh deploy is required on the EVM side too, not just SVM. Decided:
+bump `DEPLOYMENT_VERSION` to `v0.3` for a clean CREATE2 generational break;
+archive `scripts/config/addresses.json` before deploying so the old v0.2
+addresses are preserved for reference rather than overwritten. **Not yet
+done** — this pass fixed the tooling and correctness bugs the deploy would
+have exercised; the deploy itself is a separate step.
 
-- Config PDA seed is `psm_config`.
-- USDC transfers use `transfer_checked` (mint + decimals validated).
-- Error enum includes `ZeroOutput`, `SlippageExceeded`,
-  `MultiplierUnpackFailed`, `ScaledUiExtensionMissing`,
-  `MultiplierOutOfRange`.
-- `update_token_metadata` instruction is present.
+**SVM: clean-slate redeploy, not an in-place upgrade.** Decided (not just
+because the config layout grew 562→626 bytes, which alone would have been a
+clean init at an already-empty PDA): close the existing program
+(`close-programs --allow-anchor-toml-ids`, recovering ~4.35 SOL of stranded
+ProgramData rent), rotate `target/deploy/lite_psm-keypair.json`, run
+`anchor keys sync` (NOT on the standard build path today — `build.ts` only
+does this on the fork path — must be done explicitly), update `Anchor.toml`
+and `declare_id!`, then `deploy:programs` → `deploy:init` → `grant-roles`.
 
-**Follow-up required before this can be closed:** rebuild, deploy fresh
-to devnet (new PDA + mint), re-verify with the bankrun/devnet suites,
-then mainnet-beta following the testnet-then-mainnet posture.
+**SVM deployment state files were stale and actively misleading — archived,
+not fixed in place.** `deployments/devnet.json`'s recorded `psm_config` PDA
+pointed at a 562-byte orphan the current (626-byte) program cannot
+deserialize, alongside dead two-token-model keys (`tokens.okuMoney`,
+`tokens.usdOku`, `redemptionQueue`, `vaultConfig`) and three `OkuDollar`
+upgrade records for a program that no longer exists in this workspace.
+`devnet-fork.json` additionally carried a live `okuDollarProgram` reference
+and pointed at the wrong program ID entirely. Both renamed to
+`*.v1-pre-streaming.json` (see `SVM/oku-programs/deployments/README.md`)
+rather than left in place — `saveDeployment`'s merge behavior
+(`{...existing.tokens, ...addresses.tokens}`) would have carried every dead
+key forward into a "fresh" file otherwise.
 
-### RESOLVED: SVM test harness now passes `tsc --noEmit` `[SVM]`
+**The SVM upgrade path (`scripts/upgrade/`) is broken for this class of
+change, in three ways — moot given clean-slate redeploy, but worth recording
+so `npm run upgrade` isn't reached for reflexively on a future layout
+change:** the IDL-diff guard is inert whenever the prior deployment record
+has no `idlSnapshot` (true today); the pre/post state-invariant check
+excludes fetch errors from its diff, so if BOTH the pre- and post-upgrade
+account reads fail (as they would here, since the real config PDA doesn't
+exist) it prints a false "all state invariants preserved"; and
+`didUpgradeLand`'s post-timeout recheck hashes the on-chain ELF without an
+`expectedSize`, so it can never match once the account has grown from a
+prior generation's smaller allocation. None of the three were fixed this
+pass — not worth it given the redeploy makes them unreachable for this
+specific transition, but a genuine in-place upgrade later should not trust
+any of these three checks without revisiting them first.
 
-`npx tsc --noEmit` reports ~35 type errors across the bankrun test files
-(`Program<LitePsm>` vs `Program<Idl>` generic-variance around
-`addEventListener`). Harmless — the suite runs via `tsx` (no type-check)
-and all 94 bankrun tests pass — but a fully polished project would type-
-check clean. Fix with a targeted cast/typing shim in the harness.
+**`verify.ts` was existence-only** and would have reported the stale
+562-byte orphan config as a passing check. Fixed: now also checks owner,
+account size against `PSM_CONFIG_LEN`, and the `PsmConfig` discriminator.
+
+**`initialize.ts` wired `direct_minter` post-init but never `direct_burner`**
+— the SVM→EVM bridge burn path was silently dead until a separate
+`grant-roles` run, with nothing surfacing the gap. Fixed: mirrors the
+`direct_minter` wiring exactly.
+
+**`runEpoch.ts`'s `roll-epoch` phase derived its rate from the LOCAL
+reference chain's supply, not the global value across all chains** —
+exactly the mistake `distributeYield` was removed for, reintroduced at the
+operator-tooling layer instead of the contract layer. Running the (correctly
+documented, single-chain) script once per EVM chain, as its own usage
+examples instruct, would have derived a **different rate per chain**. Fixed,
+and replaced with a proper derive-once/broadcast-to-all architecture — see
+`SVM/DECISIONS.md` D-28 for the full writeup, including what is explicitly
+NOT yet done (the V̄ sampler has never been run on a schedule, so the new
+path is correct but not yet exercised end-to-end against a live deployment).
+
+**Both stacks now typecheck clean, including scripts (not just tests).**
+SVM's `tsconfig.json` only ever covered `tests/**`, so `npm run typecheck`
+passed while hiding a real compile error in `withdraw-buffer.ts` (dead
+account keys an instruction doesn't take) — see `SVM/DECISIONS.md` D-14.
+
+**Follow-up required before this can be closed:** actually run the EVM v0.3
+and SVM clean-slate deploys; bootstrap the V̄ sampler on a schedule; run one
+full derive→broadcast→drift-check cycle against the live testnet + devnet
+deployment as the closing verification.
+
+### RESOLVED: SVM `tsc --noEmit` now passes, tests AND scripts `[SVM]`
+
+Was 21 errors across the bankrun test files (`Program<LitePsm>` vs
+`Program<Idl>` generic-variance around `addEventListener`), fixed by typing
+the shared test helpers concretely. This entry's title said RESOLVED before
+that fix actually shipped — left contradicting its own body for a full pass;
+corrected here.
+
+Extended further during the deploy-readiness pass: `tsconfig.json`'s
+`include` was `tests/**/*` only, so `npm run typecheck` — gated in CI —
+covered zero scripts and was hiding a real compile error in
+`withdraw-buffer.ts` (dead account keys an instruction doesn't take).
+`include` now covers `scripts/**/*` too; see `SVM/DECISIONS.md` D-14.
 
 ### SVM audit-tooling note `[SVM]`
 

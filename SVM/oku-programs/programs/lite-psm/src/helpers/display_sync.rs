@@ -5,8 +5,7 @@
 //! The canonical multiplier streams continuously and costs no transactions.
 //! Wallets, however, cannot see it: Phantom, Solflare, Jupiter and the RPC's
 //! `getTokenAccountBalance` all render a Token-2022 mint's UI amount via
-//! `ScaledUiAmountConfig::current_multiplier()`, which is a **step function
-//! with exactly one pre-armable future step**
+//! `ScaledUiAmountConfig::current_multiplier()`, which is a **step function**
 //! (`spl-token-2022-interface-2.1.0/src/extension/scaled_ui_amount/mod.rs:57-63`).
 //!
 //! There is therefore no transaction-free way to make a wallet balance stream
@@ -16,42 +15,42 @@
 //! window, the pre-staged successor, and the ability to re-anchor — i.e. it
 //! trades a cosmetic problem for three correctness ones.
 //!
-//! So: the extension becomes a **lagging display mirror**, cranked
-//! permissionlessly, and the economics never touch it.
+//! So: the extension is a **lagging display mirror**, cranked permissionlessly,
+//! and the economics never touch it.
 //!
-//! ## The safety direction
+//! ## The one invariant
 //!
-//! Display must always be `<= canonical`. A user then redeems for at least
-//! what their wallet showed — surprises are in their favour. Two things
-//! enforce this:
+//! ```text
+//!     display <= canonical,  always
+//! ```
 //!
-//! 1. The pre-armed step is evaluated at the exact timestamp it becomes
-//!    effective, so the staircase touches the true curve at each step and
-//!    lies below it in between — never above.
-//! 2. The `f64` conversion rounds **down** (see [`multiplier_to_f64_floor`]),
-//!    because `x as f64` rounds to nearest and could otherwise land a hair
-//!    above the canonical integer.
+//! A user then redeems for at least what their wallet showed — surprises are in
+//! their favour. Two things make it hold **unconditionally**:
+//!
+//! 1. Each sync writes only `m(now)`, effective immediately. The display is a
+//!    pure lag: flat between cranks, stepping up at each one, never ahead of a
+//!    monotonically-increasing curve. There is no pre-armed future step that
+//!    could fire under a schedule different from the one that computed it —
+//!    see `sync_display_multiplier` for why that mattered.
+//! 2. The `f64` conversion is biased **downward** (see
+//!    [`multiplier_to_f64_floor`]), because `x as f64` rounds to nearest and
+//!    could otherwise land a hair above the canonical integer.
 //!
 //! ## Cost of the lag
 //!
-//! At [`DISPLAY_SYNC_INTERVAL`] = 60s and 20% APY the display under-reads by
-//! ~3.5e-5 %, i.e. about **$0.35 per $1,000,000**. Integrators pricing off the
-//! extension rather than off `PsmConfig` see an arbitrage of at most that,
-//! which is the same order as EVM's per-block granularity.
+//! The display under-reads by one crank interval of yield. At a 60s cadence and
+//! 20% APY that is ~3.5e-5 %, about **$0.35 per $1,000,000** — the same order as
+//! EVM's per-block granularity. Integrators pricing off the extension rather
+//! than off `PsmConfig` see at most that, always in the protocol's favour.
+//!
+//! The cadence is an operator choice, not a protocol constant: nothing on-chain
+//! enforces or assumes any particular interval.
 
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_2022::spl_token_2022::extension::scaled_ui_amount::instruction::update_multiplier;
 use oku_shared::PRECISION;
-
-/// How far ahead the display staircase is pre-armed, and the staleness
-/// threshold for the opportunistic piggyback sync.
-///
-/// 60s costs ~1440 transactions/day (~0.007 SOL) for ~$0.35 of under-read per
-/// $1M at 20% APY. Shortening it is a linear trade of cost against drift;
-/// nothing in the protocol's correctness depends on the value.
-pub const DISPLAY_SYNC_INTERVAL: i64 = 60;
 
 /// Convert a WAD-scaled canonical multiplier to the `f64` the extension
 /// stores, biased **downward**.
@@ -84,7 +83,8 @@ pub const DISPLAY_SYNC_INTERVAL: i64 = 60;
 /// suggests, for two independent reasons:
 ///
 /// 1. The display is a staircase that lags canonical by up to one
-///    [`DISPLAY_SYNC_INTERVAL`]. At 20% APY that is ~3.5e-7 relative — nine
+///    one crank interval. At a 60s cadence and 20% APY that is ~3.5e-7
+///    relative — nine
 ///    orders of magnitude larger than the f64 error, so outside the instant of
 ///    a sync the display is nowhere near the bound.
 /// 2. OkuM has 6 decimals, so a rendered balance is truncated to 1e-6. A 1e-16
@@ -227,29 +227,14 @@ mod tests {
         );
 
         // And it is dwarfed by the staircase lag that exists BY DESIGN: one
-        // 60s interval at 20% APY is ~3.5e-7 relative, ~6 orders of magnitude
-        // larger than this bias. The f64 conversion is not the binding term.
-        let staircase_lag_rel = 0.20_f64.ln_1p() * (DISPLAY_SYNC_INTERVAL as f64) / 31_536_000.0;
+        // crank interval of yield. At a 60s cadence and 20% APY that is
+        // ~3.5e-7 relative, ~6 orders of magnitude larger than this bias, so
+        // the f64 conversion is nowhere near the binding term.
+        const TYPICAL_CRANK_SECS: f64 = 60.0;
+        let staircase_lag_rel = 0.20_f64.ln_1p() * TYPICAL_CRANK_SECS / 31_536_000.0;
         assert!(
             rel_bias * 1_000.0 < staircase_lag_rel,
             "f64 bias {rel_bias} is not negligible next to the {staircase_lag_rel} staircase lag"
         );
-    }
-
-    /// `PsmConfig` has no `Default` (it is an Anchor account with 16 pubkeys),
-    /// so the staleness predicate is tested against its only input directly.
-    fn stale(last_sync: i64, now: i64) -> bool {
-        now.saturating_sub(last_sync) >= DISPLAY_SYNC_INTERVAL
-    }
-
-    #[test]
-    fn staleness_threshold_respects_the_interval() {
-        assert!(!stale(1_000, 1_000));
-        assert!(!stale(1_000, 1_000 + DISPLAY_SYNC_INTERVAL - 1));
-        assert!(stale(1_000, 1_000 + DISPLAY_SYNC_INTERVAL));
-        // A clock that appears to move backwards must not wrap into "stale"
-        // (saturating_sub, not a wrapping subtraction).
-        assert!(!stale(1_000, 0));
-        assert!(!stale(i64::MAX, i64::MIN));
     }
 }

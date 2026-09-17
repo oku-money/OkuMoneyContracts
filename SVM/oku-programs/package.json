@@ -49,7 +49,8 @@
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "admin:set-yield-rate": "tsx scripts/admin/set-yield-rate.ts",
     "admin:sync-display": "tsx scripts/admin/sync-display.ts",
-    "admin:read-schedule": "tsx scripts/admin/read-schedule.ts"
+    "admin:read-schedule": "tsx scripts/admin/read-schedule.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@anchor-lang/core": "^1.0.0",

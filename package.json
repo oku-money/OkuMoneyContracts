@@ -11,6 +11,7 @@
   "scripts": {
     "test:tooling": "npm run test --workspace @okumoney/yield-tooling",
     "gen:vectors": "cd EVM && forge test --match-contract GenerateVectors -vv",
-    "test:differential": "npm run gen:vectors && npm run test:tooling && cd SVM/oku-programs && cargo test --package oku-shared --test differential"
+    "test:differential": "npm run gen:vectors && npm run test:tooling && cd SVM/oku-programs && cargo test --package oku-shared --test differential",
+    "typecheck": "npm run typecheck --workspace okumoney-evm-contracts && npm run typecheck --workspace okumoney-svm-programs && npm run build --workspace @okumoney/yield-tooling"
   }
 }

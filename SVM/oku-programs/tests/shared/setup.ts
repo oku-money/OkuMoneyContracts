@@ -31,6 +31,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
+import type { LitePsm } from "../../target/types/lite_psm";
 import type { BankrunHarness } from "./bankrun";
 import { fundKeypairs, ensureAtaViaBankrun } from "./bankrun";
 
@@ -95,7 +96,7 @@ export interface PsmSetupResult {
  */
 export async function initializePsm(
   h: BankrunHarness,
-  program: Program,
+  program: Program<LitePsm>,
   payer: Keypair,
   usdcMint: PublicKey
 ): Promise<PsmSetupResult> {
@@ -177,7 +178,7 @@ export async function initializePsm(
  * funding the user's USDC ATA and creating their okuM ATA.
  */
 export async function mintOkuMViaProgram(
-  program: Program,
+  program: Program<LitePsm>,
   user: Keypair,
   amount: BN,
   configPda: PublicKey,
@@ -212,7 +213,7 @@ export async function mintOkuMViaProgram(
  * the standard test layout).
  */
 export async function ensurePSMUnpaused(
-  program: Program,
+  program: Program<LitePsm>,
   configPda: PublicKey
 ): Promise<void> {
   const config = await program.account.psmConfig.fetch(configPda);

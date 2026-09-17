@@ -2843,23 +2843,10 @@
           {
             "name": "multiplier",
             "docs": [
-              "Canonical multiplier written as immediately effective."
+              "Canonical multiplier written as immediately effective. The mirror is a",
+              "pure lag — there is no pre-armed next step (see `sync_display_multiplier`)."
             ],
             "type": "u128"
-          },
-          {
-            "name": "pre_armed_multiplier",
-            "docs": [
-              "Pre-armed next step."
-            ],
-            "type": "u128"
-          },
-          {
-            "name": "pre_armed_effective_ts",
-            "docs": [
-              "When the pre-armed step becomes effective."
-            ],
-            "type": "i64"
           },
           {
             "name": "timestamp",

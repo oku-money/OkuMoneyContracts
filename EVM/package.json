@@ -11,7 +11,7 @@
     "compile": "hardhat compile",
     "clean": "hardhat clean && forge clean && rm -rf cache_hardhat typechain-types",
     "typechain": "hardhat typechain",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "npm run typecheck",
     "export-abis": "ts-node scripts/utils/exportAbis.ts",
     "test": "hardhat test",

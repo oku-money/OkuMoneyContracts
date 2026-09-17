@@ -135,7 +135,7 @@ describe("streaming accrual (continuous rate schedule)", () => {
       TOKEN_PROGRAM_ID,
     );
 
-    await ensurePSMUnpaused(psm as any, psmConfigPda);
+    await ensurePSMUnpaused(psm, psmConfigPda);
   });
 
   // -- helpers ---------------------------------------------------------
@@ -143,7 +143,7 @@ describe("streaming accrual (continuous rate schedule)", () => {
   const nowTs = async (): Promise<number> => Number((await getClock(h)).unixTimestamp);
 
   const canonical = async (atTs?: bigint): Promise<bigint> =>
-    computeCanonicalMultiplier(h, psm as any, psmConfigPda, atTs);
+    computeCanonicalMultiplier(h, psm, psmConfigPda, atTs);
 
   const fetchSchedule = async () =>
     scheduleFromConfig((await psm.account.psmConfig.fetch(psmConfigPda)) as any);
@@ -277,7 +277,7 @@ describe("streaming accrual (continuous rate schedule)", () => {
     await setRate(ratePerSecondForApy(0.2), start + 30 * DAY);
 
     await mintOkuMViaProgram(
-      psm as any,
+      psm,
       user,
       new BN(50_000_000_000),
       psmConfigPda,
@@ -570,7 +570,7 @@ describe("streaming accrual (continuous rate schedule)", () => {
       .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
       .transaction();
     const sim = await simulateTx(h, tx, [orchestrator]);
-    const events = decodeEvents(psm as any, sim.logs);
+    const events = decodeEvents(psm, sim.logs);
     const names = events.map((e) => e.name);
     expect(names).to.include(
       "pendingRateCancelled",

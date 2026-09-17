@@ -268,12 +268,9 @@ pub struct PendingRateCancelled {
 /// the display has drifted from canonical and whether the crank is alive.
 #[event]
 pub struct DisplayMultiplierSynced {
-    /// Canonical multiplier written as immediately effective.
+    /// Canonical multiplier written as immediately effective. The mirror is a
+    /// pure lag — there is no pre-armed next step (see `sync_display_multiplier`).
     pub multiplier: u128,
-    /// Pre-armed next step.
-    pub pre_armed_multiplier: u128,
-    /// When the pre-armed step becomes effective.
-    pub pre_armed_effective_ts: i64,
     pub timestamp: i64,
 }
 

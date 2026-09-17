@@ -236,7 +236,7 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
     // Step 0: Alice mints okuM via public PSM on chain A (1000 USDC -> ~1000 okuM).
     const mintUsdc = new BN(1_000_000_000); // 1000 USDC
     await mintOkuMViaProgram(
-      psm as any,
+      psm,
       alice,
       mintUsdc,
       psmConfigPda,
@@ -329,7 +329,7 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
     // Fund Alice with fresh okuM.
     await mintToViaBankrun(h, usdcMint, aliceUsdcAta, payer, 1_000_000_000, TOKEN_PROGRAM_ID);
     await mintOkuMViaProgram(
-      psm as any,
+      psm,
       alice,
       new BN(1_000_000_000),
       psmConfigPda,
@@ -345,7 +345,7 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
 
     // Snapshot the starting CANONICAL multiplier (computed from the rate
     // schedule, not read from the display mirror).
-    const multiplier0 = await computeCanonicalMultiplier(h, psm as any, psmConfigPda);
+    const multiplier0 = await computeCanonicalMultiplier(h, psm, psmConfigPda);
 
     // Alice -> orchestrator (pull).
     const bridgeAmount = new BN(Number(aliceOkuM));
@@ -394,7 +394,7 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
       .rpc();
     await warpBy(h, 2 * 86_400);
 
-    const multiplier1 = await computeCanonicalMultiplier(h, psm as any, psmConfigPda);
+    const multiplier1 = await computeCanonicalMultiplier(h, psm, psmConfigPda);
     expect(multiplier1 > multiplier0, "multiplier should have streamed upward").to.be.true;
 
     // Mint on "chain B" — same raw amount, regardless of multiplier.

@@ -39,9 +39,7 @@
 use crate::contexts::{SetOkuMMultiplier, SetYieldRate, SyncDisplayMultiplier};
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::display_sync::{
-    write_display_multiplier, DISPLAY_SYNC_INTERVAL,
-};
+use crate::helpers::display_sync::write_display_multiplier;
 use crate::helpers::{check_yield_lock, multiplier};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -395,56 +393,54 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
 /// rebaser-gated would turn display freshness into an operator liveness
 /// dependency for no security gain.
 ///
-/// Writes two points: the value NOW (effective immediately) and the value one
-/// [`DISPLAY_SYNC_INTERVAL`] ahead (pre-armed at its own effective timestamp).
-/// The pre-arm means the display keeps advancing for a full interval even if
-/// the next crank never arrives.
+/// Writes ONE point: the canonical multiplier as of now, effective
+/// immediately. The display is therefore a pure lag — a staircase that steps
+/// up at each crank and is flat in between, always at or below canonical.
 ///
-/// ## Why two CPIs rather than one
+/// ## Why there is no pre-armed next step
 ///
-/// A single write of the future value would be enough IF Token-2022's
-/// processor resolves the standing `multiplier` field to
-/// `current_multiplier(now)` before overwriting `new_multiplier`. That
-/// behaviour lives in the processor, not in `spl-token-2022-interface`, and is
-/// not yet verified here (`SVM/DECISIONS.md` D-02). If it does NOT resolve,
-/// a single write would leave the display pinned to the *previous* pre-armed
-/// value for a full interval — a lag of two intervals instead of one.
+/// An earlier version also pre-armed `m(now + 60s)` at its own effective
+/// timestamp, so the display kept advancing for one interval if the crank
+/// stopped. That was removed, because it was the sole cause of a real
+/// violation of the only invariant the mirror has to hold.
 ///
-/// Two writes are correct under either semantics, so the ambiguity is not on
-/// the correctness path. The cost is one extra CPI per minute.
+/// A step armed under one schedule fires under whatever schedule is live when
+/// its timestamp arrives. After a rate DECREASE — which is routine at an epoch
+/// roll, where the settlement rate is usually lower than the base rate — the
+/// armed value is computed from the old, faster curve and lands ABOVE the new
+/// canonical value. Measured worst cases: ~$0.25 per $1M for a 20%→5% roll,
+/// ~$6 per $1M for `MAX_RATE`→halt. Small and self-correcting within one
+/// interval, but the wrong direction: the display would briefly promise more
+/// than the PSM will pay.
+///
+/// Closing that by having every rate write also re-sync the display would mean
+/// putting the mint back into `SetYieldRate`, re-coupling the one instruction
+/// that must land reliably at epoch boundaries to the token program. Dropping
+/// the pre-arm instead makes the invariant unconditional, halves the cost of
+/// this instruction, and removes the dependency on Token-2022's
+/// future-timestamp resolve semantics entirely.
+///
+/// What is lost: if the crank stops, the display freezes rather than advancing
+/// one more step. It is stale-LOW, which is safe, and nothing prices against
+/// it (`SVM/DECISIONS.md` D-16).
 ///
 /// Does NOT stamp the sandwich lock — see `PsmConfig::last_yield_distribution_slot`.
 pub fn sync_display_multiplier(ctx: Context<SyncDisplayMultiplier>) -> Result<()> {
     let now_ts = Clock::get()?.unix_timestamp;
-
-    let next_ts = now_ts
-        .checked_add(DISPLAY_SYNC_INTERVAL)
-        .ok_or(LitePsmError::Overflow)?;
-
     let current = multiplier::at(&ctx.accounts.config, now_ts)?;
-    let next_multiplier = multiplier::at(&ctx.accounts.config, next_ts)?;
 
-    let mint = ctx.accounts.oku_m_mint.to_account_info();
-    let token_program = ctx.accounts.token_2022_program.to_account_info();
-
-    // 1. Land the display exactly on the curve right now.
-    write_display_multiplier(current, now_ts, &ctx.accounts.config, &mint, &token_program)?;
-
-    // 2. Pre-arm the next step so the staircase advances unattended.
     write_display_multiplier(
-        next_multiplier,
-        next_ts,
+        current,
+        now_ts,
         &ctx.accounts.config,
-        &mint,
-        &token_program,
+        &ctx.accounts.oku_m_mint.to_account_info(),
+        &ctx.accounts.token_2022_program.to_account_info(),
     )?;
 
     ctx.accounts.config.last_display_sync_ts = now_ts;
 
     emit!(DisplayMultiplierSynced {
         multiplier: current,
-        pre_armed_multiplier: next_multiplier,
-        pre_armed_effective_ts: next_ts,
         timestamp: now_ts,
     });
 

@@ -182,6 +182,13 @@ jobs:
       - name: Build Anchor programs
         run: anchor build --ignore-keys
 
+      - name: Typecheck
+        # The SVM suite passed `tsc` with 21 errors for a long time because
+        # `tsx` transpiles without typechecking. With the backend owning most
+        # of the protocol's levers, the off-chain code is MORE load-bearing,
+        # not less — so this is gated rather than advisory.
+        run: npm run typecheck
+
       - name: Run bankrun test suite
         run: npm run test:bankrun
 

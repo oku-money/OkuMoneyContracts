@@ -30,13 +30,14 @@
  *   CHAINS=base,arbitrum,...   chains to compare (default: all in the address book)
  *   TOLERANCE_BPS=<n>          max tolerated multiplier spread, basis points (default 1)
  *   EXPIRY_WARN_HOURS=<n>      warn when rateEnd is nearer than this (default 48)
- *   EPOCH_ANCHOR_UNIX=<n>      (optional) Unix seconds of epoch 0's start, for grid
- *                              alignment checking. Omit to skip this check entirely —
- *                              the epoch length/anchor convention is not yet decided.
- *   EPOCH_LENGTH_SECONDS=<n>   (optional) fixed epoch length, required if
- *                              EPOCH_ANCHOR_UNIX is set.
- *   EPOCH_GRID_TOLERANCE_SECONDS=<n>  slack allowed off the exact grid, e.g. for
- *                              a settlement window (default 0 — exact alignment).
+ *   EPOCH_ANCHOR_UNIX=<n>      Override epoch 0's start. Defaults to the committed
+ *                              grid in scripts/config/epoch.ts, so the alignment
+ *                              check runs by default rather than being skipped.
+ *   EPOCH_LENGTH_SECONDS=<n>   Override the epoch length (default: 30 days).
+ *   EPOCH_GRID_TOLERANCE_SECONDS=<n>  Slack allowed off the exact grid; defaults
+ *                              to one settlement window, since a rate window
+ *                              legitimately ends at the BASE boundary rather
+ *                              than the epoch boundary.
  */
 
 import { ethers } from "ethers";
@@ -48,14 +49,26 @@ import { CHAIN_METADATA } from "../config/chains";
 import { readSvmSchedule } from "../utils/svmValue";
 import { SVM_CHAIN_KEY } from "../utils/globalValue";
 import { effectiveRate as mirrorEffectiveRate } from "@okumoney/yield-tooling";
+import {
+  EPOCH_ANCHOR_UNIX as DEFAULT_EPOCH_ANCHOR_UNIX,
+  EPOCH_LENGTH_SECONDS as DEFAULT_EPOCH_LENGTH_SECONDS,
+  EPOCH_GRID_TOLERANCE_SECONDS as DEFAULT_EPOCH_GRID_TOLERANCE_SECONDS,
+} from "../config/epoch";
 
 const TOLERANCE_BPS = BigInt(process.env.TOLERANCE_BPS ?? "1");
 const EXPIRY_WARN_HOURS = Number(process.env.EXPIRY_WARN_HOURS ?? "48");
-const EPOCH_ANCHOR_UNIX = process.env.EPOCH_ANCHOR_UNIX ? Number(process.env.EPOCH_ANCHOR_UNIX) : undefined;
+// Defaults come from the committed grid (scripts/config/epoch.ts) so the check
+// is ON by default rather than silently skipped. Env vars still override, for
+// testing against a non-standard grid.
+const EPOCH_ANCHOR_UNIX = process.env.EPOCH_ANCHOR_UNIX
+  ? Number(process.env.EPOCH_ANCHOR_UNIX)
+  : DEFAULT_EPOCH_ANCHOR_UNIX;
 const EPOCH_LENGTH_SECONDS = process.env.EPOCH_LENGTH_SECONDS
   ? Number(process.env.EPOCH_LENGTH_SECONDS)
-  : undefined;
-const EPOCH_GRID_TOLERANCE_SECONDS = Number(process.env.EPOCH_GRID_TOLERANCE_SECONDS ?? "0");
+  : DEFAULT_EPOCH_LENGTH_SECONDS;
+const EPOCH_GRID_TOLERANCE_SECONDS = process.env.EPOCH_GRID_TOLERANCE_SECONDS
+  ? Number(process.env.EPOCH_GRID_TOLERANCE_SECONDS)
+  : DEFAULT_EPOCH_GRID_TOLERANCE_SECONDS;
 
 const ABI = [
   "function okuMMultiplier() view returns (uint256)",

@@ -132,26 +132,56 @@ export const SVM_CHAIN_KEY = "solana";
 /**
  * Read SVM's contribution using environment-provided endpoints.
  *
- * Returns `null` — meaning "omit", never "zero" — when SVM is not configured.
- * That is the correct behaviour pre-SVM-mainnet, but it is also indistinguishable
- * from a misconfiguration, so it warns loudly: a silently-absent SVM inflates
- * every derived rate.
+ * ## Why this throws rather than warns
+ *
+ * V(t) is the DENOMINATOR of every derived rate:
+ *
+ * ```text
+ *   rate  ~=  realisedYield / (V̄ x window)
+ * ```
+ *
+ * So a chain omitted from V does not merely make the sample incomplete — it
+ * makes the derived rate too HIGH, and the protocol over-distributes. If SVM
+ * held 20% of supply and were silently excluded, V̄ would come out 20% low and
+ * the rate 25% high, every epoch, with nothing failing.
+ *
+ * A warning is not a control for that; it is a line in a cron log. So once SVM
+ * is live, `SVM_EXPECTED=true` makes a missing configuration a hard error.
+ *
+ * The flag exists because "SVM is absent" is a legitimate state pre-launch and
+ * must stay distinguishable from "SVM is misconfigured". Set it the moment SVM
+ * carries supply.
  */
 async function readSvmConfigured(): Promise<number | null> {
   const rpcUrl = process.env.SVM_RPC_URL;
   const programId = process.env.SVM_LITE_PSM_PROGRAM_ID;
   const okuMMint = process.env.SVM_OKU_M_MINT;
+  const expected = process.env.SVM_EXPECTED === "true";
 
   if (!rpcUrl || !programId || !okuMMint) {
-    logger.warning(
+    const detail =
       "SVM not configured (need SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT). " +
-        "Its supply is EXCLUDED from V(t), which makes any rate derived from this " +
-        "sample too high. Set these before deriving a live rate."
-    );
+      "Its supply would be EXCLUDED from V(t), making any rate derived from this " +
+      "sample too high.";
+    if (expected) {
+      throw new Error(
+        `${detail} SVM_EXPECTED=true, so this is a hard error rather than a warning.`
+      );
+    }
+    logger.warning(`${detail} Set SVM_EXPECTED=true once SVM carries supply.`);
     return null;
   }
 
   const reading = await readSvmValueUsd(rpcUrl, programId, okuMMint);
+  if (reading === null && expected) {
+    // Configured but unreadable. Omitting it would silently inflate the rate,
+    // so with SVM_EXPECTED set we refuse to produce a sample at all — better
+    // no sample than a quietly wrong one.
+    throw new Error(
+      "SVM is configured and expected, but its value could not be read. Refusing " +
+        "to emit a global-value sample that would omit it and inflate the derived rate."
+    );
+  }
   return reading === null ? null : reading.valueUsd;
 }
 

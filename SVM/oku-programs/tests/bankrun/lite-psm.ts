@@ -651,7 +651,7 @@ describe("lite-psm", () => {
         await warpSlots(h2, 1);
 
         // Stamp the sandwich-lock slot via the emergency override.
-        const m0 = await computeCanonicalMultiplier(h2, program2 as any, configPda2);
+        const m0 = await computeCanonicalMultiplier(h2, program2, configPda2);
         const m1 = m0 + m0 / 100n; // +1%
         await program2.methods
           .setOkumMultiplier(new BN(m1.toString()))
@@ -707,12 +707,10 @@ describe("lite-psm", () => {
           .accountsPartial({
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
-            okuMMint: okuMMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint: usdcMint,
             tokenProgram: TOKEN_PROGRAM_ID,
-            token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([coldMultisig])
           .rpc();
@@ -728,12 +726,10 @@ describe("lite-psm", () => {
             .accountsPartial({
               bufferWithdrawer: warmMultisig.publicKey, // Wrong role
               config: configPda,
-              okuMMint: okuMMint,
               withdrawerUsdcAta: bufferWithdrawerUsdcAta,
               vaultUsdc: vaultUsdcAta,
               usdcMint: usdcMint,
               tokenProgram: TOKEN_PROGRAM_ID,
-              token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([warmMultisig])
             .rpc();
@@ -746,7 +742,7 @@ describe("lite-psm", () => {
       it("rebaser can force the multiplier via the emergency override", async () => {
         // Multiplier is WAD-scaled (1e18) since the PRECISION migration.
         // Nudge it one unit above whatever has accrued so far.
-        const current = await computeCanonicalMultiplier(h, program as any, configPda);
+        const current = await computeCanonicalMultiplier(h, program, configPda);
         const newMultiplier = new BN((current + 1n).toString());
 
         await program.methods
@@ -983,7 +979,6 @@ describe("lite-psm", () => {
           userUsdcAta,
           userOkuMAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuM: vaultOkuMAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1008,7 +1003,7 @@ describe("lite-psm", () => {
       // elapsed time does, and bankrun's clock is sticky. Assert the actual
       // pricing rule instead, which holds at any multiplier.
       const usdcReceived = BigInt(userUsdcAfter.amount) - BigInt(userUsdcBefore.amount);
-      const m = await computeCanonicalMultiplier(h, program as any, configPda);
+      const m = await computeCanonicalMultiplier(h, program, configPda);
       const expectedOut = (BigInt(redeemAmount.toString()) * m) / 1_000_000_000_000_000_000n;
       expect(usdcReceived.toString()).to.equal(expectedOut.toString());
       // Never below par: the multiplier is monotonic and starts at 1.0.
@@ -1036,7 +1031,6 @@ describe("lite-psm", () => {
             userUsdcAta,
             userOkuMAta,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuM: vaultOkuMAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1070,7 +1064,6 @@ describe("lite-psm", () => {
             userUsdcAta,
             userOkuMAta,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuM: vaultOkuMAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1100,7 +1093,6 @@ describe("lite-psm", () => {
             userUsdcAta,
             userOkuMAta,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuM: vaultOkuMAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1507,12 +1499,10 @@ describe("lite-psm", () => {
           .accountsPartial({
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
-            okuMMint: okuMMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
             tokenProgram: TOKEN_PROGRAM_ID,
-            token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([coldMultisig])
           .rpc();

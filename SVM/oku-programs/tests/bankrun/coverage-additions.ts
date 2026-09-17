@@ -66,7 +66,7 @@ describe("PSM coverage additions", () => {
       h, payer.publicKey, null, DECIMALS, Keypair.generate(), TOKEN_PROGRAM_ID
     );
 
-    const setup = await initializePsm(h, psm as any, payer, usdcMint);
+    const setup = await initializePsm(h, psm, payer, usdcMint);
     configPda = setup.configPda;
     okuMMint = setup.okuMMint;
     vaultUsdcAta = setup.vaultUsdcAta;

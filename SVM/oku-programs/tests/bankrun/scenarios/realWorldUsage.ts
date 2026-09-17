@@ -236,7 +236,6 @@ async function userRedeemOkuM(
         userUsdcAta: ctx.userUsdcAtas[userIndex],
         userOkuMAta: ctx.userOkuMAtas[userIndex],
         vaultUsdc: ctx.vaultUsdcAta,
-        vaultOkuM: ctx.vaultOkuMAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -282,7 +281,6 @@ async function orchestratorBridge(
       userUsdcAta: ctx.orchUsdcAta,
       userOkuMAta: ctx.orchOkuMAta,
       vaultUsdc: ctx.vaultUsdcAta,
-      vaultOkuM: ctx.vaultOkuMAta,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -487,7 +485,7 @@ describe(
       // Monotonicity is structural -- rates below PRECISION are rejected at
       // write time -- so this is a check that nothing in the simulation found
       // a path around that.
-      const finalMultiplier = await computeCanonicalMultiplier(ctx.h, ctx.psm as any, ctx.configPda);
+      const finalMultiplier = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
       assertGte(finalMultiplier, PRECISION, "final multiplier >= PRECISION");
     });
   }
@@ -572,7 +570,6 @@ describe("realWorldUsage (SVM) edge cases", () => {
           usdcMint: ctx.usdcMint,
           okuMMint: ctx.okuMMint, userUsdcAta: ctx.orchUsdcAta,
           userOkuMAta: ctx.orchOkuMAta, vaultUsdc: ctx.vaultUsdcAta,
-          vaultOkuM: ctx.vaultOkuMAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -589,7 +586,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
         .signers([psmOrchestrator]).rpc();
       await warpBy(ctx.h, DAY_SECS * 30);
       await warpSlots(ctx.h, 1);
-      const newMultiplier = await computeCanonicalMultiplier(ctx.h, ctx.psm as any, ctx.configPda);
+      const newMultiplier = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
 
       // Destination leg: mint okuM with same USDC at new (higher) multiplier -> fewer okuM
       await mintUsdc(ctx.h, ctx.orchUsdcAta, ctx.usdcMint, Number(usdcFromRedeem));
@@ -655,7 +652,6 @@ describe("realWorldUsage (SVM) edge cases", () => {
           usdcMint: ctx.usdcMint,
           okuMMint: ctx.okuMMint, userUsdcAta: ctx.orchUsdcAta,
           userOkuMAta: ctx.orchOkuMAta, vaultUsdc: ctx.vaultUsdcAta,
-          vaultOkuM: ctx.vaultOkuMAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -797,7 +793,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       // Emergency override (slot N) -- the only instruction that still stamps
       // the sandwich lock, because it is the only one producing a discrete
       // jump. Routine yield no longer engages it.
-      const curMultiplierE7 = await computeCanonicalMultiplier(h, psm as any, configPda);
+      const curMultiplierE7 = await computeCanonicalMultiplier(h, psm, configPda);
       await psm.methods.setOkumMultiplier(new BN((curMultiplierE7 + 1000n).toString()))
         .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: configPda, okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
         .signers([psmOrchestrator]).rpc();

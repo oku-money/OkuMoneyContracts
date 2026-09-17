@@ -72,14 +72,14 @@ const DAY = 86_400;
 const USER_PATH_CU_CEILING = 100_000;
 
 /**
- * Separate, looser ceiling for the permissionless display crank.
+ * Ceiling for the permissionless display crank.
  *
- * It is not user-facing and composes with nothing, so it only has to fit
- * Solana's 200k default on its own. It is more expensive than a mint because it
- * evaluates the multiplier twice (now, and one interval ahead) and makes two
- * Token-2022 CPIs.
+ * Not user-facing and composes with nothing, so it only has to fit Solana's
+ * 200k default on its own. It was ~104k when the mirror pre-armed a second
+ * step; dropping the pre-arm (one `compute_multiplier`, one CPI) roughly halved
+ * it, so the ceiling is tightened accordingly rather than left slack.
  */
-const CRANK_CU_CEILING = 150_000;
+const CRANK_CU_CEILING = 80_000;
 
 describe("compute budget (streaming accrual hot paths)", () => {
   let h: BankrunHarness;
@@ -146,7 +146,7 @@ describe("compute budget (streaming accrual hot paths)", () => {
       100_000_000_000,
       TOKEN_PROGRAM_ID,
     );
-    await ensurePSMUnpaused(psm as any, psmConfigPda);
+    await ensurePSMUnpaused(psm, psmConfigPda);
   });
 
   after(() => {
@@ -274,7 +274,7 @@ describe("compute budget (streaming accrual hot paths)", () => {
     );
     await seedBuffer();
     await mintOkuMViaProgram(
-      psm as any,
+      psm,
       user,
       new BN(10_000_000),
       psmConfigPda,
@@ -395,7 +395,7 @@ describe("compute budget (streaming accrual hot paths)", () => {
       .transaction();
     const syncSim = await simulateTx(h, syncTx, [orchestrator]);
     expect(syncSim.error).to.be.null;
-    record("sync_display_multiplier (2 CPIs)", syncSim.computeUnits);
+    record("sync_display_multiplier (1 CPI)", syncSim.computeUnits);
 
     // The crank is permissionless and runs ~1440x/day. It is measured in the
     // two-rpow overhang branch here, which is its worst case.

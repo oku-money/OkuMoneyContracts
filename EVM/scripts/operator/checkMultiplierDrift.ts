@@ -48,6 +48,7 @@ import { summarizeLedger } from "../utils/carryLedger";
 import { CHAIN_METADATA } from "../config/chains";
 import { readSvmSchedule } from "../utils/svmValue";
 import { SVM_CHAIN_KEY } from "../utils/globalValue";
+import { parseChainsEnv } from "../config/epochChains";
 import { effectiveRate as mirrorEffectiveRate } from "@okumoney/yield-tooling";
 import {
   EPOCH_ANCHOR_UNIX as DEFAULT_EPOCH_ANCHOR_UNIX,
@@ -190,7 +191,21 @@ async function readSvm(): Promise<Reading | null> {
 async function main() {
   logger.header("Cross-chain multiplier drift check");
 
-  const requested = process.env.CHAINS?.split(",").map((s) => s.trim()).filter(Boolean);
+  // DELIBERATELY scans every chain in CHAIN_METADATA by default, NOT
+  // `config/epochChains.ts::participatingChains()` like the V̄ sampler and
+  // the schedule broadcaster do.
+  //
+  // Those two must agree on one narrow set, because a mismatch between the
+  // denominator and the rate's recipients corrupts the published rate. This
+  // is a read-only diagnostic with the opposite requirement: its whole job is
+  // to notice a chain running a multiplier it shouldn't be — including a
+  // chain that is NOT in the participating set (e.g. a stale pre-streaming
+  // mainnet deployment still carrying supply). Narrowing it to the
+  // participating set would blind it to precisely the drift worth finding.
+  // `parseChainsEnv` treats an empty `CHAINS=` as "unset" rather than as an
+  // empty scope — the inline split it replaced yielded `[]`, which filtered
+  // every chain out and reported "no chains readable" instead of scanning.
+  const requested = parseChainsEnv(process.env.CHAINS);
   const targets = Object.entries(CHAIN_METADATA).filter(
     ([name]) => !requested || requested.includes(name)
   );

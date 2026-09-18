@@ -770,6 +770,284 @@ and SVM clean-slate deploys; bootstrap the V̄ sampler on a schedule; run one
 full derive→broadcast→drift-check cycle against the live testnet + devnet
 deployment as the closing verification.
 
+**Second pass: the derive-once/broadcast architecture above shipped with four
+real defects, caught by an audit BEFORE deploy rather than during it — all
+fixed, with new tests, in this pass.** It had zero test coverage and was
+never executed, only typechecked, which is how these survived:
+
+1. **`deriveEpochSchedule.ts` had no CLI entrypoint** — the derivation step
+   was not invocable at all; only `broadcastSchedule.ts` had a `require.main`
+   block. Fixed: added the entrypoint, dispatching on `--phase`/`PHASE`.
+2. **Artifact collision.** Keyed on `epochId` alone, so `stage-settlement`
+   and `roll-epoch` for the SAME epoch wrote to the same file and the second
+   `saveArtifact` call threw. Fixed: artifact I/O split into a new,
+   deliberately hardhat-free `scripts/utils/epochArtifact.ts` (also fixes #5
+   below), keyed on `(epochId, phase)`.
+3. **Carry semantics inverted — the subtle one.** `deriveRollEpoch` set
+   `meta.carryInUsd` and `meta.carryForwardUsd` to the SAME value, and
+   `broadcastSchedule` fed that into the ledger, so `summarizeLedger()`'s
+   "carry to apply next epoch" actually returned THIS epoch's carry-IN,
+   silently double-counting it. Root cause: two genuinely different
+   quantities — the derivation-time residual (`RateWithCarry.carryForwardUsd`,
+   known immediately) and the ex-post reconciliation (`reconcileActualPayout`,
+   only knowable one epoch later) — were sharing one field. Fixed:
+   `CarryLedgerEntry` now has both `carryForwardUsd` (derivation-time,
+   currently always `0` since `deriveBaseRate` doesn't clamp) and a separate
+   `reconciledCarryUsd`, backfilled onto the PRIOR epoch's entry via the new
+   `backfillReconciliation()` once the NEXT roll computes it.
+   `deriveStageSettlement`'s carry-in default was also silently wrong for the
+   same reason — it read `outstandingCarryUsd` (the carry the CURRENTLY OPEN
+   epoch will produce) instead of `currentEpochCarryInUsd` (what was already
+   baked into that epoch's own target), which would have double-applied it.
+4. **Chain scoping was three independent copies of "every `CHAIN_METADATA`
+   key"** — `broadcastSchedule.ts::targets()`, `sampleGlobalValueUsd()`'s
+   default, and `deriveRollEpoch`'s call to it. That set includes `mainnet`,
+   `base`, `bsc` (the last two carrying the stale pre-streaming deployment).
+   Nothing guaranteed V̄'s denominator and the broadcast's recipient set were
+   ever the same set. Fixed: new `scripts/config/epochChains.ts` is the
+   single source of truth (`participatingChains()`, defaulting to
+   `sepolia`/`baseSepolia`/`arbSepolia`/`bscTestnet` + SVM devnet), refusing
+   any mainnet chain without an explicit `YES_MAINNET` gate (separate from
+   `mainnetGuard.ts`'s per-transaction check — this one guards the epoch's
+   SCOPE). All three call sites now import it.
+5. `broadcastSchedule.ts` transitively imported `hardhat` (via
+   `deriveEpochSchedule.ts`), so the chain-agnostic multi-chain driver could
+   not actually run standalone under `tsx`. Fixed as a side effect of #2's
+   `epochArtifact.ts` split.
+6. No npm scripts existed for the three new files. Added
+   `operator:deriveEpochSchedule`, `operator:broadcastSchedule` (`tsx`, not
+   `hardhat run` — see #5), `operator:applyScheduleSingleChain`.
+7. Zero test coverage for any of this — root cause of 1-4. Added:
+   `epochArtifact.test.ts`, `epochChains.test.ts`, ledger tests for
+   `upsertLedgerEntry`/`backfillReconciliation`/the carry split
+   (`carryLedger.test.ts`), and a full two-epoch derive→apply→reconcile cycle
+   in `operatorDrill.test.ts` exercising `deriveStageSettlement`/
+   `deriveRollEpoch` against a real local deployment (the actual multi-chain
+   subprocess fan-out in `broadcastSchedule.ts` remains untested by
+   necessity — it requires live per-chain RPCs, same limitation as
+   `sampleGlobalValueUsd()` / `checkMultiplierDrift.ts` above it).
+
+**Deploy prep executed this pass (still NOT an actual deploy):**
+`DEPLOYMENT_VERSION` bumped `v0.2` → `v0.3`. `addresses.json` pruned to
+`MockUSDC`-only entries for the four MVP testnets (`sepolia`, `baseSepolia`,
+`arbSepolia`, `bscTestnet` — deliberately so `deployMockUSDC`'s `tryAttach`
+reuses the existing token rather than deploying a new one), with `base`/`bsc`
+mainnet entries removed entirely; the full pre-streaming state archived to
+`addresses.pre-streaming.json` (see `scripts/config/addresses.README.md` for
+why leaving the four contract-address keys in place would have caused a v0.3
+deploy to silently reuse the live v0.2 contracts). Verified locally: the
+existing `deployDrill.test.ts` (8 tests) passes unchanged against the new
+CREATE2 salts, confirming the version bump doesn't break the deploy pipeline
+itself.
+
+**SVM program-ID rotation intentionally NOT executed this pass.**
+Close-existing-program → rotate keypair → `anchor keys sync` → update
+`declare_id!` is real surgery on committed program source and live program
+rent, explicitly out of scope for this pass ("do not recover/close the
+existing devnet deployments"). Left for the actual deploy day.
+
+**Third pass: verification of the second pass found two more defects, both
+introduced BY the second pass.** Recorded because the pattern is the point —
+both were at boundaries the fixes themselves never executed:
+
+1. **`EPOCH_PHASE` vs `PHASE`.** `broadcastSchedule.ts` set `EPOCH_PHASE` in
+   each subprocess's environment; `applyScheduleSingleChain.ts` reads
+   `parseArg("phase")`, which resolves to `PHASE`. Every EVM chain's
+   subprocess would have aborted with "Required: --phase". It appeared to
+   work only when the operator happened to have `PHASE=` set on the parent
+   process, which then leaked through `...process.env`. The env-var name is
+   produced by a camelCase→SCREAMING_SNAKE transform inside `cli.ts` and
+   appears literally nowhere at either end, so reading both files could not
+   reveal the mismatch — only executing it could. Fixed, and
+   `broadcastArtifact` now takes an injectable `SubprocessRunner` purely so
+   that boundary is assertable; `test/hardhat/unit/broadcastSchedule.test.ts`
+   executes the real function with a recording stub and pins the exact env
+   every chain receives. Verified by mutation: reintroducing `EPOCH_PHASE`
+   fails the suite.
+2. **The second pass made the legacy `runEpoch.ts` path worse.** It fixed
+   `deriveStageSettlement`'s carry-in source but not `runEpoch.ts`'s, which
+   still read `outstandingCarryUsd`. That was latent while the legacy path ran
+   alone (it only ever wrote `carryForwardUsd: 0`, so the value was always 0)
+   but became live the instant the new path started backfilling real non-zero
+   reconciliations into the SHARED ledger — the legacy path would then read
+   one and double-apply it. Both paths now use `currentEpochCarryInUsd`, and
+   `runRollEpoch`'s ledger write was aligned with `broadcastSchedule.ts`'s
+   (backfill-then-upsert, rather than a blind `appendLedgerEntry` that left
+   `reconciledCarryUsd` permanently undefined on every row it wrote).
+
+Also closed in the same pass: `sampleGlobalValueUsd` was only validating the
+DEFAULT chain list — an explicit `CHAINS=base,bsc` bypassed
+`participatingChains()` entirely, so the sampler could still include mainnets
+the broadcaster refuses, reopening the V̄-vs-recipients divergence one layer
+down. Explicit lists now route through the same validation.
+`EVM/.env.example` was created (it did not exist); the `SVM_*` bridge vars
+that `globalValue.ts` needs were previously documented only in code comments,
+so an operator had no way to discover that forgetting `SVM_EXPECTED=true`
+silently under-counts V̄ and over-pays yield on every chain.
+
+---
+
+### Contract & program audit — the on-chain MVP gate `[both]`
+
+Every prior pass in this cycle targeted off-chain tooling. This one audited
+the artifacts that actually ship. Two blockers per stack, all fixed, all with
+regression tests; where a fix guards behaviour rather than shape, the test was
+mutation-verified (reintroduce the bug, confirm the suite goes red).
+
+**EVM — `OkuDollar.withdraw()` returned assets instead of shares.**
+`shares = previewWithdraw(assets)` was immediately overwritten by
+`return _redeemShares(...)`, which returns OkuM. An EIP-4626 integrator got a
+number ~25% off at a 1.33 multiplier. No funds were ever at risk — the
+`Withdraw` event payload and all share accounting were correct — but the
+contract declares `IERC4626`. It survived because **not one test in the suite
+captured the return value of any of the four 4626 entry points**; they were
+called for effects and the result discarded. Fixed, plus return-value tests for
+all four, run at a non-unit multiplier so assets and shares can't coincide.
+
+**SVM — `initialize` was completely unauthenticated.** `role_admin: Signer`
+with no constraint of any kind. `PsmConfig` is a singleton PDA, deploy and
+init are necessarily separate transactions, and there is no `close_config` and
+no re-init — so the first caller to land it would own `role_admin` permanently
+AND choose `usdc_mint`, for which only the decimal count is validated (an
+attacker-controlled fake mint passes). The program ID would be unrecoverable.
+Now gated on the program's own BPF upgrade authority via `ProgramData`, which
+needs no environment-specific constant baked into the binary and grants no
+authority the holder didn't already have (they could replace the program
+outright). Anchor's `address =` constraint pins it to *this* program's
+ProgramData PDA, so a foreign program's account can't be substituted —
+tested. Related: `deploy/lib/initialize.ts` swallowed
+`AccountAlreadyInitialized` as success, which would have reported a hostile
+land-grab as a clean deploy; it now verifies the existing config's
+`role_admin` is the deployer before adopting it.
+
+Worth recording how that one was verified: bankrun loads programs under
+**BPFLoader2** and creates no ProgramData account at all, so a naive fix would
+have made `initialize` unreachable in all 118 tests. Rather than feature-flag
+the check off under `cfg(test)` — which would leave the deployed path
+untested — the harness seeds a real ProgramData account (`seedProgramData`),
+so the tests exercise the same code path production runs, including both
+negative cases.
+
+**SVM — CI was red.** `cargo fmt --all -- --check` failed with 21 diffs across
+5 files, and the workflow gates on it. Fixed.
+
+**EVM — `RedemptionQueue` held `OKUM_MINTER` plus a 1e27 minter allowance and
+contains no mint call.** It calls exactly two OkuMoney methods, `burn` and
+`okuMMultiplier`. The justifying comment ("RedemptionQueue mints rebase
+deltas") described the pre-streaming-accrual design. That was a live, unused
+mint-anything capability on an upgradeable contract whose `QUEUE_UPGRADER` is
+the same admin key. Removed, and asserted as an explicit **negative** check in
+both the deploy verifier and the drill — a future re-grant, or a stale
+deployment reused through the address book, now fails loudly rather than
+silently restoring it. The drill's end-to-end mint still passes on 20 grants
+instead of 21, which is the evidence the role was genuinely dead.
+
+**Both stacks — rate windows were unbounded, and the docs claimed otherwise.**
+`MathLib.compoundFor` asserts "every caller bounds `elapsed` via the mandatory
+rate-window timestamps"; `MAX_RATE`'s Rust doc says the bounded window "is what
+keeps the reachable domain small". Neither was enforced — the only check was
+`endTimestamp > now`. The `MAX_MULTIPLIER` clamp applies to `compoundFor`'s
+OUTPUT and cannot stop `rpow` overflowing internally. Measured empirically
+against the real crate: first failure at `MAX_RATE` after ~472,763,099 s
+(~15 years). Unreachable in practice, but the consequence is unrecoverable —
+once the multiplier read reverts, **every** recovery path reverts with it,
+including the emergency override, leaving only an upgrade. Now bounded at
+**90 days on both stacks** (~60x margin, 3x a production epoch), applied
+independently to the active window and to a successor's own
+`[rateEnd, pendingEnd]` span, since those are separate `rpow` calls. A Rust
+parity assertion pins the two constants together — a divergence here means one
+chain accepts a schedule the other rejects.
+
+That bound broke 45 Foundry tests, which is itself informative: the fixtures
+were opening single 100-year and 50-year windows, a shape the contracts will
+never see in production. They now walk long horizons via
+`_accrueAtCurrentRate`, chaining 90-day re-anchors exactly as the epoch model
+does. The 50-year compounding test now passes through ~203 chained anchors and
+still lands within tolerance — incidental evidence that re-anchoring is
+value-preserving at scale.
+
+**EVM — smaller hardening.** `LitePSM.processQueue` was the only
+multiplier-consuming path missing `whenYieldNotDistributing`, while
+`RedemptionQueue.processQueue` caches the multiplier once and pays real USDC
+against it. `RedemptionQueue.enqueue` didn't reject `address(0)`, which is the
+load-bearing "slot cleared" sentinel — a zero-user entry would be permanently
+unprocessable, unrescuable, and would permanently block `withdrawUsdc` via
+`WouldStrandQueue`. And `processQueue` now deletes the slot before the external
+transfer, restoring it on failure: re-entry was already closed, but only
+because the configured USDC has no transfer callback, which is a property of
+the token rather than of the code.
+
+**Deliberately deferred** (no fund risk, not blocking internal testing):
+`approveAmount` validation and a paid-vs-queued return signal on the PSM
+redeem path; `update_token_metadata`'s missing rent payer (it can only
+re-assert the existing name, not perform a real rename); Token-2022 CPI error
+opacity; and cold-ATA CU measurement — the measured worst case (80,883)
+excludes first-time ATA creation, which would add ~20-25k and breach the
+self-imposed 100k ceiling while remaining far inside the 200k limit.
+
+---
+
+## Deploy-day runbook — internal-testing MVP
+
+Ordered. Each step's verification is the gate for the next.
+
+**0. Pre-flight.** `EVM/.env` populated from `.env.example` (deployer key,
+four testnet RPCs, explorer keys). Confirm `DEPLOYMENT_VERSION === "v0.3"`
+and that `scripts/config/addresses.json` holds `MockUSDC`-only entries for
+`sepolia`/`baseSepolia`/`arbSepolia`/`bscTestnet`. Full suite green:
+`forge test` (577), `npm run test:unit` (184), SVM `npm test` (57 Rust + 118
+bankrun), `packages/yield-tooling` `npm test` (3290 differential vectors).
+
+**1. EVM deploy, one chain at a time.** `npm run deploy:sepolia`, then
+`baseSepolia`, `arbSepolia`, `bscTestnet`. Each run reuses the existing
+MockUSDC (address-book entry retained deliberately for this) and deploys the
+other four contracts at fresh v0.3 CREATE2 addresses. Verify: the deploy
+script's own 21-role-grant check passes, and `addresses.json` now carries all
+five contracts per chain.
+
+**2. SVM clean-slate deploy.** `admin:close-programs
+--allow-anchor-toml-ids` (recovers ~4.35 SOL of stranded ProgramData rent),
+rotate `target/deploy/lite_psm-keypair.json`, `anchor keys sync` — **NOT on
+the standard build path; must be run explicitly** — update `Anchor.toml` and
+`declare_id!`, then `npm run deploy:programs` → `deploy:init` →
+`admin:grant-roles:devnet`. Verify with `scripts/deploy/verify.ts` (now
+checks owner, size against `PSM_CONFIG_LEN`, and the `PsmConfig`
+discriminator — not just existence).
+
+**3. Wire the bridge env. THE EASIEST STEP TO SKIP AND THE MOST COSTLY.**
+Set `SVM_RPC_URL`, `SVM_LITE_PSM_PROGRAM_ID`, `SVM_OKU_M_MINT`, and
+`SVM_EXPECTED=true` in `EVM/.env`. Until `SVM_EXPECTED=true` is set, a
+missing/unreadable SVM config is a **warning**, SVM drops out of V̄, and every
+derived rate comes out too high. Verify: `npm run operator:sampleGlobalValue`
+lists `solana` in its per-chain breakdown with a non-zero value.
+
+**4. Bootstrap V̄.** `operator:sampleGlobalValue` on a schedule (hourly
+recommended). **At least two samples must exist spanning the measurement
+window before any derivation** — `samplesInWindow` hard-errors below two, by
+design. This is the one step with an unavoidable wall-clock wait.
+
+**5. Set the first schedule.** No epoch exists yet, so there is nothing to
+roll: use `operator:setOkuMYieldRate` directly per chain plus SVM's
+`admin:set-yield-rate`, to put every chain on one identical
+`(rate, rateEnd)`. Verify with `operator:checkMultiplierDrift` — it scans
+every chain in `CHAIN_METADATA`, deliberately wider than the participating
+set, so it will also flag the stale pre-streaming `base`/`bsc` mainnet
+deployments; that is expected and is not a failure of this deploy.
+
+**6. First full epoch cycle.** `operator:deriveEpochSchedule` with
+`PHASE=stage-settlement`, then `operator:broadcastSchedule` for that
+artifact; later `PHASE=roll-epoch` and broadcast again. Run both with
+`DRY_RUN=true` first — the broadcaster propagates it to every subprocess and
+skips the ledger write. For internal testing pass a short `EPOCH_LENGTH_SEC`
+(the contracts impose no epoch-length constraint; see
+`scripts/config/epoch.ts`), accepting that the settlement window scales down
+with it.
+
+**7. Close the loop.** After the first `roll-epoch` broadcast, confirm the
+carry ledger has exactly one row per epoch, that the prior row's
+`reconciledCarryUsd` was backfilled, and that `checkMultiplierDrift` reports
+agreement across all four testnets and SVM.
+
 ### RESOLVED: SVM `tsc --noEmit` now passes, tests AND scripts `[SVM]`
 
 Was 21 errors across the bankrun test files (`Program<LitePsm>` vs

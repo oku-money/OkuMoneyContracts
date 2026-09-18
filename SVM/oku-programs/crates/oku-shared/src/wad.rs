@@ -310,7 +310,9 @@ mod tests {
         // a differential test, no dev-dependency required.
         let mut out: u128 = 0;
         for _ in 0..2 {
-            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             out = (out << 64) | ((*state >> 33) as u64 as u128);
         }
         out
@@ -330,8 +332,16 @@ mod tests {
         for _ in 0..20_000 {
             let a = lcg(&mut s);
             let b = lcg(&mut s);
-            assert_eq!(mul_div_wad_floor(a, b), oracle_mul_div(a, b, false), "floor a={a} b={b}");
-            assert_eq!(mul_div_wad_half_up(a, b), oracle_mul_div(a, b, true), "half a={a} b={b}");
+            assert_eq!(
+                mul_div_wad_floor(a, b),
+                oracle_mul_div(a, b, false),
+                "floor a={a} b={b}"
+            );
+            assert_eq!(
+                mul_div_wad_half_up(a, b),
+                oracle_mul_div(a, b, true),
+                "half a={a} b={b}"
+            );
         }
     }
 
@@ -343,15 +353,32 @@ mod tests {
         for _ in 0..20_000 {
             let amount = lcg(&mut s) % (u64::MAX as u128);
             let mult = lcg(&mut s) % crate::constants::MAX_MULTIPLIER;
-            assert_eq!(mul_div_wad_floor(amount, mult), oracle_mul_div(amount, mult, false));
-            assert_eq!(mul_div_wad_half_up(amount, mult), oracle_mul_div(amount, mult, true));
+            assert_eq!(
+                mul_div_wad_floor(amount, mult),
+                oracle_mul_div(amount, mult, false)
+            );
+            assert_eq!(
+                mul_div_wad_half_up(amount, mult),
+                oracle_mul_div(amount, mult, true)
+            );
         }
     }
 
     #[test]
     fn identity_at_precision() {
-        for a in [0u128, 1, 12_345, PRECISION, crate::constants::MAX_MULTIPLIER, u64::MAX as u128] {
-            assert_eq!(mul_div_wad_floor(a, PRECISION), Some(a), "floor identity a={a}");
+        for a in [
+            0u128,
+            1,
+            12_345,
+            PRECISION,
+            crate::constants::MAX_MULTIPLIER,
+            u64::MAX as u128,
+        ] {
+            assert_eq!(
+                mul_div_wad_floor(a, PRECISION),
+                Some(a),
+                "floor identity a={a}"
+            );
         }
     }
 
@@ -381,8 +408,14 @@ mod tests {
 
     #[test]
     fn zero_propagates() {
-        assert_eq!(mul_div_wad_floor(0, crate::constants::MAX_MULTIPLIER), Some(0));
-        assert_eq!(mul_div_wad_floor(crate::constants::MAX_MULTIPLIER, 0), Some(0));
+        assert_eq!(
+            mul_div_wad_floor(0, crate::constants::MAX_MULTIPLIER),
+            Some(0)
+        );
+        assert_eq!(
+            mul_div_wad_floor(crate::constants::MAX_MULTIPLIER, 0),
+            Some(0)
+        );
         // half-up of zero is still zero: floor(0 + 5e17 / 1e18) == 0
         assert_eq!(mul_div_wad_half_up(0, 0), Some(0));
     }

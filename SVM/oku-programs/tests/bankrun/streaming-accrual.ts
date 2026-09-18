@@ -72,6 +72,11 @@ type Keypair = anchor.web3.Keypair;
 
 const DAY = 86_400;
 
+/// Mirrors `oku_shared::MAX_RATE_WINDOW_SECONDS` and EVM's
+/// `Constants.MAX_RATE_WINDOW`. Hardcoded here rather than imported so a
+/// silent change on either stack fails these tests instead of following along.
+const MAX_RATE_WINDOW_SECONDS = 90 * DAY;
+
 describe("streaming accrual (continuous rate schedule)", () => {
   let h: BankrunHarness;
   let psm: Program<LitePsm>;
@@ -431,6 +436,64 @@ describe("streaming accrual (continuous rate schedule)", () => {
   it("rejects a halted rate that carries a window", async () => {
     const end = (await nowTs()) + DAY;
     await expectBankrunError(() => setRate(PRECISION, end), "EndTimestampNotAllowed");
+  });
+
+  // ── MAX_RATE_WINDOW_SECONDS (90 days) ─────────────────────────────────────
+  //
+  // `MAX_RATE`'s own doc claimed the bounded window is "what keeps the
+  // reachable domain small", but nothing enforced a maximum — only
+  // `end_timestamp > now_ts`. `compound_for` clamps its OUTPUT to
+  // MAX_MULTIPLIER, which cannot stop `rpow` failing internally on a huge
+  // `elapsed` (measured: first `None` at ~15 years at MAX_RATE). Once that
+  // happens every schedule-rewriting instruction re-anchors through
+  // `multiplier::at` and fails too, including the emergency override.
+  //
+  // Must match EVM's `Constants.MAX_RATE_WINDOW` exactly — a divergence means
+  // one chain accepts a window the other rejects.
+
+  it("accepts a rate window of exactly MAX_RATE_WINDOW_SECONDS", async () => {
+    const start = await nowTs();
+    await setRate(ratePerSecondForApy(0.05), start + MAX_RATE_WINDOW_SECONDS);
+    const sched = await fetchSchedule();
+    expect(Number(sched.rateEnd)).to.equal(start + MAX_RATE_WINDOW_SECONDS);
+  });
+
+  it("rejects a rate window one second beyond MAX_RATE_WINDOW_SECONDS", async () => {
+    const start = await nowTs();
+    await expectBankrunError(
+      () => setRate(ratePerSecondForApy(0.05), start + MAX_RATE_WINDOW_SECONDS + 1),
+      "RateWindowTooLong",
+    );
+  });
+
+  it("bounds the SUCCESSOR's own window independently of the active one", async () => {
+    const start = await nowTs();
+    const rateEnd = start + MAX_RATE_WINDOW_SECONDS;
+
+    // Two chained maximal windows are fine — each is a separately bounded
+    // `rpow` call, not one 180-day call.
+    await setRateWithSuccessor(
+      ratePerSecondForApy(0.05),
+      rateEnd,
+      ratePerSecondForApy(0.02),
+      rateEnd + MAX_RATE_WINDOW_SECONDS,
+    );
+    const sched = await fetchSchedule();
+    expect(Number(sched.pendingRateEnd)).to.equal(rateEnd + MAX_RATE_WINDOW_SECONDS);
+
+    // One second beyond the successor's own span: rejected.
+    const start2 = await nowTs();
+    const rateEnd2 = start2 + DAY;
+    await expectBankrunError(
+      () =>
+        setRateWithSuccessor(
+          ratePerSecondForApy(0.05),
+          rateEnd2,
+          ratePerSecondForApy(0.02),
+          rateEnd2 + MAX_RATE_WINDOW_SECONDS + 1,
+        ),
+      "RateWindowTooLong",
+    );
   });
 
   it("allows halting (rate == PRECISION, end == 0)", async () => {

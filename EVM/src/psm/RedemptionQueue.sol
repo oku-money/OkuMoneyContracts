@@ -167,6 +167,18 @@ contract RedemptionQueue is
     /// @dev Tokens must already be in this contract before calling (PSM transfers them first).
     ///      Record-only: stores the raw OkuM amount and pushes an entry.
     function enqueue(address user, uint256 okuMTokenAmount) external onlyRole(Roles.QUEUE_PSM) {
+        // `address(0)` is the sentinel for "slot cleared" (see `processQueue`'s
+        // AlreadyCleared branch, `rescueQueueEntry`, and `advanceHead`). A
+        // zero-user entry would therefore be permanently unprocessable AND
+        // unrescuable, while `totalQueuedOkuM` below is never decremented for
+        // it — permanently inflating `totalQueuedUsdc()` and so permanently
+        // blocking `LitePSM.withdrawUsdc` via WouldStrandQueue.
+        //
+        // Unreachable today (the sole caller passes `msg.sender`), but this is
+        // a role-gated external entry point and the sentinel collision is
+        // load-bearing, so the invariant is enforced here rather than assumed.
+        if (user == address(0)) revert Errors.ZeroAddress();
+
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         uint256 position = $.queueTail;
         $.queue[position] =
@@ -246,8 +258,25 @@ contract RedemptionQueue is
             // ERC-20 whose `transferFrom` returns `false` on failure rather than
             // reverting. Hardened here via SafeERC20 to be uniform across both
             // failure shapes.
+            // CHECKS-EFFECTS-INTERACTIONS: clear the slot BEFORE the external
+            // USDC transfer, and restore it if the transfer fails.
+            //
+            // Re-entry is closed today by several independent facts — this
+            // function is `nonReentrant`, `rescueQueueEntry` shares the same
+            // guard slot, `LitePSM.redeemOkuM` is blocked by LitePSM's own
+            // guard held by the enclosing `LitePSM.processQueue`, and Circle
+            // USDC has no transfer callback. But the last of those is a
+            // property of the *configured token*, not of this code, and
+            // `usdc` is set at init. Ordering state-before-interaction costs
+            // nothing and removes the dependency on that assumption.
+            delete $.queue[i];
+
             bool ok = usdcContract.trySafeTransferFrom(msg.sender, entry.user, usdcAmount);
             if (!ok) {
+                // Restore the entry: the OkuM stays escrowed and the slot
+                // remains claimable by `rescueQueueEntry`. `entry` is a memory
+                // copy taken before the delete, so this is a faithful restore.
+                $.queue[i] = entry;
                 emit RedemptionSkipped(i, RedemptionSkipReason.TransferFailed);
                 continue;
             }
@@ -260,7 +289,6 @@ contract RedemptionQueue is
                 entry.user, entry.okuMAmount, dollarValue18, usdcAmount, waitTime
             );
 
-            delete $.queue[i];
             usdcBalance -= usdcAmount;
         }
 

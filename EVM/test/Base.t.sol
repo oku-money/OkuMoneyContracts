@@ -34,6 +34,7 @@ abstract contract BaseTest is Test, Actors {
     uint256 public constant MAX_SUPPLY = TestConstants.MAX_SUPPLY;
     uint256 public constant DECIMAL_MULTIPLIER = TestConstants.DECIMAL_MULTIPLIER;
     uint256 public constant MAX_RATE = TestConstants.MAX_RATE;
+    uint256 public constant MAX_RATE_WINDOW = TestConstants.MAX_RATE_WINDOW;
     uint256 public constant BASIS_POINTS = TestConstants.BASIS_POINTS;
 
     // ============ Re-exported Roles ============
@@ -278,6 +279,39 @@ abstract contract BaseTest is Test, Actors {
         vm.roll(block.number + 1);
     }
 
+    /// @notice Advance `secondsToAccrue` of real compounding at the CURRENTLY
+    ///         active rate, re-anchoring as often as the rate-window bound
+    ///         requires.
+    /// @dev A single `setOkuMYieldRate` window may not exceed
+    ///      `Constants.MAX_RATE_WINDOW` (90 days) — see that constant for why
+    ///      an unbounded window is unrecoverable. Horizons longer than that
+    ///      must therefore be walked in chunks, re-anchoring at each boundary.
+    ///
+    ///      This is not a workaround for the bound; it is what production
+    ///      does. The epoch model re-anchors at every boundary, so a 25-year
+    ///      fixture built from ~101 chained windows exercises the real code
+    ///      path, whereas the single 100-year window these tests used before
+    ///      exercised a shape the contracts will never see in production.
+    ///
+    ///      Re-anchoring is value-preserving by construction (each write
+    ///      snapshots the multiplier reached so far into the new base), so the
+    ///      endpoint matches a hypothetical single long window to within
+    ///      per-anchor rounding dust.
+    function _accrueAtCurrentRate(uint256 secondsToAccrue) internal {
+        uint256 rate = okuMoney.okuMRatePerSecond();
+        require(rate > PRECISION, "no active yielding rate to accrue at");
+
+        uint256 remaining = secondsToAccrue;
+        while (remaining > 0) {
+            uint256 step = remaining > MAX_RATE_WINDOW ? MAX_RATE_WINDOW : remaining;
+            // Re-anchor at the same rate for a window exactly covering `step`.
+            vm.prank(rebaser);
+            okuMoney.setOkuMYieldRate(rate, block.timestamp + step);
+            vm.warp(block.timestamp + step);
+            remaining -= step;
+        }
+    }
+
     /// @notice Elevate the (single) multiplier to at least `targetMultiplier`.
     /// @dev SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` is exactly
     ///      `okuMoney.okuMMultiplier()`, so this drives the OkuMoney rate schedule.
@@ -291,19 +325,40 @@ abstract contract BaseTest is Test, Actors {
         uint256 current = okuMoney.okuMMultiplier();
         if (targetMultiplier <= current) return;
 
-        // Set the active rate to MAX_RATE with a window comfortably beyond the loop's
-        // own safety bound below, so the multiplier compounds continuously for as
-        // long as this helper might need. Then warp forward enough seconds to clear
-        // the target. We loop in case rounding leaves us short on the first warp.
-        vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(MAX_RATE, block.timestamp + 365 days * 5);
-
+        // Accrue at MAX_RATE in windows of at most `Constants.MAX_RATE_WINDOW`,
+        // re-anchoring whenever the current window is exhausted.
+        //
+        // This helper used to open one 5-year window, which the contracts now
+        // reject (`RateWindowTooLong`) — a single unbounded window can drive
+        // `MathLib.rpow` into overflow, and once `okuMMultiplier()` reverts
+        // every recovery path reverts with it. Chunking is also what production
+        // actually does: the epoch model re-anchors at every boundary, so this
+        // is now a more faithful fixture than the single long window was, not
+        // merely a workaround for the new bound.
+        //
+        // Re-anchoring is value-preserving by construction — each
+        // `setOkuMYieldRate` snapshots the multiplier reached so far into the
+        // new base — so compounding across N chunks lands at the same place as
+        // one long window, modulo per-anchor rounding dust.
         uint256 elapsed = 1;
+        uint256 totalElapsed = 0;
+        uint256 windowRemaining = 0;
+
         while (okuMoney.okuMMultiplier() < targetMultiplier) {
-            vm.warp(block.timestamp + elapsed);
+            if (windowRemaining == 0) {
+                vm.prank(rebaser);
+                okuMoney.setOkuMYieldRate(MAX_RATE, block.timestamp + MAX_RATE_WINDOW);
+                windowRemaining = MAX_RATE_WINDOW;
+            }
+
+            uint256 step = elapsed > windowRemaining ? windowRemaining : elapsed;
+            vm.warp(block.timestamp + step);
+            windowRemaining -= step;
+            totalElapsed += step;
             elapsed *= 2;
+
             // Safety: bound the loop in case targetMultiplier is unreachable.
-            require(elapsed < 365 days * 4, "target unreachable");
+            require(totalElapsed < 365 days * 4, "target unreachable");
         }
 
         // Snapshot the achieved multiplier and stop accrual so subsequent reads stay

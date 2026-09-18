@@ -11,19 +11,28 @@
  *
  * Usage:
  *   npx hardhat run scripts/operator/sampleGlobalValue.ts
- *   CHAINS=base,arbitrum npx hardhat run scripts/operator/sampleGlobalValue.ts
+ *   CHAINS=sepolia,baseSepolia npx hardhat run scripts/operator/sampleGlobalValue.ts
  *
  * Env:
- *   CHAINS=base,arbitrum,...   chains to sample (default: all in the address book)
+ *   CHAINS=sepolia,baseSepolia,...  chains to sample. Default AND explicit
+ *     values both resolve through `config/epochChains.ts::participatingChains()`
+ *     — the same set `broadcastSchedule.ts` targets, so V̄'s denominator can
+ *     never cover a different set of chains than the rate is published to.
+ *     Unknown chain names are rejected; mainnets require `YES_MAINNET=true`.
  */
 
 import { logger } from "../utils/logger";
 import { sampleGlobalValueUsd, appendSample } from "../utils/globalValue";
+import { parseChainsEnv } from "../config/epochChains";
 
 async function main() {
   logger.header("Cross-chain global value sample");
 
-  const requested = process.env.CHAINS?.split(",").map((s) => s.trim()).filter(Boolean);
+  // `parseChainsEnv`, not an inline split: an empty `CHAINS=` must mean "use
+  // the default participating set", not "sample nothing". The inline form
+  // yields `[]`, which is a valid-looking empty scope that would produce a
+  // zero-chain V̄ sample rather than falling back.
+  const requested = parseChainsEnv(process.env.CHAINS);
   const sample = await sampleGlobalValueUsd(requested);
 
   const chainsRead = Object.keys(sample.perChain);

@@ -20,10 +20,17 @@ import {
   unpackMint,
   MINT_SIZE,
 } from "@solana/spl-token";
-import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
-import { startBankrun, BankrunHarness, createMintViaBankrun } from "../shared/bankrun";
+import {
+  startBankrun,
+  BankrunHarness,
+  createMintViaBankrun,
+  seedProgramData,
+  programDataAddress,
+  fundKeypairs,
+} from "../shared/bankrun";
 import { initializePsm, DECIMALS, MAX_SUPPLY, MINTER_ALLOWANCE } from "../shared/setup";
 
 
@@ -79,28 +86,37 @@ describe("init invariants (OkuM mint extensions)", () => {
     expect(config.okuMMint.equals(okuMMint)).to.be.true;
   });
 
-  describe("authority validation", () => {
-    // Base set of valid granular-authority params, matching
-    // `initializePsm` in shared/setup.ts. Each test below overrides
-    // exactly one field with an invalid value and expects `initialize`
-    // to revert with `InvalidAuthority` before any state is written.
-    function baseParams(warm: PublicKey, cold: PublicKey, orchestrator: PublicKey) {
-      return {
-        maxSupply: MAX_SUPPLY,
-        minterAllowance: MINTER_ALLOWANCE,
-        pauser: warm,
-        unpauser: cold,
-        freezer: warm,
-        unfreezer: cold,
-        bufferDepositor: orchestrator,
-        bufferWithdrawer: cold,
-        capManager: cold,
-        allowanceManager: cold,
-        rebaser: orchestrator,
-        okuMUri: "",
-      };
-    }
+  // Base set of valid granular-authority params, matching `initializePsm`
+  // in shared/setup.ts. The `authority validation` tests below override
+  // exactly one field with an invalid value and expect `initialize` to
+  // revert with `InvalidAuthority` before any state is written; the
+  // `deploy-authority gate` tests use it unmodified.
+  //
+  // Declared at THIS level, not inside `authority validation` — when it was
+  // scoped to that block, the deploy-authority tests threw
+  // `ReferenceError: baseParams is not defined`, which has no
+  // `error.errorCode`, so their `expect(...errorCode.code)` assertions
+  // compared `undefined` and the negative tests passed for entirely the
+  // wrong reason. A test that passes because the harness threw is worse
+  // than no test at all.
+  function baseParams(warm: PublicKey, cold: PublicKey, orchestrator: PublicKey) {
+    return {
+      maxSupply: MAX_SUPPLY,
+      minterAllowance: MINTER_ALLOWANCE,
+      pauser: warm,
+      unpauser: cold,
+      freezer: warm,
+      unfreezer: cold,
+      bufferDepositor: orchestrator,
+      bufferWithdrawer: cold,
+      capManager: cold,
+      allowanceManager: cold,
+      rebaser: orchestrator,
+      okuMUri: "",
+    };
+  }
 
+  describe("authority validation", () => {
     async function attemptInitialize(
       params: ReturnType<typeof baseParams>
     ): Promise<void> {
@@ -125,10 +141,15 @@ describe("init invariants (OkuM mint extensions)", () => {
         TOKEN_PROGRAM_ID
       );
 
+      // `initialize` requires its signer to be the program's upgrade
+      // authority; bankrun creates no ProgramData account, so seed one.
+      await seedProgramData(h, program.programId, payer.publicKey);
+
       await program.methods
         .initialize(params)
         .accountsPartial({
           roleAdmin: payer.publicKey,
+          programData: programDataAddress(program.programId),
           config: configPda,
           usdcMint,
           okuMMint,
@@ -216,6 +237,121 @@ describe("init invariants (OkuM mint extensions)", () => {
 
       // Should not throw.
       await attemptInitialize(params);
+    });
+  });
+
+  // ── Deploy-authority gate ────────────────────────────────────────────────
+  //
+  // `initialize` is otherwise a land-grab: `PsmConfig` is a singleton PDA at
+  // ["psm_config"], deploy and initialize are necessarily separate
+  // transactions, and there is no `close_config` or re-init path. Whoever
+  // landed it first would own `role_admin` permanently AND choose
+  // `usdc_mint` — for which only the decimal count is checked, so an
+  // attacker-controlled fake mint passes. The program now requires the
+  // signer to be its own BPF upgrade authority.
+
+  describe("deploy-authority gate", () => {
+    async function attemptInitializeAs(
+      roleAdmin: Keypair,
+      upgradeAuthority: PublicKey,
+      programDataOverride?: PublicKey
+    ): Promise<void> {
+      const usdcMint = await createMintViaBankrun(
+        h,
+        payer.publicKey,
+        null,
+        6,
+        Keypair.generate(),
+        TOKEN_PROGRAM_ID
+      );
+      const okuMMintKeypair = Keypair.generate();
+      const [configPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("psm_config")],
+        program.programId
+      );
+      const vaultUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint,
+        configPda,
+        true,
+        TOKEN_PROGRAM_ID
+      );
+
+      await seedProgramData(h, program.programId, upgradeAuthority);
+
+      const warm = Keypair.generate().publicKey;
+      const cold = Keypair.generate().publicKey;
+      const orchestrator = Keypair.generate().publicKey;
+
+      await program.methods
+        .initialize(baseParams(warm, cold, orchestrator))
+        .accountsPartial({
+          roleAdmin: roleAdmin.publicKey,
+          programData: programDataOverride ?? programDataAddress(program.programId),
+          config: configPda,
+          usdcMint,
+          okuMMint: okuMMintKeypair.publicKey,
+          vaultUsdc: vaultUsdcAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([okuMMintKeypair, roleAdmin])
+        .rpc();
+    }
+
+    it("rejects a signer who is NOT the program's upgrade authority", async () => {
+      h = await startBankrun();
+      program = h.program;
+      payer = h.payer;
+
+      const attacker = Keypair.generate();
+      await fundKeypairs(h, [attacker], 10 * LAMPORTS_PER_SOL);
+
+      // ProgramData names the legitimate deployer; the attacker signs.
+      try {
+        await attemptInitializeAs(attacker, payer.publicKey);
+        expect.fail("Should have rejected a non-upgrade-authority initializer");
+      } catch (err: any) {
+        expect(err?.error?.errorCode?.code).to.equal("Unauthorized");
+      }
+    });
+
+    it("rejects a ProgramData account belonging to a DIFFERENT program", async () => {
+      h = await startBankrun();
+      program = h.program;
+      payer = h.payer;
+
+      // Attacker controls some other program and is its upgrade authority.
+      // Substituting its ProgramData must not satisfy the check — the
+      // address is pinned to THIS program's PDA on-chain.
+      const attacker = Keypair.generate();
+      await fundKeypairs(h, [attacker], 10 * LAMPORTS_PER_SOL);
+      const foreignProgramId = Keypair.generate().publicKey;
+      await seedProgramData(h, foreignProgramId, attacker.publicKey);
+
+      try {
+        await attemptInitializeAs(
+          attacker,
+          attacker.publicKey,
+          programDataAddress(foreignProgramId)
+        );
+        expect.fail("Should have rejected a foreign program's ProgramData");
+      } catch (err: any) {
+        // Anchor's `address =` constraint surfaces as ConstraintAddress.
+        expect(["Unauthorized", "ConstraintAddress"]).to.include(
+          err?.error?.errorCode?.code
+        );
+      }
+    });
+
+    it("accepts the program's actual upgrade authority (control case)", async () => {
+      h = await startBankrun();
+      program = h.program;
+      payer = h.payer;
+
+      // Should not throw: signer IS the named upgrade authority.
+      await attemptInitializeAs(payer, payer.publicKey);
     });
   });
 });

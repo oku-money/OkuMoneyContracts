@@ -52,6 +52,26 @@ pub const PRECISION: u128 = 1_000_000_000_000_000_000;
 /// EVM mirror: `EVM/src/lib/Constants.sol:45`.
 pub const MAX_RATE: u128 = PRECISION + 100_000_000_000;
 
+/// Maximum length of a single rate window, in seconds. **90 days.**
+///
+/// The comment on `MAX_RATE` above says the bounded rate window "is what keeps
+/// the reachable domain small" — but nothing actually enforced a bound;
+/// `validate_rate_window` only checked `end_timestamp > now_ts`. This makes
+/// that documented invariant real.
+///
+/// `compound_for` clamps its OUTPUT to `MAX_MULTIPLIER`, which cannot prevent
+/// `rpow` failing internally on a huge `elapsed`. Measured empirically against
+/// this crate, `compound_for` first returns `None` at `MAX_RATE` after
+/// ~472,763,099 s (~15 years). Once that happens there is no recovery: every
+/// instruction that could rewrite the schedule re-anchors through
+/// `multiplier::at` and so fails too, including the `set_okum_multiplier`
+/// emergency override. 90 days keeps ~60x margin while comfortably exceeding
+/// the 30-day production epoch.
+///
+/// EVM mirror: `Constants.MAX_RATE_WINDOW` in `EVM/src/lib/Constants.sol`.
+/// These MUST agree or the two stacks accept different schedules.
+pub const MAX_RATE_WINDOW_SECONDS: i64 = 90 * 24 * 60 * 60;
+
 /// Basis-points denominator (10_000 = 100%). Mirrors EVM
 /// `Constants.BASIS_POINTS`.
 ///
@@ -92,13 +112,42 @@ pub const TOKEN_DECIMALS: u8 = 6;
 mod tests {
     use super::*;
 
-    /// The three constants that MUST equal their EVM counterparts exactly.
+    /// The constants that MUST equal their EVM counterparts exactly.
     /// If one of these fails, cross-chain multiplier agreement is broken.
     #[test]
     fn evm_parity_constants() {
         assert_eq!(PRECISION, 10u128.pow(18), "EVM Constants.sol:37");
-        assert_eq!(MAX_RATE, 10u128.pow(18) + 10u128.pow(11), "EVM Constants.sol:45");
+        assert_eq!(
+            MAX_RATE,
+            10u128.pow(18) + 10u128.pow(11),
+            "EVM Constants.sol:45"
+        );
         assert_eq!(MAX_MULTIPLIER, 10u128.pow(24), "EVM Constants.sol:58");
+        // Not a multiplier-math constant, but a divergence here means the two
+        // stacks ACCEPT DIFFERENT SCHEDULES — one chain would take a window the
+        // other rejects, which is the same class of cross-chain inconsistency.
+        assert_eq!(
+            MAX_RATE_WINDOW_SECONDS,
+            90 * 24 * 60 * 60,
+            "EVM Constants.MAX_RATE_WINDOW (90 days)"
+        );
+    }
+
+    /// The window bound must sit far enough inside `compound_for`'s actual
+    /// failure point to be a meaningful safety margin rather than a
+    /// coincidence. Measured empirically: at `MAX_RATE`, `compound_for` first
+    /// returns `None` at ~472,763,099 s (~15 years).
+    #[test]
+    fn max_rate_window_leaves_large_margin_below_rpow_failure() {
+        let measured_failure_secs: i64 = 472_763_099;
+        let margin = measured_failure_secs / MAX_RATE_WINDOW_SECONDS;
+        assert!(
+            margin >= 50,
+            "window bound leaves only {}x margin below the rpow failure point",
+            margin
+        );
+        // And the bound must still comfortably exceed a production epoch.
+        assert!(MAX_RATE_WINDOW_SECONDS >= 30 * 24 * 60 * 60);
     }
 
     /// Documents the reason PRECISION moved from 1e9 to 1e18: at 1e9 the
@@ -110,6 +159,9 @@ mod tests {
         let ulp_1e9 = (1.0_f64 + 1e-9_f64).powi(31_536_000) - 1.0;
         let ulp_1e18 = (1.0_f64 + 1e-18_f64).powi(31_536_000) - 1.0;
         assert!(ulp_1e9 > 0.03, "1e9 ulp should be >3% APY, got {ulp_1e9}");
-        assert!(ulp_1e18 < 1e-9, "1e18 ulp should be negligible, got {ulp_1e18}");
+        assert!(
+            ulp_1e18 < 1e-9,
+            "1e18 ulp should be negligible, got {ulp_1e18}"
+        );
     }
 }

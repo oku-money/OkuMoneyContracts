@@ -67,7 +67,7 @@ import { deriveSettlementRate, distributedUsdOverWindow, RateSegment } from "../
 import { deriveBaseRate, floatRateToBigint, DEFAULT_SETTLEMENT_FRACTION, EpochGrid } from "../utils/epochSchedule";
 import { samplesInWindow, valueAt, sampleGlobalValueUsd } from "../utils/globalValue";
 import { reconcileActualPayout } from "../utils/yieldRate";
-import { appendLedgerEntry, buildLedgerEntry, summarizeLedger } from "../utils/carryLedger";
+import { upsertLedgerEntry, backfillReconciliation, buildLedgerEntry, summarizeLedger } from "../utils/carryLedger";
 
 async function readSchedule(okuM: any) {
   const [rateBn, anchorBn, rateEndBn, baseMultBn, totalSupplyBn, multiplierBn] = await Promise.all([
@@ -117,7 +117,19 @@ export async function runStageSettlement(
   // the contract's `block.timestamp`-anchored schedule actually uses,
   // producing a window with `now < anchorSec` and breaking the sample query.
   const now = (await ethers.provider.getBlock("latest"))!.timestamp;
-  const carryInUsd = opts.carryInUsd ?? summarizeLedger().outstandingCarryUsd;
+  // `currentEpochCarryInUsd`, NOT `outstandingCarryUsd` — same fix as
+  // `deriveEpochSchedule.ts::deriveStageSettlement`, kept in lockstep because
+  // BOTH paths write to the same carry ledger and an operator may use either.
+  //
+  // The carry relevant here is what was already folded into THIS epoch's
+  // target when its base rate was rolled. `outstandingCarryUsd` is the carry
+  // the open epoch will PRODUCE (pending ex-post reconciliation at the next
+  // roll) — applying it here would double-count it. This was latent while
+  // this path ran alone (it always wrote `carryForwardUsd: 0`, so
+  // `outstandingCarryUsd` was always 0), but became live the moment the
+  // derive/broadcast path started backfilling real non-zero reconciliations
+  // into the shared ledger. See carryLedger.ts's module doc.
+  const carryInUsd = opts.carryInUsd ?? summarizeLedger().currentEpochCarryInUsd;
   const adjustedTargetUsd = opts.realisedYieldUsd * conservativeFactor + carryInUsd;
 
   const segment: RateSegment = {
@@ -233,7 +245,9 @@ export async function runRollEpoch(
   // fresh rather than failing the whole roll.
   const priorSummary = summarizeLedger();
   let carryForwardUsd = 0;
+  let priorEpochId: string | undefined;
   if (priorSummary.latestEntry) {
+    priorEpochId = priorSummary.latestEntry.epochId;
     const priorTargetUsd = priorSummary.latestEntry.realisedYieldUsd + priorSummary.latestEntry.carryInUsd;
     // GLOBAL delta: the prior entry's own measuredAvgValueUsd was global, so
     // the multiplier's relative change against it (identical on every chain
@@ -243,7 +257,7 @@ export async function runRollEpoch(
       priorSummary.latestEntry.measuredAvgValueUsd *
       (schedule.currentMultiplierFloat / schedule.baseMultiplierFloat - 1);
     carryForwardUsd = reconcileActualPayout(priorTargetUsd, actualPaidUsd);
-    logger.info(`Ex-post reconciliation: target=$${priorTargetUsd.toFixed(2)} actual=$${actualPaidUsd.toFixed(2)} carryForward=$${carryForwardUsd.toFixed(2)}`);
+    logger.info(`Ex-post reconciliation of ${priorEpochId}: target=$${priorTargetUsd.toFixed(2)} actual=$${actualPaidUsd.toFixed(2)} reconciledCarry=$${carryForwardUsd.toFixed(2)}`);
   }
 
   const grid: EpochGrid = { epochStartSec: schedule.rateEndSec, epochLengthSec: opts.epochLengthSec, settlementFraction };
@@ -268,6 +282,16 @@ export async function runRollEpoch(
       pendingEndTimestamp: BigInt(baseEndNextSec),
     });
 
+    // Ledger write mirrors `broadcastSchedule.ts` exactly — backfill the
+    // PRIOR entry's ex-post reconciliation first, then upsert this epoch's
+    // entry with its own (not-yet-knowable) carryForward left at 0. Both
+    // paths share one ledger file, so they must produce identical state;
+    // this path previously used a blind `appendLedgerEntry` and never
+    // backfilled, which left `reconciledCarryUsd` permanently undefined on
+    // every entry it wrote.
+    if (priorEpochId) {
+      backfillReconciliation(priorEpochId, carryForwardUsd);
+    }
     const entry = buildLedgerEntry({
       epochId: opts.epochId ?? new Date().toISOString().slice(0, 10),
       realisedYieldUsd: opts.nextRealisedYieldUsd,
@@ -276,7 +300,7 @@ export async function runRollEpoch(
       conservativeFactor,
       result: { ratePerSecond: floatRateToBigint(rBaseNextFloat), carryForwardUsd: 0 },
     });
-    appendLedgerEntry(entry);
+    upsertLedgerEntry(entry);
   } else {
     logger.success("DRY_RUN=true — not submitting, ledger not updated");
   }

@@ -63,6 +63,21 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.enqueue(user1, 100e18);
     }
 
+    /// @notice `address(0)` is the "slot cleared" sentinel — it must never be
+    ///         storable as a real entry.
+    /// @dev A zero-user entry would be permanently unprocessable (processQueue
+    ///      soft-skips it as AlreadyCleared) AND unrescuable, while
+    ///      `totalQueuedOkuM` is never decremented for it — permanently
+    ///      inflating `totalQueuedUsdc()` and so permanently blocking
+    ///      `LitePSM.withdrawUsdc` via WouldStrandQueue. Unreachable via the
+    ///      sole caller today, but `enqueue` is a role-gated external entry
+    ///      point and the sentinel collision is load-bearing.
+    function test_Enqueue_RevertsOnZeroAddressUser() public {
+        _mintOkuMoney(address(redemptionQueue), 100e18);
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        redemptionQueue.enqueue(address(0), 100e18);
+    }
+
     function test_Enqueue_TransfersOkuMoney() public {
         uint256 amount = 100e18;
         // Pre-fund queue (simulating PSM already moved tokens there)

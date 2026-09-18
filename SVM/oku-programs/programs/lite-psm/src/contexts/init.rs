@@ -8,10 +8,50 @@ use anchor_spl::{
 };
 use oku_shared::TOKEN_DECIMALS;
 
+/// This program's ProgramData PDA: `[program_id]` under the BPF upgradeable
+/// loader. Computed rather than trusted from the caller, so `program_data`
+/// cannot be pointed at some OTHER program's account that happens to name the
+/// caller as its upgrade authority.
+fn program_data_address() -> Pubkey {
+    anchor_lang::solana_program::bpf_loader_upgradeable::get_program_data_address(&crate::ID)
+}
+
 #[derive(Accounts)]
 pub struct Initialize<'info> {
+    /// Becomes `config.role_admin` — the permanent root authority.
+    ///
+    /// MUST be the program's BPF upgrade authority (see `program_data`
+    /// below). Without that tie this instruction is a land-grab: `config` is
+    /// a singleton PDA at `["psm_config"]`, deploy and initialize are
+    /// necessarily separate transactions, and whoever lands `initialize`
+    /// first becomes `role_admin` permanently AND chooses `usdc_mint` — for
+    /// which only the decimal count is validated, so an attacker-controlled
+    /// fake mint passes. There is no `close_config` and no re-init, so the
+    /// program ID would be unrecoverable.
     #[account(mut)]
     pub role_admin: Signer<'info>,
+
+    /// The program's own ProgramData account, used only to prove
+    /// `role_admin` is the upgrade authority.
+    ///
+    /// Checked against the upgrade authority rather than a hardcoded
+    /// `const DEPLOY_AUTHORITY` so the binary is identical across devnet /
+    /// mainnet and there is no environment-specific constant to get wrong at
+    /// build time. Anyone who could pass this check could already replace the
+    /// whole program via `bpf_loader_upgradeable::Upgrade`, so it grants no
+    /// authority that wasn't already held — it just stops anyone ELSE
+    /// claiming the config.
+    ///
+    /// `Account<'info, ProgramData>` enforces `owner == BPFLoaderUpgradeable`
+    /// and the `ProgramData` discriminant; the `address =` constraint pins it
+    /// to THIS program's ProgramData PDA, so an unrelated program's account
+    /// can't be substituted.
+    #[account(
+        address = program_data_address() @ LitePsmError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(role_admin.key())
+            @ LitePsmError::Unauthorized,
+    )]
+    pub program_data: Account<'info, ProgramData>,
 
     #[account(
         init,

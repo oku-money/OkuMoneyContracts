@@ -123,6 +123,17 @@ pub enum LitePsmError {
     #[msg("A yielding rate requires an end timestamp in the future")]
     EndTimestampInPast,
 
+    /// A single rate window exceeded `MAX_RATE_WINDOW_SECONDS` (90 days).
+    ///
+    /// An unbounded window can drive `rpow` past 256 bits; once
+    /// `compute_multiplier` starts returning `None`, every instruction that
+    /// could rewrite the schedule re-anchors through `multiplier::at` and so
+    /// fails too — including the emergency override. Applies independently to
+    /// the active window and to a successor's own `[rate_end, pending_end]`
+    /// span. EVM: RateWindowTooLong()
+    #[msg("Rate window exceeds the maximum permitted length (90 days)")]
+    RateWindowTooLong,
+
     /// Tried to stage a successor while no active window exists.
     /// EVM: NoRateEndSet()
     #[msg("Cannot stage a successor: no active rate window is set")]

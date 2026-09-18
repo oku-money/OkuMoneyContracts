@@ -54,6 +54,9 @@
     "operator:psmOps": "hardhat run scripts/operator/psmOps.ts",
     "operator:vaultOps": "hardhat run scripts/operator/vaultOps.ts",
     "operator:runEpoch": "hardhat run scripts/operator/runEpoch.ts",
+    "operator:deriveEpochSchedule": "hardhat run scripts/operator/deriveEpochSchedule.ts",
+    "operator:broadcastSchedule": "tsx scripts/operator/broadcastSchedule.ts",
+    "operator:applyScheduleSingleChain": "hardhat run scripts/operator/applyScheduleSingleChain.ts",
     "operator:setOkuMMultiplier": "hardhat run scripts/operator/setOkuMMultiplier.ts",
     "operator:depositBuffer": "hardhat run scripts/operator/depositBuffer.ts",
     "operator:withdrawBuffer": "hardhat run scripts/operator/withdrawBuffer.ts",
@@ -89,6 +92,7 @@
     "hardhat-deploy": "0.12.4",
     "hardhat-deploy-ethers": "0.4.2",
     "ts-node": "10.9.2",
+    "tsx": "^4.21.0",
     "typechain": "8.3.2",
     "typescript": "5.6.3"
   },

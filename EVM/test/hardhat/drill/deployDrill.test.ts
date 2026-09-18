@@ -150,14 +150,39 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         }
     });
 
-    it("sets non-zero minter allowances for both minting contracts", async () => {
+    it("sets a non-zero minter allowance for LitePSM, the only minting contract", async () => {
         // `OkuMoney.mint` checks BOTH the OKUM_MINTER role and a separate
         // per-minter allowance, so a role grant alone is not sufficient —
         // without the allowance every mint reverts with ExceedsAllowance.
         const psmAllowance = await result.okuMoney.minterAllowance(await result.litePSM.getAddress());
-        const queueAllowance = await result.okuMoney.minterAllowance(await result.redemptionQueue.getAddress());
         expect(psmAllowance).to.be.greaterThan(0n);
-        expect(queueAllowance).to.be.greaterThan(0n);
+    });
+
+    it("grants RedemptionQueue NEITHER the minter role NOR an allowance — it only burns", async () => {
+        // RedemptionQueue previously received OKUM_MINTER plus a 1e27
+        // allowance, justified by a comment ("mints rebase deltas") describing
+        // the pre-streaming-accrual design. The current contract calls exactly
+        // two OkuMoney methods — `burn` and `okuMMultiplier` — so that was a
+        // live, unused mint-anything capability on an upgradeable contract.
+        //
+        // Asserted as an explicit NEGATIVE rather than just deleted from the
+        // positive matrix: a future re-grant, or a stale prior deployment
+        // being reused through the address book, must fail loudly rather than
+        // silently restoring the capability.
+        const queueAddr = await result.redemptionQueue.getAddress();
+        expect(
+            await result.okuMoney.hasRole(ROLES.OKUM_MINTER, queueAddr),
+            "RedemptionQueue must not hold OKUM_MINTER"
+        ).to.be.false;
+        expect(
+            await result.okuMoney.minterAllowance(queueAddr),
+            "RedemptionQueue must have zero minter allowance"
+        ).to.equal(0n);
+        // ...but it MUST still be able to burn, or processQueue reverts.
+        expect(
+            await result.okuMoney.hasRole(ROLES.OKUM_BURNER, queueAddr),
+            "RedemptionQueue still needs OKUM_BURNER"
+        ).to.be.true;
     });
 
     it("does NOT grant privileged roles to an unrelated address", async () => {

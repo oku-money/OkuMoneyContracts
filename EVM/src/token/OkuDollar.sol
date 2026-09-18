@@ -608,6 +608,21 @@ contract OkuDollar is
     }
 
     /// @notice Withdraw `assets` OkuM to `receiver`, burning `owner`'s UsdOku.
+    /// @return shares The number of UsdOku shares burned.
+    /// @dev Returns SHARES, not assets — EIP-4626 requires `withdraw` to return
+    ///      the shares burned, while its counterpart {redeem} returns the assets
+    ///      delivered. `_redeemShares` returns ASSETS (it tail-calls `_unwrap`,
+    ///      whose return is `okuMReturned`), so its result is deliberately
+    ///      discarded here rather than returned.
+    ///
+    ///      This previously read `return _redeemShares(...)`, which silently
+    ///      overwrote the named `shares` return with the OkuM amount — so
+    ///      `withdraw` returned approximately its own `assets` input instead of
+    ///      `previewWithdraw(assets)`. At a multiplier of 1.33 that is ~25% off.
+    ///      No funds were ever at risk (the `Withdraw` event payload and all
+    ///      share accounting were correct); it was a wrong ABI return value that
+    ///      would mislead any integrating contract. The sibling entry points
+    ///      ({deposit}, {mint}, {redeem}) were and remain correct.
     function withdraw(
         uint256 assets,
         address receiver,
@@ -620,7 +635,8 @@ contract OkuDollar is
         returns (uint256 shares)
     {
         shares = previewWithdraw(assets);
-        return _redeemShares(shares, receiver, owner);
+        _redeemShares(shares, receiver, owner);
+        return shares;
     }
 
     /// @notice Redeem `shares` dollars of UsdOku from `owner` for OkuM to `receiver`.

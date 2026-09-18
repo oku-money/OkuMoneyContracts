@@ -36,14 +36,14 @@
  * this file exists to prevent, not something to paper over.
  */
 
-import * as fs from "fs";
-import * as path from "path";
 import { ethers } from "hardhat";
 import { Signer } from "ethers";
-import { NetworkContext } from "../utils/networkContext";
+import { NetworkContext, resolveNetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { logger } from "../utils/logger";
+import { mainnetGuard } from "../utils/mainnetGuard";
+import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
 import {
   deriveSettlementRate,
   distributedUsdOverWindow,
@@ -57,6 +57,21 @@ import {
 } from "@okumoney/yield-tooling";
 import { sampleGlobalValueUsd, samplesInWindow, valueAt } from "../utils/globalValue";
 import { summarizeLedger } from "../utils/carryLedger";
+import { participatingChains, parseChainsEnv } from "../config/epochChains";
+import {
+  EpochScheduleArtifact,
+  saveArtifact,
+  loadArtifact,
+  saveArtifactInPlace,
+  artifactPath,
+  artifactKey,
+  EpochPhase,
+} from "../utils/epochArtifact";
+
+// Re-exported for backward compatibility — every I/O helper now lives in
+// `epochArtifact.ts` (deliberately hardhat-free; see that file's module doc
+// for why `broadcastSchedule.ts` needed this split out of this file).
+export { EpochScheduleArtifact, saveArtifact, loadArtifact, saveArtifactInPlace, artifactPath, artifactKey, EpochPhase };
 
 async function readSchedule(okuM: any) {
   const [rateBn, anchorBn, rateEndBn, baseMultBn, multiplierBn] = await Promise.all([
@@ -73,65 +88,6 @@ async function readSchedule(okuM: any) {
     baseMultiplierFloat: Number(baseMultBn) / 1e18,
     currentMultiplierFloat: Number(multiplierBn) / 1e18,
   };
-}
-
-/** WAD integers + absolute timestamps, exactly what both stacks submit. */
-export interface EpochScheduleArtifact {
-  artifactVersion: 1;
-  epochId: string;
-  phase: "stage-settlement" | "roll-epoch";
-  derivedAtSec: number;
-  /** Chain the derivation read its CURRENT on-chain schedule from. Every
-   *  chain is expected to already be running this same schedule — this is
-   *  just where the operator happened to read it. */
-  referenceChain: string;
-  schedule: {
-    rate: string; // WAD, decimal string (bigint doesn't survive JSON)
-    rateEnd: number;
-    nextRate: string;
-    nextRateEnd: number;
-  };
-  meta: {
-    realisedYieldUsd: number;
-    conservativeFactor: number;
-    carryInUsd: number;
-    carryForwardUsd: number;
-    globalValueUsd: number;
-  };
-  /** Populated by `broadcastSchedule.ts` as each chain confirms. Present here
-   *  (rather than a separate file) so re-running the broadcaster can see what
-   *  already landed and skip it — see that file for the resume logic. */
-  receipts: Record<string, { txHash: string; confirmedAtSec: number } | { error: string }>;
-}
-
-const ARTIFACT_DIR = path.join(__dirname, "../config/epochs");
-
-export function artifactPath(epochId: string): string {
-  return path.join(ARTIFACT_DIR, `${epochId}.json`);
-}
-
-export function saveArtifact(artifact: EpochScheduleArtifact): string {
-  fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
-  const p = artifactPath(artifact.epochId);
-  if (fs.existsSync(p)) {
-    throw new Error(
-      `Artifact already exists for epochId=${artifact.epochId} at ${p}. ` +
-        `Each epoch's derivation must be written exactly once — if you need to ` +
-        `re-derive, use a new epochId or delete the stale artifact deliberately.`
-    );
-  }
-  fs.writeFileSync(p, JSON.stringify(artifact, null, 2) + "\n");
-  return p;
-}
-
-export function loadArtifact(epochId: string): EpochScheduleArtifact {
-  const p = artifactPath(epochId);
-  if (!fs.existsSync(p)) throw new Error(`No artifact for epochId=${epochId} at ${p}`);
-  return JSON.parse(fs.readFileSync(p, "utf-8"));
-}
-
-export function saveArtifactInPlace(artifact: EpochScheduleArtifact): void {
-  fs.writeFileSync(artifactPath(artifact.epochId), JSON.stringify(artifact, null, 2) + "\n");
 }
 
 async function referenceOkuM(ctx: NetworkContext, signer: Signer) {
@@ -162,7 +118,13 @@ export async function deriveStageSettlement(
   }
 
   const now = (await ethers.provider.getBlock("latest"))!.timestamp;
-  const carryInUsd = opts.carryInUsd ?? summarizeLedger().outstandingCarryUsd;
+  // NOT `outstandingCarryUsd` — that is the carry PRODUCED by the epoch that
+  // is currently open (pending reconciliation at the next roll). The carry
+  // relevant HERE is what was already baked into THIS epoch's own target
+  // when its base rate was rolled (`currentEpochCarryInUsd`); re-applying
+  // `outstandingCarryUsd` would double-count it (defect #3 in the deploy-
+  // readiness audit — see carryLedger.ts's module doc for the full account).
+  const carryInUsd = opts.carryInUsd ?? summarizeLedger().currentEpochCarryInUsd;
   const adjustedTargetUsd = opts.realisedYieldUsd * conservativeFactor + carryInUsd;
 
   const segment: RateSegment = {
@@ -242,6 +204,23 @@ export interface DeriveRollEpochOpts {
   settlementFraction?: number;
   baseWindowFraction?: number;
   conservativeFactor?: number;
+  /** Chains to include in the GLOBAL value sample — defaults to
+   *  `participatingChains()` (see `config/epochChains.ts`). Passed through
+   *  explicitly so callers can override for testing without mutating shared
+   *  config. */
+  chains?: string[];
+  /**
+   * Bypass the live `sampleGlobalValueUsd()` read with a supplied value.
+   *
+   * TEST-ONLY SEAM, same rationale as `runEpoch.ts`'s
+   * `RollEpochOpts.globalValueUsdOverride`: `sampleGlobalValueUsd()` reads
+   * real per-chain RPCs for every entry in `participatingChains()`
+   * (`sepolia`, `baseSepolia`, etc.) — chains a local single-network drill
+   * has no live address-book entries or RPC access for, so it always samples
+   * to `0` there. Without this seam, `deriveRollEpoch` would be exercised
+   * only by hand against live testnets, never by the operator drill.
+   */
+  globalValueUsdOverride?: number;
 }
 
 /** Derive the `roll-epoch` schedule and write its artifact. Submits nothing;
@@ -259,8 +238,16 @@ export async function deriveRollEpoch(
   const okuM = await referenceOkuM(ctx, signer);
   const schedule = await readSchedule(okuM);
 
-  // GLOBAL value only, sampled fresh — not the reference chain's local supply.
-  const globalNow = await sampleGlobalValueUsd();
+  // GLOBAL value only, sampled fresh — not the reference chain's local
+  // supply — and scoped to the SAME chain set the broadcaster will target
+  // (`participatingChains()`), not every chain in CHAIN_METADATA. Sampling a
+  // wider set than the broadcast reaches would inflate V̄ with chains that
+  // never receive this rate (defect #4 in the deploy-readiness audit).
+  const chains = opts.chains ?? participatingChains();
+  const globalNow =
+    opts.globalValueUsdOverride !== undefined
+      ? { valueUsd: opts.globalValueUsdOverride, timestampSec: 0, perChain: {} }
+      : await sampleGlobalValueUsd(chains);
   if (globalNow.valueUsd <= 0) {
     throw new Error(
       "Global value sample is 0 or unreadable — refusing to derive a rate " +
@@ -268,9 +255,15 @@ export async function deriveRollEpoch(
     );
   }
 
+  // Ex-post reconciliation of the PRIOR epoch's ledger entry: what did it
+  // ACTUALLY pay against what it targeted? This is a DIFFERENT quantity from
+  // this epoch's OWN carryForwardUsd (see carryLedger.ts's module doc) — it
+  // becomes THIS epoch's carryInUsd, not this epoch's own carryForwardUsd.
   const priorSummary = summarizeLedger();
-  let carryForwardUsd = 0;
+  let reconciledCarryUsd = 0;
+  let priorEpochId: string | undefined;
   if (priorSummary.latestEntry) {
+    priorEpochId = priorSummary.latestEntry.epochId;
     const priorTargetUsd = priorSummary.latestEntry.realisedYieldUsd + priorSummary.latestEntry.carryInUsd;
     // Ex-post reconciliation also needs the GLOBAL delta, not the reference
     // chain's local delta — approximate via the reference chain's multiplier
@@ -279,12 +272,12 @@ export async function deriveRollEpoch(
     const priorMeasuredAvgValueUsd = priorSummary.latestEntry.measuredAvgValueUsd;
     const actualPaidUsd =
       priorMeasuredAvgValueUsd * (schedule.currentMultiplierFloat / schedule.baseMultiplierFloat - 1);
-    carryForwardUsd = reconcileActualPayout(priorTargetUsd, actualPaidUsd);
-    logger.info(`Ex-post reconciliation: target=$${priorTargetUsd.toFixed(2)} actual=$${actualPaidUsd.toFixed(2)} carryForward=$${carryForwardUsd.toFixed(2)}`);
+    reconciledCarryUsd = reconcileActualPayout(priorTargetUsd, actualPaidUsd);
+    logger.info(`Ex-post reconciliation of ${priorEpochId}: target=$${priorTargetUsd.toFixed(2)} actual=$${actualPaidUsd.toFixed(2)} reconciledCarry=$${reconciledCarryUsd.toFixed(2)}`);
   }
 
   const grid: EpochGrid = { epochStartSec: schedule.rateEndSec, epochLengthSec: opts.epochLengthSec, settlementFraction };
-  const nextAdjustedTargetUsd = opts.nextRealisedYieldUsd * conservativeFactor + carryForwardUsd;
+  const nextAdjustedTargetUsd = opts.nextRealisedYieldUsd * conservativeFactor + reconciledCarryUsd;
   const { ratePerSecond: rBaseNextFloat } = deriveBaseRate({
     targetUsd: nextAdjustedTargetUsd,
     baseWindowFraction,
@@ -293,7 +286,7 @@ export async function deriveRollEpoch(
   });
   const baseEndNextSec = Math.floor(schedule.rateEndSec + opts.epochLengthSec * (1 - settlementFraction));
 
-  logger.info(`Next epoch adjusted target: $${nextAdjustedTargetUsd.toFixed(2)} (global V=$${globalNow.valueUsd.toFixed(2)})`);
+  logger.info(`Next epoch adjusted target: $${nextAdjustedTargetUsd.toFixed(2)} (global V=$${globalNow.valueUsd.toFixed(2)}, chains=${chains.join(",")})`);
 
   // Re-anchoring the already-running settlement rate at its own value, not
   // re-deriving it — this is the currently active on-chain rate, just scaled.
@@ -317,13 +310,72 @@ export async function deriveRollEpoch(
     meta: {
       realisedYieldUsd: opts.nextRealisedYieldUsd,
       conservativeFactor,
-      carryInUsd: carryForwardUsd,
-      carryForwardUsd, // roll-epoch DOES close an epoch — this is what the ledger entry uses
+      // Carry-in to THIS epoch's target is the PRIOR epoch's reconciliation —
+      // NOT this epoch's own carryForwardUsd (see interface doc + the
+      // carryLedger.ts module doc for why conflating them was a bug).
+      carryInUsd: reconciledCarryUsd,
+      // THIS epoch's own derivation-time residual: `deriveBaseRate` is a
+      // pure float division with no clamping, so there is none yet. It will
+      // only be known once THIS epoch closes and the NEXT roll reconciles
+      // it — see `priorEpochId`/`backfillReconciliation` in broadcastSchedule.ts.
+      carryForwardUsd: 0,
       globalValueUsd: globalNow.valueUsd,
+      priorEpochId,
     },
     receipts: {},
   };
   const p = saveArtifact(artifact);
   logger.success(`Artifact written: ${p}`);
   return artifact;
+}
+
+if (require.main === module) {
+  runMain(async () => {
+    const ctx = await resolveNetworkContext();
+    mainnetGuard(ctx.networkName, { yesMainnet: isYesMainnet(), dryRun: isDryRun() });
+    const [signer] = await ethers.getSigners();
+
+    const phase = parseArg("phase");
+    const epochId = parseArg("epochId");
+    if (!epochId) throw new Error("Required: --epochId=<id> (env: EPOCH_ID)");
+    const chains = parseChainsEnv(parseArg("chains"));
+
+    if (phase === "stage-settlement") {
+      const realisedYieldUsd = Number(parseArg("realisedYieldUsd"));
+      const pendingEndTimestamp = parseArg("pendingEndTimestamp");
+      if (!realisedYieldUsd || !pendingEndTimestamp) {
+        throw new Error("stage-settlement requires --realisedYieldUsd and --pendingEndTimestamp");
+      }
+      await deriveStageSettlement(ctx, signer, {
+        epochId,
+        realisedYieldUsd,
+        pendingEndTimestamp: BigInt(pendingEndTimestamp),
+        conservativeFactor: parseArg("conservativeFactor") ? Number(parseArg("conservativeFactor")) : undefined,
+        carryInUsd: parseArg("carryInUsd") ? Number(parseArg("carryInUsd")) : undefined,
+      });
+    } else if (phase === "roll-epoch") {
+      const nextRealisedYieldUsd = Number(parseArg("nextRealisedYieldUsd"));
+      const nextEndTimestamp = parseArg("nextEndTimestamp");
+      const epochLengthSec = Number(parseArg("epochLengthSec"));
+      if (!nextRealisedYieldUsd || !nextEndTimestamp || !epochLengthSec) {
+        throw new Error(
+          "roll-epoch requires --nextRealisedYieldUsd, --nextEndTimestamp, and --epochLengthSec " +
+            "(NOTE: for internal testing, pass a short override here, e.g. 3600 for 1h — " +
+            "the on-chain contracts place no constraint on epoch length; see epoch.ts's module doc)"
+        );
+      }
+      await deriveRollEpoch(ctx, signer, {
+        epochId,
+        nextRealisedYieldUsd,
+        nextEndTimestamp: BigInt(nextEndTimestamp),
+        epochLengthSec,
+        settlementFraction: parseArg("settlementFraction") ? Number(parseArg("settlementFraction")) : undefined,
+        baseWindowFraction: parseArg("baseWindowFraction") ? Number(parseArg("baseWindowFraction")) : undefined,
+        conservativeFactor: parseArg("conservativeFactor") ? Number(parseArg("conservativeFactor")) : undefined,
+        chains,
+      });
+    } else {
+      throw new Error("Required: --phase=stage-settlement|roll-epoch (env: PHASE)");
+    }
+  });
 }

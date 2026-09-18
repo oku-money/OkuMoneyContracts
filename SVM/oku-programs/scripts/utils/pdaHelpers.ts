@@ -19,3 +19,23 @@ export const PDA_SEEDS = {
 export function derivePsmConfigPDA(programId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.psmConfig)], programId);
 }
+
+/** Canonical BPF upgradeable loader program ID. */
+export const BPF_LOADER_UPGRADEABLE_ID = new PublicKey(
+  "BPFLoaderUpgradeab1e11111111111111111111111"
+);
+
+/**
+ * Derive a program's ProgramData PDA — `[program_id]` under the BPF
+ * upgradeable loader.
+ *
+ * `initialize` requires its signer to be the program's upgrade authority and
+ * pins this address on-chain via `get_program_data_address(&crate::ID)` (see
+ * `contexts/init.rs`), so this must derive identically.
+ */
+export function programDataAddress(programId: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [programId.toBuffer()],
+    BPF_LOADER_UPGRADEABLE_ID
+  )[0];
+}

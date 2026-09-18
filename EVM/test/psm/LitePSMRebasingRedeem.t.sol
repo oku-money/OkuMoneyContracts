@@ -72,15 +72,18 @@ contract LitePSMRebasingRedeemTest is BaseTest {
 
     // ============ Helpers ============
 
-    /// @notice Set the active yield rate with a generous bounded window.
+    /// @notice Set the active yield rate for one maximal rate window.
     /// @dev SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` is exactly
     ///      `okuMoney.okuMMultiplier()`, so the rate is set on OkuMoney via OKUM_REBASER.
-    ///      Every yielding rate now requires a bounded future window (open-ended
-    ///      yielding rates are no longer supported) — 100 years comfortably covers
-    ///      every horizon exercised in this suite (max 50 years).
+    ///
+    ///      This used to open a single 100-year window. A window may now not
+    ///      exceed `Constants.MAX_RATE_WINDOW` (90 days), so horizons beyond
+    ///      that are walked via `_accrueAtCurrentRate`, which re-anchors at the
+    ///      same rate every 90 days — matching how the epoch model actually
+    ///      drives these contracts.
     function _setUsdRate(uint256 rate) internal {
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, block.timestamp + 100 * 365 days);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + MAX_RATE_WINDOW);
     }
 
     /// @notice Mint UsdOku to a user from a USDC deposit through the PSM. Returns the
@@ -247,7 +250,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         _mintUsdOkuViaPsm(user1, 10_000e6);
         _setUsdRate(RATE_5_PCT_APY);
 
-        vm.warp(block.timestamp + 1);
+        _accrueAtCurrentRate(1);
         assertGt(okuDollar.usdMultiplier(), PRECISION, "Multiplier must accrue in 1s");
 
         (uint256 usdcOut, uint256 stranded) = _redeemAndMeasure(user1, 1e18);
@@ -265,7 +268,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
             setUp();
             _mintUsdOkuViaPsm(user1, 10_000e6);
             _setUsdRate(RATE_5_PCT_APY);
-            vm.warp(block.timestamp + horizons[i]);
+            _accrueAtCurrentRate(horizons[i]);
 
             (uint256 usdcOut, uint256 stranded) = _redeemAndMeasure(user1, 1e18);
             assertGt(usdcOut, 0, "Short-horizon redeem must produce USDC");
@@ -278,7 +281,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         _mintUsdOkuViaPsm(user1, 100_000e6);
         _setUsdRate(RATE_5_PCT_APY);
 
-        vm.warp(block.timestamp + 365 days);
+        _accrueAtCurrentRate(365 days);
 
         uint256 multAfter = okuDollar.usdMultiplier();
         // Sanity: after 1 year at 5% APY the multiplier should be ~1.05e18.
@@ -295,7 +298,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         _mintUsdOkuViaPsm(user1, 100_000e6);
         _setUsdRate(RATE_5_PCT_APY);
 
-        vm.warp(block.timestamp + 5 * 365 days);
+        _accrueAtCurrentRate(5 * 365 days);
 
         // 1.05^5 ≈ 1.27628
         assertApproxEqRel(okuDollar.usdMultiplier(), 1_276_281_562_500_000_000, 1e15);
@@ -310,7 +313,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         _mintUsdOkuViaPsm(user1, 100_000e6);
         _setUsdRate(RATE_5_PCT_APY);
 
-        vm.warp(block.timestamp + 10 * 365 days);
+        _accrueAtCurrentRate(10 * 365 days);
 
         // 1.05^10 ≈ 1.62889
         assertApproxEqRel(okuDollar.usdMultiplier(), 1_628_894_626_777_442_000, 2e15);
@@ -325,7 +328,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         _mintUsdOkuViaPsm(user1, 100_000e6);
         _setUsdRate(RATE_5_PCT_APY);
 
-        vm.warp(block.timestamp + 25 * 365 days);
+        _accrueAtCurrentRate(25 * 365 days);
 
         // 1.05^25 ≈ 3.38635
         assertApproxEqRel(okuDollar.usdMultiplier(), 3_386_354_941_000_000_000, 5e15);
@@ -341,7 +344,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         _mintUsdOkuViaPsm(user1, 100_000e6);
         _setUsdRate(RATE_2_PCT_APY);
 
-        vm.warp(block.timestamp + 50 * 365 days);
+        _accrueAtCurrentRate(50 * 365 days);
 
         assertApproxEqRel(okuDollar.usdMultiplier(), 2_691_588_029_000_000_000, 1e16);
 
@@ -364,7 +367,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
 
         uint256 priorMult = okuDollar.usdMultiplier();
         for (uint256 year = 1; year <= 25; year++) {
-            vm.warp(block.timestamp + 365 days);
+            _accrueAtCurrentRate(365 days);
             uint256 currentMult = okuDollar.usdMultiplier();
             assertGt(currentMult, priorMult, "Multiplier must monotonically grow");
             priorMult = currentMult;
@@ -388,7 +391,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
 
         uint256 redeemsExpected = 30 * 24; // 720 hourly redeems
         for (uint256 i = 0; i < redeemsExpected; i++) {
-            vm.warp(block.timestamp + 1 hours);
+            _accrueAtCurrentRate(1 hours);
             (uint256 usdcOut,) = _redeemAndMeasure(user1, 1e17); // 0.1 UsdOku each
             assertGt(usdcOut, 0);
         }
@@ -411,7 +414,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
 
         // Activate USD yield rate and warp 2 years.
         _setUsdRate(RATE_5_PCT_APY);
-        vm.warp(block.timestamp + 2 * 365 days);
+        _accrueAtCurrentRate(2 * 365 days);
 
         // Both multipliers are now off-base.
         assertGt(okuMoney.okuMMultiplier(), PRECISION);
@@ -433,7 +436,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     function test_RedeemUsdOku_UsdcOutNeverExceedsReceivedDollarValue() public {
         _mintUsdOkuViaPsm(user1, 10_000e6);
         _setUsdRate(RATE_5_PCT_APY);
-        vm.warp(block.timestamp + 90 days);
+        _accrueAtCurrentRate(90 days);
 
         uint256 redeemAmount = 100e18;
         uint256 usdcBefore = usdc.balanceOf(user1);
@@ -454,7 +457,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     function test_RedeemUsdOku_PSMHoldsNoSpendableUsdOku_AfterRedeem() public {
         _mintUsdOkuViaPsm(user1, 100_000e6);
         _setUsdRate(RATE_5_PCT_APY);
-        vm.warp(block.timestamp + 1 days);
+        _accrueAtCurrentRate(1 days);
 
         uint256 strandedBefore = okuDollar.balanceOf(address(litePsm));
         _approveOkuDollar(user1, address(litePsm), 1000e18);

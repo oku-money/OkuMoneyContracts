@@ -400,6 +400,13 @@ contract LitePSM is
     /// @param startIndex First queue index to process (inclusive)
     /// @param endIndex Last queue index to process (exclusive)
     /// @param approveAmount USDC amount to approve for processing (sum of entries by backend)
+    /// @dev Carries `whenYieldNotDistributing` for the same reason {withdrawUsdc}
+    ///      does: `RedemptionQueue.processQueue` caches `okuMMultiplier()` once
+    ///      and pays real USDC against it, so a discrete multiplier bump landing
+    ///      in the same block would shift every payout in the batch. Every other
+    ///      multiplier-consuming path here already carried this guard
+    ///      ({mintOkuM}, {redeemOkuM}, {mintUsdOku}, {redeemUsdOku},
+    ///      {withdrawUsdc}); this one was the sole omission.
     function processQueue(
         uint256 startIndex,
         uint256 endIndex,
@@ -408,6 +415,7 @@ contract LitePSM is
         external
         nonReentrant
         whenNotPaused
+        whenYieldNotDistributing
         onlyRole(Roles.PSM_QUEUE_PROCESSOR)
     {
         LitePSMStorage storage $ = _getLitePSMStorage();

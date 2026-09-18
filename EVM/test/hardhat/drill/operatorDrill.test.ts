@@ -63,6 +63,9 @@ import { runPsmOp } from "../../../scripts/operator/psmOps";
 import { runVaultOp } from "../../../scripts/operator/vaultOps";
 import { runStageSettlement, runRollEpoch } from "../../../scripts/operator/runEpoch";
 import { appendSample, loadSamples } from "../../../scripts/utils/globalValue";
+import { deriveStageSettlement, deriveRollEpoch } from "../../../scripts/operator/deriveEpochSchedule";
+import { loadArtifact } from "../../../scripts/utils/epochArtifact";
+import { summarizeLedger, upsertLedgerEntry, backfillReconciliation, buildLedgerEntry, loadLedger } from "../../../scripts/utils/carryLedger";
 
 const ADDRESS_BOOK_PATH = path.join(__dirname, "../../../scripts/config/addresses.json");
 // Gitignored reference-implementation stores (see TRACKER.md). They MUST be
@@ -76,6 +79,8 @@ const ADDRESS_BOOK_PATH = path.join(__dirname, "../../../scripts/config/addresse
 // state with no way back.
 const CARRY_LEDGER_PATH = path.join(__dirname, "../../../scripts/config/carryLedger.json");
 const GLOBAL_VALUE_SAMPLES_PATH = path.join(__dirname, "../../../scripts/config/globalValueSamples.json");
+const EPOCHS_DIR = path.join(__dirname, "../../../scripts/config/epochs");
+const EPOCHS_DIR_BACKUP = path.join(__dirname, "../../../scripts/config/epochs.drill-backup");
 
 describe("Operator drill: exercise every lever on a clean local chain", function () {
     this.timeout(300_000);
@@ -106,6 +111,11 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             : null;
         if (fs.existsSync(CARRY_LEDGER_PATH)) fs.unlinkSync(CARRY_LEDGER_PATH);
         if (fs.existsSync(GLOBAL_VALUE_SAMPLES_PATH)) fs.unlinkSync(GLOBAL_VALUE_SAMPLES_PATH);
+
+        // Same backup-and-clear rationale as the two stores above, for the
+        // (also gitignored) epoch-schedule artifact directory this drill's
+        // deriveEpochSchedule tests write into.
+        if (fs.existsSync(EPOCHS_DIR)) fs.renameSync(EPOCHS_DIR, EPOCHS_DIR_BACKUP);
 
         // Deliberately do NOT force NETWORK here: the underlying fork's
         // chainId depends on how the current hardhat process was started
@@ -179,6 +189,9 @@ describe("Operator drill: exercise every lever on a clean local chain", function
 
         if (globalValueSamplesBackup !== null) fs.writeFileSync(GLOBAL_VALUE_SAMPLES_PATH, globalValueSamplesBackup);
         else if (fs.existsSync(GLOBAL_VALUE_SAMPLES_PATH)) fs.unlinkSync(GLOBAL_VALUE_SAMPLES_PATH);
+
+        if (fs.existsSync(EPOCHS_DIR)) fs.rmSync(EPOCHS_DIR, { recursive: true, force: true });
+        if (fs.existsSync(EPOCHS_DIR_BACKUP)) fs.renameSync(EPOCHS_DIR_BACKUP, EPOCHS_DIR);
 
         delete process.env.NETWORK;
         await network.provider.request({ method: "hardhat_reset", params: [] });
@@ -312,6 +325,169 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             globalValueUsdOverride: supply * mult,
         });
         expect(result.rBaseNextFloat).to.be.greaterThan(1);
+    });
+
+    it("deriveEpochSchedule + broadcastSchedule's carry-ledger wiring: two full derive cycles, exercising artifact identity and the reconciledCarryUsd/carryForwardUsd split end-to-end", async function () {
+        // This test exists because `deriveEpochSchedule.ts` /
+        // `broadcastSchedule.ts` — unlike `runEpoch.ts` above — had ZERO test
+        // coverage before the deploy-readiness audit, which is exactly how
+        // defects #1-#4 (no CLI entrypoint, artifact collision, inverted
+        // carry semantics, unscoped chain targets) shipped unnoticed. This
+        // replicates `broadcastSchedule.ts`'s POST-CONFIRMATION ledger-write
+        // sequence directly (backfillReconciliation + upsertLedgerEntry) —
+        // the actual subprocess-spawning/multi-chain fan-out is out of scope
+        // for a single-chain drill, same as `sampleGlobalValueUsd()` above.
+        const EPOCH_A = "drill-epoch-a";
+        const EPOCH_B = "drill-epoch-b";
+        const PRECISION = 10n ** 18n;
+
+        // ---- Fresh schedule, matching the runEpoch tests' pattern above ----
+        const rateEnd = BigInt((await time.latest()) + 30 * 86400);
+        await runSetOkuMYieldRate(ctx, admin, { mode: "direct", rate: PRECISION + 10n ** 8n, endTimestamp: rateEnd });
+
+        const supplyAtAnchor = Number(ethers.formatEther(await okuMoney.totalSupply()));
+        const multAtAnchor = Number(await okuMoney.okuMMultiplier()) / 1e18;
+        appendSample({ timestampSec: await time.latest(), valueUsd: supplyAtAnchor * multAtAnchor, perChain: {} });
+
+        await time.increase(20 * 86400);
+        const supplyNow = Number(ethers.formatEther(await okuMoney.totalSupply()));
+        const multNow = Number(await okuMoney.okuMMultiplier()) / 1e18;
+        appendSample({ timestampSec: await time.latest(), valueUsd: supplyNow * multNow, perChain: {} });
+
+        // NOTE: the "runEpoch: roll-epoch" test above already appended a real
+        // ledger entry (runEpoch.ts's own CLI default epochId, today's ISO
+        // date) — this drill runs all `it`s against ONE shared chain/ledger,
+        // so this test must not assume a clean ledger. Capture whatever the
+        // ACTUAL current state is and assert relative to it, rather than
+        // hard-coding "no prior entries".
+        const ledgerStateBeforeA = summarizeLedger();
+
+        // ---- Phase 1: stage-settlement — derive, apply, verify artifact identity ----
+        const realisedYieldUsd = supplyNow * 0.01;
+        const pendingEnd = rateEnd + BigInt(2 * 86400);
+        const stageArtifact = await deriveStageSettlement(ctx, admin, {
+            epochId: EPOCH_A,
+            realisedYieldUsd,
+            pendingEndTimestamp: pendingEnd,
+        });
+        expect(stageArtifact.phase).to.equal("stage-settlement");
+        // Must equal `currentEpochCarryInUsd` (the carry baked into whatever
+        // epoch is CURRENTLY open per the ledger), NOT `outstandingCarryUsd`
+        // — this is defect #3's fix, asserted directly.
+        expect(stageArtifact.meta.carryInUsd).to.equal(ledgerStateBeforeA.currentEpochCarryInUsd);
+        // REGRESSION (defect #2): re-derive under the SAME epochId, different
+        // phase, must NOT collide with the artifact above.
+        expect(() => loadArtifact(EPOCH_A, "stage-settlement")).to.not.throw();
+
+        // Apply exactly the WAD integers the artifact carries — proves the
+        // artifact is what `applyScheduleSingleChain.ts` actually consumes,
+        // not a parallel/duplicated derivation.
+        await runSetOkuMYieldRate(ctx, admin, {
+            mode: "withSuccessor",
+            rate: BigInt(stageArtifact.schedule.rate),
+            endTimestamp: BigInt(stageArtifact.schedule.rateEnd),
+            nextRate: BigInt(stageArtifact.schedule.nextRate),
+            pendingEndTimestamp: BigInt(stageArtifact.schedule.nextRateEnd),
+        });
+        expect(await okuMoney.okuMPendingRatePerSecond()).to.equal(BigInt(stageArtifact.schedule.nextRate));
+
+        // ---- Phase 2: roll-epoch (epoch A, first ever epoch — no prior ledger entry) ----
+        await time.increaseTo(Number(await okuMoney.okuMRateEnd()) + 1);
+        const supplyAtRoll = Number(ethers.formatEther(await okuMoney.totalSupply()));
+        const multAtRoll = Number(await okuMoney.okuMMultiplier()) / 1e18;
+
+        const rollArtifactA = await deriveRollEpoch(ctx, admin, {
+            epochId: EPOCH_A,
+            nextRealisedYieldUsd: supplyAtRoll * 0.01,
+            nextEndTimestamp: BigInt(await time.latest()) + BigInt(2 * 86400),
+            epochLengthSec: 30 * 86400,
+            globalValueUsdOverride: supplyAtRoll * multAtRoll,
+        });
+        expect(rollArtifactA.phase).to.equal("roll-epoch");
+        // Whatever the ledger's latest entry was BEFORE this derivation is
+        // what gets reconciled — could be a pre-existing entry from an
+        // earlier test in this shared-chain drill, or none.
+        expect(rollArtifactA.meta.priorEpochId).to.equal(ledgerStateBeforeA.latestEntry?.epochId);
+        expect(rollArtifactA.meta.carryForwardUsd).to.equal(0); // unknown until epoch A is itself reconciled
+
+        // Apply it, exactly as applyScheduleSingleChain.ts would.
+        await runSetOkuMYieldRate(ctx, admin, {
+            mode: "withSuccessor",
+            rate: BigInt(rollArtifactA.schedule.rate),
+            endTimestamp: BigInt(rollArtifactA.schedule.rateEnd),
+            nextRate: BigInt(rollArtifactA.schedule.nextRate),
+            pendingEndTimestamp: BigInt(rollArtifactA.schedule.nextRateEnd),
+        });
+
+        // Simulate broadcastSchedule.ts's post-confirmation ledger write —
+        // backfill first (if there's a prior entry to reconcile), then insert.
+        if (rollArtifactA.meta.priorEpochId) {
+            backfillReconciliation(rollArtifactA.meta.priorEpochId, rollArtifactA.meta.carryInUsd);
+        }
+        upsertLedgerEntry(
+            buildLedgerEntry({
+                epochId: rollArtifactA.epochId,
+                realisedYieldUsd: rollArtifactA.meta.realisedYieldUsd,
+                carryInUsd: rollArtifactA.meta.carryInUsd,
+                measuredAvgValueUsd: rollArtifactA.meta.globalValueUsd,
+                conservativeFactor: rollArtifactA.meta.conservativeFactor,
+                result: { ratePerSecond: BigInt(rollArtifactA.schedule.nextRate), carryForwardUsd: rollArtifactA.meta.carryForwardUsd },
+            })
+        );
+        let summary = summarizeLedger();
+        // +1 relative to whatever the ledger held before this test — the
+        // shared-chain drill may already have entries from earlier tests.
+        expect(summary.epochCount).to.equal(ledgerStateBeforeA.epochCount + 1);
+        expect(summary.latestEntry!.epochId).to.equal(EPOCH_A);
+        expect(summary.pendingReconciliation).to.equal(true); // epoch A not yet reconciled
+
+        // ---- Phase 3: roll-epoch (epoch B) — THIS is what reconciles epoch A ----
+        await time.increase(10 * 86400); // let epoch A's just-applied rate actually accrue something to reconcile
+        const supplyAtRollB = Number(ethers.formatEther(await okuMoney.totalSupply()));
+        const multAtRollB = Number(await okuMoney.okuMMultiplier()) / 1e18;
+        expect(multAtRollB).to.be.greaterThan(multAtRoll); // sanity: time actually passed under a live rate
+
+        const rollArtifactB = await deriveRollEpoch(ctx, admin, {
+            epochId: EPOCH_B,
+            nextRealisedYieldUsd: supplyAtRollB * 0.01,
+            nextEndTimestamp: BigInt(await time.latest()) + BigInt(2 * 86400),
+            epochLengthSec: 30 * 86400,
+            globalValueUsdOverride: supplyAtRollB * multAtRollB,
+        });
+        // REGRESSION (defect #3): epoch B's carryInUsd is epoch A's
+        // RECONCILED carry (ex-post actual-vs-target), NOT epoch A's
+        // (always-0) carryForwardUsd — these must be threaded from different
+        // sources, per carryLedger.ts's module doc.
+        expect(rollArtifactB.meta.priorEpochId).to.equal(EPOCH_A);
+        expect(rollArtifactB.meta.carryForwardUsd).to.equal(0); // epoch B's own, unknown until it's reconciled next
+
+        // Simulate broadcastSchedule.ts's post-confirmation sequence again:
+        // backfill epoch A FIRST, then insert epoch B.
+        backfillReconciliation(rollArtifactB.meta.priorEpochId!, rollArtifactB.meta.carryInUsd);
+        upsertLedgerEntry(
+            buildLedgerEntry({
+                epochId: rollArtifactB.epochId,
+                realisedYieldUsd: rollArtifactB.meta.realisedYieldUsd,
+                carryInUsd: rollArtifactB.meta.carryInUsd,
+                measuredAvgValueUsd: rollArtifactB.meta.globalValueUsd,
+                conservativeFactor: rollArtifactB.meta.conservativeFactor,
+                result: { ratePerSecond: BigInt(rollArtifactB.schedule.nextRate), carryForwardUsd: rollArtifactB.meta.carryForwardUsd },
+            })
+        );
+
+        summary = summarizeLedger();
+        expect(summary.epochCount).to.equal(ledgerStateBeforeA.epochCount + 2);
+        expect(summary.pendingReconciliation).to.equal(true); // epoch B is now the latest, still pending
+        // currentEpochCarryInUsd reflects epoch B's OWN carryInUsd (what's
+        // baked into ITS target) — this is the value `deriveStageSettlement`
+        // would use, NOT `outstandingCarryUsd` (defect #3's fix).
+        expect(summary.currentEpochCarryInUsd).to.equal(rollArtifactB.meta.carryInUsd);
+
+        expect(summary.latestEntry!.epochId).to.equal(EPOCH_B);
+        // Confirm the backfill actually landed on epoch A specifically.
+        const epochAEntry = loadLedger().find((e) => e.epochId === EPOCH_A)!;
+        expect(epochAEntry.reconciledCarryUsd).to.equal(rollArtifactB.meta.carryInUsd);
+        expect(epochAEntry.carryForwardUsd).to.equal(0); // unchanged — a DIFFERENT field, per the regression guard
     });
 
     it("setOkuMMultiplier: emergency override collapses the schedule", async () => {

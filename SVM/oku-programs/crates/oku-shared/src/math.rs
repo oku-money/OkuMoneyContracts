@@ -372,7 +372,10 @@ mod tests {
         let mult = 2 * PRECISION; // 2.0x
         assert_eq!(raw_to_dollars(raw, mult), Some(2_000_000_000_000_000));
         // And reports honestly when the *result* genuinely exceeds u64.
-        assert_eq!(raw_to_dollars(u64::MAX, crate::constants::MAX_MULTIPLIER), None);
+        assert_eq!(
+            raw_to_dollars(u64::MAX, crate::constants::MAX_MULTIPLIER),
+            None
+        );
     }
 
     /// Round-trip never gains value, and loses at most `ceil(m/PRECISION)+1`
@@ -394,7 +397,10 @@ mod tests {
             for dollars in [1u64, 999, 1_000_000, 123_456_789, 999_999_999_999] {
                 let raw = dollars_to_raw(dollars, mult).unwrap();
                 let back = raw_to_dollars(raw, mult).unwrap();
-                assert!(back <= dollars, "round trip GAINED value: {back} > {dollars} at m={mult}");
+                assert!(
+                    back <= dollars,
+                    "round trip GAINED value: {back} > {dollars} at m={mult}"
+                );
                 assert!(
                     dollars - back <= bound,
                     "lost {} units at m={mult}, bound {bound}",

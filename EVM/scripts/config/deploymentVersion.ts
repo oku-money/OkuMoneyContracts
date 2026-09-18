@@ -42,8 +42,16 @@
  * one-way door (any prior-version deploy keeps its old addresses; future
  * deploys take new addresses). Pre-audit iterate with v0.x; reserve v1.0+
  * for audited deployments.
+ *
+ * Bumped v0.2 -> v0.3 for the clean-slate streaming-yield MVP deploy: v0.2
+ * predates the streaming-yield refactor (0 references to
+ * `setOkuMYieldRate` at that commit) and is live on 6 networks including
+ * `base`/`bsc` mainnet. v0.3 deploys fresh `OkuMoney`/`OkuDollar`/
+ * `RedemptionQueue`/`LitePSM` addresses on the MVP testnets only — see
+ * `scripts/config/addresses.README.md` for the address-book split this
+ * required, and `scripts/config/epochChains.ts` for the MVP chain set.
  */
-export const DEPLOYMENT_VERSION = "v0.2";
+export const DEPLOYMENT_VERSION = "v0.3";
 
 /**
  * Canonical Arachnid CREATE2 factory. Same address on every supported chain.

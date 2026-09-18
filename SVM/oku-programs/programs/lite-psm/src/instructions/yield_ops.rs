@@ -43,7 +43,7 @@ use crate::helpers::display_sync::write_display_multiplier;
 use crate::helpers::{check_yield_lock, multiplier};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
-use oku_shared::{MAX_MULTIPLIER, MAX_RATE, PRECISION};
+use oku_shared::{MAX_MULTIPLIER, MAX_RATE, MAX_RATE_WINDOW_SECONDS, PRECISION};
 
 // ---------------------------------------------------------------------------
 // Shared validation
@@ -75,6 +75,13 @@ fn validate_rate_window(rate: u64, end_timestamp: i64, now_ts: i64) -> Result<()
     } else {
         // Yielding.
         require!(end_timestamp > now_ts, LitePsmError::EndTimestampInPast);
+        // Enforces the bound `MAX_RATE`'s own doc claims the window provides.
+        // Without it, a single long window can drive `rpow` past 256 bits and
+        // brick every recovery path — see `MAX_RATE_WINDOW_SECONDS`.
+        require!(
+            end_timestamp.saturating_sub(now_ts) <= MAX_RATE_WINDOW_SECONDS,
+            LitePsmError::RateWindowTooLong
+        );
     }
 
     Ok(())
@@ -138,7 +145,12 @@ fn check_pause_gate(config: &PsmConfig, new_rate: u64, now_ts: i64) -> Result<()
 /// Write the active rate and its window, clearing any armed successor.
 ///
 /// Mirrors `EVM/src/token/OkuMoney.sol:399-427` (`_setOkuMYieldRate`).
-fn apply_active_rate(config: &mut PsmConfig, new_rate: u64, end_timestamp: i64, now_ts: i64) -> Result<()> {
+fn apply_active_rate(
+    config: &mut PsmConfig,
+    new_rate: u64,
+    end_timestamp: i64,
+    now_ts: i64,
+) -> Result<()> {
     validate_rate_window(new_rate, end_timestamp, now_ts)?;
     check_pause_gate(config, new_rate, now_ts)?;
 
@@ -188,6 +200,14 @@ fn apply_successor(
     require!(
         pending_end_timestamp > rate_end,
         LitePsmError::PendingEndNotAfterRateEnd
+    );
+    // The successor's OWN window is [rate_end, pending_end_timestamp] — the
+    // span branch 3 of `compute_multiplier` hands to a single `rpow` — so it is
+    // bounded independently of the active window. Two chained 90-day windows
+    // are two bounded `rpow` calls, not one 180-day call.
+    require!(
+        pending_end_timestamp.saturating_sub(rate_end) <= MAX_RATE_WINDOW_SECONDS,
+        LitePsmError::RateWindowTooLong
     );
 
     // Compares against the effective rate AFTER any active-rate write in this
@@ -269,7 +289,12 @@ pub fn set_next_okum_yield_rate(
     pending_end_timestamp: i64,
 ) -> Result<()> {
     let now_ts = Clock::get()?.unix_timestamp;
-    apply_successor(&mut ctx.accounts.config, new_rate, pending_end_timestamp, now_ts)
+    apply_successor(
+        &mut ctx.accounts.config,
+        new_rate,
+        pending_end_timestamp,
+        now_ts,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +352,15 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
     let now_ts = clock.unix_timestamp;
     let config = &mut ctx.accounts.config;
 
-    // Pausing must not become a way to freeze the emergency lever.
+    // Pause DOES gate this lever — a discrete value move is a state-effect
+    // and must freeze alongside transfers during an incident, rather than
+    // remaining live while everything else is halted.
+    //
+    // Exact parity with EVM's `setOkuMMultiplier`, which carries
+    // `whenNotPaused` (`OkuMoney.sol`). The comment here previously asserted
+    // the opposite ("pausing must not become a way to freeze the emergency
+    // lever") while the code did — and still does — the correct thing; the
+    // comment was the defect, not the `require!`.
     require!(!config.is_paused, LitePsmError::Paused);
 
     let current = multiplier::at(config, now_ts)?;

@@ -44,6 +44,30 @@ library Constants {
     ///      `MAX_MULTIPLIER` for that.
     uint256 public constant MAX_RATE = PRECISION + 1e11;
 
+    /// @notice Maximum length of a single rate window: 90 days.
+    /// @dev Enforces an invariant {MathLib.compoundFor} already ASSUMED but
+    ///      nothing checked. `compoundFor` clamps its OUTPUT to
+    ///      `MAX_MULTIPLIER`, but that clamp happens AFTER `rpow`, so it
+    ///      cannot prevent `rpow` overflowing internally on a huge `elapsed`.
+    ///      MathLib's own NatSpec asserts "every caller bounds `elapsed` via
+    ///      the mandatory rate-window timestamps" — but the only check was
+    ///      `endTimestamp > block.timestamp`, so that bound was whatever the
+    ///      operator typed.
+    ///
+    ///      At `MAX_RATE`, `rpow` overflows at roughly 15 years of elapsed
+    ///      time. That is unreachable in practice, but the consequence if it
+    ///      ever fired is severe and unrecoverable without an upgrade: once
+    ///      `okuMMultiplier()` reverts, EVERY recovery path reverts with it,
+    ///      including `setOkuMYieldRate` and the `setOkuMMultiplier`
+    ///      emergency override, because both read the current multiplier to
+    ///      re-anchor. 90 days keeps ~60x margin while comfortably exceeding
+    ///      the 30-day production epoch.
+    ///
+    ///      Mirrored exactly by SVM's `MAX_RATE_WINDOW_SECONDS` in
+    ///      `oku-shared/src/constants.rs` — the two stacks must agree or the
+    ///      differential harness diverges.
+    uint256 public constant MAX_RATE_WINDOW = 90 days;
+
     /// @notice Absolute ceiling for any cumulative multiplier (OkuMoney's
     ///         `okuMMultiplier` and OkuDollar's `usdMultiplier`).
     /// @dev `1e24` = $1,000,000 of dollar value per token (since

@@ -150,6 +150,12 @@ contract OkuMoney is
     error EndTimestampNotAllowed();
     /// @dev A yielding rate's `endTimestamp` must be strictly in the future.
     error EndTimestampInPast();
+    /// @dev A single rate window may not exceed `Constants.MAX_RATE_WINDOW`
+    ///      (90 days). See that constant for why: an unbounded window can drive
+    ///      {MathLib.rpow} into overflow, and once `okuMMultiplier()` reverts
+    ///      every recovery path — including the emergency override — reverts
+    ///      with it, leaving a UUPS upgrade as the only escape.
+    error RateWindowTooLong();
     /// @dev {setNextOkuMYieldRate}'s `pendingEndTimestamp` must be strictly after
     ///      the active rate's `okuMRateEnd` — it bounds how long the successor can
     ///      compound unattended past activation.
@@ -404,6 +410,12 @@ contract OkuMoney is
             if (endTimestamp != 0) revert EndTimestampNotAllowed();
         } else {
             if (endTimestamp <= block.timestamp) revert EndTimestampInPast();
+            // Enforces the bound MathLib.compoundFor documents but never
+            // checked — see Constants.MAX_RATE_WINDOW for why an unbounded
+            // window is unrecoverable rather than merely wrong.
+            if (endTimestamp - block.timestamp > Constants.MAX_RATE_WINDOW) {
+                revert RateWindowTooLong();
+            }
         }
 
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
@@ -516,6 +528,14 @@ contract OkuMoney is
         if (rateEnd == 0) revert NoRateEndSet();
         if (block.timestamp >= rateEnd) revert RateAlreadyExpired();
         if (pendingEndTimestamp <= rateEnd) revert PendingEndNotAfterRateEnd();
+        // The successor's OWN window is [rateEnd, pendingEndTimestamp]; that is
+        // the span branch 3 of {MathLib.computeMultiplier} feeds to a single
+        // `rpow`, so it is what must be bounded. Each segment is bounded
+        // independently — a 90-day active window followed by a 90-day successor
+        // is two separate bounded `rpow` calls, not one 180-day one.
+        if (pendingEndTimestamp - rateEnd > Constants.MAX_RATE_WINDOW) {
+            revert RateWindowTooLong();
+        }
         if (newRate > _effectiveRate($) && paused()) revert PausableUpgradeable.EnforcedPause();
 
         _emitPendingRateCancelledIfArmed($);

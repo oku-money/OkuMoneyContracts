@@ -596,6 +596,59 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp - 1);
     }
 
+    // ── MAX_RATE_WINDOW ──────────────────────────────────────────────────────
+    //
+    // `MathLib.compoundFor`'s NatSpec asserted "every caller bounds `elapsed`
+    // via the mandatory rate-window timestamps", but the only check was
+    // `endTimestamp > block.timestamp` — so the bound was whatever the operator
+    // typed. `MAX_MULTIPLIER` clamps `compoundFor`'s OUTPUT, which cannot stop
+    // `rpow` overflowing internally on a huge `elapsed`. If that ever fired,
+    // `okuMMultiplier()` would revert and take EVERY recovery path with it
+    // (both rate setters and the `setOkuMMultiplier` emergency override all
+    // read the current multiplier to re-anchor), leaving a UUPS upgrade as the
+    // only escape. These pin the bound that makes the invariant real.
+
+    function test_SetOkuMYieldRate_AcceptsExactlyMaxRateWindow() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp + MAX_RATE_WINDOW);
+        assertEq(okuMoney.okuMRateEnd(), block.timestamp + MAX_RATE_WINDOW);
+    }
+
+    function test_SetOkuMYieldRate_RevertsOneSecondBeyondMaxRateWindow() public {
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.RateWindowTooLong.selector);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp + MAX_RATE_WINDOW + 1);
+    }
+
+    /// @dev Halting is exempt: it requires `endTimestamp == 0`, so there is no
+    ///      window to bound and the length check must not fire.
+    function test_SetOkuMYieldRate_HaltingIsExemptFromWindowBound() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION, 0);
+        assertEq(okuMoney.okuMRateEnd(), 0);
+    }
+
+    /// @dev The SUCCESSOR's own window is `[rateEnd, pendingEnd]` — that is the
+    ///      span a single `rpow` covers in branch 3 of `computeMultiplier`, so
+    ///      it is bounded independently of the active window. Two chained
+    ///      90-day windows are two bounded `rpow` calls, not one 180-day call.
+    function test_SetNextOkuMYieldRate_BoundsTheSuccessorWindowIndependently() public {
+        uint256 rateEnd = block.timestamp + MAX_RATE_WINDOW;
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, rateEnd);
+
+        // Successor window exactly at the bound: allowed, even though the total
+        // span from now is 180 days.
+        vm.prank(rebaser);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 634e6, rateEnd + MAX_RATE_WINDOW);
+        assertEq(okuMoney.okuMPendingRateEnd(), rateEnd + MAX_RATE_WINDOW);
+
+        // One second beyond it: rejected.
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.RateWindowTooLong.selector);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 634e6, rateEnd + MAX_RATE_WINDOW + 1);
+    }
+
     /// @dev Regression: halting (`newRate == PRECISION`) requires `endTimestamp == 0`;
     ///      a non-zero timestamp — even a valid future one — must revert.
     function test_SetOkuMYieldRate_RevertsOnNonZeroEndTimestampWhenHalting() public {
@@ -727,8 +780,8 @@ contract OkuMoneyTest is BaseTest {
         _mintOkuMoney(user1, supply);
 
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp + 400 days);
-        vm.warp(block.timestamp + 365 days);
+        okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp + MAX_RATE_WINDOW);
+        _accrueAtCurrentRate(365 days);
 
         assertGt(okuMoney.okuMMultiplier(), PRECISION, "multiplier accrued");
         assertEq(okuMoney.balanceOf(user1), supply, "balanceOf unchanged (non-rebasing)");

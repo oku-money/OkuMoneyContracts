@@ -38,6 +38,8 @@ import { logger } from "./logger";
 import { CHAIN_METADATA } from "../config/chains";
 import { distributedUsdOverWindow, RateSegment } from "./epochDistribution";
 import { readSvmValueUsd } from "./svmValue";
+import { participatingChains, SVM_CHAIN_KEY } from "../config/epochChains";
+import { isYesMainnet } from "./cli";
 
 const ABI = ["function totalSupply() view returns (uint256)", "function okuMMultiplier() view returns (uint256)"];
 
@@ -91,7 +93,23 @@ async function readChainValueUsd(name: string, rpcUrl: string): Promise<number |
  * treat a sample with missing chains as lower-confidence (see `perChain`).
  */
 export async function sampleGlobalValueUsd(chains?: string[]): Promise<GlobalValueSample> {
-  const targets = Object.entries(CHAIN_METADATA).filter(([name]) => !chains || chains.includes(name));
+  // Scope resolves through `participatingChains()` (config/epochChains.ts) —
+  // the SAME set `broadcastSchedule.ts` fans a derived rate out to — NOT
+  // every key in `CHAIN_METADATA` (which includes mainnets this protocol
+  // isn't live on for the MVP). V̄'s denominator and the broadcast's
+  // recipient set must never diverge; see epochChains.ts's module doc.
+  //
+  // An explicit `chains` list is routed through the SAME validation rather
+  // than trusted verbatim. Bypassing it for explicit lists (as an earlier
+  // revision did) reopened the exact divergence this scoping exists to
+  // prevent: `CHAINS=base,bsc` would have silently added two mainnets to V̄'s
+  // denominator while `broadcastSchedule.ts` — which does validate — refused
+  // them, inflating V̄ relative to the set actually receiving the rate.
+  const resolvedChains = participatingChains({
+    requested: chains,
+    yesMainnet: isYesMainnet(),
+  });
+  const targets = Object.entries(CHAIN_METADATA).filter(([name]) => resolvedChains.includes(name));
 
   const results = await Promise.all(
     targets.map(async ([name, cfg]) => {
@@ -115,7 +133,7 @@ export async function sampleGlobalValueUsd(chains?: string[]): Promise<GlobalVal
   // of the on-chain math. Omitted (not zeroed) if unreadable, same as any EVM
   // chain: a transient RPC failure must never shrink V, because that would
   // over-pay yield.
-  if (!chains || chains.includes(SVM_CHAIN_KEY)) {
+  if (resolvedChains.includes(SVM_CHAIN_KEY)) {
     const svm = await readSvmConfigured();
     if (svm !== null) {
       perChain[SVM_CHAIN_KEY] = svm;
@@ -126,8 +144,10 @@ export async function sampleGlobalValueUsd(chains?: string[]): Promise<GlobalVal
   return { timestampSec: Math.floor(Date.now() / 1000), valueUsd: total, perChain };
 }
 
-/** Key used for SVM in {@link GlobalValueSample.perChain}. */
-export const SVM_CHAIN_KEY = "solana";
+/** Key used for SVM in {@link GlobalValueSample.perChain}. Re-exported from
+ *  `config/epochChains.ts` (the single source of truth) for backward
+ *  compatibility with existing importers of this module. */
+export { SVM_CHAIN_KEY };
 
 /**
  * Read SVM's contribution using environment-provided endpoints.

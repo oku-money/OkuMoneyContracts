@@ -288,7 +288,10 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 before = okuMoney.okuMMultiplier();
         // A halted rate (== PRECISION) requires endTimestamp == 0; a yielding rate
         // requires a bounded future window comfortably beyond the fuzzed elapsed.
-        uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + 10 * 365 days + 1;
+        // A single window may not exceed MAX_RATE_WINDOW (90 days). `elapsed`
+        // still ranges to 10 years — past the window the schedule halts at
+        // rateEnd, which is exactly the behaviour these properties assert.
+        uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + MAX_RATE_WINDOW;
 
         vm.prank(rebaser);
         okuMoney.setOkuMYieldRate(rate, endTimestamp);
@@ -315,7 +318,10 @@ contract OkuMoneyFuzzTest is BaseTest {
         supply = bound(supply, 1e18, MAX_SUPPLY / 100);
         _mintOkuMoney(user1, supply);
 
-        uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + 10 * 365 days + 1;
+        // A single window may not exceed MAX_RATE_WINDOW (90 days). `elapsed`
+        // still ranges to 10 years — past the window the schedule halts at
+        // rateEnd, which is exactly the behaviour these properties assert.
+        uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + MAX_RATE_WINDOW;
         vm.prank(rebaser);
         okuMoney.setOkuMYieldRate(rate, endTimestamp);
         vm.warp(block.timestamp + elapsed);
@@ -360,7 +366,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         // different (and already separately covered) scenario from this bounded-
         // window regression test.
         rate = bound(rate, PRECISION + 1, MAX_RATE);
-        endOffset = bound(endOffset, 1, 365 days);
+        endOffset = bound(endOffset, 1, MAX_RATE_WINDOW);
         warpAmount = bound(warpAmount, 0, 100 * 365 days);
         overrideBump = bound(overrideBump, 1, 1e24);
 

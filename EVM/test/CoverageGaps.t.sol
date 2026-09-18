@@ -313,9 +313,11 @@ contract CoverageGapsTest is BaseTest {
         // the rpow-safe input region (warping 50+ years overflows rpow's
         // intermediate squarings, which is a separate property).
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(Constants.MAX_RATE, block.timestamp + 20 * 365 days);
+        okuMoney.setOkuMYieldRate(Constants.MAX_RATE, block.timestamp + MAX_RATE_WINDOW);
 
-        vm.warp(block.timestamp + 10 * 365 days);
+        // Walked as chained 90-day re-anchors (MAX_RATE_WINDOW); saturation at
+        // MAX_MULTIPLIER is reached partway through and must then hold.
+        _accrueAtCurrentRate(10 * 365 days);
 
         uint256 mult = okuDollar.usdMultiplier();
         assertEq(

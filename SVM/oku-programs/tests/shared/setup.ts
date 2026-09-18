@@ -33,7 +33,12 @@ import {
 } from "@solana/spl-token";
 import type { LitePsm } from "../../target/types/lite_psm";
 import type { BankrunHarness } from "./bankrun";
-import { fundKeypairs, ensureAtaViaBankrun } from "./bankrun";
+import {
+  fundKeypairs,
+  ensureAtaViaBankrun,
+  seedProgramData,
+  programDataAddress,
+} from "./bankrun";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -130,6 +135,12 @@ export async function initializePsm(
     10 * anchor.web3.LAMPORTS_PER_SOL
   );
 
+  // `initialize` requires its signer to be the program's BPF upgrade
+  // authority. bankrun loads programs under BPFLoader2 and creates no
+  // ProgramData account, so seed one naming `payer` — see `seedProgramData`
+  // for why this is seeded rather than the check being disabled in tests.
+  await seedProgramData(h, program.programId, payer.publicKey);
+
   // `initialize` takes an `InitializeParams` struct and a `okuMMint`
   // signer keypair. The program creates the mint with extensions via CPI.
   await program.methods
@@ -149,6 +160,7 @@ export async function initializePsm(
     })
     .accountsPartial({
       roleAdmin: payer.publicKey,
+      programData: programDataAddress(program.programId),
       config: configPda,
       usdcMint,
       okuMMint,

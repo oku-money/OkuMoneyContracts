@@ -17,6 +17,7 @@ import { NetworkConfig } from '../../config/networks';
 import { DIRECT_MINTER_ALLOWANCE, DIRECT_BURNER_ALLOWANCE } from '../../config/constants';
 import {
   derivePsmConfigPDA,
+  programDataAddress,
 } from '../../utils/pdaHelpers';
 import { loadIdlWithAddress } from './programs';
 import { DeploymentConfig } from './config';
@@ -117,6 +118,11 @@ export async function initializePsm(
       })
       .accountsPartial({
         roleAdmin: provider.wallet.publicKey,
+        // The program requires its initializer to BE its BPF upgrade
+        // authority — see `contexts/init.rs`. The deploying wallet is that
+        // authority by construction, so this is a no-op for a normal deploy
+        // and a hard stop for anyone else racing to claim the config PDA.
+        programData: programDataAddress(program.programId),
         config: psmConfig,
         usdcMint: usdcMint,
         okuMMint: okuMMint,
@@ -135,6 +141,28 @@ export async function initializePsm(
       logger.warning('PSM already initialized -- reading OkuM mint from on-chain state');
       // Retrieve the OkuM mint from the existing PsmConfig
       const existingCfg: any = await program.account['psmConfig'].fetch(psmConfig);
+
+      // Treating "already initialized" as success is only safe if the
+      // existing config is OURS. Verify before adopting it: a config whose
+      // role_admin is someone else means this program ID was claimed by a
+      // third party, and silently continuing would produce a deployment
+      // record pointing at a PSM we do not control.
+      //
+      // `initialize` is now gated on the BPF upgrade authority
+      // (`contexts/init.rs`), so this should be unreachable — but this
+      // branch predates that gate and would have reported a hostile
+      // land-grab as a clean deploy, so the check stays as defence in depth.
+      const existingAdmin = existingCfg.roleAdmin as PublicKey;
+      if (!existingAdmin.equals(provider.wallet.publicKey)) {
+        throw new Error(
+          `PsmConfig at ${psmConfig.toBase58()} already exists but its role_admin is ` +
+            `${existingAdmin.toBase58()}, not this deployer ` +
+            `(${provider.wallet.publicKey.toBase58()}). Refusing to adopt a PSM ` +
+            `this wallet does not control. If this program ID was claimed by ` +
+            `someone else, rotate to a new program keypair.`
+        );
+      }
+
       okuMMint = existingCfg.okuMMint as PublicKey;
       logger.info(`OkuM mint (from config): ${okuMMint.toBase58()}`);
     } else {

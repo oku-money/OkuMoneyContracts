@@ -23,6 +23,11 @@ library TestConstants {
     /// @notice Maximum yield rate: ~3700% APY safety cap
     uint256 public constant MAX_RATE = SrcConstants.MAX_RATE;
 
+    /// @notice Maximum length of a single rate window (90 days).
+    /// @dev Re-exported rather than duplicated so a change to the bound in
+    ///      `src/lib/Constants.sol` propagates to every fixture automatically.
+    uint256 public constant MAX_RATE_WINDOW = SrcConstants.MAX_RATE_WINDOW;
+
     /// @notice Basis points denominator (10000 = 100%)
     uint256 public constant BASIS_POINTS = SrcConstants.BASIS_POINTS;
 

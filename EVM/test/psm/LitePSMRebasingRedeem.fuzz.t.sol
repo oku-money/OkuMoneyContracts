@@ -170,10 +170,12 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
 
         _mintUsdOkuViaPsm(user1, usdcAmount);
         // SINGLE MULTIPLIER: the rate lives on OkuMoney; `usdMultiplier()` reads it.
-        // Bounded window (100y) comfortably covers the 50y fuzz horizon above.
+        // A single window may not exceed MAX_RATE_WINDOW (90 days), so the up-to-
+        // 50-year fuzz horizon is walked as chained re-anchors at the same rate —
+        // see `_accrueAtCurrentRate`. That is also what production does.
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(1_000_000_001_546_176_000, block.timestamp + 100 * 365 days); // ~5% APY
-        vm.warp(block.timestamp + elapsedSeconds);
+        okuMoney.setOkuMYieldRate(1_000_000_001_546_176_000, block.timestamp + MAX_RATE_WINDOW); // ~5% APY
+        _accrueAtCurrentRate(elapsedSeconds);
         _topUpReservesFully();
 
         uint256 userBal = okuDollar.balanceOf(user1);

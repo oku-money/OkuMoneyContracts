@@ -456,7 +456,8 @@ contract OkuDollarTest is BaseTest {
 
         vm.recordLogs();
         vm.prank(user2);
-        okuDollar.withdraw(assets, user2, user1);
+        uint256 sharesReturned = okuDollar.withdraw(assets, user2, user1);
+        assertEq(sharesReturned, sharesQuote, "withdraw must return the shares burned");
 
         // Withdraw(sender, receiver, owner, assets, shares) — sender is the spender
         // (user2), NOT the owner whose shares were burned (user1). Prior to the fix,
@@ -487,6 +488,79 @@ contract OkuDollarTest is BaseTest {
             okuDollar.convertToAssets(okuDollar.balanceOf(user1)),
             "maxWithdraw must report assets, not shares"
         );
+    }
+
+    // ── EIP-4626 return-value contract ──────────────────────────────────────
+    //
+    // Every one of the four entry points' RETURN VALUES was previously
+    // unasserted anywhere in this suite — tests called them for their effects
+    // and discarded the result. `withdraw` was returning assets instead of
+    // shares as a result (`shares = previewWithdraw(...)` was immediately
+    // overwritten by `return _redeemShares(...)`, which returns OkuM), and
+    // nothing caught it. These tests pin the whole class, not just the one
+    // instance, and deliberately run at a non-unit multiplier so that assets
+    // and shares are far apart — at multiplier 1.0 the bug is invisible
+    // because the two quantities coincide.
+
+    function test_Withdraw_ReturnsSharesNotAssets() public {
+        _mintUsdOku(user1, 1000e18);
+        _setOkuMMultiplierAndRoll(PRECISION * 2); // assets and shares differ ~2x
+
+        uint256 assets = okuMoney.balanceOf(address(okuDollar)) / 2;
+        uint256 expectedShares = okuDollar.previewWithdraw(assets);
+        assertTrue(expectedShares != assets, "test is meaningless unless the two diverge");
+
+        vm.prank(user1);
+        uint256 returned = okuDollar.withdraw(assets, user1, user1);
+
+        assertEq(returned, expectedShares, "withdraw must return SHARES burned (EIP-4626)");
+        assertTrue(returned != assets, "withdraw must NOT return the assets it was given");
+    }
+
+    function test_Redeem_ReturnsAssetsNotShares() public {
+        _mintUsdOku(user1, 1000e18);
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
+
+        uint256 shares = okuDollar.balanceOf(user1) / 2;
+        uint256 expectedAssets = okuDollar.previewRedeem(shares);
+        assertTrue(expectedAssets != shares, "test is meaningless unless the two diverge");
+
+        vm.prank(user1);
+        uint256 returned = okuDollar.redeem(shares, user1, user1);
+
+        assertEq(returned, expectedAssets, "redeem must return ASSETS delivered (EIP-4626)");
+    }
+
+    function test_Deposit_ReturnsSharesMinted() public {
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
+        _mintOkuMoney(user1, 1000e18);
+
+        uint256 assets = 100e18;
+        uint256 expectedShares = okuDollar.previewDeposit(assets);
+        assertTrue(expectedShares != assets, "test is meaningless unless the two diverge");
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuDollar), assets);
+        uint256 returned = okuDollar.deposit(assets, user1);
+        vm.stopPrank();
+
+        assertEq(returned, expectedShares, "deposit must return SHARES minted (EIP-4626)");
+    }
+
+    function test_Mint_ReturnsAssetsConsumed() public {
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
+        _mintOkuMoney(user1, 1000e18);
+
+        uint256 shares = 100e18;
+        uint256 expectedAssets = okuDollar.previewMint(shares);
+        assertTrue(expectedAssets != shares, "test is meaningless unless the two diverge");
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuDollar), expectedAssets);
+        uint256 returned = okuDollar.mint(shares, user1);
+        vm.stopPrank();
+
+        assertEq(returned, expectedAssets, "mint must return ASSETS consumed (EIP-4626)");
     }
 
     function test_MaxDeposit_ZeroWhenPaused() public {
@@ -1380,18 +1454,34 @@ contract OkuDollarTest is BaseTest {
         vm.prank(rebaser);
         okuMoney.setOkuMYieldRate(rate1, endTime);
 
+        // The successor's own window is [endTime, pendingEnd] and is subject to
+        // MAX_RATE_WINDOW (90 days) — this used to request 400 days.
         vm.prank(rebaser);
-        okuMoney.setNextOkuMYieldRate(rate2, endTime + 400 days);
+        okuMoney.setNextOkuMYieldRate(rate2, endTime + MAX_RATE_WINDOW);
 
-        // Warp past end + 365 days: should have 30d of rate1 + 365d of rate2
-        vm.warp(endTime + 365 days);
+        // Snapshot at the handover instant so the successor's contribution can
+        // be isolated, rather than inferred from a total-magnitude threshold.
+        vm.warp(endTime);
+        uint256 multAtHandover = okuDollar.usdMultiplier();
+        assertGt(multAtHandover, PRECISION, "rate1 must have accrued over its 30-day window");
 
-        uint256 mult = okuDollar.usdMultiplier();
-        assertGt(mult, PRECISION, "Must have accrued yield through both periods");
+        // Run the successor to its own expiry.
+        vm.warp(endTime + MAX_RATE_WINDOW);
+        uint256 multAfterSuccessor = okuDollar.usdMultiplier();
+        assertGt(
+            multAfterSuccessor,
+            multAtHandover,
+            "pending rate must take over and keep accruing past the active window's end"
+        );
 
-        // Compare against just rate1 for 30 days (rate2 adds more)
-        // Approximate: 30 days of ~4.5% + 365 days of ~2% => well above PRECISION
-        assertGt(mult, PRECISION + 1e16, "Should have meaningful accrual");
+        // ...and then stop: with no further successor armed, accrual halts at
+        // pendingRateEnd rather than compounding forever.
+        vm.warp(endTime + MAX_RATE_WINDOW + 365 days);
+        assertEq(
+            okuDollar.usdMultiplier(),
+            multAfterSuccessor,
+            "accrual must halt at pendingRateEnd when no further successor is armed"
+        );
     }
 
     // ============ APY Accuracy Tests ============
@@ -1402,11 +1492,13 @@ contract OkuDollarTest is BaseTest {
         uint256 rate = 1_000_000_001_395_766_281;
 
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, block.timestamp + 400 days);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + MAX_RATE_WINDOW);
 
         uint256 startMult = okuDollar.usdMultiplier();
 
-        vm.warp(block.timestamp + 365 days);
+        // A window may not exceed MAX_RATE_WINDOW (90 days), so a 1-year
+        // horizon is walked as chained re-anchors — see `_accrueAtCurrentRate`.
+        _accrueAtCurrentRate(365 days);
 
         uint256 endMult = okuDollar.usdMultiplier();
         uint256 expectedMult = 1045e15; // 1.045e18
@@ -1431,8 +1523,8 @@ contract OkuDollarTest is BaseTest {
         assertEq(okuDollar.usdMultiplier(), okuMoney.okuMMultiplier());
 
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(PRECISION + 634e6, block.timestamp + 400 days); // streaming rate
-        vm.warp(block.timestamp + 365 days);
+        okuMoney.setOkuMYieldRate(PRECISION + 634e6, block.timestamp + MAX_RATE_WINDOW); // streaming rate
+        _accrueAtCurrentRate(365 days);
 
         assertEq(
             okuDollar.usdMultiplier(),
@@ -1543,9 +1635,9 @@ contract OkuDollarTest is BaseTest {
 
         uint256 rate = 1_000_000_001_395_766_281; // ~4.5% APY
         vm.prank(rebaser);
-        okuMoney.setOkuMYieldRate(rate, block.timestamp + 400 days);
+        okuMoney.setOkuMYieldRate(rate, block.timestamp + MAX_RATE_WINDOW);
 
-        vm.warp(block.timestamp + 365 days);
+        _accrueAtCurrentRate(365 days);
 
         uint256 bal1 = okuDollar.balanceOf(user1);
         uint256 bal2 = okuDollar.balanceOf(user2);

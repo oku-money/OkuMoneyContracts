@@ -343,6 +343,63 @@ export async function setLamports(
   h.context.setAccount(address, next);
 }
 
+/** Canonical BPF upgradeable loader program ID. */
+export const BPF_LOADER_UPGRADEABLE_ID = new PublicKey(
+  'BPFLoaderUpgradeab1e11111111111111111111111'
+);
+
+/** Derive a program's ProgramData PDA — `[program_id]` under the upgradeable
+ *  loader. Mirrors the on-chain `get_program_data_address`. */
+export function programDataAddress(programId: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [programId.toBuffer()],
+    BPF_LOADER_UPGRADEABLE_ID
+  )[0];
+}
+
+/**
+ * Seed a synthetic `ProgramData` account naming `upgradeAuthority` as the
+ * program's upgrade authority.
+ *
+ * `initialize` requires the caller to BE the program's upgrade authority
+ * (see `contexts/init.rs`), which closes an otherwise unauthenticated
+ * land-grab on the singleton `PsmConfig` PDA. bankrun, however, loads test
+ * programs under **BPFLoader2** (non-upgradeable) and creates **no**
+ * ProgramData account at all — verified empirically — so without this helper
+ * `initialize` is unreachable in tests.
+ *
+ * Seeding a real ProgramData account (rather than feature-flagging the check
+ * off under `cfg(test)`) means the tests exercise the SAME code path
+ * production runs, including the negative case: pass a different
+ * `upgradeAuthority` here and `initialize` must reject.
+ *
+ * Layout is `UpgradeableLoaderState::ProgramData`, bincode-encoded:
+ *   u32 enum discriminant (= 3) | u64 slot | Option<Pubkey> authority
+ *   4 + 8 + (1 + 32) = 45 bytes
+ */
+export async function seedProgramData(
+  h: BankrunHarness,
+  programId: PublicKey,
+  upgradeAuthority: PublicKey
+): Promise<PublicKey> {
+  const address = programDataAddress(programId);
+  const data = new Uint8Array(45);
+  const view = new DataView(data.buffer);
+  view.setUint32(0, 3, true); // UpgradeableLoaderState::ProgramData
+  view.setBigUint64(4, 0n, true); // slot
+  data[12] = 1; // Option::Some
+  data.set(upgradeAuthority.toBytes(), 13);
+
+  h.context.setAccount(address, {
+    lamports: 1_000_000_000,
+    data,
+    owner: BPF_LOADER_UPGRADEABLE_ID,
+    executable: false,
+    rentEpoch: 0,
+  });
+  return address;
+}
+
 /** Bulk-fund a list of keypairs via `setLamports` (bankrun has no
  *  `requestAirdrop`). Used by every test `before()` hook and by
  *  `initializePsm` to credit the shared authority keypairs. */

@@ -594,11 +594,19 @@ async function configureRoles(
   }
   logger.info(`  USDC match verified: ${psmUsdc}`);
 
-  // OkuMoney minter roles. LitePSM is the sole user-facing OKUM_MINTER in the
-  // noBridge model; RedemptionQueue mints rebase deltas; off-chain cross-chain
-  // mint/burn flows route through LitePSM via the orchestrator's USDC custody.
+  // OkuMoney minter roles. LitePSM is the ONLY OKUM_MINTER; off-chain
+  // cross-chain mint/burn flows route through it via the orchestrator's USDC
+  // custody.
+  //
+  // RedemptionQueue deliberately does NOT get OKUM_MINTER. It used to, with
+  // the justification "RedemptionQueue mints rebase deltas" — that described
+  // the pre-streaming-accrual design and is long dead. The current contract
+  // calls exactly two OkuMoney methods, `burn` and `okuMMultiplier` (grep it),
+  // so the grant plus its 1e27 minter allowance was a live, unused
+  // mint-anything capability parked on an upgradeable contract whose
+  // QUEUE_UPGRADER is the same admin key. Least privilege: removed. The
+  // OKUM_BURNER grant below is the one it actually needs.
   await sendAndWait("Grant OKUM_MINTER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_MINTER, litePSMAddress));
-  await sendAndWait("Grant OKUM_MINTER to RedemptionQueue", () => okuMoney.grantRole(ROLES.OKUM_MINTER, redemptionQueueAddress));
 
   // Cycle 4 (EVM-15): OKUM_BURNER was split out of OKUM_MINTER. Both consumers
   // of `OkuMoney.burn(...)` need the burner role:
@@ -612,9 +620,9 @@ async function configureRoles(
   await sendAndWait("Grant OKUM_REBASER to Admin", () => okuMoney.grantRole(ROLES.OKUM_REBASER, deployerAddress));
   await sendAndWait("Grant OKUM_ALLOWANCE_MANAGER to Admin", () => okuMoney.grantRole(ROLES.OKUM_ALLOWANCE_MANAGER, deployerAddress));
 
-  // Minter allowances
+  // Minter allowances. LitePSM only — see the OKUM_MINTER comment above for
+  // why RedemptionQueue no longer receives one.
   await sendAndWait("Set LitePSM minter allowance", () => okuMoney.configureMinterAllowance(litePSMAddress, config.minterAllowance));
-  await sendAndWait("Set RedemptionQueue minter allowance", () => okuMoney.configureMinterAllowance(redemptionQueueAddress, config.minterAllowance));
 
   // OkuDollar roles
   // REMOVED: VAULT_REBASER grant — OkuDollar has no rate of its own. The
@@ -673,7 +681,8 @@ export function expectedRoleGrants(): ExpectedRoleGrant[] {
   return [
     // OkuMoney — contract-to-contract grants. Without these, mint/redeem revert.
     { label: "OkuMoney.OKUM_MINTER -> LitePSM", contract: "okuMoney", role: ROLES.OKUM_MINTER, holder: "litePSM" },
-    { label: "OkuMoney.OKUM_MINTER -> RedemptionQueue", contract: "okuMoney", role: ROLES.OKUM_MINTER, holder: "redemptionQueue" },
+    // NOTE: OKUM_MINTER -> RedemptionQueue is deliberately absent; it is
+    // asserted as a NEGATIVE check further below. RedemptionQueue only burns.
     { label: "OkuMoney.OKUM_BURNER -> LitePSM", contract: "okuMoney", role: ROLES.OKUM_BURNER, holder: "litePSM" },
     { label: "OkuMoney.OKUM_BURNER -> RedemptionQueue", contract: "okuMoney", role: ROLES.OKUM_BURNER, holder: "redemptionQueue" },
 
@@ -754,11 +763,25 @@ async function verifyDeployment(
   // checks BOTH `onlyRole(OKUM_MINTER)` and `minterAllowance[msg.sender]`, so
   // a role grant without an allowance still reverts with ExceedsAllowance.
   const psmAllowance = await okuMoney.minterAllowance(litePSMAddress);
-  const queueAllowance = await okuMoney.minterAllowance(queueAddress);
   if (psmAllowance === 0n) missingRoles.push("LitePSM minter allowance is zero");
-  if (queueAllowance === 0n) missingRoles.push("RedemptionQueue minter allowance is zero");
   logger.info(`  LitePSM minter allowance: ${psmAllowance}`);
-  logger.info(`  RedemptionQueue minter allowance: ${queueAllowance}`);
+
+  // RedemptionQueue must have NEITHER the minter role NOR an allowance — it
+  // only burns. This is asserted as a NEGATIVE check rather than simply
+  // dropped, so that a future re-grant (or a stale prior deployment being
+  // reused via the address book) fails the deploy loudly instead of silently
+  // restoring a 1e27 mint capability. See the OKUM_MINTER grant block above.
+  const queueAllowance = await okuMoney.minterAllowance(queueAddress);
+  const queueHasMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, queueAddress);
+  if (queueAllowance !== 0n) {
+    missingRoles.push(
+      `RedemptionQueue minter allowance must be 0 (it only burns), got ${queueAllowance}`
+    );
+  }
+  if (queueHasMinter) {
+    missingRoles.push("RedemptionQueue must NOT hold OKUM_MINTER (it only burns)");
+  }
+  logger.info(`  RedemptionQueue minter allowance: ${queueAllowance} (expected 0)`);
 
   // Verify all addresses saved
   const book = loadAddressBook();

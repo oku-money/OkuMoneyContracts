@@ -1375,6 +1375,32 @@ contract LitePSMTest is BaseTest {
         litePsm.withdrawUsdc(user1, 1e6);
     }
 
+    /// @notice `processQueue` pays real USDC against a cached multiplier, so it
+    ///         must carry the same same-block guard every other
+    ///         multiplier-consuming path here already had.
+    /// @dev This was the sole omission: `RedemptionQueue.processQueue` caches
+    ///      `okuMMultiplier()` ONCE before its loop and converts every entry at
+    ///      that rate, so a discrete multiplier bump landing in the same block
+    ///      would shift the entire batch's payout — exactly the hazard
+    ///      `withdrawUsdc`'s NatSpec already calls out.
+    function test_ProcessQueue_RevertsInYieldDistributionBlock() public {
+        _stampYieldLockBlock();
+
+        vm.prank(queueProcessor);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        litePsm.processQueue(0, 0, 0);
+    }
+
+    function test_ProcessQueue_SucceedsInNextBlockAfterYield() public {
+        _stampYieldLockBlock();
+        vm.roll(block.number + 1);
+
+        // Empty range — this asserts the guard no longer blocks, not queue
+        // mechanics (covered in RedemptionQueue.t.sol).
+        vm.prank(queueProcessor);
+        litePsm.processQueue(0, 0, 0);
+    }
+
     function test_WithdrawUSDC_SucceedsInNextBlockAfterYield() public {
         _mintOkuMoney(user2, 10_000e18);
         _stampYieldLockBlock();

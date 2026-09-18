@@ -193,7 +193,11 @@ pub const fn compound_for(base: u128, rate: u128, elapsed: u64) -> Option<u128> 
         Some(v) => v,
         None => return None,
     };
-    Some(if result > MAX_MULTIPLIER { MAX_MULTIPLIER } else { result })
+    Some(if result > MAX_MULTIPLIER {
+        MAX_MULTIPLIER
+    } else {
+        result
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +289,11 @@ pub const fn compute_multiplier(
         // or sets a fresh one strictly in the future), but guard the
         // subtraction anyway rather than let a future writer bug underflow
         // this view forever.
-        let elapsed_in_window = if anchor < rate_end { (rate_end - anchor) as u64 } else { 0 };
+        let elapsed_in_window = if anchor < rate_end {
+            (rate_end - anchor) as u64
+        } else {
+            0
+        };
         let mut compounded = match compound_for(base, rate, elapsed_in_window) {
             Some(v) => v,
             None => return None,
@@ -385,7 +393,10 @@ mod tests {
 
     #[test]
     fn compound_for_is_identity_at_zero_elapsed() {
-        assert_eq!(compound_for(PRECISION, rate_for_apy(0.05), 0), Some(PRECISION));
+        assert_eq!(
+            compound_for(PRECISION, rate_for_apy(0.05), 0),
+            Some(PRECISION)
+        );
         // Even a nonsense rate is the identity when no time has passed.
         assert_eq!(compound_for(12345, u128::MAX, 0), Some(12345));
     }
@@ -399,7 +410,10 @@ mod tests {
 
     #[test]
     fn compound_for_no_yield_rate_is_identity() {
-        assert_eq!(compound_for(PRECISION, PRECISION, 31_536_000), Some(PRECISION));
+        assert_eq!(
+            compound_for(PRECISION, PRECISION, 31_536_000),
+            Some(PRECISION)
+        );
     }
 
     // -- compute_multiplier: branch 1 (halted) ----------------------------
@@ -417,7 +431,8 @@ mod tests {
         // writers never produce, but the defensive fallback must accrue it
         // rather than silently drop it. Mirrors MathLib.t.sol:314 / :329.
         let r = rate_for_apy(0.05);
-        let got = compute_multiplier(PRECISION, PRECISION, 0, 1_000, r, 0, 1_000 + 30 * DAY).unwrap();
+        let got =
+            compute_multiplier(PRECISION, PRECISION, 0, 1_000, r, 0, 1_000 + 30 * DAY).unwrap();
         assert!(got > PRECISION, "defensive overhang did not accrue");
     }
 
@@ -453,7 +468,12 @@ mod tests {
             // (anchor, rate_end, pending_rate_end, now_ts)
             (i64::MIN, i64::MAX, i64::MAX, i64::MAX),
             (i64::MAX, i64::MIN, i64::MIN, i64::MIN),
-            (-8542639707296468366, 8246779703540740749, 8246779703540740722, 1920103026),
+            (
+                -8542639707296468366,
+                8246779703540740749,
+                8246779703540740722,
+                1920103026,
+            ),
             (i64::MIN, 0, 0, i64::MAX),
             (-1, 1, 1, 1),
             (0, i64::MAX, i64::MAX, i64::MAX),
@@ -513,7 +533,10 @@ mod tests {
         };
         let at_end = s.multiplier_at(30 * DAY).unwrap();
         let later = s.multiplier_at(90 * DAY).unwrap();
-        assert_eq!(at_end, later, "accrual must HALT when no successor is armed");
+        assert_eq!(
+            at_end, later,
+            "accrual must HALT when no successor is armed"
+        );
     }
 
     #[test]
@@ -534,7 +557,10 @@ mod tests {
         // And it halts at its own expiry.
         let at_pending_end = s.multiplier_at(60 * DAY).unwrap();
         let way_later = s.multiplier_at(365 * DAY).unwrap();
-        assert_eq!(at_pending_end, way_later, "overhang must be bounded by pending_rate_end");
+        assert_eq!(
+            at_pending_end, way_later,
+            "overhang must be bounded by pending_rate_end"
+        );
     }
 
     #[test]
@@ -556,7 +582,10 @@ mod tests {
         let after = s.multiplier_at(30 * DAY + 1).unwrap();
         // One second of 10% APY on ~1.004 is about 3e9 at WAD scale.
         assert!(at >= before && after >= at);
-        assert!(after - at < PRECISION / 1_000_000, "discontinuity at handover");
+        assert!(
+            after - at < PRECISION / 1_000_000,
+            "discontinuity at handover"
+        );
     }
 
     #[test]
@@ -571,7 +600,11 @@ mod tests {
             0,
             90 * DAY,
         );
-        assert_eq!(got, Some(PRECISION), "anchor > rate_end must contribute zero elapsed");
+        assert_eq!(
+            got,
+            Some(PRECISION),
+            "anchor > rate_end must contribute zero elapsed"
+        );
     }
 
     // -- monotonicity invariant -------------------------------------------

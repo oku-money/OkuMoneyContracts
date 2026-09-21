@@ -24,7 +24,7 @@ infrastructure backed by US Treasury Bills. Single-token architecture
 The single program housing the Peg Stability Module (buffer-only —
 no redemption queue), yield distribution, compliance (freeze / thaw),
 and direct mint/burn for bridging. Program ID:
-`BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g`. Holds mint
+`4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN`. Holds mint
 authority, freeze authority, and `ScaledUiAmountConfig` authority
 over the `OkuM` mint. All program authority is held by a PDA — no
 EOA controls minting.
@@ -593,6 +593,47 @@ escrow-setup instruction.
 No on-chain bridge, router, or redemption queue is deployed — the PSM is
 buffer-only and cross-chain transfers are orchestrator-mediated.
 
+### Two binding authority constraints at init
+
+`initialize` enforces two rules that, taken together, force the deployer
+and the operational roles onto **different keys**:
+
+1. **`role_admin` must be the BPF upgrade authority.** `contexts/init.rs`
+   constrains `program_data.upgrade_authority_address ==
+   Some(role_admin.key())`. The account that signs `initialize` and becomes
+   `config.role_admin` is therefore always the deploying wallet. This also
+   stops a third party racing to claim the config PDA.
+2. **No granular authority may equal `role_admin`** (nor the zero pubkey).
+   `instructions/init.rs` checks all 9 — `pauser`, `unpauser`, `freezer`,
+   `unfreezer`, `buffer_depositor`, `buffer_withdrawer`, `cap_manager`,
+   `allowance_manager`, `rebaser` — mirroring `set_authority`'s
+   separation-of-duties guard in `psm_admin.rs`.
+
+So on devnet/localnet the deployer holds `role_admin` and a **separate,
+locally-held operator key** (`keys/devnet-authority.json`, gitignored)
+holds all 9 granular roles. One key still signs every operational call
+during smoke testing, so the convenience of the old single-key setup is
+preserved; the deployer keeps unconditional claw-back via `set_authority`.
+`direct_minter` / `direct_burner` sit on a third key (the delegate EOA) —
+they model an external fiat/bridge operator and are wired by
+`grant-roles.ts`.
+
+Generate and fund the operator key before the first deploy:
+
+```bash
+solana-keygen new --outfile keys/devnet-authority.json
+solana transfer $(solana-keygen pubkey keys/devnet-authority.json) 0.5 \
+    --url devnet --allow-unfunded-recipient
+```
+
+Override the path with `DEVNET_AUTHORITY_PATH` if CI stages it elsewhere.
+
+> Historical note: `scripts/config/authorities.ts` originally pointed all
+> 9 roles at the deployer. That made `initialize` revert with
+> `InvalidAuthority` (6024) — the devnet deploy path could not complete at
+> all. `direct_minter`/`direct_burner` had already been split out for this
+> exact reason; the other 9 were missed.
+
 ---
 
 ## Error codes
@@ -780,7 +821,7 @@ solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority 
 
 - [ ] `MAINNET_ORCHESTRATOR` env var points at a KMS-backed signer, not the deployer wallet.
 - [ ] BPF loader upgrade authority transferred to the cold multisig.
-- [ ] `Anchor.toml [programs.<network>]` matches the freshly-deployed program ID (`BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g`).
+- [ ] `Anchor.toml [programs.<network>]` matches the freshly-deployed program ID (`4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN`).
 - [ ] Token-2022 binary override applied if bankrun tests are part of CI (`make fetch-token-2022`).
 
 ### Delegated operation vs. retained ownership (devnet/testnet)
@@ -788,7 +829,19 @@ solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority 
 On mainnet, roles map to the Squads multisig tiers per the Authority
 model table above. On devnet/testnet it's common to delegate
 day-to-day operation of the app to a coworker or CI-owned key (the
-"delegate") while governance retains ownership. The rule of thumb:
+"delegate") while governance retains ownership.
+
+On devnet the starting point is the two-key split described under
+[Initialization](#two-binding-authority-constraints-at-init): deployer =
+`role_admin`, operator key = the 9 granular roles. `grant-roles.ts` then
+moves the 4 *operational* roles onto the delegate EOA. Note the ordering
+consequence: once `rebaser` and `buffer_depositor` have moved to a
+delegate you do not hold, `npm run test:onchain` can no longer run its
+`streamingAccrual` and `redeem` steps. **Run the smoke test before
+`grant-roles`**, or claw the roles back first with `set-authority.ts`
+(`role_admin` can do this unilaterally, in one tx per role).
+
+The rule of thumb:
 
 - **Operational roles** (safe to delegate to a third-party operating
   key): `direct_minter`, `direct_burner`, `rebaser`, `buffer_depositor`.

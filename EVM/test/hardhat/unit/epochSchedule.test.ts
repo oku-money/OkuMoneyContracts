@@ -12,22 +12,33 @@ import {
 import { PRECISION, MAX_RATE } from "../../../scripts/utils/yieldRate";
 
 describe("scripts/utils/epochSchedule", () => {
-    const grid30d: EpochGrid = {
+    // Production grid: 24h epochs (scripts/config/epoch.ts). At the default
+    // 1/15 settlement fraction this is a 22.4h base window + a 1.6h settlement
+    // window.
+    const grid24h: EpochGrid = {
         epochStartSec: 0,
-        epochLengthSec: 30 * 86400,
+        epochLengthSec: 24 * 3600,
         settlementFraction: DEFAULT_SETTLEMENT_FRACTION,
     };
 
     describe("baseEndSec / epochEndSec", () => {
-        it("computes a 2-day settlement window on a 30-day epoch at the default fraction", () => {
-            const settlementLen = epochEndSec(grid30d) - baseEndSec(grid30d);
-            expect(settlementLen).to.be.closeTo(2 * 86400, 1);
+        it("computes a 1.6-hour settlement window on a 24-hour epoch at the default fraction", () => {
+            const settlementLen = epochEndSec(grid24h) - baseEndSec(grid24h);
+            expect(settlementLen).to.be.closeTo(5760, 1); // 24h / 15
+            // And the base window is the remainder, not a separately-derived number.
+            expect(baseEndSec(grid24h) - grid24h.epochStartSec).to.be.closeTo(86400 - 5760, 1);
         });
 
         it("scales the settlement window proportionally for a 1-hour epoch", () => {
             const grid1h: EpochGrid = { epochStartSec: 0, epochLengthSec: 3600, settlementFraction: DEFAULT_SETTLEMENT_FRACTION };
             const settlementLen = epochEndSec(grid1h) - baseEndSec(grid1h);
             expect(settlementLen).to.be.closeTo(3600 / 15, 1);
+        });
+
+        it("still scales UP correctly — the split is a pure fraction, not tuned to 24h", () => {
+            const grid30d: EpochGrid = { epochStartSec: 0, epochLengthSec: 30 * 86400, settlementFraction: DEFAULT_SETTLEMENT_FRACTION };
+            const settlementLen = epochEndSec(grid30d) - baseEndSec(grid30d);
+            expect(settlementLen).to.be.closeTo(2 * 86400, 1);
         });
     });
 
@@ -37,7 +48,7 @@ describe("scripts/utils/epochSchedule", () => {
                 targetUsd: 40_000,
                 baseWindowFraction: 0.9,
                 measuredAvgValueUsd: 10_000_000,
-                grid: grid30d,
+                grid: grid24h,
             });
             expect(baseWindowTargetUsd).to.be.closeTo(40_000 * 0.9, 1e-6);
             expect(ratePerSecond).to.be.greaterThan(1);
@@ -48,7 +59,7 @@ describe("scripts/utils/epochSchedule", () => {
                 targetUsd: 40_000,
                 baseWindowFraction: 1,
                 measuredAvgValueUsd: 10_000_000,
-                grid: grid30d,
+                grid: grid24h,
             });
             expect(baseWindowTargetUsd).to.equal(40_000);
         });
@@ -59,7 +70,7 @@ describe("scripts/utils/epochSchedule", () => {
                     targetUsd: 40_000,
                     baseWindowFraction: 0,
                     measuredAvgValueUsd: 10_000_000,
-                    grid: grid30d,
+                    grid: grid24h,
                 })
             ).to.throw(/baseWindowFraction/);
             expect(() =>
@@ -67,7 +78,7 @@ describe("scripts/utils/epochSchedule", () => {
                     targetUsd: 40_000,
                     baseWindowFraction: 1.1,
                     measuredAvgValueUsd: 10_000_000,
-                    grid: grid30d,
+                    grid: grid24h,
                 })
             ).to.throw(/baseWindowFraction/);
         });
@@ -80,13 +91,13 @@ describe("scripts/utils/epochSchedule", () => {
                 targetUsd: 45_000, // caller already folded in +5k carry upstream
                 baseWindowFraction: 0.9,
                 measuredAvgValueUsd: 10_000_000,
-                grid: grid30d,
+                grid: grid24h,
             });
             const b = deriveBaseRate({
                 targetUsd: 45_000,
                 baseWindowFraction: 0.9,
                 measuredAvgValueUsd: 10_000_000,
-                grid: grid30d,
+                grid: grid24h,
             });
             expect(a.ratePerSecond).to.equal(b.ratePerSecond);
         });
@@ -100,7 +111,7 @@ describe("scripts/utils/epochSchedule", () => {
                 targetUsd,
                 baseWindowFraction,
                 measuredAvgValueUsd: 10_000_000,
-                grid: grid30d,
+                grid: grid24h,
             });
 
             // Simulate the base window distributing exactly its own target (idealized),
@@ -112,8 +123,8 @@ describe("scripts/utils/epochSchedule", () => {
                 targetUsd,
                 distributedSoFarUsd,
                 settlementForecastAvgValueUsd: 10_000_000,
-                grid: grid30d,
-                stagingSec: baseEndSec(grid30d),
+                grid: grid24h,
+                stagingSec: baseEndSec(grid24h),
                 baseRatePerSecond: rBaseFloat,
             });
 
@@ -130,28 +141,32 @@ describe("scripts/utils/epochSchedule", () => {
                 targetUsd,
                 baseWindowFraction,
                 measuredAvgValueUsd,
-                grid: grid30d,
+                grid: grid24h,
             });
 
-            // Stage 2 days before baseEndSec (a realistic lead time) — base
-            // window has only distributed a PORTION of its own target so far.
-            const stagingSec = baseEndSec(grid30d) - 2 * 86400;
+            // Stage 4 hours before baseEndSec (a realistic lead time on a 24h
+            // epoch, whose base window is 22.4h) — the base window has only
+            // distributed a PORTION of its own target so far. NOTE: this lead
+            // must stay well inside the base window; the previous value here
+            // was 2 days, which is longer than the entire epoch now and would
+            // put stagingSec before epochStartSec.
+            const stagingSec = baseEndSec(grid24h) - 4 * 3600;
             // Idealized: distributed exactly proportional to elapsed base-window time.
-            const baseWindowLenSec = grid30d.epochLengthSec * (1 - grid30d.settlementFraction);
-            const elapsedFrac = (stagingSec - grid30d.epochStartSec) / baseWindowLenSec;
+            const baseWindowLenSec = grid24h.epochLengthSec * (1 - grid24h.settlementFraction);
+            const elapsedFrac = (stagingSec - grid24h.epochStartSec) / baseWindowLenSec;
             const distributedSoFarUsd = baseWindowTargetUsd * elapsedFrac;
 
             const rSettleWithTail = deriveSettlementRateForEpoch({
                 targetUsd,
                 distributedSoFarUsd,
                 settlementForecastAvgValueUsd: measuredAvgValueUsd,
-                grid: grid30d,
+                grid: grid24h,
                 stagingSec,
                 baseRatePerSecond: rBaseFloat,
             });
 
             // Without the tail correction (old buggy behavior), the settlement
-            // rate would be derived as if the ~2 remaining base-window days
+            // rate would be derived as if the ~4 remaining base-window hours
             // don't exist — i.e. targeting the FULL remaining gap
             // (targetUsd - distributedSoFarUsd) instead of that minus the
             // projected tail. That would produce a HIGHER settlement rate than
@@ -161,7 +176,7 @@ describe("scripts/utils/epochSchedule", () => {
                 1 + (targetUsd - distributedSoFarUsd) / measuredAvgValueUsd;
             const rSettleWithoutTailFix = Math.pow(
                 growthWithoutTailFix,
-                1 / (grid30d.epochLengthSec * grid30d.settlementFraction)
+                1 / (grid24h.epochLengthSec * grid24h.settlementFraction)
             );
 
             expect(rSettleWithTail).to.be.lessThan(rSettleWithoutTailFix);
@@ -196,7 +211,7 @@ describe("scripts/utils/epochSchedule", () => {
             const schedule = toOnChainSchedule({
                 rBaseFloat: 1.0000000015,
                 rSettleFloat: 1.000000003,
-                grid: grid30d,
+                grid: grid24h,
             });
             expect(Number.isInteger(schedule.baseEndSec)).to.be.true;
             expect(Number.isInteger(schedule.settleEndSec)).to.be.true;

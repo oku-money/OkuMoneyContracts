@@ -69,6 +69,20 @@ Caveats:
   where they apply. Testnets all use `MockUSDC` deterministically, so
   `RedemptionQueue`/`LitePSM` match across testnets; mainnet (real USDC)
   diverges — handled post-audit.
+- **⚠ Comments in `src/` are address-load-bearing.** `bytecodeHash` is left at
+  solc's default (`ipfs`), so the compiler appends a metadata hash — derived
+  from the *source text* — to every contract's creation bytecode. Editing even
+  a comment or a NatSpec line in `src/` therefore changes the initCode, which
+  changes the CREATE2 address, which silently forks the fleet away from the
+  already-deployed contracts and invalidates their block-explorer
+  verification. Practical consequences:
+  - Documentation-only changes to `src/` must be batched with a planned
+    redeploy / `DEPLOYMENT_VERSION` bump, not landed opportunistically.
+  - Files under `test/` are unaffected — test contracts are never deployed.
+  - If this coupling is unwanted, set `settings.metadata.bytecodeHash = "none"`
+    in both `hardhat.config.ts` and `foundry.toml`. That decouples comments
+    from addresses permanently, but is itself an address-changing change, so it
+    must also coincide with a version bump.
 
 ### Where deployed addresses live
 
@@ -292,7 +306,7 @@ by the operator drill.
 | [`scripts/utils/globalValue.ts`](scripts/utils/globalValue.ts) + [`scripts/operator/sampleGlobalValue.ts`](scripts/operator/sampleGlobalValue.ts) | Cross-chain `totalSupply() * okuMMultiplier()` sampler + local JSON store (REFERENCE implementation, not durable/shared — see `TRACKER.md`). `valueAt` (interpolation), `samplesInWindow`, `cumulativeDistributedUsd`. |
 | [`scripts/utils/carryLedger.ts`](scripts/utils/carryLedger.ts) | Append-only local JSON ledger (REFERENCE implementation) of every epoch's rate derivation; `summarizeLedger()` computes the cumulative-conservation identity, read (diagnostic-only) by `checkMultiplierDrift.ts`. |
 | [`scripts/operator/setOkuMYieldRate.ts`](scripts/operator/setOkuMYieldRate.ts) | Replaces the deleted `distributeYield.ts`. Prefers `APY=<fraction>` (raw `RATE=` supported for corrections but warned against). Default path calls `setOkuMYieldRate(rate, endTimestamp)`, requiring a future `END_TIMESTAMP` for any yielding rate; `STAGE=true PENDING_END_TIMESTAMP=<unix>` calls `setNextOkuMYieldRate(rate, pendingEndTimestamp)` — the **preferred** path, since the successor activates with no transaction at the boundary. `WITH_SUCCESSOR=true` (+ `NEXT_APY`) uses the atomic `setOkuMYieldRateWithSuccessor`. Supports `DRY_RUN=true`; `YES_MAINNET=true` required to broadcast on mainnet. |
-| [`scripts/operator/checkMultiplierDrift.ts`](scripts/operator/checkMultiplierDrift.ts) | Read-only cross-chain drift monitor. Compares `okuMMultiplier()`, rate, `rateEnd`, and pending rate across chains; exits non-zero on any mismatch. `CHAINS`, `TOLERANCE_BPS` (default 1), `EXPIRY_WARN_HOURS` (default 48), and OPTIONAL `EPOCH_ANCHOR_UNIX` / `EPOCH_LENGTH_SECONDS` / `EPOCH_GRID_TOLERANCE_SECONDS` for epoch-grid alignment checking (skipped until set). An EXPIRED rate window is now a hard failure (not a warning) — under a fixed-epoch model this is a recurring, scheduled deadline, not an edge case. Also reports the carry ledger's cumulative-conservation summary. |
+| [`scripts/operator/checkMultiplierDrift.ts`](scripts/operator/checkMultiplierDrift.ts) | Read-only cross-chain drift monitor. Compares `okuMMultiplier()`, rate, `rateEnd`, and pending rate across chains; exits non-zero on any mismatch. `CHAINS`, `TOLERANCE_BPS` (default 1), `EXPIRY_WARN_HOURS` (default 4 — must stay well under one epoch length or it fires on every chain on every run), and `EPOCH_ANCHOR_UNIX` / `EPOCH_LENGTH_SECONDS` / `EPOCH_GRID_TOLERANCE_SECONDS` overrides for epoch-grid alignment checking (defaults come from the committed grid, so the check is ON by default). An EXPIRED rate window is now a hard failure (not a warning) — under a fixed-epoch model this is a recurring, scheduled deadline, not an edge case. Also reports the carry ledger's cumulative-conservation summary. |
 
 **Deleted**: `scripts/operator/distributeYield.ts`,
 `scripts/operator/setUsdYieldRate.ts`,
@@ -888,7 +902,7 @@ specifically proves flat supply with **no** buffer (`conservativeFactor =
 mechanism.
 
 **Baseline**: 1,000,000 OkuM global supply, 3.2% realized on-chain APY (after
-off-chain spread from a ~3.5% RWA return), 30-day epoch, 2-day (1/15)
+off-chain spread from a ~3.5% RWA return), **24-hour epoch**, 1.6-hour (1/15)
 settlement window, `baseWindowFraction = 0.9`, `conservativeFactor = 0.97`.
 
 **A note on reading these tables**: with `conservativeFactor = 0.97`, the
@@ -971,14 +985,27 @@ below for why the "error" column isn't a real independent measurement of that.
 | Epoch length | Settlement window | Status |
 |---|---|---|
 | 1 hour | 4 minutes | Characterization only — see feasibility note below |
-| 1 day | 1.6 hours | Characterization only |
+| **1 day (production grid)** | **1.6 hours** | **Fully tested — ADOPTED** |
 | **7 days** | **11.2 hours** | **Fully tested candidate** |
-| **30 days (baseline)** | **2 days** | **Fully tested candidate** |
+| **30 days** | **2 days** | **Fully tested candidate** |
 | 90 days | 6 days | Characterization only |
 
-7-day and 30-day epochs are the fully-tested candidates for adoption (per
-product decision); 1 hour / 1 day / 90 days are characterized for mechanism
-correctness only, not recommended.
+**24 hours is the adopted production grid** (`scripts/config/epoch.ts`),
+anchored at 2026-01-01T00:00:00Z so every epoch boundary is UTC midnight.
+7-day and 30-day remain fully-tested alternatives; 1 hour and 90 days are
+characterized for mechanism correctness only and are not recommended — a
+4-minute settlement window is not an operational window.
+
+Adopting 24h required **no contract or program changes**. The on-chain guards
+constrain only the maximum rate (`MAX_RATE`) and the maximum window
+(`MAX_RATE_WINDOW = 90 days`); there is no minimum window on either stack, and
+86,400s sits far inside the maximum. What the shorter epoch does change is
+`MAX_RATE` *headroom*: the ceiling permits ~0.8677% growth per 24h versus
+~29.6% per 30 days. A realistic daily figure (5% APY ≈ 0.0137% of AUM) leaves
+roughly 63x margin, but a **monthly-sized dollar target pushed through a daily
+window sits at only ~2x** — the specific regression the
+`MAX_RATE headroom at a 24h epoch` tests in
+`test/hardhat/unit/yieldRate.test.ts` now pin.
 
 **Known test-design limitation, not chased down (see `TRACKER.md`):** the
 measured "error vs `Y*`" figure came out nearly identical (~2.27-2.29%) across
@@ -1606,6 +1633,17 @@ OkuMoney records `lastYieldDistributionBlock = block.number` inside `setOkuMMult
 
 Every contract's `initialize` grants its **full** role set to `admin`. Admin is expected to redistribute operational roles (minters, rebasers, rescuers, etc.) to other parties (multisigs, bots) post-deployment via `grantRoles.ts` or `grantRolesMainnet.ts`. This removes contract-specific role plumbing from deployment scripts.
 
+`grantRoles.ts` and `grantRolesMainnet.ts` are NOT interchangeable — they implement different threat models for different environments:
+
+| | `grantRoles.ts` | `grantRolesMainnet.ts` |
+|---|---|---|
+| Target | `MASTER_EOA` (single testnet operator key) | Cold Multisig / Warm Multisig / Orchestrator (3-key topology, from `MAINNET_COLD_MULTISIG` / `MAINNET_WARM_MULTISIG` / `MAINNET_ORCHESTRATOR` env vars) |
+| Grants | `OKUM_REBASER`, `OKUM_MINTER`, `OKUM_BURNER` (OkuMoney) + `PSM_BUFFER_DEPOSITOR`, `PSM_QUEUE_PROCESSOR` (LitePSM), plus a `configureMinterAllowance` call so the mint grant is usable | Full production RBAC split per the table below |
+| `DEFAULT_ADMIN_ROLE` / `*_UPGRADER` | Never granted — stays on the deployer | Cold Multisig only; deployer's admin is revoked as the script's final step |
+| Runs on mainnet? | **Refuses unconditionally** — see its NatSpec header | Yes (its purpose) |
+
+`grantRoles.ts` including `OKUM_MINTER`/`OKUM_BURNER` on an EOA is a **deliberate testnet-only divergence** from the "never callable by EOA" guarantee in the role table below — it exists to give a testnet operator SVM-equivalent direct-mint/burn parity (SVM has no redemption queue and must mint/burn directly; EVM's production bridge legs are USDC-collateral-mediated and don't need it). That is why the script hard-refuses to broadcast on any mainnet network rather than offering an opt-in override.
+
 One intentional exception:
 - `RedemptionQueue.QUEUE_PSM` is NOT granted at init — it is granted post-deploy to the `LitePSM` proxy address. This avoids a circular deployment dependency AND keeps admin from being able to call `enqueue` / `processQueue` directly (bypassing the PSM).
 
@@ -1637,7 +1675,7 @@ both EVM and SVM. EVM-specific notes:
 | `OKUM_REBASER` | Orchestrator | Set the shared yield-rate schedule (`setOkuMYieldRate`, `setNextOkuMYieldRate`, `setOkuMYieldRateWithSuccessor`) and the discrete emergency override (`setOkuMMultiplier`) | Rate bounded to `[PRECISION, MAX_RATE]` (`InvalidRate` / `RateTooHigh`), so it can never drive the multiplier backwards; multiplier hard capped at `MAX_MULTIPLIER` (1e24); `setOkuMMultiplier` cannot decrease (`MultiplierCannotDecrease`) and is pause-gated. **Not** bounded on-chain against other chains' schedules — see Accepted Risks |
 | `PSM_QUEUE_PROCESSOR` | Orchestrator | Process queue entries — burns OkuM, pays USDC to users | Payment destination is fixed to the queue entry's `user` address; cannot reroute |
 | `PSM_BUFFER_DEPOSITOR` | Orchestrator | Deposit USDC to buffer from caller's wallet | Caller must hold the USDC; no damage possible |
-| `OKUM_MINTER` | LitePSM + RedemptionQueue (contracts) | Call `OkuMoney.mint()` inside swap/processQueue paths | Bounded by per-minter `minterAllowance` and global `maxSupply`; never callable by EOA |
+| `OKUM_MINTER` | LitePSM + RedemptionQueue (contracts) | Call `OkuMoney.mint()` inside swap/processQueue paths | Bounded by per-minter `minterAllowance` and global `maxSupply`. **Production model: never callable by EOA.** `grantRoles.ts` (testnet only — see § Role Grants Policy above) deliberately breaks this by also granting `OKUM_MINTER`/`OKUM_BURNER` directly to `MASTER_EOA`, with an explicit `minterAllowance` cap; that script refuses to run on any mainnet network for exactly this reason |
 
 ---
 

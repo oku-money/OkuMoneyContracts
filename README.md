@@ -76,7 +76,7 @@ yield and the published on-chain rate.
 ### SVM — single-token model
 
 A single token: **OkuM**, a Token-2022 mint
-(`BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g`) with
+(`4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN`) with
 `ScaledUiAmount` + `MetadataPointer` + `TokenMetadata` extensions.
 The on-chain token IS OkuM (a value-appreciating T-Bill-backed
 token); the `TokenMetadata` extension stores the wallet-facing brand
@@ -126,7 +126,7 @@ multiplier to a value that already accounts for the protocol take).
 │                     SVM On-Chain (lite-psm)                      │
 │                                                                  │
 │  ┌────────────────────────────────────────────────────┐         │
-│  │  lite-psm (BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCG…) │         │
+│  │  lite-psm (4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5Tubu…) │         │
 │  │  ─ mint_oku_m / redeem_oku_m (buffer-only)         │         │
 │  │  ─ set_okum_yield_rate / _with_successor           │         │
 │  │  ─ mint_oku_m_direct / burn_oku_m_direct           │         │
@@ -505,12 +505,26 @@ OkuBridge / NTT / CCIP — not granted by v1 deploy scripts.
 
 **Devnet/testnet delegation.** The table above is the mainnet target
 model. On devnet/testnet it's common to delegate operational roles
-(`direct_minter`, `direct_burner`, `rebaser`, `buffer_depositor` on
-SVM) to a coworker- or CI-owned key while governance/safety roles
-and `role_admin` stay with the deployer/owner — see
-[`SVM/README.md § Delegated operation vs. retained ownership`](SVM/README.md)
-for the full rationale and the `grant-roles.ts --delegate=<pubkey>`
-tool that implements it.
+to a coworker- or CI-owned key while governance/safety roles and
+`role_admin` / `DEFAULT_ADMIN_ROLE` stay with the deployer/owner:
+
+- **SVM:** `direct_minter`, `direct_burner`, `rebaser`, `buffer_depositor`
+  → see [`SVM/README.md § Delegated operation vs. retained
+  ownership`](SVM/README.md) for the full rationale and the
+  `scripts/admin/grant-roles.ts --delegate=<pubkey>` tool that implements
+  it.
+- **EVM:** `OKUM_REBASER`, `OKUM_MINTER`, `OKUM_BURNER` (OkuMoney),
+  `PSM_BUFFER_DEPOSITOR`, `PSM_QUEUE_PROCESSOR` (LitePSM), plus a
+  matching `configureMinterAllowance` grant so the mint role is actually
+  usable → `EVM/scripts/operator/grantRoles.ts` (targets `MASTER_EOA`).
+  **This mint/burn grant is a deliberate testnet-only divergence** from
+  the mainnet threat model below ("orchestrator key has no special
+  minting authority on EVM") — SVM's direct-mint/burn roles exist
+  because SVM has no redemption queue and must mint/burn directly; EVM's
+  production bridge legs are USDC-collateral-mediated instead and don't
+  need it. `grantRoles.ts` refuses to run against a mainnet network for
+  this reason — see its NatSpec header for the full rationale. Both
+  tools are idempotent (safe to re-run) and support `DRY_RUN`.
 
 ### Signer trust implications
 
@@ -822,7 +836,10 @@ Refuses IDs currently in `Anchor.toml [programs.<network>]` unless
 ```bash
 cd EVM
 npx hardhat test                              # in-process happy-path
-NETWORK=sepolia npm run test:flow:live        # live round-trip + balance check
+NETWORK=sepolia npm run test:onchain:sepolia  # live round-trip + balance check
+                                               # (baseSepolia/arbSepolia/bscTestnet variants also available;
+                                               # `npm run test:onchain` alone runs against a FORK, not live —
+                                               # despite the name, it targets `--network localhost`)
 ```
 
 **SVM:**
@@ -831,7 +848,8 @@ NETWORK=sepolia npm run test:flow:live        # live round-trip + balance check
 cd SVM/oku-programs
 NETWORK=devnet npm run test:onchain           # ~30 s end-to-end smoke
 NETWORK=devnet npm run test:onchain -- --step=redeem   # single step (mint/transfer/redeem/
-                                                        # distributeYield/pause/setAuthority also available)
+                                                        # streamingAccrual/pause/setAuthority also available —
+                                                        # `distributeYield` was removed with the discrete-yield model)
 ```
 
 ### Phase 4 — cross-chain bridge test (noBridge / PSM-mediated)

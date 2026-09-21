@@ -58,6 +58,52 @@ import { mainnetGuard } from "../utils/mainnetGuard";
 import { ROLES } from "../config/roles";
 import { DEV_WALLET_ADDRESS } from "../config/chains";
 import { apyToRatePerSecond, describeRate, PRECISION } from "../utils/yieldRate";
+import { computeMultiplier } from "@okumoney/yield-tooling";
+import {
+  EPOCH_ANCHOR_UNIX,
+  EPOCH_LENGTH_SECONDS,
+} from "../config/epoch";
+
+/**
+ * Seconds to wait while observing real accrual on a live chain (step 8).
+ * Short enough not to stall a run, long enough that a 3% APY rate moves the
+ * multiplier well clear of rounding. Override with ACCRUAL_OBSERVE_SEC.
+ */
+const ACCRUAL_OBSERVE_SEC = Number(process.env.ACCRUAL_OBSERVE_SEC ?? "20");
+
+/**
+ * The next epoch boundary on the declared grid, strictly in the future.
+ *
+ * Chain-INDEPENDENT by construction: every chain running this within the same
+ * epoch derives the identical absolute timestamp, which is what makes a
+ * per-chain invocation of this suite converge the fleet rather than scatter it.
+ */
+function nextEpochBoundarySec(): bigint {
+  const now = Math.floor(Date.now() / 1000);
+  const elapsed = now - EPOCH_ANCHOR_UNIX;
+  const nextIndex = Math.floor(elapsed / EPOCH_LENGTH_SECONDS) + 1;
+  return BigInt(EPOCH_ANCHOR_UNIX + nextIndex * EPOCH_LENGTH_SECONDS);
+}
+
+/**
+ * Read `okuMMultiplier()` and the chain timestamp it corresponds to ATOMICALLY,
+ * by pinning both to the same block number.
+ *
+ * Reading them as two independent calls is subtly wrong: a block can land
+ * between the two reads, so the multiplier reflects a later instant than the
+ * timestamp. On a 12s chain that skew is usually invisible; on BSC's ~3s blocks
+ * it produced a full second of unexplained accrual and failed an otherwise
+ * correct assertion. Pinning to `blockTag` removes the race entirely instead of
+ * papering over it with a wider tolerance.
+ */
+async function multiplierAtChainTime(
+  okuMoney: any
+): Promise<{ multiplier: bigint; timestampSec: bigint; blockNumber: number }> {
+  const blk = await ethers.provider.getBlock("latest");
+  if (!blk) throw new Error("could not read latest block");
+  const multiplier: bigint = await okuMoney.okuMMultiplier({ blockTag: blk.number });
+  return { multiplier, timestampSec: BigInt(blk.timestamp), blockNumber: blk.number };
+}
 
 // ============================================================================
 // CLI / env helpers
@@ -330,18 +376,53 @@ async function stepMint(ctx: TestCtx): Promise<bigint> {
   await waitForTx(await ctx.usdc.approve(psmAddr, usdcAmount), "usdc.approve(LitePSM)");
   await waitForTx(await ctx.litePSM.mintOkuM(usdcAmount), `LitePSM.mintOkuM(${DEFAULT_USDC_AMOUNT})`);
 
-  const okuMAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
-  const minted = okuMAfter - okuMBefore;
+  // Load-balanced RPCs (Alchemy, public endpoints) are eventually consistent:
+  // the read issued immediately after `tx.wait()` can be served by a replica
+  // that has not yet applied the block, returning a stale balance. Observed
+  // repeatedly on Base Sepolia — the tx was mined and correct on-chain while
+  // this read reported no change. Poll instead of asserting on a single read.
+  const minted = await pollBalanceDelta(
+    () => ctx.okuMoney.balanceOf(ctx.user.address),
+    okuMBefore,
+    /* maxMs */ 30_000
+  );
   logger.success(`Minted ${ethers.formatUnits(minted, 18)} OkuM`);
   if (minted === 0n) throw new Error("mint produced zero OkuM");
+
+  // EXACT check: OkuM minted must equal the USDC paid, valued at the current
+  // multiplier. `!= 0` alone would pass a PSM that silently retained 99.99% of
+  // the deposit, or one with mint/divide inverted in its pricing.
+  const multNow: bigint = await ctx.okuMoney.okuMMultiplier();
+  const expectedOkuM = (usdcAmount * 10n ** 12n * PRECISION) / multNow;
+  const mintDrift = minted > expectedOkuM ? minted - expectedOkuM : expectedOkuM - minted;
+  const mintTolerance = expectedOkuM / 1_000_000n + 1n; // 1 ppm + rounding
+  if (mintDrift > mintTolerance) {
+    throw new Error(
+      `mint produced ${minted} OkuM but ${usdcAmount} USDC-units at multiplier ${multNow} ` +
+        `implies ${expectedOkuM} (drift=${mintDrift}, tolerance=${mintTolerance}). PSM mint pricing is wrong.`
+    );
+  }
+  logger.success(`Mint amount matches multiplier-implied value (drift ${mintDrift} wei)`);
   return minted;
 }
 
 async function stepTransfer(ctx: TestCtx) {
   logger.section("Step 3: transfer");
-  // Throwaway recipient: deterministic test wallet (PrivateKey #1 from a known
-  // mnemonic). Live testnets only — never used as a custody account.
-  const recipient = ethers.Wallet.createRandom().address;
+  // FIXED, deterministic recipient — same address on every run.
+  //
+  // This used to be `ethers.Wallet.createRandom().address`, a fresh address
+  // every invocation. That permanently strands ~1% of the signer's OkuM on a
+  // brand-new, uncontrolled address EVERY time the suite runs — on four live
+  // testnets, run repeatedly over a session, that adds up to real fragmented
+  // supply with no way to recover it. A deterministic recipient just
+  // accumulates in one place instead, which is what a throwaway destination
+  // whose only job is "prove a transfer credited someone else" should do.
+  //
+  // Derived from a fixed, documented seed — not a real private key anyone
+  // needs to hold. Nothing is ever sent FROM this address.
+  const recipient = ethers.computeAddress(
+    ethers.keccak256(ethers.toUtf8Bytes("okumoney-test-onchain-recipient-v1"))
+  );
   // Poll for non-zero balance — BSC testnet RPCs can lag a block after mint.
   let balBefore: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
   if (balBefore === 0n) {
@@ -359,17 +440,45 @@ async function stepTransfer(ctx: TestCtx) {
   const amt = balBefore / 100n; // 1% of current balance
   if (amt === 0n) throw new Error("Transfer amount rounded to zero");
 
+  // Recipient is now FIXED (reused across runs, see above), so its balance can
+  // already be non-zero from a prior run. Capture the baseline before sending
+  // and assert the DELTA, not the absolute post-transfer balance.
+  const recipBalBefore: bigint = await ctx.okuMoney.balanceOf(recipient);
+
   await waitForTx(
     await ctx.okuMoney.transfer(recipient, amt),
     `okuMoney.transfer(${ethers.formatUnits(amt, 18)} OkuM -> ${recipient})`
   );
-  const recipBal: bigint = await ctx.okuMoney.balanceOf(recipient);
+  // Poll for the delta rather than a single immediate read — tolerates RPC
+  // read-replica lag (see stepMint).
+  const recipDelta: bigint = await pollBalanceDelta(
+    () => ctx.okuMoney.balanceOf(recipient),
+    recipBalBefore,
+    /* maxMs */ 30_000
+  );
   const balAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
-  logger.info(`Recipient OkuM:  ${ethers.formatUnits(recipBal, 18)}`);
+  logger.info(`Recipient OkuM delta: ${ethers.formatUnits(recipDelta, 18)}`);
   logger.info(`Signer OkuM:     ${ethers.formatUnits(balAfter, 18)} (delta -${ethers.formatUnits(balBefore - balAfter, 18)})`);
-  // Allow ±1 wei drift from rebase math (multiplier rounding).
-  const drift = recipBal > amt ? recipBal - amt : amt - recipBal;
-  if (drift > 1n) throw new Error(`Recipient balance drift > 1 wei (${drift})`);
+  // EXACT equality — no tolerance.
+  //
+  // OkuM is a STATIC-BALANCE, NON-rebasing ERC-20: `transfer` is plain
+  // `ERC20Upgradeable._update` with no multiplier anywhere in the path. The
+  // old "±1 wei drift from rebase math" tolerance asserted the opposite of the
+  // token's defining property, and would have masked a real rounding bug.
+  if (recipDelta !== amt) {
+    throw new Error(
+      `Recipient's balance moved by ${recipDelta}, expected exactly ${amt}. OkuM is ` +
+        `non-rebasing — a transfer must move the exact amount with zero drift.`
+    );
+  }
+  // The sender side was previously only logged, so a double-debit passed.
+  if (balBefore - balAfter !== amt) {
+    throw new Error(
+      `Sender debited ${balBefore - balAfter}, expected exactly ${amt} ` +
+        `(before=${balBefore}, after=${balAfter}).`
+    );
+  }
+  logger.success("Transfer moved the exact amount on both sides (non-rebasing, zero drift)");
 }
 
 async function stepWrap(ctx: TestCtx): Promise<bigint> {
@@ -396,8 +505,12 @@ async function stepWrap(ctx: TestCtx): Promise<bigint> {
     `okuDollar.wrap(${ethers.formatUnits(half, 18)} OkuM)`
   );
 
-  const usdoAfter: bigint = await ctx.okuDollar.balanceOf(ctx.user.address);
-  const minted = usdoAfter - usdoBefore;
+  // Poll rather than single-read — see stepMint for why.
+  const minted = await pollBalanceDelta(
+    () => ctx.okuDollar.balanceOf(ctx.user.address),
+    usdoBefore,
+    /* maxMs */ 30_000
+  );
   logger.success(`Received ${ethers.formatUnits(minted, 18)} usdOku`);
   if (minted === 0n) throw new Error("wrap produced zero usdOku");
   return minted;
@@ -477,6 +590,24 @@ async function stepRedeem(ctx: TestCtx) {
   );
   logger.success(`Received ${ethers.formatUnits(received, 6)} USDC`);
   if (received === 0n) throw new Error("redeem returned zero USDC (likely queued — buffer too low?)");
+
+  // EXACT value check, not `!= 0`.
+  //
+  // `usdcEquiv` above is already the correct expected payout — same
+  // `okuMMultiplier()` the contract prices against, same /1e30 scaling
+  // `MathLib.dollarsToUsdc` performs. It was computed purely to size the
+  // buffer and then discarded, which meant a PSM paying 1 USDC-unit for 25
+  // OkuM passed this step. Allow 1 unit for dollarsToUsdc's floor, plus any
+  // accrual between the sizing read and the redeem tx landing.
+  const redeemDrift = received > usdcEquiv ? received - usdcEquiv : usdcEquiv - received;
+  const redeemTolerance = usdcEquiv / 1_000_000n + 2n; // 1 ppm of notional + floor/rounding
+  if (redeemDrift > redeemTolerance) {
+    throw new Error(
+      `redeem paid ${received} USDC-units but the multiplier implies ${usdcEquiv} ` +
+        `(drift=${redeemDrift}, tolerance=${redeemTolerance}). PSM redeem pricing is wrong.`
+    );
+  }
+  logger.success(`Redeem payout matches multiplier-implied value (drift ${redeemDrift} units)`);
 }
 
 /**
@@ -529,8 +660,18 @@ async function stepQueueRedeem(ctx: TestCtx) {
     );
   }
 
+  // Tail BEFORE the forced redeem — the assertion below must prove THIS run
+  // enqueued something, not that some entry happens to be pending.
+  const qTailBefore: bigint = await ctx.queue.queueTail();
+
   // Drain the buffer to zero — must happen AFTER any seeding mint that
   // would re-fill it.
+  //
+  // ⚠ This deliberately empties a LIVE PSM. Everything from here to the end of
+  // the step runs inside a try/finally that restores the drained amount, so an
+  // RPC hiccup mid-step cannot leave the chain with a zero buffer and a live
+  // unpayable queue entry (which would also brick `withdrawUsdc` behind
+  // `WouldStrandQueue` until an operator intervened).
   const buf: bigint = await ctx.usdc.balanceOf(psmAddr);
   if (buf > 0n) {
     await waitForTx(
@@ -539,6 +680,46 @@ async function stepQueueRedeem(ctx: TestCtx) {
     );
   }
 
+  try {
+    await runQueueDrain(ctx, psmAddr, queueRedeemAmt, qTailBefore);
+  } finally {
+    // Restore the buffer we drained, regardless of outcome. Without this,
+    // every run of the suite left the live PSM at ~0.1 USDC with the drained
+    // funds stranded in the deployer EOA, forcing every subsequent user
+    // redemption onto the queue path.
+    const bufNow: bigint = await ctx.usdc.balanceOf(psmAddr);
+    if (bufNow < buf) {
+      const restore = buf - bufNow;
+      try {
+        await ensureUsdc(ctx, restore);
+        await waitForTx(
+          await ctx.usdc.approve(psmAddr, restore),
+          "usdc.approve(LitePSM) [buffer restore]"
+        );
+        await waitForTx(
+          await ctx.litePSM.depositBuffer(restore),
+          `LitePSM.depositBuffer(${ethers.formatUnits(restore, 6)} USDC) [restore drained buffer]`
+        );
+        logger.success(`Restored PSM buffer to its pre-test level (${ethers.formatUnits(buf, 6)} USDC)`);
+      } catch (e: any) {
+        logger.error(
+          `FAILED to restore the PSM buffer (wanted ${ethers.formatUnits(restore, 6)} USDC): ` +
+            `${e?.message ?? e}. The live PSM is left under-funded — refill it manually with ` +
+            `operator:depositBuffer before relying on instant redemptions on this chain.`
+        );
+      }
+    }
+  }
+}
+
+/** The forced-queue body of step 7, factored out so the caller can guarantee
+ *  buffer restoration in a `finally` even when an assertion throws. */
+async function runQueueDrain(
+  ctx: TestCtx,
+  psmAddr: string,
+  queueRedeemAmt: bigint,
+  qTailBefore: bigint
+) {
   // Redeem with empty buffer -> queue path.
   await waitForTx(
     await ctx.okuMoney.approve(psmAddr, queueRedeemAmt),
@@ -549,17 +730,29 @@ async function stepQueueRedeem(ctx: TestCtx) {
     "LitePSM.redeemOkuM (queue path)"
   );
 
+  // Poll for the tail to advance rather than single-reading it. Load-balanced
+  // RPCs serve reads from replicas that can lag the block the redeem landed in
+  // (observed repeatedly on Base Sepolia), so a single read here reports the
+  // pre-redeem tail and makes a correctly-queued redemption look like a
+  // non-event. Poll, then assert.
+  await pollBalanceDelta(() => ctx.queue.queueTail(), qTailBefore, /* maxMs */ 30_000);
   const qTail: bigint = await ctx.queue.queueTail();
   const qHead: bigint = await ctx.queue.queueHead();
   const qPending: bigint = qTail - qHead;
-  if (qPending === 0n) {
-    logger.warning(
-      "Queue did not grow after empty-buffer redeem — possible that " +
-        "withdrawUsdc was blocked by an existing pending obligation. Skipping drain."
+  // MUST grow relative to the PRE-REDEEM tail, and must be a hard failure.
+  //
+  // Previously this compared `qPending === 0n` and `return`ed with a warning —
+  // so the one step whose entire purpose is proving the queue path works
+  // reported SUCCESS when the queue never engaged. The `=== 0` form was also
+  // satisfiable by a stale pending entry from an earlier aborted run, without
+  // this run enqueuing anything.
+  if (qTail <= qTailBefore) {
+    throw new Error(
+      `Queue did NOT grow after an empty-buffer redeem (tail ${qTailBefore} -> ${qTail}). ` +
+        `The queue fallback path did not engage — this is the behaviour this step exists to verify.`
     );
-    return;
   }
-  logger.info(`Queue pending after forced redeem: ${qPending}`);
+  logger.info(`Queue pending after forced redeem: ${qPending} (tail ${qTailBefore} -> ${qTail})`);
 
   // Refill the buffer with exactly the queued USDC obligation + a small margin.
   const obligation: bigint = await ctx.queue.totalQueuedUsdc();
@@ -576,9 +769,27 @@ async function stepQueueRedeem(ctx: TestCtx) {
   const head: bigint = await ctx.queue.queueHead();
   const tail: bigint = await ctx.queue.queueTail();
   const bufNow: bigint = await ctx.usdc.balanceOf(psmAddr);
+  // Snapshot the claimant's USDC so we can verify they were actually PAID.
+  // Previously the step only checked that head advanced past the slot, which a
+  // processQueue paying 1 wei per entry satisfies.
+  const claimantUsdcBefore: bigint = await ctx.usdc.balanceOf(ctx.user.address);
   await waitForTx(
     await ctx.litePSM.processQueue(head, tail, bufNow),
     `LitePSM.processQueue(${head}, ${tail}, ${ethers.formatUnits(bufNow, 6)} USDC)`
+  );
+  const claimantPaid = await pollBalanceDelta(
+    () => ctx.usdc.balanceOf(ctx.user.address),
+    claimantUsdcBefore,
+    /* maxMs */ 30_000
+  );
+  if (claimantPaid < obligation) {
+    throw new Error(
+      `Queued claimant was under-paid: received ${claimantPaid} USDC-units but the queue's ` +
+        `recorded obligation was ${obligation}. processQueue cleared the slot without settling it.`
+    );
+  }
+  logger.success(
+    `Queued claimant paid ${ethers.formatUnits(claimantPaid, 6)} USDC (obligation ${ethers.formatUnits(obligation, 6)})`
   );
 
   // processQueue clears entries (sets user=address(0)) but does NOT
@@ -588,6 +799,10 @@ async function stepQueueRedeem(ctx: TestCtx) {
     `queue.advanceHead(${tail - head})`
   );
 
+  // Poll for head to catch up to tail. `advanceHead` has already mined at this
+  // point, but a lagging read replica can still report the pre-advance head and
+  // make a fully-drained queue look stuck.
+  await pollBalanceDelta(() => ctx.queue.queueHead(), head, /* maxMs */ 30_000);
   const tailFinal: bigint = await ctx.queue.queueTail();
   const headFinal: bigint = await ctx.queue.queueHead();
   const remaining: bigint = tailFinal - headFinal;
@@ -605,7 +820,21 @@ async function stepSetOkuMYieldRate(ctx: TestCtx) {
   await ensureRole(ctx, ROLES.OKUM_REBASER, "OKUM_REBASER");
 
   const rate = apyToRatePerSecond(0.03); // 3% APY
-  const endTimestamp = BigInt(Math.floor(Date.now() / 1000) + 86_400); // +1 day
+  // Snap to the declared epoch grid (UTC midnight under the 24h grid) rather
+  // than `now + 86400`.
+  //
+  // This previously used a wall-clock-relative deadline, which made THIS SCRIPT
+  // the protocol's largest source of cross-chain divergence: the suite is
+  // invoked once per chain (`test:onchain:sepolia`, `:baseSepolia`, ...), so
+  // each run stamped a different `rateEnd`, and `checkMultiplierDrift.ts` then
+  // reported both RATE-END MISMATCH and EPOCH-GRID MISALIGNMENT across the
+  // fleet — while this script exited 0 claiming success. Observed live: the
+  // four testnets ended up 128-233s apart.
+  //
+  // The design is "one global rate, byte-identical absolute timestamps on every
+  // chain". A grid-snapped boundary is chain-independent, so running this on
+  // all four testnets now converges them instead of scattering them.
+  const endTimestamp = nextEpochBoundarySec();
 
   const mBefore: bigint = await ctx.okuMoney.okuMMultiplier();
   const rateBefore: bigint = await ctx.okuMoney.okuMRatePerSecond();
@@ -631,11 +860,119 @@ async function stepSetOkuMYieldRate(ctx: TestCtx) {
   if (endAfter !== endTimestamp) throw new Error(`okuMRateEnd is ${endAfter}, expected ${endTimestamp}`);
   // setOkuMYieldRate re-anchors the base to the multiplier at write time and clears
   // any armed successor, so the curve is continuous across the write (no step).
+  // NOTE: `mAfter >= mBefore` is a THEOREM (rate >= PRECISION is enforced on-chain
+  // and the base re-anchors to the current multiplier), not a test — it is kept
+  // only as a cheap corruption canary. The real verification is below.
   if (mAfter < mBefore) throw new Error(`Multiplier went backwards: ${mBefore} -> ${mAfter}`);
+  if (baseAfter < mBefore) {
+    throw new Error(`Base multiplier ${baseAfter} re-anchored BELOW the pre-write multiplier ${mBefore}`);
+  }
   if (pendingAfter !== PRECISION) {
     throw new Error(`Pending rate not cleared: ${pendingAfter}, expected ${PRECISION}`);
   }
   logger.success("Yield rate schedule written and verified");
+
+  // ───────────────────────────────────────────────────────────────────────
+  // LIVE DIFFERENTIAL: on-chain Solidity vs the TypeScript mirror.
+  //
+  // `EVM/test/differential` replays a committed OFFLINE corpus, which cannot
+  // catch a proxy pointing at a stale implementation, a corrupted storage
+  // slot, or a bad upgrade on ONE specific deployment. This reads the six
+  // schedule getters from THIS live contract, evaluates the TS mirror at the
+  // same instant, and requires exact agreement.
+  //
+  // This is the only place any test compares on-chain multiplier math to an
+  // independent implementation against a real chain.
+  // ───────────────────────────────────────────────────────────────────────
+  const anchorSec: bigint = await ctx.okuMoney.okuMLastAccrualTime();
+  const pendingEnd0: bigint = await ctx.okuMoney.okuMPendingRateEnd();
+  const { multiplier: onChain, timestampSec: evalAt } = await multiplierAtChainTime(ctx.okuMoney);
+  const mirrored = computeMultiplier(
+    {
+      baseMultiplier: baseAfter,
+      ratePerSecond: rateAfter,
+      lastAccrualTime: anchorSec,
+      rateEnd: endAfter,
+      pendingRatePerSecond: pendingAfter,
+      pendingRateEnd: pendingEnd0,
+    },
+    evalAt
+  );
+  logger.info(`Differential: on-chain=${onChain} mirror@${evalAt}=${mirrored}`);
+  // Both sides are pinned to the SAME block, so this should be exact. Allow a
+  // single wei for integer-rounding differences between the two
+  // implementations, nothing more.
+  const diff = onChain > mirrored ? onChain - mirrored : mirrored - onChain;
+  if (diff > 1n) {
+    throw new Error(
+      `LIVE DIFFERENTIAL FAILED: on-chain okuMMultiplier()=${onChain} vs TS mirror=${mirrored} ` +
+        `(diff=${diff}, both pinned to block ${evalAt}). The deployed Solidity and the ` +
+        `TypeScript reference disagree about this chain's multiplier — the orchestrator's ` +
+        `V(t) and every cross-chain rate derived from it would be wrong for this chain.`
+    );
+  }
+  logger.success(`Live differential OK (on-chain Solidity == TS mirror within 1s of accrual)`);
+
+  // ───────────────────────────────────────────────────────────────────────
+  // OBSERVED ACCRUAL: the protocol's core value proposition.
+  //
+  // Wait real wall-clock time on a real chain and require the multiplier to
+  // have advanced by the amount the published rate implies. Nothing else in
+  // the on-chain suite verifies that yield actually accrues.
+  // ───────────────────────────────────────────────────────────────────────
+  const { multiplier: m0, timestampSec: t0 } = await multiplierAtChainTime(ctx.okuMoney);
+  if (ctx.netCtx.isFork) {
+    // A local fork only advances `block.timestamp` when it mines, and it mines
+    // only on a transaction. Sleeping would leave the clock frozen and make
+    // this check fail for a reason that has nothing to do with accrual. Warp
+    // the fork's clock explicitly instead — the assertion below is identical
+    // either way because it compares against the schedule evaluated at the
+    // chain's OWN post-warp timestamp.
+    logger.info(`Advancing fork clock by ${ACCRUAL_OBSERVE_SEC}s (no real wait on a fork)...`);
+    await hhNetwork.provider.send("evm_increaseTime", [ACCRUAL_OBSERVE_SEC]);
+    await hhNetwork.provider.send("evm_mine", []);
+  } else {
+    logger.info(`Observing accrual for ${ACCRUAL_OBSERVE_SEC}s at ${describeRate(rateAfter)}...`);
+    await new Promise((r) => setTimeout(r, ACCRUAL_OBSERVE_SEC * 1000));
+  }
+  const { multiplier: m1, timestampSec: t1 } = await multiplierAtChainTime(ctx.okuMoney);
+
+  const elapsed = t1 - t0;
+  if (elapsed <= 0n) {
+    throw new Error(`Chain time did not advance during the accrual window (t0=${t0}, t1=${t1})`);
+  }
+  const expected = computeMultiplier(
+    {
+      baseMultiplier: baseAfter,
+      ratePerSecond: rateAfter,
+      lastAccrualTime: anchorSec,
+      rateEnd: endAfter,
+      pendingRatePerSecond: pendingAfter,
+      pendingRateEnd: pendingEnd0,
+    },
+    t1
+  );
+  logger.info(
+    `Accrual over ${elapsed}s: ${m0} -> ${m1} (expected ${expected} at t=${t1})`
+  );
+  if (m1 <= m0) {
+    throw new Error(
+      `ACCRUAL DEAD: multiplier did not advance over ${elapsed}s of real chain time ` +
+        `at ${describeRate(rateAfter)} (${m0} -> ${m1}). Yield is not streaming on this chain.`
+    );
+  }
+  // `m1` and `t1` come from the same block, and `expected` is the schedule
+  // evaluated at exactly `t1` — so this is an exact comparison, not a
+  // tolerance-based one. 1 wei for integer rounding.
+  const accrualDiff = m1 > expected ? m1 - expected : expected - m1;
+  if (accrualDiff > 1n) {
+    throw new Error(
+      `ACCRUAL RATE WRONG: after ${elapsed}s the multiplier is ${m1}, but the published ` +
+        `schedule implies ${expected} (diff=${accrualDiff}). The chain is accruing at a ` +
+        `different rate than the one published.`
+    );
+  }
+  logger.success(`Observed accrual matches the published rate over ${elapsed}s of real chain time`);
 
   // Stage a successor rate off the bounded window just set. It activates off the
   // absolute okuMRateEnd timestamp with no tx at the boundary. pendingEndTimestamp
@@ -695,19 +1032,49 @@ async function stepPause(ctx: TestCtx) {
   );
   logger.success("Confirmed paused=true on chain");
 
-  // Verify mint reverts while paused.
+  // Verify mint reverts while paused — with the SPECIFIC reason, not "it threw".
   const usdcAmount = ethers.parseUnits("1", 6);
   await ensureUsdc(ctx, usdcAmount);
   const psmAddr = await ctx.litePSM.getAddress();
-  await (ctx.usdc as any).approve(psmAddr, usdcAmount);
-  let reverted = false;
+  // MUST wait for mining, not just submission. The approve tx was previously
+  // only awaited to the point of being accepted by the RPC (ethers' default
+  // `await contract.method(...)` resolves on submission, not confirmation),
+  // so the following staticCall could race an un-mined approve on a live
+  // chain and revert with ERC20InsufficientAllowance instead of the pause
+  // check — which the bare `catch {}` below then couldn't distinguish from
+  // the thing this step is actually trying to prove.
+  await waitForTx(
+    await ctx.usdc.approve(psmAddr, usdcAmount),
+    "usdc.approve(LitePSM) [pause check]"
+  );
+  let revertReason = "";
   try {
-    await (ctx.litePSM as any).mintOkuM.staticCall(usdcAmount);
-  } catch {
-    reverted = true;
+    await ctx.litePSM.mintOkuM.staticCall(usdcAmount);
+  } catch (e: any) {
+    // A bare `catch {}` here previously accepted ANY failure — a malformed
+    // ABI call, an RPC timeout, or a wrong-reason revert would all report
+    // "Confirmed mintOkuM reverts while paused" without the pause having
+    // anything to do with it. Decode the specific custom error instead.
+    const data = e?.data ?? e?.error?.data ?? e?.info?.error?.data;
+    if (data) {
+      try {
+        const parsed = ctx.litePSM.interface.parseError(data);
+        revertReason = parsed?.name ?? "";
+      } catch {
+        // Non-custom-error revert shape; fall through to the raw message.
+      }
+    }
+    if (!revertReason) revertReason = e?.shortMessage ?? e?.reason ?? e?.message ?? String(e);
   }
-  if (!reverted) throw new Error("mintOkuM did not revert while paused");
-  logger.success("Confirmed mintOkuM reverts while paused");
+  if (!revertReason) throw new Error("mintOkuM did not revert while paused");
+  if (!/EnforcedPause/i.test(revertReason)) {
+    throw new Error(
+      `mintOkuM reverted while paused, but with "${revertReason}" — expected EnforcedPause. ` +
+        `A different revert reason means this isn't actually testing the pause gate ` +
+        `(e.g. it could be an allowance/balance failure that happens to also revert).`
+    );
+  }
+  logger.success(`Confirmed mintOkuM reverts with EnforcedPause while paused`);
 
   await waitForTx(await ctx.litePSM.unpause(), "LitePSM.unpause");
   await pollUntil<boolean>(

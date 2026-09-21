@@ -1,5 +1,5 @@
 {
-  "address": "BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g",
+  "address": "4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN",
   "metadata": {
     "name": "lite_psm",
     "version": "0.1.0",
@@ -398,8 +398,41 @@
       "accounts": [
         {
           "name": "role_admin",
+          "docs": [
+            "Becomes `config.role_admin` — the permanent root authority.",
+            "",
+            "MUST be the program's BPF upgrade authority (see `program_data`",
+            "below). Without that tie this instruction is a land-grab: `config` is",
+            "a singleton PDA at `[\"psm_config\"]`, deploy and initialize are",
+            "necessarily separate transactions, and whoever lands `initialize`",
+            "first becomes `role_admin` permanently AND chooses `usdc_mint` — for",
+            "which only the decimal count is validated, so an attacker-controlled",
+            "fake mint passes. There is no `close_config` and no re-init, so the",
+            "program ID would be unrecoverable."
+          ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "program_data",
+          "docs": [
+            "The program's own ProgramData account, used only to prove",
+            "`role_admin` is the upgrade authority.",
+            "",
+            "Checked against the upgrade authority rather than a hardcoded",
+            "`const DEPLOY_AUTHORITY` so the binary is identical across devnet /",
+            "mainnet and there is no environment-specific constant to get wrong at",
+            "build time. Anyone who could pass this check could already replace the",
+            "whole program via `bpf_loader_upgradeable::Upgrade`, so it grants no",
+            "authority that wasn't already held — it just stops anyone ELSE",
+            "claiming the config.",
+            "",
+            "`Account<'info, ProgramData>` enforces `owner == BPFLoaderUpgradeable`",
+            "and the `ProgramData` discriminant; the `address =` constraint pins it",
+            "to THIS program's ProgramData PDA, so an unrelated program's account",
+            "can't be substituted."
+          ],
+          "address": "ChPL9fhREtCc8WQSBkBmqd6ESjfv5JHyENwXkj2JWV8D"
         },
         {
           "name": "config",
@@ -2459,66 +2492,71 @@
     },
     {
       "code": 6017,
+      "name": "RateWindowTooLong",
+      "msg": "Rate window exceeds the maximum permitted length (90 days)"
+    },
+    {
+      "code": 6018,
       "name": "NoRateEndSet",
       "msg": "Cannot stage a successor: no active rate window is set"
     },
     {
-      "code": 6018,
+      "code": 6019,
       "name": "RateAlreadyExpired",
       "msg": "Cannot stage a successor: the active rate window has already expired"
     },
     {
-      "code": 6019,
+      "code": 6020,
       "name": "PendingEndNotAfterRateEnd",
       "msg": "Successor expiry must be strictly after the active rate end"
     },
     {
-      "code": 6020,
+      "code": 6021,
       "name": "MultiplierAboveMax",
       "msg": "Proposed multiplier exceeds MAX_MULTIPLIER ceiling"
     },
     {
-      "code": 6021,
+      "code": 6022,
       "name": "MultiplierOutOfRange",
       "msg": "Multiplier could not be computed from the current rate schedule"
     },
     {
-      "code": 6022,
+      "code": 6023,
       "name": "MultiplierUpdateFailed",
       "msg": "Failed to update ScaledUiAmount multiplier"
     },
     {
-      "code": 6023,
+      "code": 6024,
       "name": "InvalidAuthority",
       "msg": "Authority pubkey is invalid (e.g. zero pubkey)"
     },
     {
-      "code": 6024,
+      "code": 6025,
       "name": "NoPendingRoleAdmin",
       "msg": "No pending role-admin transfer to accept"
     },
     {
-      "code": 6025,
+      "code": 6026,
       "name": "NotPendingRoleAdmin",
       "msg": "Caller is not the pending role admin"
     },
     {
-      "code": 6026,
+      "code": 6027,
       "name": "InvalidUsdcDecimals",
       "msg": "USDC mint must have exactly 6 decimals"
     },
     {
-      "code": 6027,
+      "code": 6028,
       "name": "AmountTooSmall",
       "msg": "Output amount too small (rounds to zero)"
     },
     {
-      "code": 6028,
+      "code": 6029,
       "name": "ZeroOutput",
       "msg": "Redeem output is zero"
     },
     {
-      "code": 6029,
+      "code": 6030,
       "name": "SlippageExceeded",
       "msg": "Redeem output is below min_usdc_out"
     }

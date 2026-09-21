@@ -27,6 +27,7 @@ import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
+import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 function parseArg(name: string): string | undefined {
@@ -72,13 +73,16 @@ async function main() {
     ownerLabel = owner.toBase58();
   }
 
+  const cfg = await program.account.psmConfig.fetch(psmConfig);
+  const freezer = resolveRoleSigner(provider, cfg, 'freezer');
+
   logger.info(
     summaryBlock('freeze_account()', {
       'config PDA': psmConfig.toBase58(),
       'target owner': ownerLabel,
       'target ATA': targetAta.toBase58(),
       'OkuM mint': okuMMint.toBase58(),
-      'signer (freezer)': provider.wallet.publicKey.toBase58(),
+      'signer (freezer)': describeRoleSigner('freezer', freezer),
     })
   );
 
@@ -91,12 +95,13 @@ async function main() {
   const sig = await program.methods
     .freezeAccount()
     .accountsPartial({
-      freezer: provider.wallet.publicKey,
+      freezer: freezer.authority,
       config: psmConfig,
       okuMMint,
       targetOkuMAta: targetAta,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
+    .signers(freezer.signers)
     .rpc();
   logger.success(`tx: ${sig}`);
 }

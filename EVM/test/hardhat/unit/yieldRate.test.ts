@@ -70,7 +70,7 @@ describe("scripts/utils/yieldRate", () => {
 
     describe("realisedYieldToRatePerSecond — conservative publish + carry-in", () => {
         it("under-publishing via conservativeFactor carries the withheld spread FORWARD (positive)", () => {
-            const windowSeconds = 86400 * 30;
+            const windowSeconds = 86400; // 24h production epoch
             const measuredAvgValueUsd = 10_000_000;
             const trueYieldUsd = 40_000;
             const conservativeFactor = 0.9;
@@ -90,7 +90,7 @@ describe("scripts/utils/yieldRate", () => {
         });
 
         it("steady state: constant realised yield + constant conservativeFactor converges carry to a stable residual, not unbounded growth", () => {
-            const windowSeconds = 86400 * 30;
+            const windowSeconds = 86400; // 24h production epoch
             const measuredAvgValueUsd = 10_000_000;
             const trueYieldPerEpoch = 40_000;
             const conservativeFactor = 0.9; // publish 90% of realised yield every epoch
@@ -124,7 +124,7 @@ describe("scripts/utils/yieldRate", () => {
         });
 
         it("a positive carry-in (prior under-payment) is folded into this epoch's published rate", () => {
-            const windowSeconds = 86400 * 30;
+            const windowSeconds = 86400; // 24h production epoch
             const measuredAvgValueUsd = 10_000_000;
 
             const withoutCarry = realisedYieldToRatePerSecond(30_000, measuredAvgValueUsd, windowSeconds, 0);
@@ -134,7 +134,7 @@ describe("scripts/utils/yieldRate", () => {
         });
 
         it("a negative carry-in (prior OVER-payment) DECELERATES this epoch's rate without violating monotonicity", () => {
-            const windowSeconds = 86400 * 30;
+            const windowSeconds = 86400; // 24h production epoch
             const measuredAvgValueUsd = 10_000_000;
 
             const withoutCarry = realisedYieldToRatePerSecond(30_000, measuredAvgValueUsd, windowSeconds, 0);
@@ -152,7 +152,7 @@ describe("scripts/utils/yieldRate", () => {
         });
 
         it("a carry-in deficit larger than realised yield clamps to PRECISION and carries the UNPAID remainder forward (does not destroy debt)", () => {
-            const windowSeconds = 86400 * 30;
+            const windowSeconds = 86400; // 24h production epoch
             const measuredAvgValueUsd = 10_000_000;
 
             // Realised 5k this epoch, but we over-paid 20k last epoch: net desired
@@ -191,6 +191,54 @@ describe("scripts/utils/yieldRate", () => {
             expect(() =>
                 realisedYieldToRatePerSecond(0, 1_000_000, 86400, -1_000_000)
             ).to.throw(/>=100% loss/);
+        });
+
+        // ───────────────────────────────────────────────────────────────────
+        // MAX_RATE headroom under the 24h epoch.
+        //
+        // Shortening the epoch from 30 days to 24 hours cut the growth
+        // expressible in one window by 30x: MAX_RATE permits ~0.8677% per 24h
+        // (vs ~29.6% per 30d). A realistic daily yield is nowhere near that,
+        // but a MONTHLY-sized dollar figure accidentally streamed over a daily
+        // window (e.g. a stale REALISED_YIELD_USD, or a large accumulated
+        // carry) lands close to the cap. That is a silent clamp — the rate is
+        // capped and the shortfall is carried forward, so nothing reverts and
+        // nothing looks wrong.
+        //
+        // These two assertions pin the boundary so the margin can't erode
+        // unnoticed.
+        // ───────────────────────────────────────────────────────────────────
+        describe("MAX_RATE headroom at a 24h epoch", () => {
+            const V = 10_000_000;
+            const DAY = 86400;
+            const maxExcess = Number(MAX_RATE - PRECISION) / 1e18;
+
+            function excessPerSecond(publishedUsd: number): number {
+                const { ratePerSecond } = realisedYieldToRatePerSecond(publishedUsd, V, DAY);
+                return Number(ratePerSecond - PRECISION) / 1e18;
+            }
+
+            it("a realistic daily yield (5% APY) sits far below MAX_RATE — ample headroom", () => {
+                const dailyAt5Pct = (V * 0.05) / 365; // ~$1,370
+                const used = excessPerSecond(dailyAt5Pct) / maxExcess;
+                expect(used).to.be.lessThan(0.05); // under 5% of the cap (~63x headroom)
+            });
+
+            it("a MONTHLY-sized figure pushed through a DAILY window approaches the cap — the regression to watch", () => {
+                const monthlySized = 40_000; // 0.4% of V, i.e. a 30-day-shaped target
+                const used = excessPerSecond(monthlySized) / maxExcess;
+                // Not yet clamping, but only ~2x margin — a fraction of the
+                // ~63x a correctly-sized daily figure enjoys.
+                expect(used).to.be.greaterThan(0.25);
+                expect(used).to.be.lessThan(1);
+            });
+
+            it("an ANNUAL-sized figure in a daily window does clamp, and conserves the shortfall as carry", () => {
+                const annualSized = (V * 0.05); // $500k — a full year's yield in one day
+                const { ratePerSecond, carryForwardUsd } = realisedYieldToRatePerSecond(annualSized, V, DAY);
+                expect(ratePerSecond).to.equal(MAX_RATE);
+                expect(carryForwardUsd).to.be.greaterThan(0);
+            });
         });
     });
 
@@ -249,7 +297,7 @@ describe("scripts/utils/yieldRate", () => {
             // Global value starts at 10M and grows linearly to 15M over the epoch
             // (e.g. a large mint at the midpoint). Realised yield for the epoch
             // is a known, fixed dollar amount.
-            const windowSeconds = 86400 * 30;
+            const windowSeconds = 86400; // 24h production epoch
             const realisedYieldUsd = 40_000;
             const spotAtStart = 10_000_000;
 
@@ -288,33 +336,49 @@ describe("scripts/utils/yieldRate", () => {
             expect(reconcileActualPayout(40_000, 40_000)).to.equal(0);
         });
 
+        // These two scenarios previously hardcoded `publishedRatePerSecond =
+        // 1.0000000015`, a value implicitly sized for a 30-DAY window. That
+        // coupled the fixture to the epoch length invisibly: over 24h the same
+        // rate pays ~$1.4k instead of ~$42.8k, flipping the sign of the
+        // residual and breaking the test for reasons unrelated to
+        // `reconcileActualPayout`. Deriving the rate from the target makes the
+        // fixture self-consistent at ANY window.
+        const ASSUMED_AVG_VALUE_USD = 10_000_000;
+        const EPOCH_WINDOW_SEC = 86400; // 24h production epoch
+
+        /** The per-second rate that pays exactly `targetUsd` on `ASSUMED_AVG_VALUE_USD`
+         *  over `EPOCH_WINDOW_SEC` — i.e. what the deriver would have published. */
+        function publishedRateFor(targetUsd: number): number {
+            return Math.pow(1 + targetUsd / ASSUMED_AVG_VALUE_USD, 1 / EPOCH_WINDOW_SEC);
+        }
+
         it("returns a POSITIVE residual (under-paid) when the paying epoch's real AUM was smaller than assumed", () => {
             // Rate was derived assuming ~10M average value, but the paying
             // epoch's REAL time-weighted average turned out lower (e.g. net
             // redemptions), so the same rate paid out less than the target.
             const targetUsd = 40_000;
-            const publishedRatePerSecond = 1.0000000015; // illustrative float rate
-            const windowSeconds = 86400 * 30;
             const payingEpochRealAvgValueUsd = 9_000_000; // lower than the 10M assumed
 
-            const achievedGrowth = Math.pow(publishedRatePerSecond, windowSeconds) - 1;
+            const achievedGrowth = Math.pow(publishedRateFor(targetUsd), EPOCH_WINDOW_SEC) - 1;
             const actualPaidUsd = achievedGrowth * payingEpochRealAvgValueUsd;
 
             const residual = reconcileActualPayout(targetUsd, actualPaidUsd);
             expect(residual).to.be.greaterThan(0);
+            // Under-paid by exactly the AUM shortfall ratio: 40k * (1 - 9/10).
+            expect(residual).to.be.closeTo(4_000, 1);
         });
 
         it("returns a NEGATIVE residual (over-paid) when the paying epoch's real AUM was larger than assumed", () => {
             const targetUsd = 40_000;
-            const publishedRatePerSecond = 1.0000000015;
-            const windowSeconds = 86400 * 30;
             const payingEpochRealAvgValueUsd = 11_000_000; // higher than the 10M assumed
 
-            const achievedGrowth = Math.pow(publishedRatePerSecond, windowSeconds) - 1;
+            const achievedGrowth = Math.pow(publishedRateFor(targetUsd), EPOCH_WINDOW_SEC) - 1;
             const actualPaidUsd = achievedGrowth * payingEpochRealAvgValueUsd;
 
             const residual = reconcileActualPayout(targetUsd, actualPaidUsd);
             expect(residual).to.be.lessThan(0);
+            // Over-paid by exactly the AUM excess ratio: 40k * (1 - 11/10).
+            expect(residual).to.be.closeTo(-4_000, 1);
         });
 
         it("cumulative conservation: summing residuals across epochs tracks cumulative realised yield", () => {

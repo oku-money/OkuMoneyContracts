@@ -4,6 +4,7 @@
 
 import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { Program, AnchorProvider, BN } from '@anchor-lang/core';
+import { loadDevnetAuthority } from '../../config/authorities';
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -52,6 +53,42 @@ function isAlreadyInitialized(error: any): boolean {
     msg.includes('already in use') ||
     msg.includes('AccountAlreadyInitialized')
   );
+}
+
+/**
+ * Resolve the extra signers needed to act as `allowance_manager`.
+ *
+ * `set_direct_minter_allowance` / `set_direct_burner_allowance` are gated on
+ * `config.allowance_manager`, which on devnet/localnet is the OPERATOR key,
+ * not the deployer (see `config/authorities.ts::allRolesToOperatorKey` — the
+ * on-chain init guard forbids any granular role from equalling role_admin).
+ *
+ * An earlier version of this file hardcoded `allowanceManager:
+ * provider.wallet.publicKey`, which silently degraded to a non-fatal
+ * "Unauthorized" warning the moment the roles were split — leaving the
+ * direct-mint/burn allowances at zero and the fiat/bridge paths dead.
+ *
+ * Returns the array to hand to `.signers()`:
+ *   - `[]`      the provider wallet already IS allowance_manager
+ *   - `[kp]`    the locally-held operator key is allowance_manager
+ *   - `null`    allowance_manager is a key we do not hold — caller must skip
+ */
+function resolveAllowanceManagerSigners(
+  provider: AnchorProvider,
+  allowanceManager: PublicKey
+): Keypair[] | null {
+  if (allowanceManager.equals(provider.wallet.publicKey)) {
+    return [];
+  }
+  try {
+    const operator = loadDevnetAuthority();
+    if (operator.publicKey.equals(allowanceManager)) {
+      return [operator];
+    }
+  } catch {
+    // No local operator key — fall through.
+  }
+  return null;
 }
 
 export interface PsmInitResult {
@@ -226,21 +263,31 @@ export async function initializePsm(
         logger.success(`direct_minter set to ${directMinter.toBase58().slice(0, 12)}...`);
       }
 
-      // Set the direct-minter allowance (allowance_manager is still the
-      // deployer at this point -- deploy-init runs before grant-roles).
+      // Set the direct-minter allowance. Gated on `allowance_manager`, which
+      // is the operator key on devnet/localnet -- resolve the signer rather
+      // than assuming it is the deployer.
+      const allowanceManager = currentCfg.allowanceManager as PublicKey;
+      const extraSigners = resolveAllowanceManagerSigners(provider, allowanceManager);
       const currentAllowance = currentCfg.directMinterAllowance;
       const targetAllowance = new BN(DIRECT_MINTER_ALLOWANCE);
       if (currentAllowance && currentAllowance.eq(targetAllowance)) {
         logger.warning(
           `direct_minter_allowance already ${targetAllowance.toString()} — skipping`
         );
+      } else if (extraSigners === null) {
+        logger.warning(
+          `allowance_manager is ${allowanceManager.toBase58().slice(0, 12)}... ` +
+            `(not a locally-held key) — skipping direct_minter_allowance. ` +
+            `Run set-direct-minter-allowance.ts with that wallet.`
+        );
       } else {
         await program.methods
           .setDirectMinterAllowance(targetAllowance)
           .accountsPartial({
-            allowanceManager: provider.wallet.publicKey,
+            allowanceManager,
             config: psmConfig,
           })
+          .signers(extraSigners)
           .rpc();
         logger.success(
           `direct_minter_allowance set to ${targetAllowance.toString()}`
@@ -286,19 +333,28 @@ export async function initializePsm(
         logger.success(`direct_burner set to ${directBurner.toBase58().slice(0, 12)}...`);
       }
 
+      const allowanceManager = currentCfg.allowanceManager as PublicKey;
+      const extraSigners = resolveAllowanceManagerSigners(provider, allowanceManager);
       const currentAllowance = currentCfg.directBurnerAllowance;
       const targetAllowance = new BN(DIRECT_BURNER_ALLOWANCE);
       if (currentAllowance && currentAllowance.eq(targetAllowance)) {
         logger.warning(
           `direct_burner_allowance already ${targetAllowance.toString()} — skipping`
         );
+      } else if (extraSigners === null) {
+        logger.warning(
+          `allowance_manager is ${allowanceManager.toBase58().slice(0, 12)}... ` +
+            `(not a locally-held key) — skipping direct_burner_allowance. ` +
+            `Run set-direct-burner-allowance.ts with that wallet.`
+        );
       } else {
         await program.methods
           .setDirectBurnerAllowance(targetAllowance)
           .accountsPartial({
-            allowanceManager: provider.wallet.publicKey,
+            allowanceManager,
             config: psmConfig,
           })
+          .signers(extraSigners)
           .rpc();
         logger.success(
           `direct_burner_allowance set to ${targetAllowance.toString()}`

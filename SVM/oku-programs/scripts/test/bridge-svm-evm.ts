@@ -12,7 +12,36 @@
  * Invariants per direction:
  *   - USDC released on source == USDC minted on destination
  *     (both EVM MockUSDC and SVM USDC are 6 decimals — direct equality).
- *   - Global OkuM holdings preserved within rounding tolerance.
+ *   - VALUE CONSERVATION: the dollar value burned on the source equals the
+ *     dollar value minted on the destination, within two USDC units of
+ *     truncation. Asserted by `assertValueConserved`.
+ *
+ * WHAT VALUE CONSERVATION DOES AND DOES NOT PROVE — read before trusting it.
+ * It catches fee leakage, truncation beyond the stated tolerance, and a
+ * destination mint that fails to honour its own multiplier.
+ *
+ * It does NOT prove the two chains' multipliers agree, and it is important
+ * not to read it that way. Because every leg converts OkuM <-> USDC at the
+ * LOCAL multiplier, dollar value survives the trip even when the multipliers
+ * have diverged badly — divergence shows up as a different TOKEN COUNT on
+ * each side, not as lost value. (Observed on this very deployment: EVM was
+ * at 1.000168 and SVM at 1.0000037, and value still reconciled to 6e-7.)
+ *
+ * Multiplier parity is a separate property with its own dedicated monitor:
+ * `EVM/scripts/operator/checkMultiplierDrift.ts`, which reads every chain
+ * including SVM (via SVM_RPC_URL / SVM_LITE_PSM_PROGRAM_ID / SVM_OKU_M_MINT)
+ * and is the thing that actually fails when the streaming schedules drift.
+ * Run both; neither subsumes the other.
+ *
+ * SOURCE-SIDE LIQUIDITY IS A PRECONDITION, NOT AN OUTCOME.
+ * The EVM LitePSM redeems from a buffer and falls back to a redemption
+ * QUEUE when the buffer cannot cover the redemption (`_redeemOkuMShared`
+ * returns 0 and routes the OkuM to `RedemptionQueue`). SVM has no queue at
+ * all — it reverts with `InsufficientBuffer`. A queued redemption is NOT a
+ * bridgeable event: the orchestrator watches for `OkuMRedeemed`, which the
+ * queued path never emits. Both directions therefore pre-flight the source
+ * buffer and abort with an actionable message rather than misreporting a
+ * queued redemption as a bridge failure.
  *
  * Refuses to operate against Solana mainnet-beta or EVM mainnets (base/bsc).
  *
@@ -59,6 +88,12 @@ import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import {
+  PRECISION,
+  computeMultiplier,
+  scheduleFromConfig,
+} from '@okumoney/yield-tooling';
+
 import { LitePsm } from '../../target/types/lite_psm';
 import { detectNetwork, createProvider, loadKeypair } from '../utils/network';
 import * as os from 'os';
@@ -101,7 +136,14 @@ if (!PRIVATE_KEY) {
 const SVM_NETWORK = SVM_NETWORK_ARG as NetworkName;
 
 // Mainnet guard
-const EVM_MAINNETS = new Set(['base', 'bsc', 'mainnet', 'ethereum']);
+// MUST stay in sync with `MAINNET_NETWORKS` in `EVM/scripts/utils/mainnetGuard.ts`
+// (the canonical EVM mainnet guard). Not imported directly: that file lives in
+// a sibling package and this repo's cross-package sharing mechanism is
+// `@okumoney/yield-tooling`, which `mainnetGuard.ts` isn't published through.
+// Previously this set was MISSING `optimism` and `arbitrum` relative to the
+// canonical guard (and relative to `test-bridge-evm-evm.ts`'s own copy) —
+// both are real deployable mainnet targets in `EVM/scripts/config/chains.ts`.
+const EVM_MAINNETS = new Set(['base', 'bsc', 'mainnet', 'ethereum', 'optimism', 'arbitrum']);
 const SVM_MAINNETS = new Set(['mainnet-beta', 'mainnet-fork']);
 if (EVM_MAINNETS.has(EVM_CHAIN) || SVM_MAINNETS.has(SVM_NETWORK)) {
   throw new Error(
@@ -157,16 +199,58 @@ function loadEvmRegistry(): any {
   return JSON.parse(fs.readFileSync(registryPath, 'utf8'));
 }
 
+/**
+ * Resolve RPC URL with reliability-first ordering, matching
+ * `test-bridge-evm-evm.ts::resolveRpcUrl` exactly (kept as a literal copy
+ * rather than a shared import — see the mainnet-guard sync comment above for
+ * why cross-package imports aren't how this repo shares script code).
+ *
+ * This script does NOT load any .env itself (same convention as PRIVATE_KEY
+ * above — the caller exports it), so ALCHEMY_API_KEY must be exported by
+ * whoever invokes this, same as PRIVATE_KEY.
+ *
+ * Previously this script skipped straight to the registry's raw `rpcUrl`
+ * (often a public, load-balanced endpoint), making it the MOST exposed of
+ * the two bridge scripts to exactly the RPC read-replica lag both scripts
+ * spend significant code working around.
+ */
+function resolveEvmRpcUrl(chainName: string, registryRpcUrl: string): string {
+  const alchemyKey = process.env.ALCHEMY_API_KEY;
+  if (alchemyKey) {
+    const alchemyNetworks: Record<string, string> = {
+      sepolia: 'eth-sepolia',
+      baseSepolia: 'base-sepolia',
+      arbSepolia: 'arb-sepolia',
+      bscTestnet: 'bnb-testnet',
+    };
+    const alchemyNet = alchemyNetworks[chainName];
+    if (alchemyNet) return `https://${alchemyNet}.g.alchemy.com/v2/${alchemyKey}`;
+  }
+
+  const envOverrides: Record<string, string | undefined> = {
+    sepolia: process.env.SEPOLIA_RPC_URL,
+    baseSepolia: process.env.BASE_SEPOLIA_RPC_URL,
+    arbSepolia: process.env.ARB_SEPOLIA_RPC_URL,
+    bscTestnet: process.env.BSC_TESTNET_RPC_URL,
+    base: process.env.BASE_RPC_URL,
+    bsc: process.env.BSC_RPC_URL,
+  };
+  if (envOverrides[chainName]) return envOverrides[chainName]!;
+
+  return registryRpcUrl;
+}
+
 async function makeEvmCtx(chainName: string): Promise<EvmCtx> {
   const registry = loadEvmRegistry();
   const entry = registry.evm?.[chainName];
   if (!entry) {
     throw new Error(`No EVM registry entry for "${chainName}"`);
   }
-  const { chainId, rpcUrl, contracts } = entry;
+  const { chainId, rpcUrl: registryRpcUrl, contracts } = entry;
   if (!contracts.okuMoney || !contracts.litePSM) {
     throw new Error(`Missing OkuMoney/LitePSM in registry for "${chainName}"`);
   }
+  const rpcUrl = resolveEvmRpcUrl(chainName, registryRpcUrl);
   const provider = new ethers.JsonRpcProvider(rpcUrl, chainId);
   const pk = PRIVATE_KEY!.startsWith('0x') ? PRIVATE_KEY! : `0x${PRIVATE_KEY!}`;
   const wallet = new ethers.Wallet(pk, provider);
@@ -223,11 +307,15 @@ async function evmSendTx(
     } catch (e: any) {
       lastErr = e;
       const msg = e?.shortMessage || e?.message || String(e);
+      // "replacement transaction underpriced" deliberately does NOT retry —
+      // see the matching comment in test-bridge-evm-evm.ts::sendTx. It means a
+      // tx was already broadcast; retrying can double-execute the mint/redeem
+      // and none of this script's value-conservation checks would catch a
+      // doubled amount.
       if (
         attempt < maxRetries - 1 &&
         (msg.includes('execution reverted') ||
-          msg.includes('insufficient allowance') ||
-          msg.includes('replacement transaction underpriced'))
+          msg.includes('insufficient allowance'))
       ) {
         logger.warning(
           `[EVM:${ctx.chainName}] ${label} estimateGas/send failed (attempt ${attempt + 1}/${maxRetries}); ` +
@@ -492,6 +580,136 @@ async function svmRedeemOkuM(ctx: SvmCtx, okuMAmount: bigint): Promise<bigint> {
 }
 
 // ============================================================================
+// Value conservation
+// ============================================================================
+
+/**
+ * Tolerance for cross-chain value comparison, expressed in 18-decimal
+ * dollars. The bridge rail is denominated in USDC (6 decimals), so a
+ * round trip truncates twice — once converting source OkuM to USDC, once
+ * converting destination USDC back to OkuM. Two USDC units is the tight
+ * bound; anything larger indicates real multiplier divergence rather than
+ * rounding.
+ */
+const VALUE_TOLERANCE_18 = 2n * 10n ** 12n; // 2 USDC units in 18-dec dollars
+
+/** EVM OkuM (18-dec) -> dollars, 18-dec. */
+function evmOkuMToDollars18(okuM18: bigint, multiplier: bigint): bigint {
+  return (okuM18 * multiplier) / PRECISION;
+}
+
+/**
+ * SVM OkuM (6-dec) -> dollars, 18-dec.
+ *
+ * Scales the 6-decimal token amount up by 1e12 BEFORE applying the
+ * multiplier so the division by PRECISION does not truncate away the
+ * fractional cents we are trying to compare.
+ */
+function svmOkuMToDollars18(okuM6: bigint, multiplier: bigint): bigint {
+  return (okuM6 * 10n ** 12n * multiplier) / PRECISION;
+}
+
+/** Read the SVM canonical (streamed) multiplier at wall-clock now. */
+async function svmMultiplier(ctx: SvmCtx): Promise<bigint> {
+  const cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  return computeMultiplier(
+    scheduleFromConfig(cfg as any),
+    BigInt(Math.floor(Date.now() / 1000))
+  );
+}
+
+/**
+ * THE invariant this script exists to prove: value in == value out.
+ *
+ * Deliberately compares DOLLARS, not token amounts. Token amounts cannot
+ * be compared directly across the two stacks — different decimals (18 vs
+ * 6) and, more importantly, independent multipliers. A test that only
+ * checks "USDC released == USDC minted" proves the rail moved the right
+ * number of USDC units while saying nothing about whether the user's
+ * claim on the protocol survived the trip.
+ */
+function assertValueConserved(
+  srcLabel: string,
+  srcDollars18: bigint,
+  dstLabel: string,
+  dstDollars18: bigint
+): void {
+  const diff =
+    srcDollars18 > dstDollars18
+      ? srcDollars18 - dstDollars18
+      : dstDollars18 - srcDollars18;
+  const fmt = (v: bigint) => ethers.formatUnits(v, 18);
+  logger.info(`  source (${srcLabel}) dollar value burned : ${fmt(srcDollars18)}`);
+  logger.info(`  dest   (${dstLabel}) dollar value minted : ${fmt(dstDollars18)}`);
+  logger.info(`  delta                                    : ${fmt(diff)}`);
+  if (diff > VALUE_TOLERANCE_18) {
+    throw new Error(
+      `[invariant] VALUE NOT CONSERVED across the bridge: burned ` +
+        `$${fmt(srcDollars18)} on ${srcLabel} but minted $${fmt(dstDollars18)} ` +
+        `on ${dstLabel} (delta $${fmt(diff)} > tolerance ` +
+        `$${fmt(VALUE_TOLERANCE_18)}). This means the two chains' multipliers ` +
+        `have diverged — users bridging in this direction are being ` +
+        `silently ${srcDollars18 > dstDollars18 ? 'shortchanged' : 'overpaid'}.`
+    );
+  }
+  logger.success(`[invariant] value conserved within ${fmt(VALUE_TOLERANCE_18)}: OK`);
+}
+
+// ============================================================================
+// Source-buffer pre-flight
+// ============================================================================
+
+/**
+ * Assert the EVM LitePSM buffer can cover `usdcNeeded` BEFORE redeeming.
+ *
+ * Without this, an under-funded PSM silently routes the redemption to the
+ * RedemptionQueue: the tx succeeds, OkuM leaves the wallet, no USDC
+ * arrives, and the script previously reported the misleading
+ * "redeemOkuM released 0 USDC". The OkuM is not lost (it is escrowed in
+ * the queue) but it is NOT bridged, and no `OkuMRedeemed` event is emitted
+ * for the orchestrator to act on.
+ */
+async function assertEvmBufferCovers(evm: EvmCtx, usdcNeeded: bigint): Promise<void> {
+  const buffer: bigint = await evm.usdc.balanceOf(evm.litePSMAddr);
+  logger.info(
+    `[EVM:${evm.chainName}] PSM buffer: ${ethers.formatUnits(buffer, evm.usdcDecimals)} USDC ` +
+      `(need ${ethers.formatUnits(usdcNeeded, evm.usdcDecimals)})`
+  );
+  if (buffer < usdcNeeded) {
+    throw new Error(
+      `[EVM:${evm.chainName}] PSM buffer ${ethers.formatUnits(buffer, evm.usdcDecimals)} USDC ` +
+        `< required ${ethers.formatUnits(usdcNeeded, evm.usdcDecimals)} USDC. ` +
+        `redeemOkuM would ENQUEUE instead of paying out, which is not a ` +
+        `bridgeable event (no OkuMRedeemed emitted). Fund it first:\n` +
+        `  LitePSM.depositBuffer(<amount>)  [role: PSM_BUFFER_DEPOSITOR]\n` +
+        `then drain any backlog with LitePSM.processQueue(head, tail, approve).`
+    );
+  }
+}
+
+/** Assert the SVM PSM vault can cover `usdcNeeded` before redeeming. */
+async function assertSvmBufferCovers(svm: SvmCtx, usdcNeeded: bigint): Promise<void> {
+  const acct = await getAccount(
+    svm.provider.connection,
+    svm.vaultUsdc,
+    undefined,
+    TOKEN_PROGRAM_ID
+  );
+  logger.info(
+    `[SVM:${svm.network}] PSM vault: ${Number(acct.amount) / 1e6} USDC ` +
+      `(need ${Number(usdcNeeded) / 1e6})`
+  );
+  if (acct.amount < usdcNeeded) {
+    throw new Error(
+      `[SVM:${svm.network}] PSM vault ${Number(acct.amount) / 1e6} USDC < required ` +
+        `${Number(usdcNeeded) / 1e6} USDC. SVM has NO redemption queue — ` +
+        `redeem_oku_m reverts with InsufficientBuffer. Top up with ` +
+        `\`npm run admin:deposit-buffer\` [role: buffer_depositor].`
+    );
+  }
+}
+
+// ============================================================================
 // Snapshots
 // ============================================================================
 
@@ -605,6 +823,32 @@ async function evmToSvm(
     await evmSendTx(evm, evm.litePSM, 'mintOkuM', [usdcNeeded], 'litePSM.mintOkuM');
   }
 
+  // Capture the source-side multiplier and dollar value BEFORE the burn, so
+  // value conservation is measured against what the user actually gave up.
+  const evmMultPre: bigint = await evm.okuMoney.okuMMultiplier();
+  const srcDollars18 = evmOkuMToDollars18(okuMAmountEvm, evmMultPre);
+
+  // Pre-flight: the buffer must cover this redemption or it will silently
+  // enqueue instead of paying out.
+  const expectedUsdc =
+    srcDollars18 / 10n ** BigInt(18 - evm.usdcDecimals);
+  await assertEvmBufferCovers(evm, expectedUsdc);
+
+  // DRY_RUN stops HERE, after the read-only pre-flight, rather than continuing
+  // into legs whose assertions compare balance deltas that by definition cannot
+  // move when nothing is sent. Previously `DRY_RUN=true` always failed at the
+  // "released 0 USDC" check — a documented flag that could not work. Everything
+  // above this line (registry resolution, RPC wiring, both multipliers, the
+  // buffer sufficiency check) is exactly what a dry run is useful for.
+  if (DRY_RUN) {
+    logger.success(
+      `DRY_RUN pre-flight OK: would bridge ${ethers.formatUnits(okuMAmountEvm, 18)} OkuM ` +
+        `($${ethers.formatUnits(srcDollars18, 18)}) from EVM:${evm.chainName} @ multiplier ` +
+        `${evmMultPre} to SVM:${svm.network}; source buffer covers ${expectedUsdc} USDC-units.`
+    );
+    return { released: 0n, minted: 0n };
+  }
+
   const usdcBefore: bigint = await evm.usdc.balanceOf(evm.wallet.address);
   await evmSendTx(
     evm,
@@ -624,7 +868,15 @@ async function evmToSvm(
     () => evm.usdc.balanceOf(evm.wallet.address) as Promise<bigint>,
     usdcBefore
   );
-  if (released === 0n) throw new Error('[EVM] redeemOkuM released 0 USDC');
+  if (released === 0n) {
+    throw new Error(
+      `[EVM:${evm.chainName}] redeemOkuM released 0 USDC despite a pre-flight ` +
+        `buffer check passing. The redemption was almost certainly routed to ` +
+        `the RedemptionQueue (OkuM left the wallet, no USDC arrived, no ` +
+        `OkuMRedeemed event). Inspect RedemptionQueue.queueTail() and drain ` +
+        `with LitePSM.processQueue(). This is NOT a bridgeable redemption.`
+    );
+  }
   logger.success(`[EVM:${evm.chainName}] released ${ethers.formatUnits(released, evm.usdcDecimals)} USDC`);
 
   // Off-chain rail: mint MockUSDC on SVM dest for the same amount.
@@ -650,17 +902,19 @@ async function evmToSvm(
   }
   logger.success(`[invariant] SVM USDC net delta = 0 (mint+spend cancel): OK`);
 
-  // EVM supply down by exactly okuMAmountEvm
-  const evmSupplyDelta = evmPost.okuMSupply - evmPre.okuMSupply;
-  if (evmSupplyDelta > 0n) {
-    // If we minted to seed the wallet, supply could have gone up by more than
-    // it later went down. Only fail if net supply increased — that would
-    // contradict "source burn".
-    logger.warning(
-      `[invariant] EVM supply went up (seeded then redeemed): ` +
-        `${ethers.formatUnits(evmSupplyDelta, 18)} (may be expected on first run)`
+  // EVM wallet OkuM must fall by exactly the redeemed amount. This is the
+  // real "source burn" assertion. totalSupply is NOT usable here: the seeding
+  // branch above may mint before redeeming, so a net supply delta conflates
+  // two unrelated operations. The wallet delta isolates the redemption.
+  const evmWalletOkuMDelta = evmPre.okuM - evmPost.okuM;
+  if (evmWalletOkuMDelta !== okuMAmountEvm) {
+    throw new Error(
+      `[invariant] EVM wallet OkuM delta (${ethers.formatUnits(evmWalletOkuMDelta, 18)}) ` +
+        `!= redeemed (${ethers.formatUnits(okuMAmountEvm, 18)}) — the source leg did ` +
+        `not burn exactly what was bridged.`
     );
   }
+  logger.success(`[invariant] EVM wallet OkuM delta == redeemed: OK`);
 
   // SVM OkuM balance increased by exactly okuMMinted
   const svmOkuMDelta = svmPost.okuM - svmPre.okuM;
@@ -670,6 +924,15 @@ async function evmToSvm(
     );
   }
   logger.success(`[invariant] SVM OkuM wallet delta == minted: OK`);
+
+  // The invariant that actually matters: dollars in == dollars out.
+  const svmMultPost = await svmMultiplier(svm);
+  assertValueConserved(
+    `EVM:${evm.chainName}`,
+    srcDollars18,
+    `SVM:${svm.network}`,
+    svmOkuMToDollars18(okuMMinted, svmMultPost)
+  );
 
   return { released, minted: okuMMinted };
 }
@@ -688,16 +951,40 @@ async function svmToEvm(
 
   // Source leg (SVM): ensure OkuM, redeem.
   if (svmPre.okuM < okuMAmountSvm) {
-    // Seed: mint SVM MockUSDC, then mintOkuM via PSM.
     const short = okuMAmountSvm - svmPre.okuM;
-    // We don't know the SVM price exactly, but a 1:1 USDC->OkuM approximation
-    // with cushion suffices for testnet sizing. Use short + 10% cushion.
-    const seedUsdc = (short * 11n) / 10n;
+    // Size the seed from the ACTUAL on-chain multiplier rather than the old
+    // "1:1 plus 10% cushion" guess. OkuM appreciates, so 1 USDC buys strictly
+    // less than 1 OkuM once the multiplier exceeds PRECISION; the guess was
+    // only safe because the cushion happened to exceed the drift. Deriving it
+    // keeps the seed correct at any multiplier.
+    const multSeed = await svmMultiplier(svm);
+    const seedUsdc = (short * multSeed) / PRECISION + 1n;
     logger.info(
-      `[SVM:${svm.network}] Wallet short on OkuM; seeding via mintUSDC+mintOkuM(${seedUsdc})`
+      `[SVM:${svm.network}] Wallet short on OkuM; seeding via mintUSDC+mintOkuM(${seedUsdc}) ` +
+        `at multiplier ${multSeed}`
     );
     await svmMintMockUsdc(svm, seedUsdc, svm.signer.publicKey);
     await svmMintOkuM(svm, seedUsdc);
+  }
+
+  // Capture source-side value before the burn.
+  const svmMultPre = await svmMultiplier(svm);
+  const srcDollars18 = svmOkuMToDollars18(okuMAmountSvm, svmMultPre);
+
+  // Pre-flight: SVM has NO queue — an under-funded vault hard-reverts.
+  await assertSvmBufferCovers(svm, srcDollars18 / 10n ** 12n);
+
+  // See the matching guard in evmToSvm: DRY_RUN stops after the read-only
+  // pre-flight. This direction previously ran to completion under DRY_RUN and
+  // reported PASS having executed nothing, because its destination leg had no
+  // zero-check — the inverse failure to evmToSvm's, in the same script.
+  if (DRY_RUN) {
+    logger.success(
+      `DRY_RUN pre-flight OK: would bridge ${Number(okuMAmountSvm) / 1e6} OkuM ` +
+        `($${ethers.formatUnits(srcDollars18, 18)}) from SVM:${svm.network} @ multiplier ` +
+        `${svmMultPre} to EVM:${evm.chainName}; source vault covers the redemption.`
+    );
+    return { released: 0n, minted: 0n };
   }
 
   const released = await svmRedeemOkuM(svm, okuMAmountSvm);
@@ -752,6 +1039,25 @@ async function svmToEvm(
     );
   }
   logger.success(`[invariant] EVM supply delta == minted: OK`);
+
+  // SVM wallet OkuM must fall by exactly the redeemed amount (source burn).
+  const svmWalletOkuMDelta = svmPre.okuM - svmPost.okuM;
+  if (svmWalletOkuMDelta !== okuMAmountSvm) {
+    throw new Error(
+      `[invariant] SVM wallet OkuM delta (${svmWalletOkuMDelta}) != redeemed ` +
+        `(${okuMAmountSvm}) — the source leg did not burn exactly what was bridged.`
+    );
+  }
+  logger.success(`[invariant] SVM wallet OkuM delta == redeemed: OK`);
+
+  // The invariant that actually matters: dollars in == dollars out.
+  const evmMultPost: bigint = await evm.okuMoney.okuMMultiplier();
+  assertValueConserved(
+    `SVM:${svm.network}`,
+    srcDollars18,
+    `EVM:${evm.chainName}`,
+    evmOkuMToDollars18(minted, evmMultPost)
+  );
 
   return { released, minted };
 }

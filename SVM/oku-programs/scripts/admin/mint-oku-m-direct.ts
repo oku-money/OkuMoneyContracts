@@ -25,6 +25,7 @@ import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
+import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 function parseArg(name: string): string | undefined {
@@ -58,6 +59,7 @@ async function main() {
 
   const cfg = await program.account.psmConfig.fetch(psmConfig);
   const okuMMint = cfg.okuMMint;
+  const directMinter = resolveRoleSigner(provider, cfg, 'directMinter');
   const recipientAta = getAssociatedTokenAddressSync(
     okuMMint, recipient, true, TOKEN_2022_PROGRAM_ID
   );
@@ -70,7 +72,7 @@ async function main() {
       'recipient ATA': recipientAta.toBase58(),
       'amount (6dec)': amount.toString(),
       'remaining direct_minter_allowance': cfg.directMinterAllowance.toString(),
-      'signer (direct_minter)': provider.wallet.publicKey.toBase58(),
+      'signer (direct_minter)': describeRoleSigner('directMinter', directMinter),
     })
   );
 
@@ -83,7 +85,7 @@ async function main() {
   const sig = await program.methods
     .mintOkuMDirect(amount)
     .accountsPartial({
-      directMinter: provider.wallet.publicKey,
+      directMinter: directMinter.authority,
       config: psmConfig,
       okuMMint,
       recipient,
@@ -92,6 +94,7 @@ async function main() {
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
+    .signers(directMinter.signers)
     .rpc();
   logger.success(`tx: ${sig}`);
 

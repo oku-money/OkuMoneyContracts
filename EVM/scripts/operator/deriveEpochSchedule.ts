@@ -50,6 +50,7 @@ import {
   RateSegment,
   deriveBaseRate,
   toOnChainSchedule,
+  floatRateToBigint,
   DEFAULT_SETTLEMENT_FRACTION,
   EpochGrid,
   describeRate,
@@ -82,6 +83,14 @@ async function readSchedule(okuM: any) {
     okuM.okuMMultiplier(),
   ]);
   return {
+    // EXACT on-chain value, preserved as a bigint. `rateFloat` below is a lossy
+    // convenience view for the float-based derivation maths; it must NOT be
+    // used to reconstruct a rate for submission. Near 1e18 a JS number's ULP is
+    // 128, so `BigInt(Math.round(Number(rateBn) / 1e18 * 1e18))` can land up to
+    // ~128 wei away from `rateBn` — and this artifact is broadcast verbatim to
+    // every chain, so a re-anchor that claims to preserve the running rate
+    // would in fact perturb it fleet-wide.
+    rateBig: rateBn as bigint,
     rateFloat: Number(rateBn) / 1e18,
     anchorSec: Number(anchorBn),
     rateEndSec: Number(rateEndBn),
@@ -289,9 +298,17 @@ export async function deriveRollEpoch(
   logger.info(`Next epoch adjusted target: $${nextAdjustedTargetUsd.toFixed(2)} (global V=$${globalNow.valueUsd.toFixed(2)}, chains=${chains.join(",")})`);
 
   // Re-anchoring the already-running settlement rate at its own value, not
-  // re-deriving it — this is the currently active on-chain rate, just scaled.
-  const rate = BigInt(Math.round(schedule.rateFloat * 1e18));
-  const nextRateBig = BigInt(Math.round(rBaseNextFloat * 1e18));
+  // re-deriving it — this is the currently active on-chain rate, used verbatim
+  // as a bigint (see `readSchedule`: round-tripping it through a JS float would
+  // perturb it by up to ~128 wei on every chain at once).
+  const rate = schedule.rateBig;
+  // MUST clamp. This is the production multi-chain roll path: `broadcastSchedule`
+  // fans this artifact out to every chain, so an out-of-range rate does not fail
+  // on one chain — it reverts `RateTooHigh` on ALL of them simultaneously, in the
+  // settlement window, with yield already halted. `floatRateToBigint` clamps to
+  // MAX_RATE instead, and the shortfall is carried forward by the ledger.
+  // Every sibling rate-producing path already clamps; this one did not.
+  const nextRateBig = floatRateToBigint(rBaseNextFloat);
 
   logger.info(`Derived next base rate:     ${describeRate(nextRateBig)}`);
 

@@ -256,7 +256,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
     });
 
     it("setOkuMYieldRate: direct mode activates streaming accrual", async () => {
-        const endTimestamp = BigInt((await time.latest()) + 30 * 86400);
+        const endTimestamp = BigInt((await time.latest()) + 86400); // 24h production epoch
         const PRECISION = 10n ** 18n;
         const { confirmedRate } = await runSetOkuMYieldRate(ctx, admin, {
             mode: "direct",
@@ -276,21 +276,26 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         // before settlement even ran (a TEST bug, not a mechanism bug: caught
         // and fixed here rather than chased further, per the "measure before
         // asserting" principle the simulation suite audit established).
-        const rateEnd = BigInt((await time.latest()) + 30 * 86400);
+        const rateEnd = BigInt((await time.latest()) + 86400); // 24h production epoch
         await runSetOkuMYieldRate(ctx, admin, {
             mode: "direct",
             rate: PRECISION + 10n ** 8n,
             endTimestamp: rateEnd,
         });
-        await time.increase(20 * 86400); // 20 days into the 30-day base window
+        await time.increase(16 * 3600); // 16h into the 22.4h base window (same fraction as the old 20-of-28-days)
 
         // Target set generously ABOVE what the tiny base rate alone could
         // have distributed over the full window, so settlement has real,
         // positive work to do (not clamped to a halt).
         const supply = Number(ethers.formatEther(await okuMoney.totalSupply()));
-        const realisedYieldUsd = supply * 0.01; // 1% of supply — far above what 0.01% APY/30d produces
+        // 0.05% of supply per 24h epoch (~20% APY). Sized deliberately: ~56x above
+        // what the tiny base rate alone distributes over the base window (so
+        // settlement has real positive work), but only ~5.6% of MAX_RATE's
+        // per-24h ceiling. The previous value (1% of supply) was a 30-day-shaped
+        // target and would CLAMP at 111% of MAX_RATE in a 24h window.
+        const realisedYieldUsd = supply * 0.0005;
 
-        const pendingEnd = rateEnd + BigInt(2 * 86400);
+        const pendingEnd = rateEnd + BigInt(5760); // one 24h-epoch settlement window (1/15)
         const result = await runStageSettlement(ctx, admin, {
             realisedYieldUsd,
             pendingEndTimestamp: pendingEnd,
@@ -311,13 +316,17 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         // Same "target relative to actual supply" fix as the stage-settlement
         // test above, for the same reason.
         const supply = Number(ethers.formatEther(await okuMoney.totalSupply()));
-        const nextRealisedYieldUsd = supply * 0.01;
+        const nextRealisedYieldUsd = supply * 0.0005;
         const mult = Number(await okuMoney.okuMMultiplier()) / 1e18;
 
         const result = await runRollEpoch(ctx, admin, {
             nextRealisedYieldUsd,
-            nextEndTimestamp: BigInt(await time.latest()) + BigInt(2 * 86400),
-            epochLengthSec: 30 * 86400,
+            // One settlement window, NOT a full epoch. `deriveRollEpoch` computes
+            // nextRateEnd = <current on-chain rateEnd> + epochLength*(1-1/15),
+            // and the contract requires nextRateEnd > rateEnd. A full-epoch
+            // value here exceeds that and reverts PendingEndNotAfterRateEnd.
+            nextEndTimestamp: BigInt(await time.latest()) + BigInt(5760),
+            epochLengthSec: 86400,
             // Single-chain local drill: "global" value IS this chain's value.
             // sampleGlobalValueUsd() is CHAIN_METADATA-driven and cannot be
             // exercised here for the same reason the globalValue test above
@@ -342,14 +351,14 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const PRECISION = 10n ** 18n;
 
         // ---- Fresh schedule, matching the runEpoch tests' pattern above ----
-        const rateEnd = BigInt((await time.latest()) + 30 * 86400);
+        const rateEnd = BigInt((await time.latest()) + 86400); // 24h production epoch
         await runSetOkuMYieldRate(ctx, admin, { mode: "direct", rate: PRECISION + 10n ** 8n, endTimestamp: rateEnd });
 
         const supplyAtAnchor = Number(ethers.formatEther(await okuMoney.totalSupply()));
         const multAtAnchor = Number(await okuMoney.okuMMultiplier()) / 1e18;
         appendSample({ timestampSec: await time.latest(), valueUsd: supplyAtAnchor * multAtAnchor, perChain: {} });
 
-        await time.increase(20 * 86400);
+        await time.increase(16 * 3600); // 16h into the 22.4h base window
         const supplyNow = Number(ethers.formatEther(await okuMoney.totalSupply()));
         const multNow = Number(await okuMoney.okuMMultiplier()) / 1e18;
         appendSample({ timestampSec: await time.latest(), valueUsd: supplyNow * multNow, perChain: {} });
@@ -363,8 +372,8 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const ledgerStateBeforeA = summarizeLedger();
 
         // ---- Phase 1: stage-settlement — derive, apply, verify artifact identity ----
-        const realisedYieldUsd = supplyNow * 0.01;
-        const pendingEnd = rateEnd + BigInt(2 * 86400);
+        const realisedYieldUsd = supplyNow * 0.0005;
+        const pendingEnd = rateEnd + BigInt(5760); // one 24h-epoch settlement window (1/15)
         const stageArtifact = await deriveStageSettlement(ctx, admin, {
             epochId: EPOCH_A,
             realisedYieldUsd,
@@ -398,9 +407,13 @@ describe("Operator drill: exercise every lever on a clean local chain", function
 
         const rollArtifactA = await deriveRollEpoch(ctx, admin, {
             epochId: EPOCH_A,
-            nextRealisedYieldUsd: supplyAtRoll * 0.01,
-            nextEndTimestamp: BigInt(await time.latest()) + BigInt(2 * 86400),
-            epochLengthSec: 30 * 86400,
+            nextRealisedYieldUsd: supplyAtRoll * 0.0005,
+            // One settlement window, NOT a full epoch. `deriveRollEpoch` computes
+            // nextRateEnd = <current on-chain rateEnd> + epochLength*(1-1/15),
+            // and the contract requires nextRateEnd > rateEnd. A full-epoch
+            // value here exceeds that and reverts PendingEndNotAfterRateEnd.
+            nextEndTimestamp: BigInt(await time.latest()) + BigInt(5760),
+            epochLengthSec: 86400,
             globalValueUsdOverride: supplyAtRoll * multAtRoll,
         });
         expect(rollArtifactA.phase).to.equal("roll-epoch");
@@ -442,16 +455,20 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         expect(summary.pendingReconciliation).to.equal(true); // epoch A not yet reconciled
 
         // ---- Phase 3: roll-epoch (epoch B) — THIS is what reconciles epoch A ----
-        await time.increase(10 * 86400); // let epoch A's just-applied rate actually accrue something to reconcile
+        await time.increase(8 * 3600); // let epoch A's just-applied rate actually accrue something to reconcile
         const supplyAtRollB = Number(ethers.formatEther(await okuMoney.totalSupply()));
         const multAtRollB = Number(await okuMoney.okuMMultiplier()) / 1e18;
         expect(multAtRollB).to.be.greaterThan(multAtRoll); // sanity: time actually passed under a live rate
 
         const rollArtifactB = await deriveRollEpoch(ctx, admin, {
             epochId: EPOCH_B,
-            nextRealisedYieldUsd: supplyAtRollB * 0.01,
-            nextEndTimestamp: BigInt(await time.latest()) + BigInt(2 * 86400),
-            epochLengthSec: 30 * 86400,
+            nextRealisedYieldUsd: supplyAtRollB * 0.0005,
+            // One settlement window, NOT a full epoch. `deriveRollEpoch` computes
+            // nextRateEnd = <current on-chain rateEnd> + epochLength*(1-1/15),
+            // and the contract requires nextRateEnd > rateEnd. A full-epoch
+            // value here exceeds that and reverts PendingEndNotAfterRateEnd.
+            nextEndTimestamp: BigInt(await time.latest()) + BigInt(5760),
+            epochLengthSec: 86400,
             globalValueUsdOverride: supplyAtRollB * multAtRollB,
         });
         // REGRESSION (defect #3): epoch B's carryInUsd is epoch A's

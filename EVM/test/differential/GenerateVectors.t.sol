@@ -189,8 +189,18 @@ contract GenerateVectorsTest is Test {
 
         uint256[4] memory bases = [P, P + 1, 2 * P, Constants.MAX_MULTIPLIER];
 
-        uint256[5] memory windows =
-            [uint256(1), uint256(1 hours), uint256(7 days), uint256(30 days), MAX_WINDOW];
+        // `1 days` is the PRODUCTION epoch length (see scripts/config/epoch.ts).
+        // It was previously absent — the corpus bracketed it with 1 hours and
+        // 7 days but never sampled it — so the three implementations were never
+        // cross-validated at the exact window the fleet actually runs on.
+        uint256[6] memory windows = [
+            uint256(1),
+            uint256(1 hours),
+            uint256(1 days),
+            uint256(7 days),
+            uint256(30 days),
+            MAX_WINDOW
+        ];
 
         for (uint256 b = 0; b < bases.length; b++) {
             for (uint256 r = 0; r < rates.length; r++) {

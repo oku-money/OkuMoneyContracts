@@ -15,7 +15,8 @@
  * executable, not just simulated. Two phases, both using the atomic
  * `setOkuMYieldRateWithSuccessor` (see `setOkuMYieldRate.ts`):
  *
- *   PHASE=stage-settlement   (call mid base window, e.g. ~day 26 of 30)
+ *   PHASE=stage-settlement   (call mid base window; at 24h, a few hours before
+ *                             baseEnd — i.e. inside the first 22.4h)
  *     Reads the CURRENT on-chain schedule (active rate/anchor/rateEnd) and
  *     V̄ samples since the anchor, derives the settlement rate that closes
  *     the gap between the (buffer/carry-adjusted) target and what's been
@@ -23,7 +24,8 @@
  *     remaining tail — then re-anchors at the SAME active rate (skew-free)
  *     while atomically staging the settlement rate as its successor.
  *
- *   PHASE=roll-epoch         (call once IN the settlement window, e.g. ~day 29)
+ *   PHASE=roll-epoch         (call once IN the settlement window — at 24h that
+ *                             is the final 1.6h of the epoch)
  *     Reconciles what the settlement rate actually delivered so far
  *     (`reconcileActualPayout`) against the target, appends a carry-ledger
  *     entry, derives the NEXT epoch's base rate from a freshly realised
@@ -39,7 +41,7 @@
  *       PENDING_END_TIMESTAMP=1769904000 \
  *       npx hardhat run scripts/operator/runEpoch.ts --network base
  *   NETWORK=base PHASE=roll-epoch NEXT_REALISED_YIELD_USD=41200 \
- *       NEXT_END_TIMESTAMP=1772323200 EPOCH_LENGTH_SEC=2592000 \
+ *       NEXT_END_TIMESTAMP=1772323200 EPOCH_LENGTH_SEC=86400 \
  *       npx hardhat run scripts/operator/runEpoch.ts --network base
  *
  * Environment (see individual phase functions for the full parameter list):
@@ -68,6 +70,7 @@ import { deriveBaseRate, floatRateToBigint, DEFAULT_SETTLEMENT_FRACTION, EpochGr
 import { samplesInWindow, valueAt, sampleGlobalValueUsd } from "../utils/globalValue";
 import { reconcileActualPayout } from "../utils/yieldRate";
 import { upsertLedgerEntry, backfillReconciliation, buildLedgerEntry, summarizeLedger } from "../utils/carryLedger";
+import { EPOCH_LENGTH_SECONDS as DEFAULT_EPOCH_LENGTH_SECONDS } from "../config/epoch";
 
 async function readSchedule(okuM: any) {
   const [rateBn, anchorBn, rateEndBn, baseMultBn, totalSupplyBn, multiplierBn] = await Promise.all([
@@ -332,7 +335,7 @@ if (require.main === module) {
     } else if (phase === "roll-epoch") {
       const nextRealisedYieldUsd = Number(parseArg("nextRealisedYieldUsd"));
       const nextEndTimestamp = parseArg("nextEndTimestamp");
-      const epochLengthSec = Number(parseArg("epochLengthSec") ?? 30 * 86400);
+      const epochLengthSec = Number(parseArg("epochLengthSec") ?? DEFAULT_EPOCH_LENGTH_SECONDS);
       if (!nextRealisedYieldUsd || !nextEndTimestamp) {
         throw new Error("roll-epoch requires --nextRealisedYieldUsd and --nextEndTimestamp");
       }

@@ -11,6 +11,7 @@ import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
+import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 async function main() {
@@ -31,10 +32,11 @@ async function main() {
     logger.warning('PSM is not paused — no-op.');
     return;
   }
+  const unpauser = resolveRoleSigner(provider, cfg, 'unpauser');
   logger.info(
     summaryBlock('unpause()', {
       'config PDA': psmConfig.toBase58(),
-      'signer (unpauser)': provider.wallet.publicKey.toBase58(),
+      'signer (unpauser)': describeRoleSigner('unpauser', unpauser),
     })
   );
   if (isDryRun()) return logger.success('--dry-run set; not submitting.');
@@ -42,7 +44,8 @@ async function main() {
 
   const sig = await program.methods
     .unpause()
-    .accountsPartial({ unpauser: provider.wallet.publicKey, config: psmConfig })
+    .accountsPartial({ unpauser: unpauser.authority, config: psmConfig })
+    .signers(unpauser.signers)
     .rpc();
   logger.success(`tx: ${sig}`);
 }

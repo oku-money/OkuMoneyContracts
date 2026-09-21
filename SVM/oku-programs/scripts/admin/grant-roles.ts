@@ -76,6 +76,7 @@ import {
 import * as os from 'os';
 import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork, loadKeypair } from '../utils/network';
+import { loadDevnetAuthority } from '../config/authorities';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
@@ -158,6 +159,33 @@ const DIRECT_BURNER_ALLOWANCE = DIRECT_BURNER_ALLOWANCE_CONST;
 
 type GrantStatus = 'granted' | 'already' | 'would_grant' | 'skipped' | 'error';
 
+/**
+ * Resolve the extra signers needed to act as `allowance_manager`.
+ *
+ * On devnet/localnet `allowance_manager` is the OPERATOR key
+ * (`keys/devnet-authority.json`), not the deployer — the on-chain init
+ * guard forbids any granular role from equalling `role_admin`, and the
+ * deployer must be `role_admin` because it is the BPF upgrade authority.
+ * See `config/authorities.ts::allRolesToOperatorKey`.
+ *
+ *   - `[]`   the signer already IS allowance_manager
+ *   - `[kp]` the locally-held operator key is allowance_manager
+ *   - `null` allowance_manager is a key we do not hold — caller must skip
+ */
+function resolveAllowanceManagerSigners(
+  signer: PublicKey,
+  allowanceManager: PublicKey
+): Keypair[] | null {
+  if (allowanceManager.equals(signer)) return [];
+  try {
+    const operator = loadDevnetAuthority();
+    if (operator.publicKey.equals(allowanceManager)) return [operator];
+  } catch {
+    // No local operator key available.
+  }
+  return null;
+}
+
 interface GrantResult {
   program: string;
   role: string;
@@ -230,11 +258,14 @@ async function main() {
     const targetAllowance = new anchor.BN(DIRECT_MINTER_ALLOWANCE);
     const currentAllowanceManager = (psmCfgPre as any).allowanceManager as PublicKey;
 
+    const extraSigners = resolveAllowanceManagerSigners(roleAdmin, currentAllowanceManager);
+
     if (currentAllowance && currentAllowance.eq(targetAllowance)) {
       logger.info(`  direct_minter_allowance already ${targetAllowance.toString()} -- skipping`);
-    } else if (!currentAllowanceManager.equals(roleAdmin)) {
+    } else if (extraSigners === null) {
       logger.warning(
-        `  allowanceManager is ${currentAllowanceManager.toBase58().slice(0, 12)}... (not the signer). ` +
+        `  allowanceManager is ${currentAllowanceManager.toBase58().slice(0, 12)}... ` +
+          `(not the signer, and no matching local operator key). ` +
           `Skipping -- use set-direct-minter-allowance.ts with the allowanceManager wallet.`
       );
     } else if (dryRun) {
@@ -247,9 +278,10 @@ async function main() {
         const sig = await psmProgram.methods
           .setDirectMinterAllowance(targetAllowance)
           .accountsPartial({
-            allowanceManager: roleAdmin,
+            allowanceManager: currentAllowanceManager,
             config: psmConfig,
           })
+          .signers(extraSigners)
           .rpc();
         logger.success(
           `  set_direct_minter_allowance(${targetAllowance.toString()}) -- tx: ${sig.slice(0, 20)}...`
@@ -269,11 +301,14 @@ async function main() {
     const targetAllowance = new anchor.BN(DIRECT_BURNER_ALLOWANCE);
     const currentAllowanceManager = (psmCfgPre as any).allowanceManager as PublicKey;
 
+    const extraSigners = resolveAllowanceManagerSigners(roleAdmin, currentAllowanceManager);
+
     if (currentAllowance && currentAllowance.eq(targetAllowance)) {
       logger.info(`  direct_burner_allowance already ${targetAllowance.toString()} -- skipping`);
-    } else if (!currentAllowanceManager.equals(roleAdmin)) {
+    } else if (extraSigners === null) {
       logger.warning(
-        `  allowanceManager is ${currentAllowanceManager.toBase58().slice(0, 12)}... (not the signer). ` +
+        `  allowanceManager is ${currentAllowanceManager.toBase58().slice(0, 12)}... ` +
+          `(not the signer, and no matching local operator key). ` +
           `Skipping -- use set-direct-burner-allowance.ts with the allowanceManager wallet.`
       );
     } else if (dryRun) {
@@ -286,9 +321,10 @@ async function main() {
         const sig = await psmProgram.methods
           .setDirectBurnerAllowance(targetAllowance)
           .accountsPartial({
-            allowanceManager: roleAdmin,
+            allowanceManager: currentAllowanceManager,
             config: psmConfig,
           })
+          .signers(extraSigners)
           .rpc();
         logger.success(
           `  set_direct_burner_allowance(${targetAllowance.toString()}) -- tx: ${sig.slice(0, 20)}...`

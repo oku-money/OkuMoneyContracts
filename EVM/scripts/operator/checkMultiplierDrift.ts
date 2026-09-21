@@ -29,15 +29,18 @@
  * Env:
  *   CHAINS=base,arbitrum,...   chains to compare (default: all in the address book)
  *   TOLERANCE_BPS=<n>          max tolerated multiplier spread, basis points (default 1)
- *   EXPIRY_WARN_HOURS=<n>      warn when rateEnd is nearer than this (default 48)
+ *   EXPIRY_WARN_HOURS=<n>      warn when rateEnd is nearer than this (default 4).
+ *                              Keep this well below one epoch length, or it
+ *                              fires on every chain on every run.
  *   EPOCH_ANCHOR_UNIX=<n>      Override epoch 0's start. Defaults to the committed
  *                              grid in scripts/config/epoch.ts, so the alignment
  *                              check runs by default rather than being skipped.
- *   EPOCH_LENGTH_SECONDS=<n>   Override the epoch length (default: 30 days).
+ *   EPOCH_LENGTH_SECONDS=<n>   Override the epoch length (default: 24 hours).
  *   EPOCH_GRID_TOLERANCE_SECONDS=<n>  Slack allowed off the exact grid; defaults
- *                              to one settlement window, since a rate window
- *                              legitimately ends at the BASE boundary rather
- *                              than the epoch boundary.
+ *                              to one tenth of the epoch, which clears the BASE
+ *                              boundary (where a rate window legitimately ends,
+ *                              one settlement window before the epoch boundary)
+ *                              with room to spare.
  */
 
 import { ethers } from "ethers";
@@ -57,7 +60,12 @@ import {
 } from "../config/epoch";
 
 const TOLERANCE_BPS = BigInt(process.env.TOLERANCE_BPS ?? "1");
-const EXPIRY_WARN_HOURS = Number(process.env.EXPIRY_WARN_HOURS ?? "48");
+// Must be well under one epoch, or it fires permanently. Under the 24h grid a
+// 48h default (the previous value, sized for 30-day epochs) meant `rateEnd -
+// now` was ALWAYS inside the warn window, so every chain warned on every run
+// and the signal was worthless. 4h sits inside the 22.4h base window and fires
+// only once the settlement window is genuinely approaching.
+const EXPIRY_WARN_HOURS = Number(process.env.EXPIRY_WARN_HOURS ?? "4");
 // Defaults come from the committed grid (scripts/config/epoch.ts) so the check
 // is ON by default rather than silently skipped. Env vars still override, for
 // testing against a non-standard grid.
@@ -215,6 +223,24 @@ async function main() {
   ).filter((r): r is Reading => r !== null);
 
   const includeSvm = !requested || requested.includes(SVM_CHAIN_KEY);
+
+  // `SVM_EXPECTED=true` means "SVM carries supply; never report agreement
+  // without checking it". A CHAINS filter that omits SVM would otherwise
+  // skip `readSvm()` entirely and silently bypass that guard — reinstating
+  // exactly the false-confidence failure mode D-27 added the flag to kill
+  // ("a cron job with SVM_RPC_URL unset would print 'all chains in
+  // agreement' while SVM was entirely unchecked"). CHAINS is a scope knob,
+  // not an override for a declared invariant, so this is a hard error:
+  // a warning here would be the very thing D-27 rejects.
+  if (!includeSvm && process.env.SVM_EXPECTED === "true") {
+    throw new Error(
+      `SVM_EXPECTED=true but CHAINS=${process.env.CHAINS} excludes ` +
+        `"${SVM_CHAIN_KEY}", so SVM would not be checked at all. Either add ` +
+        `"${SVM_CHAIN_KEY}" to CHAINS, drop the CHAINS filter, or unset ` +
+        `SVM_EXPECTED if you genuinely intend an EVM-only scan.`
+    );
+  }
+
   const svmReading = includeSvm ? await readSvm() : null;
   const readings = svmReading ? [...evmReadings, svmReading] : evmReadings;
 

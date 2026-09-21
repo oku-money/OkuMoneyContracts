@@ -19,6 +19,7 @@ import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
+import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 function parseArg(name: string): string | undefined {
@@ -49,12 +50,13 @@ async function main() {
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
   const cfg = await program.account.psmConfig.fetch(psmConfig);
+  const allowanceManager = resolveRoleSigner(provider, cfg, 'allowanceManager');
   logger.info(
     summaryBlock('set_direct_burner_allowance()', {
       'config PDA': psmConfig.toBase58(),
       'current direct_burner_allowance': (cfg as any).directBurnerAllowance.toString(),
       'new direct_burner_allowance': amount.toString(),
-      'signer (allowance_manager)': provider.wallet.publicKey.toBase58(),
+      'signer (allowance_manager)': describeRoleSigner('allowanceManager', allowanceManager),
     })
   );
 
@@ -67,9 +69,10 @@ async function main() {
   const sig = await program.methods
     .setDirectBurnerAllowance(amount)
     .accountsPartial({
-      allowanceManager: provider.wallet.publicKey,
+      allowanceManager: allowanceManager.authority,
       config: psmConfig,
     })
+    .signers(allowanceManager.signers)
     .rpc();
   logger.success(`tx: ${sig}`);
 

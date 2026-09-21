@@ -5,9 +5,51 @@
  * For mainnet: requires separate pubkeys via environment variables
  */
 
-import { PublicKey } from '@solana/web3.js';
+import * as fs from 'fs';
+import * as path from 'path';
+import { Keypair, PublicKey } from '@solana/web3.js';
 import { NetworkName } from './networks';
 import { DEFAULT_DIRECT_MINTER } from './constants';
+
+/**
+ * Path to the devnet/localnet operational key ("devnet operator").
+ *
+ * Overridable via `DEVNET_AUTHORITY_PATH` for CI, which may stage the key
+ * somewhere other than the repo. Defaults to `keys/devnet-authority.json`
+ * relative to the package root, as documented in `keys/README.md`.
+ */
+export function devnetAuthorityPath(): string {
+  return (
+    process.env.DEVNET_AUTHORITY_PATH ||
+    path.join(process.cwd(), 'keys', 'devnet-authority.json')
+  );
+}
+
+/**
+ * Load the devnet operator keypair.
+ *
+ * This key holds the 9 granular authorities on non-mainnet deployments.
+ * It CANNOT be the deployer wallet — see `allRolesToOperatorKey` below for
+ * the on-chain constraint that forces the split.
+ */
+export function loadDevnetAuthority(): Keypair {
+  const p = devnetAuthorityPath();
+  if (!fs.existsSync(p)) {
+    throw new Error(
+      `Devnet operator keypair not found at ${p}.\n` +
+        `The lite-psm program requires the 9 granular authorities to be ` +
+        `DISJOINT from role_admin (which must itself be the deployer / BPF ` +
+        `upgrade authority), so devnet needs a second key.\n` +
+        `Generate one with:\n` +
+        `  solana-keygen new --outfile keys/devnet-authority.json\n` +
+        `then fund it:\n` +
+        `  solana transfer <pubkey> 0.5 --url devnet --allow-unfunded-recipient`
+    );
+  }
+  return Keypair.fromSecretKey(
+    new Uint8Array(JSON.parse(fs.readFileSync(p, 'utf-8')))
+  );
+}
 
 export interface AuthorityConfig {
   // PSM authorities (12 roles — matches `AuthorityRole` in roles.rs)
@@ -38,27 +80,71 @@ export interface AuthorityConfig {
 }
 
 /**
- * Build an AuthorityConfig where all signer-bearing roles point to the
- * deployer wallet. Used for localnet/devnet so a single wallet can sign
- * every admin call during smoke testing.
+ * Build an AuthorityConfig for localnet/devnet/fork deployments.
+ *
+ * WHY THIS IS A TWO-KEY MODEL (it used to be one)
+ * -----------------------------------------------
+ * Two on-chain constraints in `lite-psm` are jointly binding at
+ * `initialize` time, and they force the deployer and the operational roles
+ * onto DIFFERENT keys:
+ *
+ *   1. `contexts/init.rs` — `program_data.upgrade_authority_address ==
+ *      Some(role_admin.key())`. The account that signs `initialize` and
+ *      becomes `config.role_admin` MUST be the program's BPF upgrade
+ *      authority, i.e. the deploying wallet. This is not negotiable from
+ *      the client side.
+ *
+ *   2. `instructions/init.rs` — every one of the 9 granular authorities is
+ *      checked `!= role_admin` (and `!= Pubkey::default()`). This mirrors
+ *      `set_authority`'s separation-of-duties guard in `psm_admin.rs`: the
+ *      root/claw-back meta-role must never also hold an operational role.
+ *
+ * Together: role_admin == deployer (forced by 1), therefore none of the 9
+ * granular roles may be the deployer (forced by 2).
+ *
+ * An earlier version of this function pointed all 9 at the deployer, which
+ * made `initialize` revert with `InvalidAuthority` (6024) — the devnet
+ * deploy path could not complete at all. `directMinter`/`directBurner` had
+ * already been split out onto a delegate EOA for exactly this reason; the
+ * other 9 were simply missed.
+ *
+ * So on non-mainnet we seat all 9 granular roles on a single locally-held
+ * "devnet operator" key (`keys/devnet-authority.json`). That preserves the
+ * original convenience property — ONE key signs every operational call
+ * during smoke testing — while satisfying the on-chain guard. The deployer
+ * retains `role_admin`, and therefore retains unconditional claw-back of
+ * every role via `set_authority`.
  */
-function allRolesToSingleKey(deployer: PublicKey): AuthorityConfig {
+function allRolesToOperatorKey(
+  deployer: PublicKey,
+  operator: PublicKey
+): AuthorityConfig {
+  if (operator.equals(deployer)) {
+    throw new Error(
+      `Devnet operator key (${operator.toBase58()}) must not equal the ` +
+        `deployer/role_admin wallet — the on-chain initialize guard rejects ` +
+        `any granular authority set to role_admin. Generate a distinct key ` +
+        `at keys/devnet-authority.json.`
+    );
+  }
   return {
     psm: {
+      // role_admin MUST be the BPF upgrade authority (constraint 1 above).
       roleAdmin: deployer,
-      pauser: deployer,
-      unpauser: deployer,
-      freezer: deployer,
-      unfreezer: deployer,
-      bufferDepositor: deployer,
-      bufferWithdrawer: deployer,
-      capManager: deployer,
-      allowanceManager: deployer,
-      rebaser: deployer,
-      // directMinter/directBurner cannot be the deployer because deployer ==
-      // role_admin and the on-chain guard rejects non-RoleAdmin roles set to
-      // role_admin. Use the shared devnet delegate EOA instead (the same
-      // key operates both direct-mint and direct-burn on devnet).
+      // The 9 granular roles collapse onto the operator key: distinct from
+      // role_admin (constraint 2) but still a single signer for smoke tests.
+      pauser: operator,
+      unpauser: operator,
+      freezer: operator,
+      unfreezer: operator,
+      bufferDepositor: operator,
+      bufferWithdrawer: operator,
+      capManager: operator,
+      allowanceManager: operator,
+      rebaser: operator,
+      // directMinter/directBurner stay on the shared devnet delegate EOA —
+      // these model a third-party operator (fiat gateway / bridge backend)
+      // and are exercised via grant-roles.ts rather than the smoke test.
       directMinter: new PublicKey(DEFAULT_DIRECT_MINTER),
       directBurner: new PublicKey(DEFAULT_DIRECT_MINTER),
     },
@@ -80,8 +166,10 @@ function isTestnetOrFork(network: NetworkName): boolean {
 /**
  * Load authorities based on network
  *
- * - localnet/devnet/devnet-fork/mainnet-fork: all signer roles use the
- *   deployer wallet.
+ * - localnet/devnet/devnet-fork/mainnet-fork: `role_admin` is the deployer
+ *   wallet; the 9 granular roles are seated on the locally-held devnet
+ *   operator key (`keys/devnet-authority.json`). See
+ *   `allRolesToOperatorKey` for why these cannot be the same key.
  * - mainnet-beta: loads separate pubkeys from MAINNET_* env vars.
  *
  * `litePsmProgramId` is accepted (and currently unused) for forward
@@ -92,10 +180,11 @@ export function loadAuthorities(
   deployerPubkey?: PublicKey,
   _litePsmProgramId?: PublicKey
 ): AuthorityConfig {
-  // For testnet and fork networks, use deployer wallet for all authorities
+  // Testnet/fork: deployer holds role_admin, operator key holds the rest.
   if (isTestnetOrFork(network)) {
     const deployer = deployerPubkey || PublicKey.default;
-    return allRolesToSingleKey(deployer);
+    const operator = loadDevnetAuthority().publicKey;
+    return allRolesToOperatorKey(deployer, operator);
   }
 
   // For mainnet-beta only, load separate authority pubkeys from environment

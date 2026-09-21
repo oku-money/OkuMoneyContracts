@@ -1,22 +1,63 @@
 /**
- * Grant All Roles to Master EOA
+ * Grant Operational Roles to Master EOA ("operate, don't own")
  *
- * Idempotently grants every AccessControl role on every deployed contract
- * (for the active network) to a single hard-coded "master" EOA so that one
- * dev wallet can do everything during testing — including grant/revoke other
- * roles via DEFAULT_ADMIN_ROLE.
+ * Idempotently grants MASTER_EOA the bounded set of OPERATIONAL roles it
+ * needs to run day-to-day protocol operations on a testnet deployment —
+ * mint/burn OkuM, set the yield rate, deposit the PSM buffer, process the
+ * redemption queue — and sets its OkuM minter allowance so the mint grant is
+ * actually usable. It does NOT grant `DEFAULT_ADMIN_ROLE`, any `*_UPGRADER`
+ * role, or any pause/blacklist/cap/allowance-manager/buffer-withdrawer role.
+ * Those stay on the admin/deployer key. This is the EVM mirror of SVM's
+ * `scripts/admin/grant-roles.ts --delegate=<pubkey>`; see its NatSpec for the
+ * shared "operate, don't own" rationale and the SVM/EVM role-mapping table
+ * in `../../../README.md § RBAC`.
  *
- * Decisions baked in:
- *   - QUEUE_PSM is intentionally NOT granted to an EOA (must remain on the
- *     LitePSM proxy, otherwise an EOA could bypass LitePSM accounting).
+ * ============================================================================
+ * WHY THIS DIVERGES FROM THE DOCUMENTED PRODUCTION THREAT MODEL — read first
+ * ============================================================================
+ * `../../README.md` states twice, deliberately, that the EVM orchestrator
+ * role holds NO minting authority ("Orchestrator key compromise grants no
+ * special mint privilege beyond the orchestrator's USDC custody" —
+ * `mintOkuM` is permissioned only by USDC collateral, not by an EOA role).
+ * That is the production design: EVM bridging is PSM/USDC-mediated, so an
+ * orchestrator EOA never needs `OKUM_MINTER`/`OKUM_BURNER` directly.
  *
- * The signer used to send the grants must hold DEFAULT_ADMIN_ROLE on every
- * contract being touched. On testnet deployments that is the deployer / dev
- * wallet (DEV_WALLET_ADDRESS in scripts/config/chains.ts).
+ * This script grants `OKUM_MINTER`/`OKUM_BURNER` to MASTER_EOA anyway. That
+ * is a DELIBERATE, TESTNET-ONLY parity choice with SVM's `direct_minter`/
+ * `direct_burner` roles (which exist there because SVM has no redemption
+ * queue and must mint/burn directly) — not a silent contradiction of the
+ * doc. Never point this script at a mainnet network with real funds without
+ * revisiting that decision; `assertNotMainnet` below blocks it by default.
+ *
+ * Both grants remain individually bounded even so: `mint()` is capped by
+ * `minterAllowance[msg.sender]` (set below, well under `maxSupply`) and the
+ * global supply cap; `burn()` only ever burns the caller's own balance.
+ *
+ * ----------------------------------------------------------------------------
+ * WHAT'S GRANTED vs. RETAINED
+ * ----------------------------------------------------------------------------
+ * Granted (operational, bounded):
+ *   OkuMoney: OKUM_REBASER, OKUM_MINTER, OKUM_BURNER  (+ minter allowance)
+ *   LitePSM:  PSM_BUFFER_DEPOSITOR, PSM_QUEUE_PROCESSOR
+ *
+ * Retained on the admin/deployer key (governance/safety — never granted here):
+ *   DEFAULT_ADMIN_ROLE (all contracts) — unconditional claw-back of every
+ *     other role; handing it to the same party being operationally bounded
+ *     defeats the point, same separation-of-duties rationale as SVM's
+ *     `role_admin`.
+ *   All *_UPGRADER roles — implementation-swap power.
+ *   OKUM_PAUSER/UNPAUSER, OKUM_BLACKLISTER/UNBLACKLISTER, VAULT_*,
+ *     PSM_PAUSER/UNPAUSER, PSM_BUFFER_WITHDRAWER, QUEUE_* — circuit breakers,
+ *     compliance actions, and fund-pulling levers.
+ *   OKUM_CAP_MANAGER, OKUM_ALLOWANCE_MANAGER — sets the very cap bounding
+ *     MASTER_EOA's own mint allowance; granting it to the capped party
+ *     defeats the cap (mirrors SVM's `allowance_manager` rationale exactly).
+ *   QUEUE_PSM — must stay on the LitePSM proxy, never an EOA (bypasses
+ *     LitePSM accounting otherwise).
  *
  * Usage:
- *   npx hardhat run scripts/operator/grantRoles.ts --network sepolia
  *   npx hardhat run scripts/operator/grantRoles.ts --network baseSepolia
+ *   npx hardhat run scripts/operator/grantRoles.ts --network sepolia
  *   npx hardhat run scripts/operator/grantRoles.ts --network arbSepolia
  *   npx hardhat run scripts/operator/grantRoles.ts --network bscTestnet
  *
@@ -26,41 +67,60 @@
  *   # Fork (auto-detects target chain from the running node, or pass NETWORK=…):
  *   NETWORK=base npx hardhat run scripts/operator/grantRoles.ts --network localhost
  *
- *   # Mainnet (requires explicit opt-in; prefer grantRolesMainnet.ts for production):
- *   YES_MAINNET=1 NETWORK=base npx hardhat run scripts/operator/grantRoles.ts --network base
+ *   # Mainnet — refuses by default; there is deliberately no override here.
+ *   # A mainnet deployment carrying real funds needs grantRolesMainnet.ts's
+ *   # 3-key topology, not this script's testnet parity shortcut.
  *
  * Environment knobs (live networks only; forks are unaffected):
+ *   MASTER_EOA        override the delegate address (default: the shared
+ *                      testnet operator EOA below)
+ *   MINTER_ALLOWANCE  override the 18-decimal OkuM allowance granted to
+ *                      MASTER_EOA (default: 1,000,000 OkuM)
  *   CONFIRMATIONS=N   confirmations to wait per tx (default 2)
  *   SETTLE_MS=N       extra ms to sleep after each mined tx before the next
- *                     hasRole read (default 1500; set 0 to disable)
- *   DRY_RUN=1         print planned grants without broadcasting (safe on any chain,
- *                     no PRIVATE_KEY required — uses a read-only VoidSigner)
- *   YES_MAINNET=1     bypass the mainnet safety gate (see notes above)
+ *                      hasRole read (default 1500; set 0 to disable)
+ *   DRY_RUN=1         print planned grants without broadcasting (safe on any
+ *                      chain, no PRIVATE_KEY required — uses a read-only
+ *                      VoidSigner)
  */
 
 import { ethers, network } from "hardhat";
 import { Contract } from "ethers";
-import { resolveNetworkContext } from "../utils/networkContext";
+import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { hasAddress, loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
 import { DEV_WALLET_ADDRESS } from "../config/chains";
+import { runConfigureMinterAllowance } from "./configureMinterAllowance";
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
 /**
- * EOA that will receive every role on every deployed contract.
- * Override via MASTER_EOA env var. Hardcoded default is the original testnet
- * master EOA; on mainnet use grantRolesMainnet.ts with MAINNET_COLD_MULTISIG
- * / MAINNET_WARM_MULTISIG / MAINNET_ORCHESTRATOR instead of this script.
+ * EOA that receives the bounded operational role set. Override via
+ * MASTER_EOA env var. Hardcoded default is the shared testnet operator EOA
+ * (currently controlled by the backend engineer operating this deployment —
+ * NOT held by this repo/deployer). On mainnet use grantRolesMainnet.ts with
+ * MAINNET_COLD_MULTISIG / MAINNET_WARM_MULTISIG / MAINNET_ORCHESTRATOR
+ * instead of this script — this one is refused on mainnet networks entirely.
  */
 const MASTER_EOA = process.env.MASTER_EOA ?? "0x971A3e2b0031dE23715Fa1ce53843B5B045dae00";
 
 /** EOA that holds DEFAULT_ADMIN_ROLE today (the deployer / dev wallet). */
 const ADMIN_EOA = DEV_WALLET_ADDRESS;
+
+/**
+ * Minter allowance granted to MASTER_EOA (18-decimal OkuM). Mirrors SVM's
+ * `DIRECT_MINTER_ALLOWANCE` (1,000,000 OkuM) — same magnitude, same rationale:
+ * bounds the blast radius of a permissioned direct-mint role between resets
+ * by whoever holds OKUM_ALLOWANCE_MANAGER (the admin/deployer key, not
+ * MASTER_EOA itself — see the retained-roles list above).
+ */
+const MINTER_ALLOWANCE = process.env.MINTER_ALLOWANCE
+  ? BigInt(process.env.MINTER_ALLOWANCE)
+  : ethers.parseEther("1000000");
 
 /**
  * Number of confirmations to wait per tx on live networks. Anything ≥1 is
@@ -83,103 +143,54 @@ const LIVE_SETTLE_MS = Number(process.env.SETTLE_MS ?? 1500);
 const DRY_RUN = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
 
 /**
- * Mainnet safety gate — mirrors SVM's `confirmIfMainnet`.
- * On known mainnet-beta chains, require explicit opt-in or throw.
- *
- * Opt-in mechanisms (any of):
- *   - YES_MAINNET=1 / YES_MAINNET=true env var (preferred)
- *   - --yes-mainnet CLI flag (only works when the script is invoked directly,
- *     e.g. `npx ts-node scripts/operator/grantRoles.ts ...`; Hardhat v2's
- *     `hardhat run` rejects unknown CLI flags before the script sees them, so
- *     use the env var when running under `npx hardhat run`).
+ * Mainnet gate — this script is testnet-only by design (see the module doc's
+ * "WHY THIS DIVERGES" section: it grants direct mint/burn to an EOA, which
+ * the documented production threat model explicitly forbids). Unlike
+ * `grantRolesMainnet.ts` there is no opt-in override; a mainnet deployment
+ * carrying real funds needs the 3-key topology, not this shortcut.
  */
-const YES_MAINNET =
-  process.argv.includes("--yes-mainnet") ||
-  process.env.YES_MAINNET === "1" ||
-  process.env.YES_MAINNET === "true";
 const MAINNET_NETWORKS = new Set(["base", "bsc", "mainnet", "ethereum"]);
 function assertNotMainnet(networkName: string) {
   if (!MAINNET_NETWORKS.has(networkName)) return;
-  if (YES_MAINNET) {
-    logger.warning(`YES_MAINNET set; proceeding on ${networkName}`);
-    return;
-  }
   if (DRY_RUN) return; // dry-run is always safe
   throw new Error(
-    `Refusing to broadcast on ${networkName}.\n` +
-    `  grantRoles.ts routes EVERYTHING to MASTER_EOA — use grantRolesMainnet.ts instead.\n` +
-    `  If you truly want to proceed with this script on ${networkName}, set YES_MAINNET=1.\n` +
-    `  Example: YES_MAINNET=1 NETWORK=${networkName} npx hardhat run scripts/operator/grantRoles.ts --network ${networkName}`
+    `Refusing to broadcast on ${networkName}. This script grants direct ` +
+    `OKUM_MINTER/OKUM_BURNER to an EOA (MASTER_EOA), which is a testnet-only ` +
+    `parity shortcut that contradicts the documented mainnet threat model ` +
+    `("orchestrator key has no special minting authority on EVM" — see ` +
+    `../../README.md § RBAC). Use grantRolesMainnet.ts for any network ` +
+    `carrying real funds.`
   );
 }
 
 type RoleName = keyof typeof ROLES;
 
 /**
- * Map of contract name (as it appears in addresses.json) → roles to grant.
+ * Map of contract name (as it appears in addresses.json) → operational roles
+ * to grant to MASTER_EOA. Contracts with nothing to grant (OkuDollar,
+ * RedemptionQueue — see the module doc's SVM/EVM role table) are simply
+ * absent; the grant loop below only visits contracts listed here.
  *
- * NOTE: every list begins with DEFAULT_ADMIN_ROLE so the master EOA can
- * subsequently grant/revoke any role itself.
- *
- * OkuDollar reuses the OKUM_BLACKLISTER / OKUM_UNBLACKLISTER role hashes
- * (so a single role *name* spans both tokens for regulatory enforcement),
- * but AccessControl mappings are per-contract — the role must be granted
- * separately on OkuMoney AND OkuDollar. Mirrors deploy/index.ts and
- * grantRolesMainnet.ts.
+ * Deliberately does NOT lead with DEFAULT_ADMIN_ROLE the way the old
+ * "grant everything" version of this script did — see the module doc.
  */
 const ROLE_MAP: Record<string, readonly RoleName[]> = {
   OkuMoney: [
-    "DEFAULT_ADMIN_ROLE",
-    "OKUM_UPGRADER",
-    "OKUM_PAUSER",
-    "OKUM_UNPAUSER",
-    "OKUM_MINTER",
-    // Cycle 4 (EVM-15): OKUM_BURNER required for redeem flows on both LitePSM
-    // and RedemptionQueue. Granting it to the master EOA is a no-op safety net
-    // (the master EOA never calls OkuMoney.burn() directly) but keeps the role
-    // surface complete for emergency operator action.
-    "OKUM_BURNER",
     "OKUM_REBASER",
-    "OKUM_BLACKLISTER",
-    "OKUM_UNBLACKLISTER",
-    "OKUM_CAP_MANAGER",
-    "OKUM_ALLOWANCE_MANAGER",
-  ],
-  OkuDollar: [
-    "DEFAULT_ADMIN_ROLE",
-    "VAULT_UPGRADER",
-    "VAULT_PAUSER",
-    "VAULT_UNPAUSER",
-    // REMOVED (single-multiplier refactor): VAULT_REBASER / VAULT_RESERVE_MANAGER /
-    // VAULT_ADMIN no longer exist. VAULT_RESCUER replaces them as the only
-    // asset-touching vault role (withdraws OkuM donated directly to the vault).
-    "VAULT_RESCUER",
-    // Per-contract grants of the shared OKUM_BLACKLISTER / OKUM_UNBLACKLISTER
-    // role hashes — required for OkuDollar.blacklist() / unblacklist() since
-    // AccessControl role mappings are per-contract even when the hash is shared.
-    "OKUM_BLACKLISTER",
-    "OKUM_UNBLACKLISTER",
+    // Testnet-only parity with SVM's direct_minter/direct_burner — see the
+    // module doc's "WHY THIS DIVERGES" section before granting on any
+    // network carrying real funds.
+    "OKUM_MINTER",
+    "OKUM_BURNER",
   ],
   LitePSM: [
-    "DEFAULT_ADMIN_ROLE",
-    "PSM_UPGRADER",
-    "PSM_PAUSER",
-    "PSM_UNPAUSER",
-    "PSM_QUEUE_PROCESSOR",
     "PSM_BUFFER_DEPOSITOR",
-    "PSM_BUFFER_WITHDRAWER",
+    "PSM_QUEUE_PROCESSOR",
   ],
-  // NOTE: QUEUE_PSM intentionally excluded — must stay on the LitePSM proxy.
-  RedemptionQueue: [
-    "DEFAULT_ADMIN_ROLE",
-    "QUEUE_UPGRADER",
-    "QUEUE_RESCUER",
-  ],
-  // OkuBridge / OkuBridgeRouter entries removed in the noBridge refactor.
-  // Note: live deployments from prior to the refactor may still have these
-  // proxies on-chain. The address-book lookup loop below silently skips any
-  // contract name not in ROLE_MAP, so those live proxies are simply not
-  // touched by this script until they are formally retired.
+  // OkuDollar and RedemptionQueue intentionally absent: OkuDollar has no
+  // rebaser of its own (derives its multiplier from OkuMoney) and no
+  // operator-facing mint/burn surface; RedemptionQueue's only operator-ish
+  // role (QUEUE_PSM) must stay on the LitePSM proxy, never an EOA.
 };
 
 // ============================================================================
@@ -302,7 +313,9 @@ async function grantRolesOnContract(
   const results: GrantResult[] = [];
 
   // Sanity-check the signer holds DEFAULT_ADMIN_ROLE on this contract before
-  // attempting any grant — fail early with a clear message.
+  // attempting any grant — fail early with a clear message. Note we are not
+  // GRANTING DEFAULT_ADMIN_ROLE to MASTER_EOA; the signer needs to hold it
+  // itself in order to call grantRole() on OZ AccessControl at all.
   const signerHasAdmin: boolean = await contract.hasRole(
     ROLES.DEFAULT_ADMIN_ROLE,
     signerAddress
@@ -397,6 +410,14 @@ function printSummary(results: GrantResult[], skippedContracts: string[]) {
       `Skipped contracts: ${skippedContracts.join(", ")} (no entry in address book)`
     );
   }
+
+  logger.info(
+    "Retained on admin/deployer (never granted here): DEFAULT_ADMIN_ROLE, " +
+      "all *_UPGRADER, OKUM_PAUSER/UNPAUSER, OKUM_BLACKLISTER/UNBLACKLISTER, " +
+      "OKUM_CAP_MANAGER, OKUM_ALLOWANCE_MANAGER, VAULT_*, PSM_PAUSER/UNPAUSER, " +
+      "PSM_BUFFER_WITHDRAWER, QUEUE_* (incl. QUEUE_PSM, which must stay on " +
+      "the LitePSM proxy)."
+  );
 }
 
 // ============================================================================
@@ -404,7 +425,8 @@ function printSummary(results: GrantResult[], skippedContracts: string[]) {
 // ============================================================================
 
 async function main() {
-  const { networkName, bookKey, isFork } = await resolveNetworkContext();
+  const ctx: NetworkContext = await resolveNetworkContext();
+  const { networkName, bookKey, isFork } = ctx;
   assertNotMainnet(networkName);
 
   // On a fork run we read addresses from `fork:<chain>` first, but if the
@@ -418,7 +440,7 @@ async function main() {
   const candidateKeys: string[] = isFork ? [bookKey, networkName] : [bookKey];
 
   logger.header(
-    `Grant Roles → ${MASTER_EOA} (${networkName}${isFork ? " fork" : ""}${DRY_RUN ? " — DRY_RUN" : ""})`
+    `Grant Operational Roles → ${MASTER_EOA} (${networkName}${isFork ? " fork" : ""}${DRY_RUN ? " — DRY_RUN" : ""})`
   );
   logger.info(`Address book key: ${bookKey}`);
   if (DRY_RUN) {
@@ -431,6 +453,7 @@ async function main() {
   }
   logger.info(`Master EOA:       ${MASTER_EOA}`);
   logger.info(`Admin EOA:        ${ADMIN_EOA}`);
+  logger.info(`Minter allowance: ${ethers.formatEther(MINTER_ALLOWANCE)} OkuM (only takes effect if OKUM_MINTER is granted)`);
   if (!isFork) {
     logger.info(
       `Confirmations:    ${LIVE_CONFIRMATIONS} per tx (override with CONFIRMATIONS=N)`
@@ -445,6 +468,7 @@ async function main() {
 
   const allResults: GrantResult[] = [];
   const skippedContracts: string[] = [];
+  let okuMoneyContract: Contract | undefined;
 
   try {
     for (const [contractName, roles] of Object.entries(ROLE_MAP)) {
@@ -493,6 +517,8 @@ async function main() {
         adminSigner
       ) as Contract;
 
+      if (contractName === "OkuMoney") okuMoneyContract = contract;
+
       const results = await grantRolesOnContract(
         contractName,
         contract,
@@ -501,6 +527,38 @@ async function main() {
         isFork
       );
       allResults.push(...results);
+    }
+
+    // ---- Minter allowance ----
+    // Without this, a freshly-granted OKUM_MINTER is inert: `mint()` checks
+    // `minterAllowance[msg.sender]`, which defaults to 0 and is NOT set by
+    // `grantRole` itself. This is the gap the old version of this script had
+    // — it granted OKUM_MINTER but never called configureMinterAllowance,
+    // so the grant looked complete but every mint would have reverted
+    // ExceedsAllowance. Only run this if OkuMoney was actually resolved above
+    // (keeps the script usable against partial/incomplete deployments).
+    if (okuMoneyContract) {
+      logger.section("OkuMoney minter allowance");
+      // Idempotency check BEFORE delegating to runConfigureMinterAllowance:
+      // that helper always submits (no skip-if-unchanged of its own — that's
+      // correct for its standalone use as a deliberate rotation tool, see its
+      // own header, but would make every re-run of THIS script send a
+      // redundant on-chain tx even when nothing changed, contradicting the
+      // "already held" idempotency the role grants above already have).
+      const currentAllowance: bigint = await (okuMoneyContract as any).minterAllowance(MASTER_EOA);
+      if (currentAllowance === MINTER_ALLOWANCE) {
+        logger.info(
+          `  minter_allowance already ${ethers.formatEther(MINTER_ALLOWANCE)} OkuM — skipping`
+        );
+      } else {
+        await runConfigureMinterAllowance(
+          ctx,
+          adminSigner as any,
+          MASTER_EOA,
+          MINTER_ALLOWANCE,
+          DRY_RUN
+        );
+      }
     }
   } finally {
     if (
@@ -530,7 +588,7 @@ async function main() {
         `No transactions broadcast. Re-run without DRY_RUN=1 to execute.`
     );
   } else {
-    logger.success(`All applicable roles granted to ${MASTER_EOA}`);
+    logger.success(`All applicable operational roles granted to ${MASTER_EOA}`);
   }
 }
 

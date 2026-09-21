@@ -25,6 +25,7 @@ import { logger } from '../utils/logger';
 import {
   derivePsmConfigPDA,
 } from '../utils/pdaHelpers';
+import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 function parseArg(name: string): string | undefined {
@@ -60,11 +61,16 @@ async function main() {
 
   const cfg = await program.account.psmConfig.fetch(psmConfig);
   const vaultUsdc = cfg.vaultUsdc as PublicKey;
+  const bufferWithdrawer = resolveRoleSigner(provider, cfg, 'bufferWithdrawer');
 
+  // Derive from the ROLE HOLDER, not the provider wallet: the on-chain
+  // context constrains `token::authority = buffer_withdrawer`
+  // (contexts/psm.rs), so the drained USDC lands in the withdrawer's own
+  // ATA. Under the two-key devnet model that is the operator key.
   const withdrawerUsdcAta = getAssociatedTokenAddressSync(
     usdcMint,
-    provider.wallet.publicKey,
-    false,
+    bufferWithdrawer.authority,
+    true,
     TOKEN_PROGRAM_ID
   );
 
@@ -95,7 +101,7 @@ async function main() {
       'vault USDC (before)': vaultBefore,
       'withdrawer USDC (before)': withdrawerBefore,
       'amount (6dec)': amount.toString(),
-      'signer (buffer_withdrawer)': provider.wallet.publicKey.toBase58(),
+      'signer (buffer_withdrawer)': describeRoleSigner('bufferWithdrawer', bufferWithdrawer),
     })
   );
 
@@ -108,13 +114,14 @@ async function main() {
   const sig = await program.methods
     .withdrawBuffer(amount)
     .accountsPartial({
-      bufferWithdrawer: provider.wallet.publicKey,
+      bufferWithdrawer: bufferWithdrawer.authority,
       config: psmConfig,
       withdrawerUsdcAta,
       vaultUsdc,
       usdcMint,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
+    .signers(bufferWithdrawer.signers)
     .rpc();
   logger.success(`tx: ${sig}`);
 

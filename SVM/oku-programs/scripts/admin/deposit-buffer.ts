@@ -24,6 +24,7 @@ import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
+import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 function parseArg(name: string): string | undefined {
@@ -54,11 +55,17 @@ async function main() {
 
   const cfg = await program.account.psmConfig.fetch(psmConfig);
   const vaultUsdc = cfg.vaultUsdc as PublicKey;
+  const bufferDepositor = resolveRoleSigner(provider, cfg, 'bufferDepositor');
 
+  // Derive from the ROLE HOLDER, not the provider wallet: the on-chain
+  // context constrains `associated_token::authority = buffer_depositor`
+  // (contexts/psm.rs), so the USDC being deposited must sit in the
+  // depositor's own ATA. Under the two-key devnet model the depositor is
+  // the operator key, not the deployer.
   const depositorUsdcAta = getAssociatedTokenAddressSync(
     usdcMint,
-    provider.wallet.publicKey,
-    false,
+    bufferDepositor.authority,
+    true,
     TOKEN_PROGRAM_ID
   );
 
@@ -90,7 +97,7 @@ async function main() {
       'depositor USDC (before)': depositorBefore,
       'vault USDC (before)': vaultBefore,
       'amount (6dec)': amount.toString(),
-      'signer (buffer_depositor)': provider.wallet.publicKey.toBase58(),
+      'signer (buffer_depositor)': describeRoleSigner('bufferDepositor', bufferDepositor),
     })
   );
 
@@ -103,13 +110,14 @@ async function main() {
   const sig = await program.methods
     .depositBuffer(amount)
     .accountsPartial({
-      bufferDepositor: provider.wallet.publicKey,
+      bufferDepositor: bufferDepositor.authority,
       config: psmConfig,
       bufferDepositorUsdcAta: depositorUsdcAta,
       vaultUsdc,
       usdcMint,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
+    .signers(bufferDepositor.signers)
     .rpc();
   logger.success(`tx: ${sig}`);
 

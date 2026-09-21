@@ -349,17 +349,17 @@ async function runScenario(cfg: ScenarioConfig): Promise<ScenarioResult> {
 }
 
 // Baseline defaults shared across scenarios — "1M global supply, ~3.2% realized
-// on-chain yield (after off-chain spread from a ~3.5% RWA return), 30-day
+// on-chain yield (after off-chain spread from a ~3.5% RWA return), 24-hour
 // epoch, recommended base/settlement split and a small cross-epoch buffer."
 const BASELINE: Omit<ScenarioConfig, "name" | "supplyEvents"> = {
-    epochLengthSec: 30 * 86400,
-    settlementFraction: 1 / 15, // 2 days of 30
+    epochLengthSec: 24 * 3600, // 24h production epoch (scripts/config/epoch.ts)
+    settlementFraction: 1 / 15, // 1.6h of 24h
     realizedApy: 0.032,
     initialSupplyTokens: 1_000_000,
     baseWindowFraction: 0.9,
     conservativeFactor: 0.97,
     carryInUsd: 0,
-    sampleCount: 48, // ~hourly-equivalent-ish over 30d compressed for test speed (see per-scenario overrides)
+    sampleCount: 48, // every 30 min across a 24h epoch (see per-scenario overrides)
     stagingFraction: (1 / 15) * 0.85, // stage settlement ~85% of the way through... see below, corrected per-scenario
 };
 
@@ -474,8 +474,11 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             });
             // floatRateToBigint clamps to MAX_RATE rather than the tx reverting —
             // confirm the on-chain rate actually IS the clamp ceiling, not the
-            // (unrepresentable) derived float.
-            expect(result.rBaseFloat).to.be.greaterThan(1);
+            // (unrepresentable) derived float. Asserting the ceiling DIRECTLY is
+            // the real invariant here; the error-magnitude check below is a
+            // weaker, epoch-length-dependent consequence of it.
+            const MAX_RATE_FLOAT = 1 + 1e-7; // Constants.sol: PRECISION + 1e11, in float terms
+            expect(result.rBaseFloat).to.be.closeTo(MAX_RATE_FLOAT, 1e-12);
             // Distribution still happens (bounded by MAX_RATE), doesn't throw/NaN.
             expect(Number.isFinite(result.exactDistributedUsd)).to.be.true;
             expect(result.exactDistributedUsd).to.be.greaterThan(0);
@@ -484,7 +487,14 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             // config is unreachable at this AUM, and the mechanism reports a
             // large negative "achieved vs target" gap rather than doing
             // something silently wrong.
-            expect(result.errorPctVsRawTarget).to.be.lessThan(-50);
+            //
+            // NOTE the threshold is -40, not -50: the size of this gap depends
+            // on the epoch length, because MAX_RATE compounds over the window
+            // while the APY-derived target does not scale the same way. At the
+            // same absurd 50,000% APY the shortfall is ~-55.6% over 30 days but
+            // ~-49.5% over 24 hours. A tighter bound here would be asserting the
+            // epoch length, not the clamp.
+            expect(result.errorPctVsRawTarget).to.be.lessThan(-40);
             // Model/chain parity: this test caught a REAL harness bug (the
             // ground-truth model previously used the UNCLAMPED float rate while
             // the chain runs the clamped one, producing ~25.6% spurious
@@ -699,11 +709,18 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             return { stagingFraction, sampleCount };
         }
 
+        // `fullyTested` marks a length as an operationally supported candidate
+        // rather than a characterization data point. "1 day" was promoted when
+        // the production grid moved to 24h (scripts/config/epoch.ts): its
+        // settlement window is 1.6h, comfortably above the sub-hour threshold
+        // flagged below, and the accuracy result is in line with the longer
+        // lengths. "1 hour" stays characterization-only — a 4-minute settlement
+        // window is not an operational window.
         const lengths: { name: string; epochLengthSec: number; fullyTested: boolean }[] = [
             { name: "1 hour", epochLengthSec: 3600, fullyTested: false },
-            { name: "1 day", epochLengthSec: 86400, fullyTested: false },
+            { name: "1 day (baseline — production grid)", epochLengthSec: 86400, fullyTested: true },
             { name: "7 days", epochLengthSec: 7 * 86400, fullyTested: true },
-            { name: "30 days (baseline)", epochLengthSec: 30 * 86400, fullyTested: true },
+            { name: "30 days", epochLengthSec: 30 * 86400, fullyTested: true },
             { name: "90 days", epochLengthSec: 90 * 86400, fullyTested: false },
         ];
 

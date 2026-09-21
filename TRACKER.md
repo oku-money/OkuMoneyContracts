@@ -18,6 +18,58 @@ removable post-launch.
 
 ## 🟡 Should-fix before external audit
 
+### OPEN: trim NatSpec / doc-comments before any redeploy or third-party audit `[EVM] [SVM]`
+
+**Action:** do a documentation pass over `EVM/src/**` and
+`SVM/oku-programs/programs/**` + `crates/**` that (a) cuts the overall volume of
+NatSpec / doc-comments substantially, and (b) rewrites what remains to be
+**broad enough that a small change doesn't immediately invalidate it**.
+
+**Why now / why it matters:**
+
+1. **Verbosity is already producing stale docs.** The 24h-epoch change left
+   several comments factually wrong the moment a backend constant moved, e.g.
+   `EVM/src/lib/Constants.sol:63-64` and
+   `SVM/.../crates/oku-shared/src/constants.rs:68-69` both still read *"90 days
+   keeps ~60x margin while comfortably exceeding the **30-day production
+   epoch**"*, and `constants.rs:150` asserts
+   `MAX_RATE_WINDOW_SECONDS >= 30 * 24 * 60 * 60` with the comment "must still
+   comfortably exceed a production epoch". None of these are *wrong* about the
+   90-day bound — they're wrong about a number they had no business naming. The
+   rule going forward: **document the invariant, not the current value of a
+   tunable.** "Comfortably exceeds any plausible epoch length" is correct
+   forever; "exceeds the 30-day production epoch" was correct for one quarter.
+
+2. **An auditor reads every line.** Verbose NatSpec that narrates history
+   ("this was a real bug, see TRACKER.md", "an earlier version of this used…")
+   inflates audit surface and cost, and invites findings against commentary
+   rather than code. Historical reasoning belongs in `TRACKER.md` /
+   `SVM/DECISIONS.md`, which is where it already lives — the contracts should
+   point at those rather than restate them.
+
+3. **⚠ Comments in `src/` are ADDRESS-LOAD-BEARING — this cannot be done
+   casually.** `bytecodeHash` is left at solc's default (`ipfs`), so the
+   compiler embeds a metadata hash derived from the *source text* into every
+   contract's creation bytecode (verified: the `a264697066735822` CBOR marker is
+   present in `OkuMoney`'s initCode). Editing a single comment therefore changes
+   the initCode → changes the CREATE2 address → forks the fleet away from the
+   deployed contracts and invalidates their block-explorer verification.
+
+**Therefore this work MUST be batched**, not landed opportunistically:
+   - Bundle the entire NatSpec trim into **one** change that coincides with a
+     `DEPLOYMENT_VERSION` bump and a full redeploy + re-verify.
+   - Strongly consider setting `settings.metadata.bytecodeHash = "none"` in both
+     `hardhat.config.ts` and `foundry.toml` **as part of that same batch**, which
+     decouples comments from addresses permanently and makes every future doc
+     pass free. (It is itself an address-changing change, so it must ride along
+     with the version bump, not follow it.)
+   - Files under `EVM/test/**` are exempt — test contracts are never deployed.
+   - On the SVM side the program ID is keypair-derived, not content-derived, so
+     comments don't move the address — but they do change the compiled `.so`,
+     so the trim should still land before a deploy rather than after.
+
+See the CREATE2 caveats in `EVM/README.md` § Deterministic addresses.
+
 ### RESOLVED: every operator script's documented CLI invocation was impossible `[EVM]`
 
 `npx hardhat run <script>` parses argv **itself** and rejects any parameter it
@@ -562,8 +614,35 @@ env vars) that is skipped entirely until these are set, specifically so this
 decision isn't forced by the tooling.
 
 **Follow-up required before this can be closed:**
-- ~~Pick epoch length~~ — **DECIDED: 30 days, anchored 2026-01-01T00:00:00Z**,
-  committed in `EVM/scripts/config/epoch.ts` (`SVM/DECISIONS.md` D-23).
+- ~~Pick epoch length~~ — **DECIDED: 24 hours, anchored 2026-01-01T00:00:00Z**
+  (superseded an initial 30-day decision), committed in
+  `EVM/scripts/config/epoch.ts` (`SVM/DECISIONS.md` D-23).
+
+  **Revision note (24h adoption).** The move from 30 days to 24 hours was a
+  pure backend-config change — zero contract or program edits, exactly as D-22
+  predicted when on-chain grid validation was declined. What it touched:
+  `EPOCH_LENGTH_SECONDS`, the grid tolerance (see below),
+  `EXPIRY_WARN_HOURS` (48h exceeded a whole epoch and warned permanently), and
+  the epoch-shaped test fixtures. The simulation's `1 day` row was promoted
+  from "characterization only" to a fully-tested candidate: it measures 2.27%
+  error with ~9.4e-8% on-chain parity, indistinguishable from the 7-day and
+  30-day rows.
+
+  Three things the shorter epoch genuinely changes, recorded so they are not
+  rediscovered:
+  1. **`MAX_RATE` headroom drops 30x.** ~0.8677% expressible growth per 24h vs
+     ~29.6% per 30d. Realistic daily yield leaves ~63x margin; a *monthly-sized*
+     target pushed through a daily window leaves only ~2x. Pinned by the
+     `MAX_RATE headroom at a 24h epoch` tests in `unit/yieldRate.test.ts`.
+  2. **Grid tolerance had to be decoupled from the settlement fraction.** Both
+     were `epochLength/15`, which made the tolerance exactly equal to the
+     legitimate `baseEnd` offset — the alignment check passed only because the
+     comparison is strict (`>`), with zero slack. Now `epochLength/10`.
+  3. **The cadence is now daily**, which is past what a human can drive by
+     hand. The operator CLIs are intended to be driven by an external
+     scheduler; they stay non-interactive and exit-code-clean for that reason.
+
+  The original 30-day reasoning is retained below for context.
   Retained below for the reasoning. The simulation's epoch-length axis is a MECHANISM smoke
   test (confirms the contract/schedule work correctly from 1 hour to 90 days),
   **not an isolated accuracy comparison** — measured error came out flat
@@ -580,8 +659,11 @@ decision isn't forced by the tooling.
   shock's position to an ABSOLUTE time (not `atFraction`) so it doesn't scale
   with the epoch under test. **Not worth doing first** — with on-chain grid
   validation declined (D-22), epoch length is a backend constant and changing
-  it later is a config edit, not an upgrade. Recommendation is 30 days on the
-  operational argument alone. See `SVM/DECISIONS.md` D-23.
+  it later is a config edit, not an upgrade. (This proved correct: the grid was
+  subsequently changed to 24h with no contract or program change.) The original
+  recommendation was 30 days on the operational argument alone; see the
+  revision note above for why 24h was adopted instead. See `SVM/DECISIONS.md`
+  D-23.
 - ~~Pick `conservativeFactor`~~ — **DECIDED: 1.0**, already the shipped
   default. An earlier 0.97 recommendation was withdrawn: it was justified as
   protection against the early-shock overshoot, and a 3% margin against a ~28%

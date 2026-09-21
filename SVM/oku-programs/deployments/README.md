@@ -22,6 +22,21 @@ written back to the un-archived name, these dead keys would silently survive
 into it. That merge behavior is why these were renamed rather than left in
 place — a genuinely fresh deploy should start from nothing.
 
-The next real devnet deploy writes a clean `deployments/devnet.json` from
-scratch (see `SVM/README.md` deploy runbook — clean-slate redeploy is required
-regardless, since the account layout changed).
+## `devnet.json` — LIVE (clean-slate redeploy, 2026-09-19)
+
+Written from scratch by the redeploy, so it carries none of the dead keys
+above. Program ID was rotated (`BUQ1ULxn…` → `4k5gmUht…`) because the three
+programs recorded in the archived files have since been **closed** for rent
+recovery, and a closed program ID can never be redeployed.
+
+Rent recovered at redeploy time (10.495 SOL total):
+
+| Program ID | Was | Rent |
+|---|---|---|
+| `BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g` | old `lite_psm` | 4.351 SOL |
+| `5SK6EhbXf9d7jW4vzobZfbtUsZBQmFyo9w3xuSQY3Zke` | `oku_dollar` (crate removed) | 3.286 SOL |
+| `GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb` | `oku_bridge_router` (crate removed) | 2.858 SOL |
+
+All three are now closed — `solana program show` on any of them returns
+"has been closed". They remain in the archived files as explorer history
+only.

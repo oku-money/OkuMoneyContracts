@@ -49,7 +49,7 @@ describe("scripts/utils/carryLedger", () => {
 
     it("buildLedgerEntry correctly stringifies the bigint rate for JSON storage", () => {
         const measuredAvgValueUsd = 10_000_000;
-        const result = realisedYieldToRatePerSecond(40_000, measuredAvgValueUsd, 86400 * 30);
+        const result = realisedYieldToRatePerSecond(40_000, measuredAvgValueUsd, 86400);
         const entry = buildLedgerEntry({
             epochId: "2025-01",
             realisedYieldUsd: 40_000,
@@ -64,7 +64,7 @@ describe("scripts/utils/carryLedger", () => {
 
     it("cumulative conservation identity: cumulativeAchieved = cumulativeRealised - outstandingCarry, threaded across epochs with conservativeFactor withholding", () => {
         const measuredAvgValueUsd = 10_000_000;
-        const windowSeconds = 86400 * 30;
+        const windowSeconds = 86400;
         const conservativeFactor = 0.9;
         const realisedPerEpoch = 40_000;
 

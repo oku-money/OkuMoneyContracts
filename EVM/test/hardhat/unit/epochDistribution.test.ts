@@ -137,7 +137,7 @@ describe("scripts/utils/epochDistribution", () => {
             const targetUsd = 40_000;
             const distributedSoFarUsd = 36_000; // base window under-shot, 4k remaining
             const settlementForecastAvgValueUsd = 10_000_000;
-            const settlementLenSec = 2 * 86400;
+            const settlementLenSec = 5760; // 24h epoch at the default 1/15 settlement fraction
 
             const rate = deriveSettlementRate({
                 targetUsd,
@@ -149,7 +149,7 @@ describe("scripts/utils/epochDistribution", () => {
             // Verify: applying this rate over the settlement window against the
             // SAME forecast value should distribute exactly the remaining 4k
             // (to within float round-trip error from composing Math.pow twice
-            // over a ~172,800-second exponent — not a logic error).
+            // over a ~5,760-second exponent — not a logic error).
             const growth = Math.pow(rate, settlementLenSec) - 1;
             const distributedInSettlement = growth * settlementForecastAvgValueUsd;
             expect(distributedInSettlement).to.be.closeTo(targetUsd - distributedSoFarUsd, 1e-3);
@@ -160,7 +160,7 @@ describe("scripts/utils/epochDistribution", () => {
                 targetUsd: 40_000,
                 distributedSoFarUsd: 45_000, // overshoot
                 settlementForecastAvgValueUsd: 10_000_000,
-                settlementLenSec: 2 * 86400,
+                settlementLenSec: 5760, // 24h epoch at the default 1/15 settlement fraction
             });
             expect(rate).to.equal(1);
         });
@@ -170,7 +170,7 @@ describe("scripts/utils/epochDistribution", () => {
             const distributedSoFarUsd = 36_000;
             const forecastValueUsd = 8_000_000; // forecast LOW
             const actualValueUsd = 10_000_000; // actual turns out HIGHER
-            const settlementLenSec = 2 * 86400;
+            const settlementLenSec = 5760; // 24h epoch at the default 1/15 settlement fraction
 
             const rate = deriveSettlementRate({
                 targetUsd,
@@ -221,8 +221,8 @@ describe("scripts/utils/epochDistribution", () => {
             const targetUsd = 40_000;
             const distributedSoFarUsd = 30_000;
             const forecastValueUsd = 10_000_000;
-            const settlementLenSec = 2 * 86400;
-            const baseTailSec = 2 * 86400;
+            const settlementLenSec = 5760; // 24h epoch at the default 1/15 settlement fraction
+            const baseTailSec = 4 * 3600; // realistic staging lead inside a 22.4h base window
             const baseTailRatePerSecond = 1.0000000009344034; // ~3.2% APY per-second
 
             const projectedTailUsd =
@@ -255,7 +255,7 @@ describe("scripts/utils/epochDistribution", () => {
         it("lands within 0.1% of Y* — proves the base-tail and extrapolation fixes compose correctly", () => {
             const initialSupplyUsd = 1_000_000;
             const realizedApy = 0.032;
-            const epochLengthSec = 30 * 86400;
+            const epochLengthSec = 24 * 3600; // 24h production epoch
             const settlementFraction = 1 / 15;
             const conservativeFactor = 1.0; // NO deliberate buffer — isolate mechanism error only
 
@@ -274,7 +274,7 @@ describe("scripts/utils/epochDistribution", () => {
             const stagingSec = epochLengthSec * stagingFrac;
             const baseEndSecVal = epochLengthSec * (1 - settlementFraction);
 
-            // Samples every ~37.5min (48 across the epoch), flat supply.
+            // Samples every 30min (48 across a 24h epoch), flat supply.
             const samples: { timestampSec: number; valueUsd: number }[] = [];
             const segments: RateSegment[] = [{ startSec: 0, endSec: baseEndSecVal, ratePerSecond: rBaseFloat, anchorMultiplier: 1.0 }];
             for (let i = 0; i <= 48; i++) {

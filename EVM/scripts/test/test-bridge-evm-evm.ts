@@ -41,6 +41,7 @@ import * as dotenv from "dotenv";
 import * as path from "path";
 import * as fs from "fs";
 import { ethers } from "ethers";
+import { MAINNET_NETWORKS } from "../utils/mainnetGuard";
 
 // Load .env from EVM root
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
@@ -77,11 +78,14 @@ if (!RUN_PERMUTATIONS && (!SOURCE_CHAIN || !DEST_CHAIN)) {
 // ============================================================================
 // Mainnet guard
 // ============================================================================
-
-const MAINNETS = new Set(["base", "bsc", "mainnet", "ethereum", "optimism", "arbitrum"]);
+//
+// Consumes the SAME set `mainnetGuard.ts` uses for every operator script,
+// rather than a hand-rolled duplicate — the two previously diverged
+// (this file had optimism/arbitrum; the canonical guard and the sibling
+// EVM<->SVM bridge script's guard did not).
 
 function guardMainnet(chain: string) {
-  if (MAINNETS.has(chain)) {
+  if (MAINNET_NETWORKS.has(chain)) {
     throw new Error(
       `Refusing to run bridge test on mainnet network "${chain}". ` +
         `Use operator scripts with --yes-mainnet instead.`
@@ -253,11 +257,18 @@ async function sendTx(
     } catch (e: any) {
       lastErr = e;
       const msg = e?.shortMessage || e?.message || String(e);
+      // "replacement transaction underpriced" deliberately does NOT retry.
+      // That error means a transaction was ALREADY broadcast (it's the RPC
+      // telling us our resubmission didn't out-bid the pending one) — retrying
+      // resends a DIFFERENT tx (fresh nonce/gas) rather than the original, so
+      // both can land and double-execute the mint/redeem. For MockUSDC.mint or
+      // mintOkuM that means double-minting, silently, with no invariant here
+      // able to catch it (deltas are all `> 0` / value-conservation checks that
+      // a doubled amount still satisfies).
       if (
         attempt < maxRetries - 1 &&
         (msg.includes("execution reverted") ||
-          msg.includes("insufficient allowance") ||
-          msg.includes("replacement transaction underpriced"))
+          msg.includes("insufficient allowance"))
       ) {
         logger.warning(
           `[${ctx.chainName}] ${label} failed (attempt ${attempt + 1}/${maxRetries}); ` +
@@ -535,6 +546,72 @@ async function bridgeLeg(
     `[invariant] ${source.chainName} supply delta: ${ethers.formatUnits(srcSupplyDelta, 18)} ` +
       `(may be positive if wallet was seeded)`
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // THE bridge invariant: DOLLAR-VALUE CONSERVATION across the two chains.
+  //
+  // Everything above this point is satisfiable by a completely broken bridge.
+  // `usdcReleased == usdcMinted` is TAUTOLOGICAL — the rail mints exactly
+  // `usdcReleased` by construction, so it is an assignment, not a check. And
+  // `okuMMinted > 0` says nothing about whether the amount is right.
+  //
+  // OkuM is NOT fungible 1:1 across chains: it is a static-balance token whose
+  // value is (balance x multiplier), and the two chains' multipliers are only
+  // kept in agreement by off-chain operator discipline. So bridging 5 OkuM
+  // from a chain at 1.05 to a chain at 1.02 must yield ~5.147 OkuM, not 5.
+  // Without this check, an A@1.05 -> B@1.02 bridge that produced the WRONG
+  // number passed every assertion in this file.
+  //
+  // What must hold is that DOLLAR value is preserved end-to-end:
+  //     okuMBurned_src x mult_src  ==  okuMMinted_dst x mult_dst
+  // ─────────────────────────────────────────────────────────────────────────
+  const srcMult: bigint = await source.okuMoney.okuMMultiplier();
+  const dstMult: bigint = await dest.okuMoney.okuMMultiplier();
+  const PRECISION_WAD = 10n ** 18n;
+
+  const srcValueWad = (okuMAmount * srcMult) / PRECISION_WAD;
+  const dstValueWad = (okuMMinted * dstMult) / PRECISION_WAD;
+  const valueDrift = srcValueWad > dstValueWad ? srcValueWad - dstValueWad : dstValueWad - srcValueWad;
+
+  // Tolerance: the round-trip crosses an 18->6->18 decimal boundary (OkuM is
+  // 18dp, the USDC rail is 6dp), so up to one USDC-unit of value is lost to
+  // flooring in each direction. Express that in 18dp terms and allow 2 units.
+  const oneUsdcUnitWad = 10n ** BigInt(18 - source.usdcDecimals);
+  const valueTolerance = oneUsdcUnitWad * 2n;
+
+  logger.info(
+    `[invariant] value conservation: src ${ethers.formatUnits(okuMAmount, 18)} OkuM @ ` +
+      `${ethers.formatUnits(srcMult, 18)} = $${ethers.formatUnits(srcValueWad, 18)} | ` +
+      `dst ${ethers.formatUnits(okuMMinted, 18)} OkuM @ ${ethers.formatUnits(dstMult, 18)} = ` +
+      `$${ethers.formatUnits(dstValueWad, 18)}`
+  );
+  if (valueDrift > valueTolerance) {
+    throw new Error(
+      `[invariant] VALUE NOT CONSERVED across the bridge: source burned ` +
+        `$${ethers.formatUnits(srcValueWad, 18)} of value but destination minted ` +
+        `$${ethers.formatUnits(dstValueWad, 18)} (drift=${valueDrift} wad, tolerance=${valueTolerance}). ` +
+        `src multiplier=${srcMult}, dst multiplier=${dstMult}.`
+    );
+  }
+  logger.success(
+    `[invariant] dollar value conserved across chains (drift ${valueDrift} wad <= ${valueTolerance}): OK`
+  );
+
+  // Report cross-chain multiplier divergence explicitly. This is the protocol's
+  // central trust assumption (one global rate, operator-enforced) and it is
+  // otherwise verified NOWHERE on-chain. Divergence is monotonic and
+  // uncorrectable downward, so surfacing it early matters.
+  const multDrift = srcMult > dstMult ? srcMult - dstMult : dstMult - srcMult;
+  const multDriftBps = (multDrift * 10_000n) / PRECISION_WAD;
+  if (multDriftBps > 0n) {
+    logger.warning(
+      `[observe] cross-chain multiplier divergence ${source.chainName}=${srcMult} vs ` +
+        `${dest.chainName}=${dstMult} (${multDriftBps} bps). Expected 0 under a correctly ` +
+        `broadcast global schedule.`
+    );
+  } else {
+    logger.success(`[observe] cross-chain multipliers agree (0 bps divergence)`);
+  }
 
   logger.success(
     `Bridge ${source.chainName} -> ${dest.chainName}: PASS ` +

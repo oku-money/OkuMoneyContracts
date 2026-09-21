@@ -22,6 +22,7 @@ import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
+import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 function parseArg(name: string): string | undefined {
@@ -53,13 +54,14 @@ async function main() {
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
   const cfg = await program.account.psmConfig.fetch(psmConfig);
+  const capManager = resolveRoleSigner(provider, cfg, 'capManager');
   logger.info(
     summaryBlock('set_max_supply()', {
       'config PDA': psmConfig.toBase58(),
       'OkuM mint': okuMMint.toBase58(),
       'current max_supply': cfg.maxSupply.toString(),
       'new max_supply': newCap.toString(),
-      'signer (cap_manager)': provider.wallet.publicKey.toBase58(),
+      'signer (cap_manager)': describeRoleSigner('capManager', capManager),
     })
   );
 
@@ -72,11 +74,12 @@ async function main() {
   const sig = await program.methods
     .setMaxSupply(newCap)
     .accountsPartial({
-      capManager: provider.wallet.publicKey,
+      capManager: capManager.authority,
       config: psmConfig,
       okuMMint,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
+    .signers(capManager.signers)
     .rpc();
   logger.success(`tx: ${sig}`);
 

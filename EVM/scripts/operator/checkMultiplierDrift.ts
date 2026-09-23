@@ -52,7 +52,7 @@ import { CHAIN_METADATA } from "../config/chains";
 import { readSvmSchedule } from "../utils/svmValue";
 import { SVM_CHAIN_KEY } from "../utils/globalValue";
 import { parseChainsEnv } from "../config/epochChains";
-import { effectiveRate as mirrorEffectiveRate } from "@okumoney/yield-tooling";
+import { effectiveRate as mirrorEffectiveRate, PRECISION } from "@okumoney/yield-tooling";
 import {
   EPOCH_ANCHOR_UNIX as DEFAULT_EPOCH_ANCHOR_UNIX,
   EPOCH_LENGTH_SECONDS as DEFAULT_EPOCH_LENGTH_SECONDS,
@@ -317,38 +317,57 @@ async function main() {
     }
   }
 
-  // --- Epoch expiry ---
-  // Under a fixed-epoch operating model this fires every single epoch, on
-  // every chain, by design — it is a scheduled deadline, not an edge case.
-  // An EXPIRED window means yield has ALREADY silently halted (computeMultiplier
-  // falls back to PRECISION once both the active AND pending windows have
-  // elapsed), which is an ERROR, not a nudge — escalated from a warning so this
-  // script's exit code actually reflects "yield is currently not accruing
-  // somewhere" rather than requiring a human to read the log.
+  // --- Accrual liveness + upcoming expiry ---
+  //
+  // "Has accrual stopped?" is answered by the EFFECTIVE rate, not by whether
+  // `rateEnd` has passed. `computeMultiplier` only falls back to PRECISION
+  // once the active AND pending windows have BOTH elapsed — the active window
+  // expiring merely hands accrual over to the staged successor, which is the
+  // normal, designed transition at every epoch boundary.
+  //
+  // This block used to test `now >= rateEnd` and report "accrual has HALTED"
+  // (failing the run) the moment the active window ended, even while the
+  // successor was demonstrably still accruing. The comment above that code
+  // already stated the correct rule — "once both the active AND pending
+  // windows have elapsed" — so the implementation simply contradicted its own
+  // documented intent, and cried wolf for the entire successor segment.
+  //
+  // `effectiveRate` is the contract's own answer (`okuMEffectiveRatePerSecond`
+  // on EVM, the TS mirror for SVM, which has no view functions), so it stays
+  // correct for both stacks without duplicating the overhang logic here.
   const now = BigInt(Math.floor(Date.now() / 1000));
   const warnWindow = BigInt(EXPIRY_WARN_HOURS * 3600);
   for (const r of readings) {
-    if (r.rateEnd === 0n) continue;
-    if (now >= r.rateEnd) {
+    if (r.effectiveRate <= PRECISION) {
       logger.error(
-        `${r.chain}: rate window EXPIRED — accrual has HALTED on this chain. ` +
-          `setNextOkuMYieldRate now reverts RateAlreadyExpired; a fresh setOkuMYieldRate is required.`
+        `${r.chain}: accrual HALTED — effective rate is PRECISION (no yield). ` +
+          `Recover with setOkuMYieldRate / setOkuMYieldRateWithSuccessor; note ` +
+          `setNextOkuMYieldRate reverts RateAlreadyExpired once rateEnd has passed.`
       );
       failed = true;
-    } else if (r.rateEnd - now < warnWindow) {
-      const hrs = Number(r.rateEnd - now) / 3600;
-      logger.warning(`${r.chain}: rate window closes in ${hrs.toFixed(1)}h — stage the successor`);
+      continue;
     }
 
-    // A staged successor's OWN window can also elapse if it's left unattended,
-    // silently halting accrual (see MathLib.computeMultiplier's overhang bound).
-    if (r.pendingRateEnd === 0n) continue;
-    if (now >= r.pendingRateEnd) {
-      logger.error(`${r.chain}: staged successor's own window EXPIRED — accrual has HALTED`);
-      failed = true;
-    } else if (r.pendingRateEnd - now < warnWindow) {
-      const hrs = Number(r.pendingRateEnd - now) / 3600;
-      logger.warning(`${r.chain}: staged successor's window closes in ${hrs.toFixed(1)}h — stage the next one`);
+    // Still yielding. Report which segment is carrying it, and when accrual
+    // actually runs out — that is the successor's end if the active window has
+    // already handed over, otherwise the active window's own end.
+    const handedOver = r.rateEnd !== 0n && now >= r.rateEnd;
+    const runsOutAt = handedOver ? r.pendingRateEnd : r.rateEnd;
+
+    if (handedOver) {
+      const until =
+        r.pendingRateEnd === 0n
+          ? "an unbounded window"
+          : new Date(Number(r.pendingRateEnd) * 1000).toISOString();
+      logger.info(`${r.chain}: active window ended — running on staged successor until ${until}`);
+    }
+
+    if (runsOutAt !== 0n && runsOutAt > now && runsOutAt - now < warnWindow) {
+      const hrs = Number(runsOutAt - now) / 3600;
+      logger.warning(
+        `${r.chain}: accrual stops in ${hrs.toFixed(1)}h — ` +
+          `${handedOver ? "re-anchor and stage the next window" : "stage the successor"}`
+      );
     }
   }
 

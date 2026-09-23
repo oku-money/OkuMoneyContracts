@@ -82,6 +82,13 @@ EVM/scripts/config/carryLedger.json
 # (epochId, phase) JSON file per derivation — see scripts/utils/epochArtifact.ts).
 EVM/scripts/config/epochs/
 
+# NOTE: scripts/config/roleGrants.json is deliberately NOT ignored — unlike
+# every other generated store above, it is a durable audit record. The EVM
+# contracts use AccessControlUpgradeable (no on-chain holder enumeration), and
+# bscTestnet's free endpoints have pruned the deployment-era logs, so the set
+# of addresses holding privilege is not reconstructible from chain state
+# alone. See EVM/scripts/utils/roleRegistry.ts.
+
 # Local-fork address book. Holds the `fork:<chain>` half of the address book,
 # split out of the tracked addresses.json by scripts/utils/addressBook.ts.
 # Every fork run (dryRunForks.sh, `npm run deploy --network localhost`, the

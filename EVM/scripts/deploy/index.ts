@@ -19,14 +19,15 @@
 
 import { ethers, network, upgrades, run } from "hardhat";
 import { Contract, Signer } from "ethers";
-import { saveAddress, loadAddressBook, saveAddressBook, hasAddress, loadAddress } from "../utils/addressBook";
+import { saveAddress, loadAddressBook, saveAddressBook, hasAddress, loadAddress, isForkKey } from "../utils/addressBook";
 import { syncEvmRegistry } from "../utils/testnetRegistry";
 import {
   getChainMetadata,
   DEV_WALLET_ADDRESS,
 } from "../config/chains";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
-import { ROLES } from "../config/roles";
+import { ROLES, getRoleName } from "../config/roles";
+import { recordRoleGrant } from "../utils/roleRegistry";
 import { logger } from "../utils/logger";
 import {
   CREATE2_FACTORY,
@@ -749,10 +750,46 @@ async function verifyDeployment(
   const grants = expectedRoleGrants();
   const missingRoles: string[] = [];
 
+  /** addresses.json contract key -> the name used in the grant ledger. */
+  const LEDGER_CONTRACT_NAME: Record<string, string> = {
+    okuMoney: "OkuMoney",
+    okuDollar: "OkuDollar",
+    redemptionQueue: "RedemptionQueue",
+    litePSM: "LitePSM",
+  };
+  const HOLDER_LABEL: Record<RoleHolderKind, string> = {
+    litePSM: "LitePSM (contract)",
+    redemptionQueue: "RedemptionQueue (contract)",
+    deployer: "DEV_WALLET / deployer-admin",
+  };
+
   for (const g of grants) {
     const held = await contracts[g.contract].hasRole(g.role, holders[g.holder]);
     if (held) {
       logger.info(`  OK  ${g.label}`);
+      // Record each CONFIRMED grant durably. Hooked to the verification pass
+      // rather than to the ~20 individual `sendAndWait("Grant ...")` calls in
+      // `configureRoles`, so the ledger reflects what is actually live rather
+      // than what was merely attempted, and so a re-run over an existing
+      // deployment still populates the ledger. Forks excluded — their state is
+      // discarded, and recording it would pollute the ledger with grants that
+      // never existed on a real chain. See utils/roleRegistry.ts.
+      if (!isForkKey(bookKey)) {
+        const rec = recordRoleGrant({
+          at: new Date().toISOString(),
+          chain: bookKey,
+          contract: LEDGER_CONTRACT_NAME[g.contract] ?? g.contract,
+          contractAddress: await contracts[g.contract].getAddress(),
+          role: getRoleName(g.role),
+          roleHash: g.role,
+          grantee: holders[g.holder],
+          granteeLabel: HOLDER_LABEL[g.holder],
+          action: "grant",
+          granter: deployerAddress,
+          script: "deploy/index.ts",
+        });
+        if (!rec.ok) logger.warning(`  ledger write failed for ${g.label}: ${rec.error}`);
+      }
     } else {
       logger.error(`  MISSING  ${g.label}`);
       missingRoles.push(g.label);

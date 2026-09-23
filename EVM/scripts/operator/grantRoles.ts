@@ -36,24 +36,66 @@
  * ----------------------------------------------------------------------------
  * WHAT'S GRANTED vs. RETAINED
  * ----------------------------------------------------------------------------
- * Granted (operational, bounded):
- *   OkuMoney: OKUM_REBASER, OKUM_MINTER, OKUM_BURNER  (+ minter allowance)
- *   LitePSM:  PSM_BUFFER_DEPOSITOR, PSM_QUEUE_PROCESSOR
+ * ----------------------------------------------------------------------------
+ * THE POLICY, STATED ONCE
+ * ----------------------------------------------------------------------------
+ * MASTER_EOA gets everything needed to OPERATE the protocol.
+ * The deployer/admin key keeps exactly two things: the ability to UPGRADE, and
+ * literal OWNERSHIP (which is what lets it revoke all of the above).
  *
- * Retained on the admin/deployer key (governance/safety — never granted here):
- *   DEFAULT_ADMIN_ROLE (all contracts) — unconditional claw-back of every
- *     other role; handing it to the same party being operationally bounded
- *     defeats the point, same separation-of-duties rationale as SVM's
- *     `role_admin`.
- *   All *_UPGRADER roles — implementation-swap power.
- *   OKUM_PAUSER/UNPAUSER, OKUM_BLACKLISTER/UNBLACKLISTER, VAULT_*,
- *     PSM_PAUSER/UNPAUSER, PSM_BUFFER_WITHDRAWER, QUEUE_* — circuit breakers,
- *     compliance actions, and fund-pulling levers.
- *   OKUM_CAP_MANAGER, OKUM_ALLOWANCE_MANAGER — sets the very cap bounding
- *     MASTER_EOA's own mint allowance; granting it to the capped party
- *     defeats the cap (mirrors SVM's `allowance_manager` rationale exactly).
- *   QUEUE_PSM — must stay on the LitePSM proxy, never an EOA (bypasses
- *     LitePSM accounting otherwise).
+ * Granted — the full operational surface (20 roles):
+ *   OkuMoney:        OKUM_MINTER, OKUM_BURNER, OKUM_REBASER,
+ *                    OKUM_PAUSER, OKUM_UNPAUSER,
+ *                    OKUM_BLACKLISTER, OKUM_UNBLACKLISTER,
+ *                    OKUM_CAP_MANAGER, OKUM_ALLOWANCE_MANAGER
+ *                    (+ an initial minter allowance)
+ *   OkuDollar:       VAULT_PAUSER, VAULT_UNPAUSER, VAULT_RESCUER,
+ *                    OKUM_BLACKLISTER, OKUM_UNBLACKLISTER
+ *   LitePSM:         PSM_PAUSER, PSM_UNPAUSER, PSM_QUEUE_PROCESSOR,
+ *                    PSM_BUFFER_DEPOSITOR, PSM_BUFFER_WITHDRAWER
+ *   RedemptionQueue: QUEUE_RESCUER
+ *
+ * Retained on the admin/deployer key (4 roles + ownership):
+ *   DEFAULT_ADMIN_ROLE (all four contracts) — literal ownership. It is the
+ *     role-admin for every role above, so the deployer can revoke MASTER_EOA's
+ *     entire role set unilaterally at any time. This is the ONLY backstop, and
+ *     it is deliberately the whole backstop.
+ *   OKUM_UPGRADER / VAULT_UPGRADER / PSM_UPGRADER / QUEUE_UPGRADER —
+ *     implementation-swap power (UUPS `_authorizeUpgrade`).
+ *
+ * Also NOT granted, for a reason unrelated to trust:
+ *   QUEUE_PSM — an identity role, not an operator capability. It asserts
+ *     "the caller IS the LitePSM proxy", and RedemptionQueue relies on that to
+ *     keep its accounting consistent with the PSM's. Handing it to an EOA
+ *     would let that EOA drive queue state directly, out of band from the
+ *     accounting LitePSM performs around the same calls. It stays on the
+ *     proxy, and would stay there even for a fully trusted operator.
+ *
+ * ----------------------------------------------------------------------------
+ * WHAT THIS ACTUALLY MEANS — do not skim
+ * ----------------------------------------------------------------------------
+ * Granting OKUM_MINTER + OKUM_ALLOWANCE_MANAGER + OKUM_CAP_MANAGER together
+ * makes MASTER_EOA's mint capability EFFECTIVELY UNBOUNDED:
+ *
+ *   - `configureMinterAllowance` (`src/token/OkuMoney.sol:820`) is
+ *     `onlyRole(OKUM_ALLOWANCE_MANAGER)` and takes an arbitrary `minter_`, so
+ *     the holder can raise its OWN allowance past MINTER_ALLOWANCE.
+ *   - `setMaxSupply` (`OkuMoney.sol:838`) is `onlyRole(OKUM_CAP_MANAGER)`, so
+ *     the holder can then raise the global cap that would otherwise bound it.
+ *
+ * There is consequently NO on-chain ceiling on what this key can mint. An
+ * earlier revision of this file claimed OKUM_CAP_MANAGER still bounded it;
+ * that is no longer true now that both are granted. PSM_BUFFER_WITHDRAWER
+ * likewise lets it drain the PSM's USDC buffer.
+ *
+ * This is acceptable ONLY because:
+ *   (a) this script is testnet-only and hard-refuses mainnet
+ *       (`assertNotMainnet` below — there is deliberately no override), and
+ *   (b) testnet OkuM is backed by MockUSDC and has no value.
+ *
+ * The mainnet topology in `grantRolesMainnet.ts` splits these across a
+ * cold/warm/orchestrator trio precisely so that no single key holds
+ * mint + allowance + cap at once. It MUST NOT be changed to mirror this file.
  *
  * Usage:
  *   npx hardhat run scripts/operator/grantRoles.ts --network baseSepolia
@@ -91,8 +133,9 @@ import { hasAddress, loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
-import { DEV_WALLET_ADDRESS } from "../config/chains";
+import { DEV_WALLET_ADDRESS, MASTER_OPERATOR_EOA } from "../config/chains";
 import { runConfigureMinterAllowance } from "./configureMinterAllowance";
+import { recordRoleGrant, roleGrantsPath } from "../utils/roleRegistry";
 
 // ============================================================================
 // Configuration
@@ -106,7 +149,7 @@ import { runConfigureMinterAllowance } from "./configureMinterAllowance";
  * MAINNET_COLD_MULTISIG / MAINNET_WARM_MULTISIG / MAINNET_ORCHESTRATOR
  * instead of this script — this one is refused on mainnet networks entirely.
  */
-const MASTER_EOA = process.env.MASTER_EOA ?? "0x971A3e2b0031dE23715Fa1ce53843B5B045dae00";
+const MASTER_EOA = MASTER_OPERATOR_EOA;
 
 /** EOA that holds DEFAULT_ADMIN_ROLE today (the deployer / dev wallet). */
 const ADMIN_EOA = DEV_WALLET_ADDRESS;
@@ -182,15 +225,46 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     // network carrying real funds.
     "OKUM_MINTER",
     "OKUM_BURNER",
+    // Circuit breakers. An operator that cannot pause cannot respond to an
+    // incident without waking the admin key, which defeats the point of
+    // having an operator.
+    "OKUM_PAUSER",
+    "OKUM_UNPAUSER",
+    // Compliance actions.
+    "OKUM_BLACKLISTER",
+    "OKUM_UNBLACKLISTER",
+    // Supply/allowance administration. Together with OKUM_MINTER these remove
+    // every on-chain ceiling on this key's minting — see the module doc's
+    // "WHAT THIS ACTUALLY MEANS" section. Deliberate, testnet-only.
+    "OKUM_CAP_MANAGER",
+    "OKUM_ALLOWANCE_MANAGER",
+  ],
+  OkuDollar: [
+    "VAULT_PAUSER",
+    "VAULT_UNPAUSER",
+    // Withdraws OkuM donated directly to the vault. Under the single-multiplier
+    // design donations accrue to nobody, so without this they are stuck.
+    "VAULT_RESCUER",
+    // OkuDollar carries its OWN copy of the shared-prefix blacklist roles —
+    // granting them on OkuMoney does not cover the vault. Both are needed for
+    // a blacklist action to apply across the pair.
+    "OKUM_BLACKLISTER",
+    "OKUM_UNBLACKLISTER",
   ],
   LitePSM: [
     "PSM_BUFFER_DEPOSITOR",
     "PSM_QUEUE_PROCESSOR",
+    "PSM_PAUSER",
+    "PSM_UNPAUSER",
+    // Lets the operator pull USDC out of the PSM buffer.
+    "PSM_BUFFER_WITHDRAWER",
   ],
-  // OkuDollar and RedemptionQueue intentionally absent: OkuDollar has no
-  // rebaser of its own (derives its multiplier from OkuMoney) and no
-  // operator-facing mint/burn surface; RedemptionQueue's only operator-ish
-  // role (QUEUE_PSM) must stay on the LitePSM proxy, never an EOA.
+  RedemptionQueue: [
+    "QUEUE_RESCUER",
+    // QUEUE_PSM deliberately absent — it is an identity role meaning "the
+    // caller IS the LitePSM proxy", not an operator capability. See the module
+    // doc; it stays on the proxy even for a fully trusted operator.
+  ],
 };
 
 // ============================================================================
@@ -285,7 +359,7 @@ async function sendAndConfirm(
   txPromise: Promise<any>,
   description: string,
   isFork: boolean
-): Promise<void> {
+): Promise<string> {
   logger.info(`${description}...`);
   const tx = await txPromise;
   const confirmations = isFork ? 1 : LIVE_CONFIRMATIONS;
@@ -297,6 +371,7 @@ async function sendAndConfirm(
   if (!isFork && LIVE_SETTLE_MS > 0) {
     await new Promise((resolve) => setTimeout(resolve, LIVE_SETTLE_MS));
   }
+  return receipt.hash;
 }
 
 /**
@@ -308,7 +383,8 @@ async function grantRolesOnContract(
   contract: Contract,
   roles: readonly RoleName[],
   signerAddress: string,
-  isFork: boolean
+  isFork: boolean,
+  bookKey: string
 ): Promise<GrantResult[]> {
   const results: GrantResult[] = [];
 
@@ -351,12 +427,40 @@ async function grantRolesOnContract(
         continue;
       }
 
-      await sendAndConfirm(
+      const txHash = await sendAndConfirm(
         contract.grantRole(roleHash, MASTER_EOA),
         `[${contractName}] grantRole(${roleName})`,
         isFork
       );
       results.push({ contract: contractName, role: roleName, status: "granted" });
+
+      // Record the grantee DURABLY. Printing it to stdout (which is all this
+      // script used to do) loses it the moment the terminal scrolls, and
+      // `AccessControlUpgradeable` keeps no queryable member list to recover
+      // it from — see utils/roleRegistry.ts. Forks are excluded: their state
+      // is thrown away, so recording it would pollute the ledger with grants
+      // that never existed on a real chain.
+      if (!isFork) {
+        const rec = recordRoleGrant({
+          at: new Date().toISOString(),
+          chain: bookKey,
+          contract: contractName,
+          contractAddress: await contract.getAddress(),
+          role: roleName,
+          roleHash,
+          grantee: MASTER_EOA,
+          granteeLabel: "MASTER_EOA (testnet operator)",
+          action: "grant",
+          granter: signerAddress,
+          txHash,
+          script: "operator/grantRoles.ts",
+        });
+        if (!rec.ok) {
+          // Never abort: the grant is already on-chain. Losing the audit row
+          // is bad, but leaving a half-provisioned contract behind is worse.
+          logger.warning(`  [${contractName}] ${roleName}: granted, but LEDGER WRITE FAILED: ${rec.error}`);
+        }
+      }
     } catch (err: any) {
       results.push({
         contract: contractName,
@@ -412,12 +516,33 @@ function printSummary(results: GrantResult[], skippedContracts: string[]) {
   }
 
   logger.info(
-    "Retained on admin/deployer (never granted here): DEFAULT_ADMIN_ROLE, " +
-      "all *_UPGRADER, OKUM_PAUSER/UNPAUSER, OKUM_BLACKLISTER/UNBLACKLISTER, " +
-      "OKUM_CAP_MANAGER, OKUM_ALLOWANCE_MANAGER, VAULT_*, PSM_PAUSER/UNPAUSER, " +
-      "PSM_BUFFER_WITHDRAWER, QUEUE_* (incl. QUEUE_PSM, which must stay on " +
-      "the LitePSM proxy)."
+    "Retained on admin/deployer: DEFAULT_ADMIN_ROLE on all four contracts " +
+      "(literal ownership — it is the role-admin for every role granted here, " +
+      "so the deployer can revoke this operator's entire set at any time) and " +
+      "OKUM_/VAULT_/PSM_/QUEUE_UPGRADER (implementation-swap power). " +
+      "QUEUE_PSM stays on the LitePSM proxy — an identity role, not an " +
+      "operator capability."
   );
+  logger.warning(
+    "This operator holds OKUM_MINTER + OKUM_ALLOWANCE_MANAGER + " +
+      "OKUM_CAP_MANAGER together, so it can raise its own allowance AND the " +
+      "global cap: there is NO on-chain ceiling on what it can mint " +
+      `(the ${ethers.formatEther(MINTER_ALLOWANCE)} OkuM allowance is a ` +
+      "starting value it can change itself). It can also drain the PSM USDC " +
+      "buffer. The only backstop is the deployer's DEFAULT_ADMIN_ROLE. " +
+      "Testnet-only by design — this script hard-refuses mainnet."
+  );
+
+  // State the grantee last, where it can't be missed. This is the single
+  // security-relevant fact of the whole run, and it used to appear only in
+  // the header — above dozens of lines of per-role output.
+  if (granted > 0 || wouldGrant > 0) {
+    logger.warning(
+      `PRIVILEGE RECIPIENT: ${MASTER_EOA}` +
+        (process.env.MASTER_EOA ? " (from MASTER_EOA env)" : " (config/chains.ts default)")
+    );
+    logger.info(`Recorded in: ${roleGrantsPath()}`);
+  }
 }
 
 // ============================================================================
@@ -524,7 +649,8 @@ async function main() {
         contract,
         roles,
         adminSigner.address,
-        isFork
+        isFork,
+        resolvedKey
       );
       allResults.push(...results);
     }

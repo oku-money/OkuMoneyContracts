@@ -50,6 +50,7 @@ import { loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
+import { recordRoleGrant } from "../utils/roleRegistry";
 
 // ============================================================================
 // Configuration — from environment (REQUIRED on mainnet)
@@ -163,12 +164,27 @@ async function confirmIfMainnet(networkName: string): Promise<void> {
   );
 }
 
+/**
+ * Identity of a privilege mutation, carried so it can be written to the
+ * durable grant ledger. Previously only the display `label` existed, which
+ * meant the grantee address survived nowhere but the terminal — see
+ * `utils/roleRegistry.ts` for why that is the specific failure this closes.
+ */
+interface GrantMeta {
+  chain: string;
+  contractName: string;
+  roleName: string;
+  granteeLabel: string;
+  granter: string;
+}
+
 async function grantIfNeeded(
   label: string,
   contract: Contract,
   role: string,
   account: string,
-  dryRun: boolean
+  dryRun: boolean,
+  meta: GrantMeta
 ): Promise<void> {
   const has = await contract.hasRole(role, account);
   if (has) {
@@ -180,8 +196,24 @@ async function grantIfNeeded(
     return;
   }
   const tx = await contract.grantRole(role, account);
-  await tx.wait(2);
+  const receipt = await tx.wait(2);
   logger.success(`  [granted] ${label}`);
+
+  const rec = recordRoleGrant({
+    at: new Date().toISOString(),
+    chain: meta.chain,
+    contract: meta.contractName,
+    contractAddress: await contract.getAddress(),
+    role: meta.roleName,
+    roleHash: role,
+    grantee: account,
+    granteeLabel: meta.granteeLabel,
+    action: "grant",
+    granter: meta.granter,
+    txHash: receipt.hash,
+    script: "operator/grantRolesMainnet.ts",
+  });
+  if (!rec.ok) logger.warning(`  granted, but LEDGER WRITE FAILED: ${rec.error}`);
 }
 
 async function revokeIfNeeded(
@@ -189,7 +221,8 @@ async function revokeIfNeeded(
   contract: Contract,
   role: string,
   account: string,
-  dryRun: boolean
+  dryRun: boolean,
+  meta: GrantMeta
 ): Promise<void> {
   const has = await contract.hasRole(role, account);
   if (!has) {
@@ -201,8 +234,28 @@ async function revokeIfNeeded(
     return;
   }
   const tx = await contract.revokeRole(role, account);
-  await tx.wait(2);
+  const receipt = await tx.wait(2);
   logger.warning(`  [revoked] ${label}`);
+
+  // Revocations are recorded too — the ledger is append-only, and "who used
+  // to hold DEFAULT_ADMIN_ROLE, and when did they stop" is exactly the
+  // question an incident review asks. `deriveLedgerHolders` replays these in
+  // order, so the revoke correctly removes the holder from the derived set.
+  const rec = recordRoleGrant({
+    at: new Date().toISOString(),
+    chain: meta.chain,
+    contract: meta.contractName,
+    contractAddress: await contract.getAddress(),
+    role: meta.roleName,
+    roleHash: role,
+    grantee: account,
+    granteeLabel: meta.granteeLabel,
+    action: "revoke",
+    granter: meta.granter,
+    txHash: receipt.hash,
+    script: "operator/grantRolesMainnet.ts",
+  });
+  if (!rec.ok) logger.warning(`  revoked, but LEDGER WRITE FAILED: ${rec.error}`);
 }
 
 // ============================================================================
@@ -279,7 +332,10 @@ async function main() {
     const c = contracts[name];
     if (!c) continue;
     for (const role of roles) {
-      await grantIfNeeded(`${name}.${role} → cold`, c, ROLES[role], cold, DRY_RUN);
+      await grantIfNeeded(`${name}.${role} → cold`, c, ROLES[role], cold, DRY_RUN, {
+        chain: bookKey, contractName: name, roleName: role,
+        granteeLabel: "MAINNET_COLD_MULTISIG", granter: deployerAddress,
+      });
     }
   }
 
@@ -289,7 +345,10 @@ async function main() {
     const c = contracts[name];
     if (!c) continue;
     for (const role of roles) {
-      await grantIfNeeded(`${name}.${role} → warm`, c, ROLES[role], warm, DRY_RUN);
+      await grantIfNeeded(`${name}.${role} → warm`, c, ROLES[role], warm, DRY_RUN, {
+        chain: bookKey, contractName: name, roleName: role,
+        granteeLabel: "MAINNET_WARM_MULTISIG", granter: deployerAddress,
+      });
     }
   }
 
@@ -299,7 +358,10 @@ async function main() {
     const c = contracts[name];
     if (!c) continue;
     for (const role of roles) {
-      await grantIfNeeded(`${name}.${role} → orch`, c, ROLES[role], orch, DRY_RUN);
+      await grantIfNeeded(`${name}.${role} → orch`, c, ROLES[role], orch, DRY_RUN, {
+        chain: bookKey, contractName: name, roleName: role,
+        granteeLabel: "MAINNET_ORCHESTRATOR", granter: deployerAddress,
+      });
     }
   }
 
@@ -310,7 +372,11 @@ async function main() {
   for (const [name, c] of Object.entries(contracts)) {
     await revokeIfNeeded(
       `${name}.DEFAULT_ADMIN_ROLE from deployer`,
-      c, ROLES.DEFAULT_ADMIN_ROLE, deployerAddress, DRY_RUN
+      c, ROLES.DEFAULT_ADMIN_ROLE, deployerAddress, DRY_RUN,
+      {
+        chain: bookKey, contractName: name, roleName: "DEFAULT_ADMIN_ROLE",
+        granteeLabel: "DEV_WALLET / deployer-admin", granter: deployerAddress,
+      }
     );
   }
 

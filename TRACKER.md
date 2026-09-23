@@ -18,6 +18,36 @@ removable post-launch.
 
 ## 🟡 Should-fix before external audit
 
+### OPEN: `RealWorldUsage` scenario sets a 5-year rate window against a 90-day cap `[EVM]`
+
+**Symptom:** `npx hardhat test` fails 1 of 216 —
+`RealWorldUsage — 365-day stochastic simulation`, in its `before all` hook:
+
+```
+Error: VM Exception ... reverted with custom error 'RateWindowTooLong()'
+  at OkuMoney._setOkuMYieldRate (src/token/OkuMoney.sol:419)
+```
+
+**Cause:** `test/hardhat/scenarios/RealWorldUsage.ts:283-284` arms the
+schedule with `now + 5 * 365 * DAY`, but `Constants.MAX_RATE_WINDOW` is
+`90 days`, so `setOkuMYieldRate` reverts. Pre-existing and unrelated to the
+role-audit work — confirmed by stashing that work and re-running the file
+(fails identically at HEAD). `forge test` is unaffected (588/588).
+
+**Why it is not a one-line fix:** the simulation runs 365 simulated days, so
+simply clamping the window to ≤90 days makes the rate expire roughly a
+quarter of the way in and accrual halt for the remainder — which changes what
+the invariants are asserting rather than restoring them. The scenario needs
+to re-anchor the rate periodically (as the real epoch cadence does) instead
+of arming one window for the whole run. That is a deliberate rewrite of the
+scenario's schedule handling, not a constant bump.
+
+**Related (do NOT fix in place):** `src/lib/Constants.sol:64` still justifies
+the 90-day bound as "comfortably exceeding the 30-day production epoch". The
+grid moved to 24h. The wording is stale but `EVM/src/**` comments are
+address-load-bearing under CREATE2 (see the NatSpec entry below), so this
+must be batched with a `DEPLOYMENT_VERSION` bump and redeploy.
+
 ### OPEN: trim NatSpec / doc-comments before any redeploy or third-party audit `[EVM] [SVM]`
 
 **Action:** do a documentation pass over `EVM/src/**` and

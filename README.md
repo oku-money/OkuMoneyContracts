@@ -513,18 +513,65 @@ to a coworker- or CI-owned key while governance/safety roles and
   ownership`](SVM/README.md) for the full rationale and the
   `scripts/admin/grant-roles.ts --delegate=<pubkey>` tool that implements
   it.
-- **EVM:** `OKUM_REBASER`, `OKUM_MINTER`, `OKUM_BURNER` (OkuMoney),
-  `PSM_BUFFER_DEPOSITOR`, `PSM_QUEUE_PROCESSOR` (LitePSM), plus a
-  matching `configureMinterAllowance` grant so the mint role is actually
-  usable → `EVM/scripts/operator/grantRoles.ts` (targets `MASTER_EOA`).
-  **This mint/burn grant is a deliberate testnet-only divergence** from
-  the mainnet threat model below ("orchestrator key has no special
-  minting authority on EVM") — SVM's direct-mint/burn roles exist
-  because SVM has no redemption queue and must mint/burn directly; EVM's
-  production bridge legs are USDC-collateral-mediated instead and don't
-  need it. `grantRoles.ts` refuses to run against a mainnet network for
-  this reason — see its NatSpec header for the full rationale. Both
+- **EVM:** `EVM/scripts/operator/grantRoles.ts` (targets `MASTER_EOA`)
+  implements a single, deliberately simple rule:
+
+  > The operator key gets **everything needed to operate the protocol**.
+  > The deployer/admin key keeps exactly two things: the ability to
+  > **upgrade**, and literal **ownership** — which is what lets it revoke
+  > everything above.
+
+  Granted (20 roles): `OKUM_MINTER`, `OKUM_BURNER`, `OKUM_REBASER`,
+  `OKUM_PAUSER`, `OKUM_UNPAUSER`, `OKUM_BLACKLISTER`,
+  `OKUM_UNBLACKLISTER`, `OKUM_CAP_MANAGER`, `OKUM_ALLOWANCE_MANAGER`
+  (OkuMoney); `VAULT_PAUSER`, `VAULT_UNPAUSER`, `VAULT_RESCUER`,
+  `OKUM_BLACKLISTER`, `OKUM_UNBLACKLISTER` (OkuDollar — it carries its
+  own copy of the shared-prefix blacklist roles); `PSM_PAUSER`,
+  `PSM_UNPAUSER`, `PSM_QUEUE_PROCESSOR`, `PSM_BUFFER_DEPOSITOR`,
+  `PSM_BUFFER_WITHDRAWER` (LitePSM); `QUEUE_RESCUER` (RedemptionQueue),
+  plus a starting `configureMinterAllowance` so the mint role is usable.
+
+  Retained by the deployer: `DEFAULT_ADMIN_ROLE` on all four contracts
+  (it is the role-admin for every role above, so the operator's entire
+  set can be revoked unilaterally at any time) and the four `*_UPGRADER`
+  roles. `QUEUE_PSM` is also not granted, for an unrelated reason: it is
+  an *identity* role meaning "the caller is the LitePSM proxy", not an
+  operator capability, and stays on the proxy even for a fully trusted
+  operator.
+
+  **This is a deliberate testnet-only divergence** from the mainnet
+  threat model below. Two consequences worth stating plainly: holding
+  `OKUM_MINTER` + `OKUM_ALLOWANCE_MANAGER` + `OKUM_CAP_MANAGER` together
+  means the operator can raise its own allowance *and* the global cap, so
+  there is **no on-chain ceiling on what it can mint**; and
+  `PSM_BUFFER_WITHDRAWER` lets it drain the PSM's USDC buffer. The only
+  backstop is the deployer's `DEFAULT_ADMIN_ROLE`. That is acceptable
+  because testnet OkuM is backed by MockUSDC and has no value —
+  `grantRoles.ts` hard-refuses mainnet with no override, and
+  `grantRolesMainnet.ts` splits these same powers across a
+  cold/warm/orchestrator trio so no single key holds them at once. Both
   tools are idempotent (safe to re-run) and support `DRY_RUN`.
+
+### Recording who has been granted privilege
+
+The EVM contracts extend OpenZeppelin `AccessControlUpgradeable`, **not
+`AccessControlEnumerable`**. There is consequently no on-chain way to ask
+*"who holds `OKUM_MINTER`?"* — only `hasRole(role, account)`, which
+requires already knowing the account. A grantee address that isn't
+written down is recoverable only from `RoleGranted` event logs, and on a
+chain whose history has been pruned (every free bscTestnet endpoint), not
+even from those.
+
+`EVM/scripts/config/roleGrants.json` closes that gap: an append-only
+ledger of every privilege grant/revoke performed by `deploy/index.ts`,
+`operator/grantRoles.ts`, and `operator/grantRolesMainnet.ts`, recording
+the grantee address, a human label, role, contract, chain, granting key,
+and tx hash. Revocations append rather than delete, so the history of who
+*used* to hold a privilege survives for incident review.
+
+It is tracked in git deliberately (see `.gitignore`), because unlike the
+other generated stores it is not reconstructible from chain state alone.
+Implementation and rationale: `EVM/scripts/utils/roleRegistry.ts`.
 
 ### Signer trust implications
 

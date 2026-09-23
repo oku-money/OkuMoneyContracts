@@ -364,6 +364,24 @@ export function getNetworkNameByChainId(chainId: number): string | undefined {
 export const DEV_WALLET_ADDRESS =
   process.env.DEV_WALLET_ADDRESS ?? "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
 
+/**
+ * EOA that `operator/grantRoles.ts` hands the bounded operational role set to
+ * on testnets. Overridable via the `MASTER_EOA` env var.
+ *
+ * Declared HERE rather than inside `grantRoles.ts` because it is the single
+ * most security-relevant address in the deployment and it was previously a
+ * bare literal inside the script that grants it privilege — invisible to
+ * anything that wanted to answer "which addresses hold power over these
+ * contracts?". `utils/roleRegistry.ts` now labels live role holders from this
+ * constant, so an audit names it instead of reporting it as UNKNOWN.
+ *
+ * Note this is NOT the deployer: per `grantRoles.ts`'s own NatSpec it is
+ * "currently controlled by the backend engineer operating this deployment —
+ * NOT held by this repo/deployer".
+ */
+export const MASTER_OPERATOR_EOA =
+  process.env.MASTER_EOA ?? "0x971A3e2b0031dE23715Fa1ce53843B5B045dae00";
+
 // Re-export for backwards compatibility
 export const FORK_IMPERSONATE_ADDRESS = DEV_WALLET_ADDRESS;
 

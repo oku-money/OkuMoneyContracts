@@ -1,47 +1,29 @@
 //! # OkuM Lite-PSM Errors
 //!
-//! Error codes for the Lite-PSM program. Aligned with the EVM custom
-//! errors where an equivalent exists.
-//!
-//! ## EVM Error Mapping
-//!
-//! | SVM Error | EVM Equivalent |
-//! |-----------|----------------|
-//! | `Unauthorized` | N/A (AccessControl revert) |
-//! | `Paused` | N/A (Pausable revert) |
-//! | `MaxSupplyExceeded` | `ExceedsSupplyCap()` |
-//! | `AllowanceExceeded` | `ExceedsAllowance()` |
-//! | `InsufficientBuffer` | `InsufficientBuffer()` |
-//! | `MultiplierCannotDecrease` | `MultiplierCannotDecrease()` |
-//! | `YieldDistributionInProgress` | `YieldDistributionInProgress()` |
-//! | `SlippageExceeded` | `OutputBelowMinimum()` |
-//! | `AmountTooSmall` | `AmountTooSmall()` |
-//! | `InvalidUsdcDecimals` | (initialize-time decimals check) |
+//! Error codes for the Lite-PSM program. The EVM custom error each one
+//! corresponds to, where an equivalent exists, is named on the variant.
+//! `Unauthorized` and `Paused` have no EVM custom error (AccessControl and
+//! Pausable revert with their own).
 
 use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum LitePsmError {
     // ===== Authorization Errors =====
-    /// Caller not authorized for this operation.
     #[msg("Caller not authorized")]
     Unauthorized,
 
     // ===== State Errors =====
-    /// Program is paused.
     #[msg("Program is paused")]
     Paused,
 
-    /// Program is already paused.
     #[msg("Program is already paused")]
     AlreadyPaused,
 
-    /// Program is not paused.
     #[msg("Program is not paused")]
     NotPaused,
 
     // ===== Supply/Allowance Errors =====
-    /// Mint would exceed max supply.
     /// EVM: ExceedsSupplyCap()
     #[msg("Mint would exceed max supply")]
     MaxSupplyExceeded,
@@ -51,7 +33,6 @@ pub enum LitePsmError {
     #[msg("New max_supply must be >= current circulating supply")]
     BelowCurrentSupply,
 
-    /// Mint would exceed minter allowance.
     /// EVM: ExceedsAllowance()
     #[msg("Mint would exceed minter allowance")]
     AllowanceExceeded,
@@ -70,18 +51,15 @@ pub enum LitePsmError {
     InsufficientUserBalance,
 
     // ===== Arithmetic Errors =====
-    /// Arithmetic overflow.
     #[msg("Arithmetic overflow")]
     Overflow,
 
     // ===== Input Validation Errors =====
-    /// Amount must be greater than zero.
     /// EVM: ZeroAmount()
     #[msg("Amount must be greater than zero")]
     ZeroAmount,
 
     // ===== Yield Distribution Errors =====
-    /// Cannot perform this operation in the same slot as a yield distribution.
     /// EVM: YieldDistributionInProgress()
     #[msg("Cannot perform operation in same slot as yield distribution")]
     YieldDistributionInProgress,
@@ -95,7 +73,8 @@ pub enum LitePsmError {
 
     // ===== Rate schedule =====
     //
-    // Mirrors the rails at `EVM/src/token/OkuMoney.sol:401-406` and `:516-518`.
+    // Mirrors the rails in EVM `OkuMoney._setOkuMYieldRate` /
+    // `_setNextOkuMYieldRate`.
     /// Rate below `PRECISION`. The multiplier is monotonic — there is no
     /// on-chain representation of a loss, so a sub-unity rate is meaningless.
     /// Over-payment is corrected by publishing a SLOWER rate next epoch.
@@ -134,7 +113,6 @@ pub enum LitePsmError {
     #[msg("Rate window exceeds the maximum permitted length (90 days)")]
     RateWindowTooLong,
 
-    /// Tried to stage a successor while no active window exists.
     /// EVM: NoRateEndSet()
     #[msg("Cannot stage a successor: no active rate window is set")]
     NoRateEndSet,
@@ -145,7 +123,6 @@ pub enum LitePsmError {
     #[msg("Cannot stage a successor: the active rate window has already expired")]
     RateAlreadyExpired,
 
-    /// The successor's expiry is not strictly after the active window's.
     /// EVM: PendingEndNotAfterRateEnd()
     #[msg("Successor expiry must be strictly after the active rate end")]
     PendingEndNotAfterRateEnd,
@@ -167,12 +144,10 @@ pub enum LitePsmError {
     #[msg("Multiplier could not be computed from the current rate schedule")]
     MultiplierOutOfRange,
 
-    /// Failed to update the `ScaledUiAmount` multiplier.
     #[msg("Failed to update ScaledUiAmount multiplier")]
     MultiplierUpdateFailed,
 
     // ===== Authority validation =====
-    /// Authority pubkey is the zero pubkey or otherwise invalid.
     #[msg("Authority pubkey is invalid (e.g. zero pubkey)")]
     InvalidAuthority,
 
@@ -181,12 +156,10 @@ pub enum LitePsmError {
     #[msg("No pending role-admin transfer to accept")]
     NoPendingRoleAdmin,
 
-    /// `accept_role_admin` caller is not the proposed `pending_role_admin`.
     #[msg("Caller is not the pending role admin")]
     NotPendingRoleAdmin,
 
     // ===== Initialization Errors =====
-    /// USDC mint must have exactly 6 decimals on Solana.
     #[msg("USDC mint must have exactly 6 decimals")]
     InvalidUsdcDecimals,
 

@@ -32,10 +32,9 @@
  *     rotation).
  *   - --dry-run prints the plan without submitting.
  *
- * Post-run: this script does NOT delete `deployments/<network>.json` —
- * the addressBook stale-warning still fires on the next script
- * invocation until you either run `deploy:init` (overwrites) or
- * manually `rm` the file. That's intentional: deleting the file before
+ * Post-run: this does NOT delete `deployments/<network>.json`, so the
+ * addressBook stale-warning keeps firing until you run `deploy:init`
+ * (overwrites) or `rm` the file. Intentional — deleting the file before
  * recovery would orphan the program IDs in explorer history.
  */
 

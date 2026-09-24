@@ -29,8 +29,8 @@ const { Keypair } = anchor.web3;
 
 /** Must match `ACCRUAL_BASE` in `EVM/scripts/utils/svmValue.ts`. */
 const ACCRUAL_BASE = 450;
-/** Must match `SVM_CONFIG_LEN` in `EVM/scripts/utils/svmValue.ts`. */
-const EXPECTED_LEN = 626;
+/** Must match `PsmConfig::LEN`. Tail padding included. */
+const EXPECTED_LEN = 754;
 
 describe("PsmConfig byte layout (contract with EVM/scripts/utils/svmValue.ts)", () => {
   it("decodes the accrual block at the offsets the EVM tooling assumes", async () => {

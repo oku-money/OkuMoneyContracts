@@ -1,7 +1,6 @@
 /**
  * OkuDollar vault operations — wrap/unwrap and the full ERC-4626 surface,
- * consolidated into one script. Previously NONE of these had an operator
- * script at all.
+ * consolidated into one script.
  *
  *   ACTION=wrap             OkuM -> UsdOku, price-aware, with slippage floor
  *   ACTION=unwrap           UsdOku -> OkuM, price-aware

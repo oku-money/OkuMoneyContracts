@@ -1,9 +1,8 @@
 /**
- * Shared CLI boilerplate for operator scripts — previously copy-pasted
- * (`parseArg`, `DRY_RUN`, `--yes-mainnet`, the `main().then/catch` exit
- * wrapper) across 12+ scripts. Extracted so it's defined once and so
- * operator scripts can be imported and called as functions (not just spawned
- * as processes) — required for the operator drill
+ * Shared CLI boilerplate for operator scripts: `parseArg`, `DRY_RUN`,
+ * `--yes-mainnet`, and the `main().then/catch` exit wrapper. Defined once so
+ * operator scripts can also be imported and called as functions (not just
+ * spawned as processes) — required for the operator drill
  * (`test/hardhat/drill/operatorDrill.test.ts`) to exercise real script logic
  * in-process against a local chain.
  *
@@ -16,21 +15,19 @@
  *   npx hardhat run scripts/operator/psmOps.ts --action=mintOkuM
  *     -> Error HH310: Invalid param --action=mintOkuM.
  *        Command line params must be lowercase.
- *   npx hardhat run scripts/operator/psmOps.ts --action=foo
- *     -> Error HH305: Unrecognized param --action=foo
  *   npx hardhat run scripts/operator/psmOps.ts --yes-mainnet
  *     -> Error HH305: Unrecognized param --yes-mainnet
  *
- * Position is irrelevant (before or after the script path). So the ONLY form
- * that works through `hardhat run` is the env-var form:
+ * Position is irrelevant (before or after the script path). The ONLY form that
+ * works through `hardhat run` is the env-var form:
  *
  *   ACTION=mintOkuM AMOUNT=1000000000 \
  *     npx hardhat run scripts/operator/psmOps.ts --network sepolia
  *
- * `parseArg` still reads argv first, so the `--flag` form keeps working if a
- * script is ever invoked directly (e.g. via ts-node with HARDHAT_NETWORK set)
- * rather than through `hardhat run`. Every option therefore has a working
- * env-var equivalent, including the mainnet confirmation (`YES_MAINNET=true`).
+ * `parseArg` still reads argv first, so the `--flag` form keeps working when a
+ * script is invoked directly (e.g. via ts-node with HARDHAT_NETWORK set).
+ * Every option has a working env-var equivalent, including the mainnet
+ * confirmation (`YES_MAINNET=true`).
  */
 
 import { logger } from "./logger";
@@ -48,11 +45,9 @@ import { logger } from "./logger";
  *   parseArg("batch-size")          -> BATCH_SIZE
  *   parseArg("amount")              -> AMOUNT
  *
- * The snake_cased form exists because env vars are now the PRIMARY interface
- * (argv flags don't survive `hardhat run`), and a bare `toUpperCase()` turns
- * camelCase options into unreadable names like `MINAMOUNTOUT`. The literal
- * form is still honoured so any existing script, runbook, or shell history
- * using the old name keeps working.
+ * The snake_cased form is tried first because a bare `toUpperCase()` turns
+ * camelCase options into unreadable names like `MINAMOUNTOUT`; the literal
+ * form is still honoured so older names keep working.
  */
 export function parseArg(name: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`) || x.startsWith(`--${name} `));
@@ -72,15 +67,10 @@ export function parseArg(name: string): string | undefined {
  * `YES_MAINNET=1` / `YES_MAINNET=true` in the environment (preferred) or the
  * legacy `--yes-mainnet` flag on argv.
  *
- * The env fallback is not a convenience — it's the only form that works under
- * `hardhat run`, which rejects `--yes-mainnet` outright (HH305). Without it
- * `mainnetGuard` could never be satisfied through the documented invocation,
- * making mainnet broadcast impossible rather than merely guarded.
- *
- * `grantRoles.ts` / `grantRolesMainnet.ts` already hit this and rolled their
- * own `YES_MAINNET` check; that fix never propagated to this shared helper, so
- * every other operator script was still argv-only. This matches their accepted
- * values (`1` and `true`) so there is one convention across all scripts.
+ * The env form is not a convenience — it's the only one that works under
+ * `hardhat run`, which rejects `--yes-mainnet` outright (HH305). Accepted
+ * values (`1` and `true`) match `grantRoles.ts` / `grantRolesMainnet.ts` so
+ * there is one convention across all scripts.
  */
 export function isYesMainnet(): boolean {
   return (

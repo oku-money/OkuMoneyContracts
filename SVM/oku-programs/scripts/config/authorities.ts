@@ -82,8 +82,8 @@ export interface AuthorityConfig {
 /**
  * Build an AuthorityConfig for localnet/devnet/fork deployments.
  *
- * WHY THIS IS A TWO-KEY MODEL (it used to be one)
- * -----------------------------------------------
+ * WHY THIS IS A TWO-KEY MODEL
+ * ---------------------------
  * Two on-chain constraints in `lite-psm` are jointly binding at
  * `initialize` time, and they force the deployer and the operational roles
  * onto DIFFERENT keys:
@@ -102,18 +102,13 @@ export interface AuthorityConfig {
  * Together: role_admin == deployer (forced by 1), therefore none of the 9
  * granular roles may be the deployer (forced by 2).
  *
- * An earlier version of this function pointed all 9 at the deployer, which
- * made `initialize` revert with `InvalidAuthority` (6024) — the devnet
- * deploy path could not complete at all. `directMinter`/`directBurner` had
- * already been split out onto a delegate EOA for exactly this reason; the
- * other 9 were simply missed.
- *
- * So on non-mainnet we seat all 9 granular roles on a single locally-held
- * "devnet operator" key (`keys/devnet-authority.json`). That preserves the
- * original convenience property — ONE key signs every operational call
- * during smoke testing — while satisfying the on-chain guard. The deployer
- * retains `role_admin`, and therefore retains unconditional claw-back of
- * every role via `set_authority`.
+ * Pointing any of the 9 at the deployer makes `initialize` revert with
+ * `InvalidAuthority` (6024). So on non-mainnet all 9 granular roles are seated
+ * on a single locally-held "devnet operator" key
+ * (`keys/devnet-authority.json`): ONE key signs every operational call during
+ * smoke testing, while satisfying the on-chain guard. The deployer retains
+ * `role_admin`, and therefore unconditional claw-back of every role via
+ * `set_authority`.
  */
 function allRolesToOperatorKey(
   deployer: PublicKey,

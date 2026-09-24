@@ -1,10 +1,10 @@
 /**
  * Standalone okuM redeem CLI (orchestrator bridge-leg).
  *
- * Wraps `lite_psm::redeem_oku_m`. Burns the caller's `OkuM` and pays out
- * USDC from the buffer. Reverts with `InsufficientBuffer` if the buffer
- * is depleted. The EVM sibling lives at `EVM/scripts/operator/redeemOkuM.ts`.
- * Lets the off-chain orchestrator drive a redeem directly.
+ * Wraps `lite_psm::redeem_oku_m`. Burns the caller's `OkuM` and pays out USDC
+ * from the buffer. Reverts with `InsufficientBuffer` if the buffer is
+ * depleted. The EVM sibling is
+ * `EVM/scripts/operator/psmOps.ts ACTION=redeemOkuM`.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/redeem-oku-m.ts --amount 1000000          # 1 okuM (6-dec)

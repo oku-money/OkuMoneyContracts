@@ -7,9 +7,8 @@ pragma solidity 0.8.28;
  * @dev Inherited by OkuDollar; see OkuMoneyEvents for the rationale.
  */
 abstract contract OkuDollarEvents {
-    /// @notice Emitted on internal share movements with the dollar-denominated value.
-    /// @dev OkuDollar has its own TransferValue (shares + dollar value) distinct from
-    ///      OkuMoney's TransferValue (token amount + dollar value).
+    /// @notice Emitted on internal share movements, carrying shares plus the
+    ///         dollar-denominated value of the move.
     event TransferValue(
         address indexed from, address indexed to, uint256 shares, uint256 dollarValue
     );
@@ -51,11 +50,6 @@ abstract contract OkuDollarEvents {
     /// @dev See {OkuDollar.rescueDonation} — donations accrue to nobody under the
     ///      single-multiplier design and would otherwise be permanently locked.
     event DonationRescued(address indexed receiver, uint256 okuMAmount);
-
-    // REMOVED (single-multiplier refactor): UsdYieldRateUpdated, NextUsdYieldRateSet
-    // (OkuDollar has no rate of its own — see OkuMoneyEvents.OkuMYieldRateUpdated),
-    // MinCollateralRatioUpdated, ReservesDeposited, SurplusWithdrawn
-    // (collateralization is 1.0 by construction).
 
     /// @notice Emitted when an address is added to the OkuDollar blacklist
     /// @dev Uses the shared OKUM_BLACKLISTER role for consistency with OkuMoney.

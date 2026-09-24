@@ -27,7 +27,7 @@
 //! ## Rounding
 //!
 //! `rpow` uses MakerDAO's half-up assembly rounding; everything else floors.
-//! That carve-out is inherited verbatim from `MathLib.sol:13-20` and is
+//! That carve-out is inherited verbatim from `MathLib.sol` and is
 //! implemented by [`crate::wad::mul_div_wad_half_up`].
 //!
 //! ## Known bounded divergence from EVM
@@ -43,7 +43,7 @@ use crate::constants::{MAX_MULTIPLIER, PRECISION};
 use crate::wad::{mul_div_wad_floor, mul_div_wad_half_up};
 
 /// The six-field rate schedule. Mirrors the `OkuMoneyStorage` accrual
-/// fields at `EVM/src/token/OkuMoney.sol:78-96`.
+/// fields in `EVM/src/token/OkuMoney.sol`.
 ///
 /// Timestamps are `i64` to match Solana's `Clock::unix_timestamp`. EVM packs
 /// them as `uint48`; the representable range is not the binding constraint
@@ -68,7 +68,7 @@ pub struct Schedule {
 
 impl Schedule {
     /// The flat-and-halted initial state written at program init.
-    /// Mirrors `EVM/src/token/OkuMoney.sol:195-199`.
+    /// Mirrors the initializer in `EVM/src/token/OkuMoney.sol`.
     pub const fn halted_at(now_ts: i64) -> Self {
         Self {
             base_multiplier: PRECISION,
@@ -100,7 +100,7 @@ impl Schedule {
     /// Used by the pause gate so a stale stored rate cannot be used to
     /// disguise an increase as a decrease.
     ///
-    /// Mirrors `EVM/src/token/OkuMoney.sol:321-331`.
+    /// Mirrors EVM `OkuMoney._effectiveRate`.
     #[inline]
     pub fn effective_rate(&self, now_ts: i64) -> u128 {
         if self.rate_end != 0 && now_ts > self.rate_end {
@@ -120,7 +120,7 @@ impl Schedule {
 /// `x^n / PRECISION^(n-1)` — exponentiation by squaring with half-up rounding.
 ///
 /// Verbatim port of MakerDAO `pot.sol`'s `rpow`, as reproduced at
-/// `EVM/src/lib/MathLib.sol:36-67`. The `b` parameter is fixed at
+/// EVM `MathLib.rpow`. The `b` parameter is fixed at
 /// [`PRECISION`] here because that is the only value the protocol ever
 /// passes.
 ///
@@ -128,7 +128,7 @@ impl Schedule {
 /// note on the bounded divergence between the two overflow thresholds.
 // `n % 2` is kept rather than `n.is_multiple_of(2)` because it mirrors the
 // `mod(n, 2)` in the Solidity assembly character-for-character. This function
-// is reviewed by diffing it against `MathLib.sol:36-67`; idiomatic Rust that
+// is reviewed by diffing it against `MathLib.rpow`; idiomatic Rust that
 // obscures that correspondence is a net loss here.
 #[allow(clippy::manual_is_multiple_of)]
 pub const fn rpow(x: u128, n: u64) -> Option<u128> {
@@ -180,7 +180,7 @@ pub const fn rpow(x: u128, n: u64) -> Option<u128> {
 /// prevent `rpow` from failing internally on a huge `elapsed` — so the
 /// mandatory window also keeps `rpow` in its safe range.
 ///
-/// Mirrors `EVM/src/lib/MathLib.sol:87-101`.
+/// Mirrors EVM `MathLib.compoundFor`.
 pub const fn compound_for(base: u128, rate: u128, elapsed: u64) -> Option<u128> {
     if elapsed == 0 {
         return Some(base);
@@ -225,11 +225,11 @@ pub const fn compound_for(base: u128, rate: u128, elapsed: u64) -> Option<u128> 
 /// A `pending_rate` activates with no transaction at the boundary, which is
 /// what keeps multi-chain epoch handovers simultaneous.
 ///
-/// Mirrors `EVM/src/lib/MathLib.sol:135-190`.
+/// Mirrors EVM `MathLib.computeMultiplier`.
 ///
 /// Returns `None` where EVM would revert: `rpow` overflow, `now_ts` before
-/// `anchor` in branch 3 (which underflows Solidity's checked subtraction at
-/// `MathLib.sol:189`), or a negative timestamp (see below).
+/// `anchor` in branch 3 (which underflows Solidity's checked subtraction in
+/// `MathLib.computeMultiplier`), or a negative timestamp (see below).
 ///
 /// ## Why the negative-timestamp guard exists
 ///
@@ -429,7 +429,7 @@ mod tests {
     fn branch1_defensive_overhang_fires() {
         // Halted rate WITH a rate_end and an armed successor — a state the
         // writers never produce, but the defensive fallback must accrue it
-        // rather than silently drop it. Mirrors MathLib.t.sol:314 / :329.
+        // rather than silently drop it. Mirrors `MathLib.t.sol`.
         let r = rate_for_apy(0.05);
         let got =
             compute_multiplier(PRECISION, PRECISION, 0, 1_000, r, 0, 1_000 + 30 * DAY).unwrap();
@@ -458,10 +458,8 @@ mod tests {
 
     /// Regression: `compute_multiplier` must never panic, including on
     /// timestamps that are negative or far apart enough to overflow an `i64`
-    /// subtraction. Found by `fuzz_targets/compute_multiplier.rs`.
-    ///
-    /// EVM cannot reach this state (`uint48` storage, `uint256` arithmetic),
-    /// so it is a port-introduced hazard rather than a shared one.
+    /// subtraction. Found by `fuzz_targets/compute_multiplier.rs`. EVM cannot
+    /// reach this state (`uint48` storage), so it is port-introduced.
     #[test]
     fn never_panics_on_extreme_or_negative_timestamps() {
         let cases: [(i64, i64, i64, i64); 6] = [
@@ -590,7 +588,7 @@ mod tests {
 
     #[test]
     fn branch2_anchor_past_rate_end_does_not_underflow() {
-        // Mirrors MathLib.t.sol:382 — defensive guard at MathLib.sol:171.
+        // Mirrors `MathLib.t.sol` — defensive guard in `MathLib.computeMultiplier`.
         let got = compute_multiplier(
             PRECISION,
             rate_for_apy(0.05),
@@ -721,15 +719,13 @@ mod reachability {
     //! `uint256`; this port returns `None` when an intermediate **quotient**
     //! exceeds `u128`. The SVM bound binds first, so a band exists where EVM
     //! succeeds and SVM errors. The differential corpus deliberately does not
-    //! generate vectors there — doing so would produce known-failing cases and
-    //! devalue it — so the "unreachable" claim needed its own test.
+    //! generate vectors there, so the "unreachable" claim needs its own test.
     //!
-    //! The result is stronger than expected. `rpow` only fails where the
-    //! multiplier would be on the order of **1e23x or more**, while
-    //! `MAX_MULTIPLIER` already clamps it at **1e6x** ($1,000,000 per token).
-    //! There are roughly seventeen orders of magnitude between the point at
-    //! which the value stops being economically meaningful and the point at
-    //! which the arithmetic stops working.
+    //! `rpow` only fails where the multiplier would be on the order of
+    //! **1e23x or more**, while `MAX_MULTIPLIER` already clamps it at **1e6x**
+    //! ($1,000,000 per token) — roughly seventeen orders of magnitude between
+    //! the value ceasing to be economically meaningful and the arithmetic
+    //! ceasing to work.
 
     use super::*;
     use crate::constants::MAX_RATE;
@@ -741,11 +737,9 @@ mod reachability {
         ((1.0_f64 + apy).powf(1.0 / YEAR as f64) * 1e18_f64).round() as u128
     }
 
-    /// **The claim that matters.** Anywhere the multiplier is still inside the
-    /// protocol's own ceiling, the arithmetic works.
-    ///
-    /// Swept across every rate the rails permit and windows from one day to a
-    /// century — far beyond any schedule that would ever be published.
+    /// **The claim that matters.** Wherever the multiplier is inside the
+    /// protocol's own ceiling, the arithmetic works. Swept across every rate
+    /// the rails permit and windows from one day to a century.
     #[test]
     fn computes_everywhere_the_result_is_within_max_multiplier() {
         for apy in [0.0001, 0.01, 0.05, 0.20, 0.50, 1.00, 5.00, 20.00] {
@@ -769,8 +763,8 @@ mod reachability {
 
     /// `MAX_RATE` (~2242% APY) is the most extreme rate the rails permit. It
     /// computes over every window an epoch schedule would realistically use —
-    /// epochs are 7-30 days, so this covers a fat-fingered `rateEnd` by orders
-    /// of magnitude.
+    /// the production epoch is 86_400 s, so this covers a fat-fingered
+    /// `rateEnd` by orders of magnitude.
     #[test]
     fn max_rate_computes_over_realistic_windows() {
         for days in [1u64, 7, 30, 90, 365, 3 * 365] {
@@ -781,11 +775,9 @@ mod reachability {
         }
     }
 
-    /// Pins where the boundary actually falls, so a change in `wad.rs` that
-    /// moved it would be visible rather than silent.
-    ///
-    /// Note how far past anything meaningful these are: the failing cases
-    /// produce multipliers of ~1e23x and ~1e30x against a 1e6x clamp.
+    /// Pins where the boundary falls, so a `wad.rs` change that moved it would
+    /// be visible. The failing cases produce multipliers of ~1e23x and ~1e30x
+    /// against a 1e6x clamp.
     #[test]
     fn boundary_sits_far_beyond_the_clamp() {
         // Safe side.

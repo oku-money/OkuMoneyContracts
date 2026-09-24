@@ -1,10 +1,9 @@
 /**
  * Standalone OkuM mint CLI (orchestrator bridge-leg).
  *
- * Wraps `lite_psm::mint_oku_m`. Mints `OkuM` to the caller in exchange
- * for USDC. This is the SVM side of the cross-chain mint flow — the EVM
- * sibling lives at `EVM/scripts/operator/mintOkuM.ts`. Lets the off-chain
- * orchestrator drive a mint directly.
+ * Wraps `lite_psm::mint_oku_m`. Mints `OkuM` to the caller in exchange for
+ * USDC. This is the SVM side of the cross-chain mint flow; the EVM sibling is
+ * `EVM/scripts/operator/psmOps.ts ACTION=mintOkuM`.
  *
  * The caller must already hold the USDC; the PSM has its own minter-allowance
  * check on okuM issuance.

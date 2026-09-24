@@ -4,10 +4,9 @@
 //! WITHOUT depositing USDC on-chain. Matches EVM's `OkuM.mint(to, amount)`
 //! called by a non-PSM `OKUM_MINTER` role holder.
 //!
-//! The on-chain collateral discipline for USDC-backed mints lives in
-//! `instructions::psm::mint_oku_m`; the `direct_minter` path enforces
-//! only role + allowance + supply-cap guards. The fiat collateral backing
-//! these mints is held off-chain by the operator.
+//! On-chain collateral discipline for USDC-backed mints lives in
+//! `instructions::psm::mint_oku_m`; this path enforces only role + allowance
+//! + supply-cap guards, and the fiat collateral is held off-chain.
 
 use crate::contexts::direct_mint::MintOkuMDirect;
 use crate::errors::LitePsmError;
@@ -84,7 +83,7 @@ pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, raw_amount: u64) -> Resul
         raw_amount,
     )?;
 
-    // Read multiplier from mint to compute dollar value for the event
+    // Canonical multiplier, for the event's dollar value only.
     let multiplier = multiplier::current(&ctx.accounts.config)?;
     let dollar_value = raw_to_dollars(raw_amount, multiplier)?;
 

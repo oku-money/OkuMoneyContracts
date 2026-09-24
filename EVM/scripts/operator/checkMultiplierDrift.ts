@@ -1,15 +1,15 @@
 /**
  * Cross-chain multiplier drift monitor (read-only).
  *
- * Nothing on-chain enforces that every chain carries the same yield schedule —
- * each OkuMoney deployment is fully independent, with no messaging between them.
- * Cross-chain multiplier agreement rests entirely on the operator pushing
- * identical schedule state everywhere. This script is the detection layer.
+ * Nothing on-chain enforces that every chain carries the same yield schedule;
+ * each OkuMoney deployment is independent, with no messaging between them, so
+ * agreement rests entirely on the operator pushing identical schedule state
+ * everywhere. This script is the detection layer.
  *
- * `okuMMultiplier()` is a pure function of (schedule state, block.timestamp), and
- * block.timestamp is wall-clock on every EVM chain. So given identical schedules,
- * every chain MUST return the same integer at the same instant. Any divergence is
- * an operator fault, and it is one-way: the multiplier is monotonic, so a chain
+ * `okuMMultiplier()` is a pure function of (schedule state, block.timestamp),
+ * and block.timestamp is wall-clock on every EVM chain, so identical schedules
+ * MUST return the same integer at the same instant. Any divergence is an
+ * operator fault, and it is one-way: the multiplier is monotonic, so a chain
  * that ran hot can only be met by running the laggards hot to catch up.
  *
  * Checks per chain:
@@ -52,6 +52,7 @@ import { CHAIN_METADATA } from "../config/chains";
 import { readSvmSchedule } from "../utils/svmValue";
 import { SVM_CHAIN_KEY } from "../utils/globalValue";
 import { parseChainsEnv } from "../config/epochChains";
+import { distanceToGrid, classifyAccrual, isExpiringSoon } from "../utils/driftChecks";
 import { effectiveRate as mirrorEffectiveRate, PRECISION } from "@okumoney/yield-tooling";
 import {
   EPOCH_ANCHOR_UNIX as DEFAULT_EPOCH_ANCHOR_UNIX,
@@ -60,11 +61,9 @@ import {
 } from "../config/epoch";
 
 const TOLERANCE_BPS = BigInt(process.env.TOLERANCE_BPS ?? "1");
-// Must be well under one epoch, or it fires permanently. Under the 24h grid a
-// 48h default (the previous value, sized for 30-day epochs) meant `rateEnd -
-// now` was ALWAYS inside the warn window, so every chain warned on every run
-// and the signal was worthless. 4h sits inside the 22.4h base window and fires
-// only once the settlement window is genuinely approaching.
+// Must be well under one epoch, or `rateEnd - now` is ALWAYS inside the warn
+// window and every chain warns on every run. 4h sits inside the 22.4h base
+// window and fires only once the settlement window is genuinely approaching.
 const EXPIRY_WARN_HOURS = Number(process.env.EXPIRY_WARN_HOURS ?? "4");
 // Defaults come from the committed grid (scripts/config/epoch.ts) so the check
 // is ON by default rather than silently skipped. Env vars still override, for
@@ -210,9 +209,8 @@ async function main() {
   // chain that is NOT in the participating set (e.g. a stale pre-streaming
   // mainnet deployment still carrying supply). Narrowing it to the
   // participating set would blind it to precisely the drift worth finding.
-  // `parseChainsEnv` treats an empty `CHAINS=` as "unset" rather than as an
-  // empty scope — the inline split it replaced yielded `[]`, which filtered
-  // every chain out and reported "no chains readable" instead of scanning.
+  // `parseChainsEnv` treats an empty `CHAINS=` as "unset", not as an empty
+  // scope that would filter every chain out.
   const requested = parseChainsEnv(process.env.CHAINS);
   const targets = Object.entries(CHAIN_METADATA).filter(
     ([name]) => !requested || requested.includes(name)
@@ -225,13 +223,10 @@ async function main() {
   const includeSvm = !requested || requested.includes(SVM_CHAIN_KEY);
 
   // `SVM_EXPECTED=true` means "SVM carries supply; never report agreement
-  // without checking it". A CHAINS filter that omits SVM would otherwise
-  // skip `readSvm()` entirely and silently bypass that guard — reinstating
-  // exactly the false-confidence failure mode D-27 added the flag to kill
-  // ("a cron job with SVM_RPC_URL unset would print 'all chains in
-  // agreement' while SVM was entirely unchecked"). CHAINS is a scope knob,
-  // not an override for a declared invariant, so this is a hard error:
-  // a warning here would be the very thing D-27 rejects.
+  // without checking it". A CHAINS filter that omits SVM would skip
+  // `readSvm()` entirely and silently bypass that guard, reporting false
+  // confidence. CHAINS is a scope knob, not an override for a declared
+  // invariant, so this is a hard error rather than a warning (D-27).
   if (!includeSvm && process.env.SVM_EXPECTED === "true") {
     throw new Error(
       `SVM_EXPECTED=true but CHAINS=${process.env.CHAINS} excludes ` +
@@ -325,12 +320,8 @@ async function main() {
   // expiring merely hands accrual over to the staged successor, which is the
   // normal, designed transition at every epoch boundary.
   //
-  // This block used to test `now >= rateEnd` and report "accrual has HALTED"
-  // (failing the run) the moment the active window ended, even while the
-  // successor was demonstrably still accruing. The comment above that code
-  // already stated the correct rule — "once both the active AND pending
-  // windows have elapsed" — so the implementation simply contradicted its own
-  // documented intent, and cried wolf for the entire successor segment.
+  // Do NOT test `now >= rateEnd` here: that reports HALTED the moment the
+  // active window ends, while the staged successor is still accruing.
   //
   // `effectiveRate` is the contract's own answer (`okuMEffectiveRatePerSecond`
   // on EVM, the TS mirror for SVM, which has no view functions), so it stays
@@ -338,7 +329,15 @@ async function main() {
   const now = BigInt(Math.floor(Date.now() / 1000));
   const warnWindow = BigInt(EXPIRY_WARN_HOURS * 3600);
   for (const r of readings) {
-    if (r.effectiveRate <= PRECISION) {
+    const state = classifyAccrual({
+      effectiveRate: r.effectiveRate,
+      rateEnd: r.rateEnd,
+      pendingRateEnd: r.pendingRateEnd,
+      now,
+      precision: PRECISION,
+    });
+
+    if (state.halted) {
       logger.error(
         `${r.chain}: accrual HALTED — effective rate is PRECISION (no yield). ` +
           `Recover with setOkuMYieldRate / setOkuMYieldRateWithSuccessor; note ` +
@@ -351,8 +350,7 @@ async function main() {
     // Still yielding. Report which segment is carrying it, and when accrual
     // actually runs out — that is the successor's end if the active window has
     // already handed over, otherwise the active window's own end.
-    const handedOver = r.rateEnd !== 0n && now >= r.rateEnd;
-    const runsOutAt = handedOver ? r.pendingRateEnd : r.rateEnd;
+    const { handedOver, runsOutAt } = state;
 
     if (handedOver) {
       const until =
@@ -362,7 +360,7 @@ async function main() {
       logger.info(`${r.chain}: active window ended — running on staged successor until ${until}`);
     }
 
-    if (runsOutAt !== 0n && runsOutAt > now && runsOutAt - now < warnWindow) {
+    if (isExpiringSoon(runsOutAt, now, warnWindow)) {
       const hrs = Number(runsOutAt - now) / 3600;
       logger.warning(
         `${r.chain}: accrual stops in ${hrs.toFixed(1)}h — ` +
@@ -372,20 +370,16 @@ async function main() {
   }
 
   // --- Epoch-grid alignment (optional — skipped unless EPOCH_ANCHOR_UNIX is set) ---
-  // The epoch length/anchor convention is not yet decided (see TRACKER.md); this
-  // check exists so that once one IS adopted, a fat-fingered rateEnd on a single
-  // chain (the schedule is pushed manually per chain — nothing enforces this) is
-  // caught here rather than silently desynchronising that chain's grid from
-  // every other chain's.
+  // Catches a fat-fingered rateEnd on a single chain (the schedule is pushed
+  // per chain and nothing on-chain enforces alignment) before it silently
+  // desynchronises that chain's grid from every other chain's.
   if (EPOCH_ANCHOR_UNIX !== undefined && EPOCH_LENGTH_SECONDS !== undefined) {
     for (const r of readings) {
       if (r.rateEnd === 0n) continue; // halted — no window to check
-      const offset = Number(r.rateEnd) - EPOCH_ANCHOR_UNIX;
-      const remainder = ((offset % EPOCH_LENGTH_SECONDS) + EPOCH_LENGTH_SECONDS) % EPOCH_LENGTH_SECONDS;
-      const distanceToGrid = Math.min(remainder, EPOCH_LENGTH_SECONDS - remainder);
-      if (distanceToGrid > EPOCH_GRID_TOLERANCE_SECONDS) {
+      const offGrid = distanceToGrid(Number(r.rateEnd), EPOCH_ANCHOR_UNIX, EPOCH_LENGTH_SECONDS);
+      if (offGrid > EPOCH_GRID_TOLERANCE_SECONDS) {
         logger.error(
-          `${r.chain}: EPOCH-GRID MISALIGNMENT — rateEnd=${r.rateEnd} is ${distanceToGrid}s off the ` +
+          `${r.chain}: EPOCH-GRID MISALIGNMENT — rateEnd=${r.rateEnd} is ${offGrid}s off the ` +
             `declared grid (anchor=${EPOCH_ANCHOR_UNIX}, length=${EPOCH_LENGTH_SECONDS}s, ` +
             `tolerance=${EPOCH_GRID_TOLERANCE_SECONDS}s). This chain's epoch boundary has drifted ` +
             `from the rest of the fleet.`
@@ -433,6 +427,4 @@ if (require.main === module) {
 // NOTE: not exercised by the operator drill (test/hardhat/drill/operatorDrill.test.ts).
 // This script is inherently multi-chain (reads via `new ethers.JsonRpcProvider(rpcUrl)`
 // per configured chain name) — a single local in-process hardhat network has no
-// meaningful "cross-chain drift" to detect, and no second chain to compare against.
-// Exercising this would require either a second live RPC target or a deeper
-// restructuring to accept an in-process provider, which is out of scope here.
+// cross-chain drift to detect and no second chain to compare against.

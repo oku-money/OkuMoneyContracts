@@ -150,8 +150,10 @@ just never propagated to the shared `cli.ts` helper or the other 14 scripts.
 - `operator:mint` / `operator:redeem` npm aliases now bake in
   `ACTION=mintOkuM` / `ACTION=redeemOkuM` — previously both were byte-identical
   to `operator:psmOps` with no action, so both failed with
-  `Required: --action=...`. Added missing `operator:vaultOps`,
-  `operator:runEpoch`, `operator:setOkuMMultiplier` aliases.
+  `Required: --action=...`. Added missing `operator:vaultOps` and
+  `operator:setOkuMMultiplier` aliases. (An `operator:runEpoch` alias was added
+  in the same pass and removed again when `runEpoch.ts` was superseded by the
+  `deriveEpochSchedule` / `broadcastSchedule` split.)
 
 **Verified end-to-end against a live Sepolia fork node**, not just unit-level:
 deployed via `hardhat run scripts/deploy/index.ts --network localhost`, then
@@ -594,13 +596,20 @@ reference-only in their own module docs:
   independently verifiable". Anchoring a per-epoch hash on-chain remains
   available and additive if third-party verifiability ever becomes a
   requirement; it needs no change to any deployed contract.
-- Decide the V̄ sampling cadence (recommended: hourly) against actual AUM
-  volatility, and confirm it's fine-grained enough that `samplesInWindow`'s
-  ">= 2 samples" floor is never the binding constraint on measurement accuracy.
-- **`globalValue.ts` now includes SVM** and requires `SVM_RPC_URL`,
-  `SVM_LITE_PSM_PROGRAM_ID` and `SVM_OKU_M_MINT`. If unset, SVM is excluded
-  from V(t) and — since V is the DENOMINATOR — every derived rate comes out
-  too high. It warns, but consider failing hard once SVM is live.
+- ~~Decide the V̄ sampling cadence~~ — **DECIDED: hourly**
+  (`SVM/DECISIONS.md` D-27). At the adopted 24h grid that is ~24 samples per
+  epoch, comfortably past `samplesInWindow`'s ">= 2 samples" floor. The
+  remaining work is operational, not a decision: nothing runs the sampler on a
+  schedule yet (see the deploy-day runbook below).
+- ~~Consider failing hard once SVM is live~~ — **SHIPPED.**
+  `globalValue.ts` includes SVM and requires `SVM_RPC_URL`,
+  `SVM_LITE_PSM_PROGRAM_ID` and `SVM_OKU_M_MINT`. With `SVM_EXPECTED=true` a
+  missing or unreadable SVM configuration **throws** rather than warning;
+  `checkMultiplierDrift.ts` takes the same flag with the same semantics. The
+  flag exists because "SVM is absent" is a legitimate pre-launch state that
+  must stay distinguishable from "SVM is misconfigured" — set it the moment
+  SVM carries supply. Without it, SVM drops out of V(t) and, since V is the
+  DENOMINATOR, every derived rate comes out too high.
   See `SVM/DECISIONS.md` D-27.
 - Decide whether `checkMultiplierDrift.ts` should assert the published rate is
   consistent with a declared `(epochId, realisedYieldUsd, measuredAvgValueUsd,
@@ -637,11 +646,12 @@ shock scenario, which does not actually test that claim (a smaller base
 commitment means LESS exposure to a shock landing IN the base window) — see
 the "EXPERIMENT" test in the simulation suite.
 
-Still undecided: the concrete epoch LENGTH and ANCHOR timestamp.
-`checkMultiplierDrift.ts` supports an OPTIONAL epoch-grid alignment check
-(`EPOCH_ANCHOR_UNIX` / `EPOCH_LENGTH_SECONDS` / `EPOCH_GRID_TOLERANCE_SECONDS`
-env vars) that is skipped entirely until these are set, specifically so this
-decision isn't forced by the tooling.
+Epoch LENGTH and ANCHOR are **decided and committed**: 24 hours, anchored
+2026-01-01T00:00:00Z, in `EVM/scripts/config/epoch.ts` (`SVM/DECISIONS.md`
+D-23). `checkMultiplierDrift.ts` defaults to that committed grid, so the
+alignment check runs on every invocation; `EPOCH_ANCHOR_UNIX` /
+`EPOCH_LENGTH_SECONDS` / `EPOCH_GRID_TOLERANCE_SECONDS` survive only as
+overrides.
 
 **Follow-up required before this can be closed:**
 - ~~Pick epoch length~~ — **DECIDED: 24 hours, anchored 2026-01-01T00:00:00Z**
@@ -683,8 +693,9 @@ decision isn't forced by the tooling.
   Accounting. This axis has not demonstrated a genuine accuracy-vs-length
   relationship either way; do not cite it as one. The DECISIVE constraint
   remains operational: a 1-hour epoch leaves only a 4-minute settlement-staging
-  window, unrealistically tight for a reliable transaction. Sub-day epochs are
-  characterized but not recommended; 7–30 days is the practical range.
+  window, unrealistically tight for a reliable transaction. That rules out
+  sub-day epochs; 24 hours (1.6-hour settlement window) is the shortest grid
+  that clears it, and is the one adopted.
   **Follow-up:** if a genuine accuracy-vs-length comparison is wanted, fix the
   shock's position to an ABSOLUTE time (not `atFraction`) so it doesn't scale
   with the epoch under test. **Not worth doing first** — with on-chain grid
@@ -735,11 +746,16 @@ entirely manual.
 **DECIDED: the exposure is accepted** (`SVM/DECISIONS.md` D-25). Supply
 shocks are treated as part of the deal; the mitigation is conservative
 off-chain and on-chain liquidity plus conservative rate-setting, not
-additional guards. What is being accepted, numerically: at $100M AUM / 5% APY
-/ 30-day epochs, the worst TESTED overshoot of 28.61% is ~$118k
-over-distributed and irreversible — and 28.61% is the worst case tested, not a
-proven bound. The monitor remains available (it needs no contract change) if
-that proves uncomfortable.
+additional guards. What is being accepted, numerically, **at the adopted
+24-hour grid**: at $100M AUM / 5% APY the epoch yield target is ~$13.7k, so
+the worst TESTED overshoot of 28.61% is ~$3.9k over-distributed and
+irreversible. (An earlier revision of this entry sized it against the
+superseded 30-day grid — ~$411k target / ~$118k overshoot — i.e. ~30x too
+large. The *percentage* exposure is unchanged; only the per-epoch dollar
+amount shrank, and epochs now arrive 30x more often, so size reserves against
+a run of epochs.) 28.61% is the worst case tested, not a proven bound. The
+monitor remains available (it needs no contract change) if that proves
+uncomfortable. See `SVM/DECISIONS.md` D-25.
 
 ### EVM/SVM yield-model divergence — RESOLVED `[SVM]`
 
@@ -817,7 +833,9 @@ have exercised; the deploy itself is a separate step.
 
 **SVM: clean-slate redeploy, not an in-place upgrade.** Decided (not just
 because the config layout grew 562→626 bytes, which alone would have been a
-clean init at an already-empty PDA): close the existing program
+clean init at an already-empty PDA — and which is no longer the class of
+problem it was, see the `reserved`/`migrate_config_space` note below): close
+the existing program
 (`close-programs --allow-anchor-toml-ids`, recovering ~4.35 SOL of stranded
 ProgramData rent), rotate `target/deploy/lite_psm-keypair.json`, run
 `anchor keys sync` (NOT on the standard build path today — `build.ts` only
@@ -826,8 +844,8 @@ and `declare_id!`, then `deploy:programs` → `deploy:init` → `grant-roles`.
 
 **SVM deployment state files were stale and actively misleading — archived,
 not fixed in place.** `deployments/devnet.json`'s recorded `psm_config` PDA
-pointed at a 562-byte orphan the current (626-byte) program cannot
-deserialize, alongside dead two-token-model keys (`tokens.okuMoney`,
+pointed at a 562-byte orphan the current program cannot deserialize
+(`PsmConfig::LEN` is now 754), alongside dead two-token-model keys (`tokens.okuMoney`,
 `tokens.usdOku`, `redemptionQueue`, `vaultConfig`) and three `OkuDollar`
 upgrade records for a program that no longer exists in this workspace.
 `devnet-fork.json` additionally carried a live `okuDollarProgram` reference
@@ -855,6 +873,14 @@ any of these three checks without revisiting them first.
 **`verify.ts` was existence-only** and would have reported the stale
 562-byte orphan config as a passing check. Fixed: now also checks owner,
 account size against `PSM_CONFIG_LEN`, and the `PsmConfig` discriminator.
+
+**RESOLVED — config-layout growth no longer forces a redeploy.** `PsmConfig`
+now carries a `reserved: [u8; 128]` tail (`PsmConfig::LEN` = **754**, pinned by
+a compile-time `assert!`) and the program ships `migrate_config_space`, a
+one-shot idempotent in-place resize driven by
+`scripts/admin/migrate-config-space.ts`. Future fields are consumed from the
+front of `reserved` with `LEN` held constant. Pinned by
+`tests/bankrun/config-layout.ts`. See `SVM/DECISIONS.md` D-07.
 
 **`initialize.ts` wired `direct_minter` post-init but never `direct_burner`**
 — the SVM→EVM bridge burn path was silently dead until a separate
@@ -976,7 +1002,9 @@ both were at boundaries the fixes themselves never executed:
    executes the real function with a recording stub and pins the exact env
    every chain receives. Verified by mutation: reintroducing `EPOCH_PHASE`
    fails the suite.
-2. **The second pass made the legacy `runEpoch.ts` path worse.** It fixed
+2. **The second pass made the legacy `runEpoch.ts` path worse.** (`runEpoch.ts`
+   has since been deleted outright — see `SVM/DECISIONS.md` D-28. Recorded
+   because the failure shape generalises.) It fixed
    `deriveStageSettlement`'s carry-in source but not `runEpoch.ts`'s, which
    still read `outstandingCarryUsd`. That was latent while the legacy path ran
    alone (it only ever wrote `carryForwardUsd: 0`, so the value was always 0)
@@ -1107,8 +1135,9 @@ Ordered. Each step's verification is the gate for the next.
 four testnet RPCs, explorer keys). Confirm `DEPLOYMENT_VERSION === "v0.3"`
 and that `scripts/config/addresses.json` holds `MockUSDC`-only entries for
 `sepolia`/`baseSepolia`/`arbSepolia`/`bscTestnet`. Full suite green:
-`forge test` (577), `npm run test:unit` (184), SVM `npm test` (57 Rust + 118
-bankrun), `packages/yield-tooling` `npm test` (3290 differential vectors).
+`forge test` (582), `npx hardhat test` (248, of which `npm run test:unit` is
+221), SVM `npm test` (58 Rust + 124 bankrun), `packages/yield-tooling`
+`npm test` (3290 differential vectors).
 
 **1. EVM deploy, one chain at a time.** `npm run deploy:sepolia`, then
 `baseSepolia`, `arbSepolia`, `bscTestnet`. Each run reuses the existing
@@ -1203,7 +1232,7 @@ audit feedback narrows the surface.
 ### Branch coverage is the weak spot in an otherwise strong forge suite `[EVM]`
 
 CI gates on **line** coverage (95% per `src/` file) and the suite clears it
-comfortably — 98.90% lines, 99.32% functions, 576/576 passing. **Branch**
+comfortably — 98.90% lines, 99.32% functions, 582/582 passing. **Branch**
 coverage is materially weaker and ungated:
 
 | File | Branches |
@@ -1264,12 +1293,6 @@ will concentrate:
 
 Still missing CLIs — defer until post-audit when the function
 kill-list is finalised:
-
-**EVM:**
-
-- `setNextUsdYieldRate` — schedules a future rate; `setUsdYieldRate`
-  covers the immediate-effect case. Add only if the schedule-ahead
-  flow becomes part of the runbook.
 
 **SVM:**
 

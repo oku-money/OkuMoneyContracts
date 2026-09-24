@@ -4,8 +4,11 @@ pragma solidity 0.8.28;
 /**
  * @title Roles
  * @notice Centralized role constants for all OkuMoney contracts
- * @dev All roles use contract-specific prefixes (OKUM_, VAULT_, PSM_, QUEUE_)
- *      to prevent accidental role collisions across contracts.
+ * @dev Prefixes (OKUM_, VAULT_, PSM_, QUEUE_) name the contract a role primarily
+ *      belongs to. AccessControl mappings are per-contract, so a grant never leaks
+ *      across contracts even where a hash is shared: OkuDollar deliberately reuses
+ *      OKUM_BLACKLISTER / OKUM_UNBLACKLISTER so one role name spans both tokens, but
+ *      the role must still be granted on each contract separately.
  */
 library Roles {
     // ============ OkuMoney Roles ============
@@ -13,10 +16,9 @@ library Roles {
     bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
     bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");
     bytes32 public constant OKUM_MINTER = keccak256("OKUM_MINTER");
-    /// @dev Split from `OKUM_MINTER` so the burn surface can be locked
-    ///      down independently of the mint allowance system. Granted to
-    ///      LitePSM at deploy time alongside `OKUM_MINTER` because both
-    ///      flows route through the PSM.
+    /// @dev Separate from `OKUM_MINTER` so the burn surface can be locked down
+    ///      independently of the mint allowance system. Granted to LitePSM at deploy
+    ///      time alongside `OKUM_MINTER`, since both flows route through the PSM.
     bytes32 public constant OKUM_BURNER = keccak256("OKUM_BURNER");
     bytes32 public constant OKUM_REBASER = keccak256("OKUM_REBASER");
     bytes32 public constant OKUM_BLACKLISTER = keccak256("OKUM_BLACKLISTER");
@@ -33,10 +35,6 @@ library Roles {
     ///      totalAssets/totalSupply), so without this they would be locked forever.
     ///      Cannot touch OkuM backing outstanding shares.
     bytes32 public constant VAULT_RESCUER = keccak256("VAULT_RESCUER");
-    // REMOVED (single-multiplier refactor): VAULT_REBASER — OkuDollar has no rate of
-    // its own; accrual is set on OkuMoney via OKUM_REBASER. VAULT_RESERVE_MANAGER and
-    // VAULT_ADMIN — collateralization is 1.0 by construction, so there is no surplus
-    // to manage and no min-ratio to configure.
 
     // ============ LitePSM Roles ============
     bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");

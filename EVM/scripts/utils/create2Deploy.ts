@@ -1,23 +1,21 @@
 /**
  * Deterministic deploy helpers via the Arachnid CREATE2 factory.
  *
- * The factory's API is: send a tx to `CREATE2_FACTORY` with calldata
- * `salt(32 bytes) ++ initCode`. It executes CREATE2 and (post-Cancun)
- * returns the deployed address as the 20-byte return data. We don't rely
- * on return data — we compute the expected address from
+ * The factory's API: send a tx to `CREATE2_FACTORY` with calldata
+ * `salt(32 bytes) ++ initCode`. Return data is not relied on — the expected
+ * address is computed from
  * `keccak256(0xff ++ factory ++ salt ++ keccak256(initCode))[12:]` and
- * confirm via `getCode` after the tx mines.
+ * confirmed via `getCode` after the tx mines.
  *
  * Two public entry points:
  *
- *   - `deployContractDeterministic`: any contract with a constructor.
- *     Used for both impl contracts (no constructor args; OZ initializers
- *     handle setup) AND for ERC1967Proxy (constructor args = impl address
- *     + initCalldata).
+ *   - `deployContractDeterministic`: any contract with a constructor. Used for
+ *     impl contracts (no constructor args; OZ initializers handle setup) AND
+ *     for ERC1967Proxy (constructor args = impl address + initCalldata).
  *
- *   - `create2FactoryAvailable`: runtime check that the factory exists on
- *     the connected chain. Callers should gate the CREATE2 path on this
- *     and fall back to standard CREATE if the factory is missing.
+ *   - `create2FactoryAvailable`: runtime check that the factory exists on the
+ *     connected chain. Callers MUST gate the CREATE2 path on this and fall
+ *     back to standard CREATE if the factory is missing.
  *
  * Resumability: if the predicted address already has bytecode (a prior
  * partial deploy got that far), we skip the broadcast and reuse it.
@@ -62,11 +60,9 @@ export function buildInitCode(
   constructorArgs: any[] = []
 ): string {
   const tx = factory.interface.encodeDeploy(constructorArgs);
-  // `factory.bytecode` is the creation bytecode; appending the abi-encoded
-  // constructor args produces the init-code that CREATE2 hashes.
+  // Creation bytecode ++ abi-encoded constructor args = the init-code CREATE2
+  // hashes. Both are 0x-prefixed, so strip the args' prefix.
   const creationBytecode = factory.bytecode;
-  // ethers' encodeDeploy returns the 0x-prefixed encoded args; we strip the
-  // 0x and append to the creation bytecode (which also has 0x).
   return creationBytecode + tx.slice(2);
 }
 
@@ -108,12 +104,9 @@ export async function deployContractDeterministic(
     );
   }
 
-  // Confirm the deployed bytecode lives where we expect. Poll with backoff
-  // because load-balanced public RPCs (Alchemy, etc.) can return stale
-  // `getCode` results for several seconds after a tx mines — different
-  // request → different node → state not propagated yet. The receipt
-  // already told us the tx succeeded, so we just need to give the RPC
-  // network a chance to catch up.
+  // Confirm the deployed bytecode lives where we expect. Polled because
+  // load-balanced public RPCs can return stale `getCode` for several seconds
+  // after a tx mines; the receipt already confirmed the tx succeeded.
   const pollMaxMs = 30_000;
   const pollIntervalMs = 2_000;
   const pollStart = Date.now();
@@ -141,10 +134,9 @@ export async function deployContractDeterministic(
 /**
  * Build the ERC1967Proxy creation bytecode wrapping (impl, initCalldata).
  *
- * We bundle this here so deploy/index.ts doesn't have to know about the
- * proxy ABI directly. Hardhat doesn't compile ERC1967Proxy by default
- * (it's pulled in transitively via @openzeppelin/contracts-upgradeable),
- * so we load it from the OZ upgrades-core artifact that the plugin ships.
+ * Hardhat doesn't compile ERC1967Proxy by default (it comes in transitively
+ * via @openzeppelin/contracts-upgradeable), so it is loaded from the OZ
+ * upgrades-core artifact the plugin ships.
  */
 export async function buildERC1967ProxyInitCode(
   impl: string,

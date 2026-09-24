@@ -9,7 +9,7 @@ pragma solidity 0.8.28;
 abstract contract RedemptionQueueEvents {
     /// @notice Reasons why processQueue may skip an entry instead of processing it.
     enum RedemptionSkipReason {
-        AlreadyCleared, // Entry was previously processed or rescued
+        AlreadyCleared, // Entry already processed or rescued
         InsufficientFunds, // Not enough USDC to process this entry
         TransferFailed // USDC transfer to recipient reverted (e.g., blacklisted ATA); use rescueQueueEntry
     }

@@ -79,21 +79,14 @@ async function main() {
     status = 'accruing';
   }
 
-  // Health verdict is computed BEFORE the output-format branch so both the
-  // human and --json paths share it.
+  // Health verdict is computed BEFORE the output-format branch so the human
+  // and --json paths share it. Keep it here: `--json` returns early below, and
+  // a monitor consuming JSON must not exit 0 while accrual is stopped.
   //
-  // Previously the halt check lived at the very bottom of the function, after
-  // the `--json` early return — so `--json`, the natural choice for a monitor,
-  // ALWAYS exited 0 no matter how dead the schedule was. A cron consuming JSON
-  // got a clean exit while accrual was stopped.
-  //
-  // The check also required `rateEnd !== 0n`, which silently excluded the
-  // "HALTED (no rate published)" case. Both flavours mean the same thing
-  // operationally — every second from here earns nothing — and the README
-  // documents this script as "exits non-zero if accrual has HALTED" without
-  // qualification. A never-published schedule on a fresh deploy is a
-  // legitimate pre-launch state, but it is NOT an accruing one, and defaulting
-  // to silence is the wrong side to err on for a monitor.
+  // Do NOT additionally require `rateEnd !== 0n` — that excludes the
+  // "HALTED (no rate published)" case, which is operationally identical
+  // (every second from here earns nothing). A never-published schedule on a
+  // fresh deploy is a legitimate pre-launch state, but it is NOT accruing.
   const halted = status.startsWith('HALTED');
   if (halted) {
     process.exitCode = 1;

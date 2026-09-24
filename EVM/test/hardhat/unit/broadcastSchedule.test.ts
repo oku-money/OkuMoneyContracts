@@ -55,6 +55,8 @@ function makeArtifact(overrides: Partial<EpochScheduleArtifact> = {}): EpochSche
 describe("scripts/operator/broadcastSchedule", () => {
     let calls: RecordedCall[];
     let recorder: SubprocessRunner;
+    const STUB_SVM_SIGNATURE =
+        "5SRzBouhVBeyR5BqDdcVX6YRdbwe8PKLghwwuT3cnc2zDtiYYy6PoqaK6ANMaKe4gz73J54yCpoeVStTeAsuTqm4";
     let ledgerPath: string;
     const written: string[] = [];
 
@@ -62,6 +64,9 @@ describe("scripts/operator/broadcastSchedule", () => {
         calls = [];
         recorder = (command, args, opts) => {
             calls.push({ command, args, cwd: opts.cwd, env: opts.env });
+            // The SVM branch parses a real signature out of stdout and refuses
+            // to record a receipt without one, so the stub must emit one.
+            return `  tx: ${STUB_SVM_SIGNATURE}`;
         };
         ledgerPath = path.join(os.tmpdir(), `bcastLedger.${Date.now()}.${Math.random()}.json`);
     });
@@ -228,7 +233,7 @@ describe("scripts/operator/broadcastSchedule", () => {
         const failing: SubprocessRunner = (command, args, opts) => {
             const network = args[args.indexOf("--network") + 1];
             if (network === "arbSepolia") throw new Error("simulated RPC timeout");
-            recorder(command, args, opts);
+            return recorder(command, args, opts);
         };
 
         const err = await rejection(

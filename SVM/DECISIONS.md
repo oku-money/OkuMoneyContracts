@@ -271,8 +271,9 @@ narrow.
 
 **Consequence, and the reason this matters:** together with D-22 this means
 **no EVM upgrade is required at all.** `OkuMoney` is live on six networks;
-avoiding a UUPS upgrade cycle with `checkLayout`/`preState` rehearsal on each is
-the single largest simplification available in this design.
+avoiding a UUPS upgrade cycle — `prepareUpgrade` layout check plus `preState`
+diff, rehearsed against a fork, on each — is the single largest simplification
+available in this design.
 
 ---
 
@@ -282,8 +283,8 @@ Considered storing `epochLength` / `epochAnchor` on-chain and validating that
 `endTimestamp` lands on the grid, to stop a fat-fingered timestamp silently
 desynchronising one chain.
 
-**Decision: no.** Pure business policy. It would also hard-code a parameter that
-is still open (D-23) into six live contracts, making a config choice into an
+**Decision: no.** Pure business policy. It would also hard-code a backend
+constant (D-23) into six live contracts, making a config choice into an
 upgrade.
 
 Detection stays off-chain: `checkMultiplierDrift.ts` already supports an optional
@@ -356,35 +357,62 @@ bounds stay on-chain; business policy moves to the backend.
 
 ## D-23 · Epoch length and anchor — `DECIDED`
 
-**30 days, anchored 2026-01-01T00:00:00Z**, with one settlement window
-(2 days) of grid tolerance. Committed in `EVM/scripts/config/epoch.ts`;
-`checkMultiplierDrift.ts` now defaults to it, so the alignment check runs
-instead of being silently skipped.
+**24 hours (86,400 s), anchored 2026-01-01T00:00:00Z.** Committed in
+`EVM/scripts/config/epoch.ts`; `checkMultiplierDrift.ts` defaults to that grid,
+so the alignment check runs on every invocation instead of being silently
+skipped. The anchor is `20454 * 86400` exactly, so every epoch boundary falls
+on UTC midnight.
 
-Chosen on operational grounds, not measured accuracy. At
-`DEFAULT_SETTLEMENT_FRACTION = 1/15`, 30 days gives a ~2-day window in which to
-land the settlement transaction on every chain. A 1-hour epoch gives 4 minutes,
-which is a race rather than a window.
+Grid tolerance is `EPOCH_LENGTH_SECONDS / 10` (8,640 s), **not** `/15`. At
+`/15` the tolerance would exactly equal the legitimate `baseEnd` offset,
+leaving zero slack under the strict `distanceToGrid > tolerance` compare — any
+one-second rounding would flip a healthy fleet to `EPOCH-GRID MISALIGNMENT` and
+exit 1. `/10` accepts both the epoch boundary (0 s off-grid) and the base
+boundary (5,760 s off-grid) with ~48 minutes to spare.
 
-**The simulation's epoch-length axis is not evidence.** Its error was flat
-(2.27-2.29 %) from 1 hour to 90 days, almost certainly because the shock's
-position is specified as a fraction of the epoch and therefore scales with it.
-It is a mechanism smoke test.
+**Settlement window.** At `DEFAULT_SETTLEMENT_FRACTION = 1/15`, 24 h gives a
+**1.6-hour** window (base window 22.4 h) in which the settlement transaction
+must land on every chain. Ample for an automated broadcast, but **not** a
+window a human can be relied on to notice and act inside — the daily cadence is
+expected to be driven by an external scheduler, which is why the operator CLIs
+stay non-interactive and exit-code-clean. A 1-hour epoch would give 4 minutes,
+which is a race rather than a window, and is what rules out sub-day grids.
+
+**An initial 30-day decision was superseded.** 30 days maximises operational
+comfort (a ~2-day settlement window) but therefore also maximises the
+early-shock exposure recorded in D-25, since a shock has longer to compound
+before the next re-anchor. Shorter epochs are the stronger lever against that
+exposure than `conservativeFactor` is (D-24), and 24 h is the shortest grid
+whose settlement window is still operationally real. The change cost **zero
+contract or program edits** — exactly as D-22 predicted — touching only
+`EPOCH_LENGTH_SECONDS`, the grid tolerance, `EXPIRY_WARN_HOURS` (48 h exceeded
+a whole epoch and warned permanently), and the epoch-shaped test fixtures.
+
+**What the shorter grid genuinely changes:** `MAX_RATE` headroom drops ~30x.
+The ceiling permits ~0.8677 % growth per 24 h versus ~29.6 % per 30 days. A
+realistic daily figure (5 % APY ≈ 0.0137 % of AUM) leaves roughly **63x**
+margin, but a *monthly-sized* dollar target pushed through a daily window sits
+at only ~2x. Pinned by the `MAX_RATE headroom at a 24h epoch` tests in
+`unit/yieldRate.test.ts`. Every rate-producing path clamps to `MAX_RATE` and
+carries the shortfall forward rather than reverting.
+
+**The simulation's epoch-length axis is not evidence either way.** Its error
+was flat (2.27-2.29 %) from 1 hour to 90 days, almost certainly because the
+shock's position is specified as a fraction of the epoch and therefore scales
+with it. It is a mechanism smoke test, not an accuracy comparison.
 
 **Low-stakes by construction.** With on-chain grid validation declined (D-22),
 these are backend constants — revising them is an edit to one file, not an
-upgrade. That is precisely why it was not worth reworking the simulation first.
-
-**Recorded trade-off:** shorter epochs would bound the early-shock overshoot
-(D-25), because a shock has less time to compound before the next re-anchor.
-30 days maximises operational comfort and therefore maximises that exposure.
+upgrade. That is precisely why it was not worth reworking the simulation
+first, and it is what made the 30-day → 24-hour revision cheap.
 
 ---
 
 ## D-24 · `conservativeFactor` — `DECIDED`
 
 **`1.0`** — pure rear-facing, no permanent float. Already the shipped default
-(`yieldRate.ts:196`, `runEpoch.ts:94`), so no change was needed.
+in `realisedYieldToRatePerSecond` (`packages/yield-tooling/src/yieldRate.ts`),
+so no change was needed.
 
 Never an on-chain parameter: it is a scalar applied to the target before the
 rate is derived off-chain. Variance is absorbed by the carry ledger, which
@@ -410,13 +438,19 @@ back.
 mitigation is conservative off-chain and on-chain liquidity plus conservative
 rate-setting, not additional guards.
 
-**What is being accepted, stated numerically** — $100M AUM, 5 % APY, 30-day
-epoch:
+**What is being accepted, stated numerically** — $100M AUM, 5 % APY, at the
+**adopted 24-hour epoch** (`EPOCH_LENGTH_SECONDS = 86_400`):
 
 ```
-epoch yield target              $410,959
-worst TESTED overshoot 28.61%   $117,575 over-distributed, permanently
+epoch yield target              $13,699      ($100M x 5% / 365)
+worst TESTED overshoot 28.61%   $3,919 over-distributed, permanently
 ```
+
+> These are the reserve-sizing inputs. An earlier revision of this entry sized
+> them against the superseded 30-day grid ($410,959 target / $117,575
+> overshoot) — **~30x too large** for the grid actually adopted. Adopting 24 h
+> did not reduce the *percentage* exposure, only the per-epoch dollar amount
+> it applies to.
 
 Two caveats that matter for reserve sizing:
 
@@ -424,11 +458,16 @@ Two caveats that matter for reserve sizing:
   with shock magnitude, so a larger shock is worse.
 - **It is irreversible.** Once distributed, the multiplier cannot be walked
   back; the only response is to halt going forward.
+- **The dollar figure is per epoch, and epochs are now daily.** A sustained
+  regime of shocked epochs accumulates ~30x faster in count than it would on
+  the 30-day grid, even though each one is ~30x smaller. Size reserves against
+  a run of epochs, not a single one.
 
 Worth noting the mitigation lever is weaker than it sounds:
 `conservativeFactor` moves the rate by single-digit percent, while a shock
 moves `V(t)` by tens of percent (see D-24). **Shorter epochs are the stronger
-lever**, which is the trade recorded in D-23.
+lever** — which is the trade recorded in D-23, and part of why 24 h was
+adopted over 30 days.
 
 Nothing about this required a contract change either way — the monitor would
 have read `globalValue.ts` samples and used the existing
@@ -508,8 +547,9 @@ Documented for users in the root `README.md` §
 
 ## D-27 · V̄ sampling cadence + SVM environment wiring — `DECIDED`
 
-**Cadence: hourly.** ~720 samples per 30-day epoch, comfortably past
-`samplesInWindow`'s ">= 2 samples" floor.
+**Cadence: hourly.** At the adopted 24-hour grid (D-23) that is ~24 samples
+per epoch — comfortably past `samplesInWindow`'s ">= 2 samples" floor, with
+enough margin that a handful of missed samples is not immediately fatal.
 
 **The wiring hazard is now a hard error.** `globalValue.ts` reads SVM, and V is
 the DENOMINATOR of every derived rate:
@@ -584,12 +624,14 @@ only a logged float. Split into:
   matching re-run, and refuses to silently overwrite a DIFFERENT recorded
   derivation for the same epoch label.
 
-**Old `runEpoch.ts` kept, not deleted.** `test/hardhat/drill/operatorDrill.test.ts`
-exercises `runStageSettlement` / `runRollEpoch` directly, and rewriting that
-test was out of scope for this pass per its own scoping instruction. The local-
-supply bug is patched in place there too (same fix, smaller diff), so both
-paths are now correct; the artifact/broadcast split is the one to use for a
-real multi-chain rollout.
+**`runEpoch.ts` was initially kept, then deleted.** It was retained for one
+pass because `test/hardhat/drill/operatorDrill.test.ts` exercised
+`runStageSettlement` / `runRollEpoch` directly and rewriting that test was out
+of scope at the time (the local-supply bug was patched in place there too, so
+both paths were correct). It has since been removed along with its
+`operator:runEpoch` npm alias: the artifact/broadcast split is the only
+supported path for a multi-chain rollout, and keeping a second writer against
+the shared carry ledger was a standing hazard.
 
 ### What remains for a future pass (marked partial deliberately)
 
@@ -771,15 +813,25 @@ leaving a documented, proven primitive in place.
 
 ## D-07 · SVM needs a fresh redeploy — `DEFERRED`
 
-`PsmConfig` grew 562 → 626 bytes, so existing accounts cannot be reallocated in
-place. SVM is devnet-only (`deployments/` holds only `devnet.json` /
+`PsmConfig` grew 562 → 626 bytes across the streaming-accrual port, and there
+was no realloc path, so existing accounts could not be reallocated in place.
+SVM is devnet-only (`deployments/` holds only `devnet.json` /
 `devnet-fork.json`), so this is a fresh deploy rather than a migration, and no
 mainnet holders exist — the mint can be recreated freely.
 
 Already tracked in `TRACKER.md`.
 
-**Now unblocked earlier than expected:** with D-01 and D-22 both resolved as "no",
-there is no EVM upgrade to sequence behind.
+**Now unblocked earlier than expected:** with D-01 and D-22 both resolved as
+"no", there is no EVM upgrade to sequence behind.
+
+**Follow-on: the class of problem is now closed.** `PsmConfig` carries a
+`reserved: [u8; 128]` tail (current `PsmConfig::LEN` = **754**) and the program
+ships a `migrate_config_space` instruction — a one-shot, idempotent in-place
+resize driven by `scripts/admin/migrate-config-space.ts`. A future field
+addition consumes from the front of `reserved`, keeps `LEN` constant, and needs
+no redeploy at all. That does not retroactively rescue the pre-single-token
+562-byte accounts, which are orphans of a different layout, not undersized
+accounts of the current one.
 
 ## D-08 · Pre-existing SVM defects — all resolved
 

@@ -16,6 +16,7 @@
  *   - `SVM/oku-programs/tests/**`                 (canonical multiplier in tests)
  */
 
+export * from "./networks";
 export * from "./multiplier";
 export * from "./yieldRate";
 export * from "./epochDistribution";

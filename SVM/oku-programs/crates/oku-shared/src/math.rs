@@ -363,9 +363,8 @@ mod tests {
         assert_eq!(dollars_to_raw(1_000_000, 0), None);
     }
 
-    /// The whole point of the 256-bit intermediate: a large supply at a large
-    /// multiplier used to be unrepresentable. `1e15` raw ($1B at par) times a
-    /// 1e24 multiplier is ~1e39, past `u128::MAX`.
+    /// The whole point of the 256-bit intermediate: `1e15` raw ($1B at par)
+    /// times a 1e24 multiplier is ~1e39, past `u128::MAX`.
     #[test]
     fn raw_to_dollars_survives_the_old_overflow_region() {
         let raw = 1_000_000_000_000_000u64; // 1e15 raw = $1B at par

@@ -9,20 +9,14 @@
  * reason but a different toolchain: it needs `anchor.workspace.LitePsm`, its
  * own provider, and a Solana keypair, none of which this Hardhat process has.
  *
- * ## Resumable by design
+ * Resumable by design: each chain's outcome is written back into the
+ * artifact's `receipts` map as it confirms (by the subprocess itself). Re-runs
+ * re-read the artifact and SKIP any chain with a successful receipt, so a
+ * partial failure is recoverable by re-running the same command.
  *
- * Each chain's outcome is written back into the artifact's `receipts` map as
- * it confirms (by the subprocess itself, since it has the artifact-writing
- * helpers available). Re-running this driver re-reads the artifact and SKIPS
- * any chain with a successful receipt already recorded, so a partial failure
- * — one chain down, one RPC timeout — is recoverable by re-running the same
- * command.
- *
- * ## The carry ledger is written HERE, once
- *
- * Not in `deriveEpochSchedule.ts`, and not per chain. It fires exactly once,
- * after every chain (EVM and SVM) has a successful receipt for a `roll-epoch`
- * artifact — one epoch, one ledger entry, rather than one per chain-run.
+ * The carry ledger is written HERE, once — not in `deriveEpochSchedule.ts`,
+ * and not per chain. It fires after every chain (EVM and SVM) has a successful
+ * receipt for a `roll-epoch` artifact: one epoch, one ledger entry.
  */
 
 import { execFileSync } from "child_process";
@@ -33,35 +27,37 @@ import { loadArtifact, saveArtifactInPlace, EpochScheduleArtifact, EpochPhase } 
 import { upsertLedgerEntry, buildLedgerEntry, backfillReconciliation } from "../utils/carryLedger";
 import { participatingChains, parseChainsEnv, SVM_CHAIN_KEY } from "../config/epochChains";
 
-// NOTE: intentionally does NOT import anything from `deriveEpochSchedule.ts`
-// (which pulls in `ethers` from `"hardhat"`) — this driver must run standalone
-// under plain `tsx`, spawning per-chain `hardhat run` subprocesses itself. See
-// `epochArtifact.ts`'s module doc for the full rationale.
+// NOTE: must NOT import anything from `deriveEpochSchedule.ts` (which pulls in
+// `ethers` from `"hardhat"`) — this driver runs standalone under plain `tsx`,
+// spawning per-chain `hardhat run` subprocesses itself.
 
 /**
  * How this driver launches each per-chain subprocess.
  *
- * Injectable ONLY so the subprocess boundary is testable. That boundary is
- * not incidental detail — it is a contract between this file (which sets env
- * vars) and `applyScheduleSingleChain.ts` (which reads them via
- * `cli.ts::parseArg`), and it is impossible to verify by reading either file
- * alone: `parseArg("phase")` derives the env name `PHASE` by a
- * camelCase→SCREAMING_SNAKE transform that is not written down at either end.
- *
- * This driver originally set `EPOCH_PHASE`, which `parseArg("phase")` never
- * reads — so every EVM chain's subprocess aborted with "Required: --phase".
- * It appeared to work only when the operator happened to invoke the broadcaster
- * with `PHASE=` in the environment, which then leaked through `...process.env`
- * below. Nothing caught it because nothing executed this function.
+ * Injectable ONLY so the subprocess boundary is testable. That boundary is a
+ * contract between this file (which sets env vars) and
+ * `applyScheduleSingleChain.ts` (which reads them via `cli.ts::parseArg`), and
+ * cannot be verified by reading either file alone: `parseArg("phase")` derives
+ * the env name `PHASE` by a camelCase→SCREAMING_SNAKE transform written down
+ * at neither end. Set `PHASE`, not `EPOCH_PHASE`.
  */
 export type SubprocessRunner = (
   command: string,
   args: string[],
   opts: { cwd: string; env: NodeJS.ProcessEnv }
-) => void;
+) => string;
 
 const defaultRunner: SubprocessRunner = (command, args, opts) => {
-  execFileSync(command, args, { ...opts, stdio: "inherit" });
+  // stdout is captured rather than inherited so the SVM signature can be
+  // recorded as a real receipt; it is echoed so the operator still sees the
+  // subprocess live. stderr stays inherited for prompts and errors.
+  const out = execFileSync(command, args, {
+    ...opts,
+    encoding: "utf-8",
+    stdio: ["inherit", "pipe", "inherit"],
+  });
+  process.stdout.write(out);
+  return out;
 };
 
 export interface BroadcastOpts {
@@ -108,9 +104,7 @@ function applyToEvmChain(
   // Env, not argv — `hardhat run` rejects unrecognised flags (HH305/HH310);
   // see cli.ts's module doc. The names below MUST be exactly what
   // `parseArg("epochId")` / `parseArg("phase")` resolve to in the child:
-  // EPOCH_ID and PHASE respectively. See SubprocessRunner's doc for the bug
-  // that got this wrong, and `broadcastSchedule.test.ts` for the test that
-  // now pins it.
+  // EPOCH_ID and PHASE respectively.
   const env = {
     ...process.env,
     EPOCH_ID: epochId,
@@ -141,10 +135,20 @@ function applyToSvm(epochId: string, phase: EpochPhase, dryRun: boolean, run: Su
     ...(dryRun ? { DRY_RUN: "true" } : {}),
   };
   logger.info(`[solana] npx ${args.join(" ")} (cwd=${svmDir})`);
-  run("npx", args, { cwd: svmDir, env });
+  const out = run("npx", args, { cwd: svmDir, env });
 
   if (!dryRun) {
-    artifact.receipts[SVM_CHAIN_KEY] = { txHash: "see-svm-log-above", confirmedAtSec: Math.floor(Date.now() / 1000) };
+    // Record the REAL signature, never a placeholder: a placeholder makes
+    // `alreadyConfirmed` true for any exit-0 run, including one that never
+    // submitted, permanently skipping SVM on re-run.
+    const sig = /\btx:\s*([1-9A-HJ-NP-Za-km-z]{64,88})\b/.exec(out ?? "")?.[1];
+    if (!sig) {
+      throw new Error(
+        "SVM subprocess exited 0 but printed no transaction signature — refusing " +
+          "to record a receipt. Re-run; if it keeps happening, check the SVM log above."
+      );
+    }
+    artifact.receipts[SVM_CHAIN_KEY] = { txHash: sig, confirmedAtSec: Math.floor(Date.now() / 1000) };
     saveArtifactInPlace(artifact);
   }
 }
@@ -194,9 +198,8 @@ export async function broadcastArtifact(opts: BroadcastOpts): Promise<void> {
   if (artifact.phase === "roll-epoch") {
     // Backfill the PRIOR epoch's reconciliation FIRST — deriveRollEpoch
     // computed it (ex-post reconcileActualPayout) and threaded it into THIS
-    // artifact's carryInUsd; it belongs on the prior entry, not this one. See
-    // carryLedger.ts's module doc for why conflating this with the new
-    // entry's own carryForwardUsd was defect #3 in the deploy-readiness audit.
+    // artifact's carryInUsd; it belongs on the prior entry, not this one. Do
+    // not conflate it with the new entry's own carryForwardUsd.
     if (artifact.meta.priorEpochId) {
       backfillReconciliation(artifact.meta.priorEpochId, artifact.meta.carryInUsd, opts.ledgerPath);
       logger.success(

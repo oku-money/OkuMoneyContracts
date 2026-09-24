@@ -2,30 +2,21 @@
  * Single source of truth for WHICH chains participate in a given epoch's
  * schedule broadcast and global-value (V̄) sample.
  *
- * ## Why this file exists
- *
- * Before this file, three call sites each independently defaulted to "every
- * key in `CHAIN_METADATA`":
- *
- *   - `broadcastSchedule.ts::targets()`      — who receives the derived rate
- *   - `sampleGlobalValueUsd()`               — who is summed into V̄
- *   - `deriveRollEpoch()`'s call to the above with no explicit chain list
- *
  * `CHAIN_METADATA` contains all 11 known EVM chains, including `mainnet`,
  * `base`, and `bsc` mainnet — chains this protocol is not live on for the
  * internal-testing MVP (and `base`/`bsc` DO have stale pre-streaming
- * deployments in the address book; see `addresses.legacy.json`). Because the
- * three call sites scoped independently, there was no guarantee V̄'s
- * denominator and the broadcast's recipient set were ever the same set —
- * exactly the class of cross-chain inconsistency the streaming-yield
- * refactor exists to eliminate structurally.
+ * deployments in the address book; see `addresses.pre-streaming.json`).
+ * Scoping the broadcast recipient set and V̄'s denominator independently would
+ * let them diverge, which is exactly the cross-chain inconsistency the
+ * streaming-yield design eliminates structurally.
  *
- * This module is that shared scope. Every consumer must import
- * `participatingChains()` rather than reading `CHAIN_METADATA` directly for
- * this purpose.
+ * Every consumer — `broadcastSchedule.ts::targets()`, `sampleGlobalValueUsd()`,
+ * `deriveRollEpoch()` — must import `participatingChains()` rather than
+ * reading `CHAIN_METADATA` directly for this purpose.
  */
 
 import { CHAIN_METADATA } from "./chains";
+import { MAINNET_NETWORKS } from "../utils/mainnetGuard";
 
 /** SVM's key alongside the EVM `CHAIN_METADATA` keys in any {epochId}-scoped chain list. */
 export const SVM_CHAIN_KEY = "solana";
@@ -41,10 +32,11 @@ export const DEFAULT_EPOCH_CHAINS: readonly string[] = [
   SVM_CHAIN_KEY,
 ];
 
-/** Chains this file will refuse to include unless `YES_MAINNET=true` /
- *  `--yes-mainnet` is also given — mirrors `mainnetGuard.ts`'s convention,
- *  applied here to chain SCOPING rather than a single submitted tx. */
-const MAINNET_CHAINS = new Set(["mainnet", "optimism", "arbitrum", "base", "bsc"]);
+/** Chains this file refuses to include unless `YES_MAINNET=true` /
+ *  `--yes-mainnet` is also given — the same gate as `mainnetGuard.ts`, applied
+ *  to chain SCOPING rather than a single submitted tx. Uses the canonical set
+ *  so the two gates cannot disagree about what "mainnet" means. */
+const MAINNET_CHAINS = MAINNET_NETWORKS;
 
 export interface ParticipatingChainsOpts {
   /** Explicit override, e.g. from `CHAINS=sepolia,baseSepolia` env var.

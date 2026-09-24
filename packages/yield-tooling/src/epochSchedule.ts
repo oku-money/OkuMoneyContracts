@@ -34,22 +34,18 @@ export function epochEndSec(grid: EpochGrid): number {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * TWO INDEPENDENT KNOBS — do not conflate them (an earlier version of this
- * module did, and it was wrong — see git history / TRACKER.md).
+ * TWO INDEPENDENT KNOBS — do not conflate them.
  * ═══════════════════════════════════════════════════════════════════════════
- * 1. CROSS-EPOCH conservatism (`conservativeFactor` / `carryInUsd` — already
- *    implemented in `yieldRate.ts`): discount the OVERALL epoch target
- *    BEFORE either window runs; the withheld remainder carries to the NEXT
- *    epoch. This is insurance against the settlement window's OWN forecast
- *    being wrong (see `epochDistribution.test.ts`'s "under-forecasting
- *    causes over-distribution" case) — it does not reduce the base/settlement
- *    split's own accuracy, it just means a bad month costs less.
- * 2. WITHIN-epoch split (`baseWindowFraction`, this module): of WHATEVER the
- *    caller has decided the epoch's target is (already reflecting (1) if
- *    conservatism is in use), what fraction does the base window alone
- *    attempt, with the settlement window closing the remainder using
- *    FRESHLY MEASURED data. This is what actually shrinks the
- *    AUM-volatility-driven error — see the accuracy tables in
+ * 1. CROSS-EPOCH conservatism (`conservativeFactor` / `carryInUsd`, in
+ *    `yieldRate.ts`): discount the OVERALL epoch target BEFORE either window
+ *    runs; the withheld remainder carries to the NEXT epoch. Insurance against
+ *    the settlement window's OWN forecast being wrong. Does not improve the
+ *    base/settlement split's accuracy — it just means a bad month costs less.
+ * 2. WITHIN-epoch split (`baseWindowFraction`, this module): of whatever the
+ *    caller has decided the epoch's target is (already reflecting (1) if in
+ *    use), what fraction the base window alone attempts, with the settlement
+ *    window closing the remainder from FRESHLY MEASURED data. This is what
+ *    shrinks the AUM-volatility-driven error — see the accuracy tables in
  *    EVM/README.md § Rear-Facing Epoch Accounting.
  *
  * `deriveBaseRate` / `deriveSettlementRateForEpoch` below take `targetUsd` as
@@ -70,11 +66,9 @@ export function epochEndSec(grid: EpochGrid): number {
  * @param targetUsd The (already fully cross-epoch-adjusted, if applicable)
  *        epoch distribution target — see the "Two independent knobs" note above.
  * @param baseWindowFraction Fraction of `targetUsd` the base window alone
- *        attempts, in `(0, 1]`. `1` = no within-epoch split (base window
- *        targets the full amount; settlement then only has to correct
- *        whatever the base window's OWN measurement-basis error left — see
- *        the "settlement fraction too small" simulation scenarios for why
- *        this degrades toward feed-forward accuracy). Typical: ~0.9–0.97.
+ *        attempts, in `(0, 1]`. `1` means no within-epoch split, which
+ *        degrades accuracy toward a plain feed-forward rate.
+ *        Typical: ~0.9–0.97.
  * @param measuredAvgValueUsd Time-weighted average value from the CLOSED
  *        measurement epoch (basis (1) in `yieldRate.ts`'s "Two V's") — NOT
  *        this epoch's own (unknown) average.
@@ -108,16 +102,14 @@ export function deriveBaseRate(params: {
 
 /**
  * Wraps `epochDistribution.ts::deriveSettlementRate` with the full-epoch
- * target framing: the settlement window closes the gap between the FULL
- * (already cross-epoch-adjusted) `targetUsd` — not just the base window's
- * `baseWindowFraction`-discounted target, since the withheld
- * `(1 - baseWindowFraction)` slice is exactly what the settlement window is
- * supposed to recover WITHIN this epoch — and what's actually been measured
- * distributed so far, PLUS what the base window is projected to distribute
- * over its own remaining tail (`stagingSec` to `baseEndSec`) before the
- * settlement rate even takes effect. See `epochDistribution.ts::deriveSettlementRate`'s
- * "BASE-WINDOW TAIL" doc for why omitting this systematically over-derives
- * the settlement rate.
+ * target framing. The settlement window closes the gap against the FULL
+ * (already cross-epoch-adjusted) `targetUsd`, NOT the base window's
+ * `baseWindowFraction`-discounted target — the withheld
+ * `(1 - baseWindowFraction)` slice is exactly what settlement recovers within
+ * this epoch. The gap also subtracts what the base window is projected to
+ * distribute over its remaining tail (`stagingSec` to `baseEndSec`) before the
+ * settlement rate takes effect; see `deriveSettlementRate`'s "BASE-WINDOW
+ * TAIL" doc.
  *
  * @param stagingSec Unix timestamp this function is being called at (when the
  *        settlement rate is derived and staged). Required to compute the

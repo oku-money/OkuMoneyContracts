@@ -28,9 +28,12 @@ contract OkuMPriceInvariantsTest is BaseTest {
     }
 
     /**
-     * @notice Sum of all user balances equals totalSupply (standard ERC-20 invariant)
+     * @notice Actor balances never exceed totalSupply.
+     * @dev Deliberately `<=`, not `==`: addresses outside the actor set (the
+     *      PSM, the queue, the minter) also hold OkuM, so equality would not
+     *      hold. Named for what it asserts.
      */
-    function invariant_BalancesSumToTotalSupply() public view {
+    function invariant_ActorBalancesDoNotExceedTotalSupply() public view {
         address[] memory actors = handler.getActors();
         uint256 sumOfBalances = 0;
 
@@ -49,8 +52,9 @@ contract OkuMPriceInvariantsTest is BaseTest {
 
     /**
      * @notice okuMMultiplier() never decreases between observations.
-     * @dev `ghostLastOkuMMultiplier` is updated in `afterInvariant` so the
-     *      observation happens regardless of whether the handler call reverted.
+     * @dev The ghost is written only in `afterInvariant`, i.e. AFTER this
+     *      assertion, so it holds the previous observation and the comparison
+     *      is meaningful across handler calls.
      */
     function invariant_OkuMPriceNeverDecreases() public view {
         uint256 current = okuMoney.okuMMultiplier();

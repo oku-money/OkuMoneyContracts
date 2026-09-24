@@ -1,16 +1,7 @@
 //! # OkuM Lite-PSM Events
 //!
-//! Event definitions for the Lite-PSM program.
-//! Aligned with EVM contract events from `LitePSM.sol`.
-//!
-//! ## EVM Event Mapping
-//!
-//! | SVM Event | EVM Equivalent |
-//! |-----------|----------------|
-//! | `MintEvent` | `MintNote` |
-//! | `RedeemEvent` | `RedeemNote` |
-//! | `BufferDepositEvent` | `BufferDeposited` |
-//! | `BufferWithdrawEvent` | `BufferWithdrawn` |
+//! Event definitions for the Lite-PSM program. The EVM event each one
+//! corresponds to is named on the struct.
 //!
 //! There are no bridge events: cross-chain transfers are mediated off-chain
 //! and surface on-chain as ordinary `MintEvent` / `RedeemEvent` records.
@@ -47,7 +38,6 @@ pub struct MintEvent {
     pub dollar_value: u64,
     /// Canonical OkuM multiplier at time of mint, WAD-scaled (1e18 = $1.00).
     /// Computed from the rate schedule, NOT read from the display mirror.
-    /// EVM equivalent: multiplier
     pub multiplier: u128,
     /// OkuM supply after the mint completed.
     pub new_total_supply: u64,
@@ -67,7 +57,6 @@ pub struct RedeemEvent {
     pub dollar_value: u64,
     /// Canonical OkuM multiplier at time of redeem, WAD-scaled (1e18 = $1.00).
     /// Computed from the rate schedule, NOT read from the display mirror.
-    /// EVM equivalent: multiplier
     pub multiplier: u128,
     /// OkuM supply after the burn completed.
     pub new_total_supply: u64,
@@ -189,14 +178,14 @@ pub struct DirectBurnEvent {
 
 /// Emitted by the EMERGENCY multiplier override only.
 ///
-/// Under streaming accrual this is a rare, incident-response event — not the
-/// routine yield mechanism it used to be. Its presence in the log means an
-/// operator forced a discrete jump and halted the schedule.
+/// Under streaming accrual this is a rare, incident-response event, not a
+/// routine yield mechanism. Its presence in the log means an operator forced
+/// a discrete jump and halted the schedule.
 ///
 /// EVM equivalent: `MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`
 #[event]
 pub struct MultiplierUpdated {
-    /// WAD-scaled (1e18). Widened from `u64` with the PRECISION migration.
+    /// WAD-scaled (1e18).
     pub old_multiplier: u128,
     pub new_multiplier: u128,
     /// Total OkuM supply at time of update
@@ -206,9 +195,9 @@ pub struct MultiplierUpdated {
 
 /// Emitted when the ACTIVE per-second rate or its window changes.
 ///
-/// Replaces `YieldDistributed`. There is no longer a dollar-denominated
-/// distribution event because there is no dollar-denominated instruction —
-/// the operator publishes a rate, and the yield follows from it continuously.
+/// There is no dollar-denominated distribution event because there is no
+/// dollar-denominated instruction — the operator publishes a rate, and the
+/// yield follows from it continuously.
 ///
 /// EVM equivalent: `OkuMYieldRateUpdated`.
 #[event]
@@ -237,9 +226,7 @@ pub struct PendingYieldRateUpdated {
     pub old_rate: u64,
     pub new_rate: u64,
     /// The ACTIVE window's expiry — i.e. exactly when this successor takes
-    /// over. Carried because the handover needs no transaction, so this event
-    /// is the only on-chain record of when it will happen; cross-chain
-    /// monitoring compares this field across deployments.
+    /// over.
     pub rate_end: i64,
     /// Absolute expiry of the successor itself, bounding the overhang.
     pub pending_rate_end: i64,

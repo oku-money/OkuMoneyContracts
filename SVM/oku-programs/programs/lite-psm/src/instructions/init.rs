@@ -14,14 +14,12 @@ use anchor_spl::token_2022_extensions::spl_pod;
 use anchor_spl::token_2022_extensions::spl_token_metadata_interface;
 use spl_token_metadata_interface::state::TokenMetadata;
 
-/// Parameter bundle for [`initialize`]. Bundling the initialization
-/// arguments into a single named struct keeps the IDL self-documenting
-/// and the call site hard to scramble (every field is named, not
-/// positional).
+/// Parameter bundle for [`initialize`]. A named struct keeps the IDL
+/// self-documenting and the call site hard to scramble (every field is named,
+/// not positional).
 ///
 /// The pubkey fields are the granular on-chain authorities; see
-/// `roles::AuthorityRole` for the role catalogue and `SVM/README.md`
-/// § "Authority model" for the warm-vs-cold matrix.
+/// `roles::AuthorityRole` and `SVM/README.md` § "Authority model".
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct InitializeParams {
     // ----- Supply / capacity -----
@@ -46,15 +44,11 @@ pub struct InitializeParams {
 /// Creates config PDA, USDC vault, and the OkuM mint (Token-2022 with
 /// ScaledUiAmount + MetadataPointer + TokenMetadata extensions).
 ///
-/// The OkuM mint is created in this instruction via CPIs because
-/// Anchor's `init` macro doesn't support multi-extension Token-2022
-/// mints. The deployer passes a fresh keypair as `oku_m_mint`
-/// (Signer); the instruction issues CreateAccount + extension init +
-/// InitializeMint + metadata init CPIs. The PsmConfig PDA is the
-/// mint authority, freeze authority, and ScaledUiAmount authority.
-///
-/// Authority pubkeys are bundled into [`InitializeParams`] to keep the
-/// IDL self-documenting.
+/// The OkuM mint is created here via CPIs because Anchor's `init` macro does
+/// not support multi-extension Token-2022 mints. The deployer passes a fresh
+/// keypair as `oku_m_mint` (Signer); the instruction issues CreateAccount +
+/// extension init + InitializeMint + metadata init CPIs. The PsmConfig PDA is
+/// the mint authority, freeze authority, and ScaledUiAmount authority.
 pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<()> {
     // Capture keys before taking the mutable borrow on config, so we
     // can still call `ctx.accounts.config.to_account_info()` for CPIs.
@@ -69,14 +63,9 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
         update_authority: spl_pod::optional_keys::OptionalNonZeroPubkey::try_from(Some(config_key))
             .map_err(|_| error!(LitePsmError::InvalidAuthority))?,
         mint: mint_key,
-        // On-chain identity is the base OkuM ("OkuMoney") token — the true,
-        // value-appreciating, T-Bill-backed token. Wallets and block
-        // explorers display THESE values for the mint and for transfers.
-        // The "$1-pegged usdOku" figure is a display-layer value produced
-        // by the ScaledUiAmount extension (raw_amount * multiplier), not
-        // the on-chain symbol. Strings mirror EVM `OkuMoney`/`OkuM`; kept
-        // in a single constant (see constants.rs) so this and the metadata
-        // -init CPI below cannot drift on a rename.
+        // The base OkuM ("OkuMoney") on-chain identity; see constants.rs for
+        // OkuM vs usdOku. Held in a single constant so this and the
+        // metadata-init CPI below cannot drift on a rename.
         name: OKU_M_METADATA_NAME.to_string(),
         symbol: OKU_M_METADATA_SYMBOL.to_string(),
         uri: params.oku_m_uri.clone(),
@@ -86,21 +75,17 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
 
     use anchor_spl::token_2022::spl_token_2022 as spl_t22;
 
-    // Mint account space allocation (two-step pattern for Token-2022
-    // mints with variable-length extensions like TokenMetadata):
+    // Two-step allocation, the standard pattern for Token-2022 mints with
+    // variable-length extensions like TokenMetadata:
     //
     //   1. `CreateAccount` with space for the base mint + fixed-size
-    //      extensions only (ScaledUiAmount + MetadataPointer).
-    //      Token-2022's `InitializeMint` validates the TLV layout is
-    //      consistent with the account length, so extra uninitialized
-    //      bytes would cause `InvalidAccountData`.
+    //      extensions only (ScaledUiAmount + MetadataPointer). `InitializeMint`
+    //      validates the TLV layout against the account length, so extra
+    //      uninitialized bytes would cause `InvalidAccountData`.
+    //   2. Fund lamports for the FULL final size. The metadata-init
+    //      instruction reallocs to fit the metadata TLV, and the pre-funded
+    //      lamports cover the extra rent.
     //
-    //   2. Fund with enough lamports for the FULL final size (including
-    //      the variable-length TokenMetadata). Token-2022's metadata
-    //      init instruction reallocs the account to fit the metadata
-    //      TLV, and the pre-funded lamports cover the additional rent.
-    //
-    // This is the standard pattern for Token-2022 mints with metadata.
     // See: https://solana.com/docs/tokens/extensions/metadata-pointer
     let fixed_space =
         spl_t22::extension::ExtensionType::try_calculate_account_len::<spl_t22::state::Mint>(&[
@@ -134,9 +119,9 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
         ],
     )?;
 
-    // Initialize extensions. Order matters: all extension inits must
-    // come before InitializeMint2. MetadataPointer before ScaledUiAmount
-    // so extensions are laid out in ascending ExtensionType order.
+    // Order matters: all extension inits must precede InitializeMint2, and
+    // MetadataPointer before ScaledUiAmount so extensions are laid out in
+    // ascending ExtensionType order.
     // InitializeMetadataPointer — point to self (mint stores its own metadata)
     invoke(
         &initialize_metadata_pointer(
@@ -207,16 +192,13 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
 
     // Validate the 9 granular authorities before writing any of them.
     // Mirrors `set_authority`'s two guards (`psm_admin.rs`):
-    //   1. Reject the zero pubkey — a deploy-script typo/omission must
-    //      not silently seat a role at `Pubkey::default()`, which would
-    //      make that role permanently unusable (e.g. a zero `freezer`
-    //      quietly removes an incident-response lever with no on-chain
-    //      signal, since `has_one` constraints simply never match).
-    //   2. Reject collapsing a granular authority into `role_admin` —
-    //      the cold-multisig meta-role must stay separate from the warm
-    //      operational roles, same separation-of-duties rationale as
-    //      `set_authority` (`psm_admin.rs:221-224`). `role_admin` itself
-    //      is exempt (it is a `Signer` account, inherently non-default).
+    //   1. Reject the zero pubkey — it would seat a role at
+    //      `Pubkey::default()` and make it permanently unusable with no
+    //      on-chain signal, since `has_one` would simply never match.
+    //   2. Reject collapsing a granular authority into `role_admin` — the
+    //      cold-multisig meta-role must stay separate from the warm
+    //      operational roles. `role_admin` itself is exempt (a `Signer`
+    //      account, inherently non-default).
     let granular_authorities = [
         params.pauser,
         params.unpauser,
@@ -269,7 +251,7 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     // move until the operator publishes a rate, which is the correct initial
     // state: a freshly deployed chain has earned nothing.
     //
-    // Mirrors `EVM/src/token/OkuMoney.sol:195-199`.
+    // Mirrors the initializer in `EVM/src/token/OkuMoney.sol`.
     let init_schedule = oku_shared::rate::Schedule::halted_at(Clock::get()?.unix_timestamp);
     config.okum_base_multiplier = init_schedule.base_multiplier;
     config.okum_rate_per_second = init_schedule.rate_per_second as u64;

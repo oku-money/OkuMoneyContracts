@@ -109,6 +109,13 @@ test("computeMultiplier matches the Solidity reference exactly", () => {
   );
 
   // eslint-disable-next-line no-console
+  // See the Rust twin: the revert half of the corpus can vanish silently.
+  assert(
+    revertCases >= 4,
+    `corpus contains only ${revertCases} revert case(s) — the revert half of the ` +
+      `differential has degraded. Regenerate with: cd EVM && forge test --match-contract GenerateVectors`,
+  );
+
   console.log(
     `  differential: ${vectors.length} vectors matched (${revertCases} revert cases)`,
   );

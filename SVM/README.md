@@ -48,146 +48,112 @@ walks `programs/*` and requires every member to declare an
 
 ### Cross-chain transfers (off-chain orchestrator)
 
-There is no on-chain bridge program. Cross-chain transfers use an
-asymmetric model:
+There is no on-chain bridge program and no reserved seam for one. The
+SVM leg is `burn_oku_m_direct` on the source / `mint_oku_m_direct` on
+the destination — raw OkuM amounts conserved 1:1, with no USDC
+intermediary and no multiplier conversion. The EVM leg is
+PSM-mediated USDC flow, and the orchestrator absorbs the asymmetry.
 
-- **SVM side:** The orchestrator calls `burn_oku_m_direct` on the
-  source chain (burns raw OkuM tokens) and `mint_oku_m_direct`
-  on the destination chain (mints raw OkuM tokens). Raw amounts
-  are conserved directly — no USDC intermediate on the SVM side.
-- **EVM side:** Still uses PSM-mediated USDC flow
-  (`mint` / `redeem`).
-- **Orchestrator** handles the asymmetry between the two models.
-
-See [`../README.md` § Orchestrator runbook](../README.md) for
-operational procedures.
+Full model, conservation invariants and operating procedure:
+[`../README.md` § Cross-chain transfers](../README.md#cross-chain-transfers-v1-off-chain-orchestrated)
+and § Orchestrator runbook.
 
 ---
 
 ## Why a single token on SVM
 
-**Platform constraint:** Solana's SPL Token program stores balances
-as a literal `u64` in each token account — there is no `balanceOf()`
-override, so **true on-chain rebasing (the EVM stETH/USDM/rUSDY
-pattern) is impossible on SVM**. Every yield-bearing Solana token
-(JitoSOL, mSOL, Sanctum LSTs, Ondo USDY) instead uses a
-value-appreciating model: static raw balances, value-per-token rises
-over time. None of them use Token-2022 extensions for display.
+**Platform constraint.** Solana's SPL Token program stores balances as a
+literal `u64` in each token account — there is no `balanceOf()` override, so
+**true on-chain rebasing (the EVM stETH/USDM/rUSDY pattern) is impossible on
+SVM**. Every yield-bearing Solana token (JitoSOL, mSOL, Sanctum LSTs, Ondo
+USDY) uses a value-appreciating model instead: static raw balances,
+value-per-token rises over time. None of them use Token-2022 extensions for
+display.
 
-**Our approach:** Token-2022's `ScaledUiAmountConfig` extension
-stores an updatable f64 multiplier on the mint. Wallets/RPCs that
-support it display `raw_amount * multiplier`; the raw
-`token_account.amount` never changes, so DeFi protocols (AMMs,
-lending) see static balances by construction. This gives the
-value-appreciating model under the hood with a $1-pegged display on
-top (deposit 100 USDC → see 100.00 OkuM; after 5% yield → see 105.00
-OkuM). This is the extension's intended use case per the [official
+**Our approach.** Token-2022's `ScaledUiAmountConfig` extension stores an
+updatable f64 multiplier on the mint. Wallets and RPCs that support it display
+`raw_amount * multiplier`; `token_account.amount` never changes, so AMMs,
+lending protocols and orderbooks see static balances by construction. Raydium
+CPMM/CLMM explicitly allow `ScaledUiAmount` tokens and Jupiter routes through
+them natively. This is the extension's intended use case per the [official
 ScaledUiAmount integration
 guide](https://solana.com/docs/tokens/extensions/scaled-ui-amount/integration-guide).
 
-**Naming convention (important):** the on-chain token is **OkuM
-(OkuMoney)** in all code, instructions, and field names
-(`oku_m_mint`, `mint_oku_m`, `MintOkuM`, etc.). The mint's
-`TokenMetadata` extension carries this same on-chain identity —
-`name: "OkuMoney", symbol: "OkuM"` — matching the EVM `OkuMoney`
-token (`EVM/test/shared/Constants.sol`: `OKUMONEY_NAME`/`OKUMONEY_SYMBOL`).
-Wallets and block explorers therefore display **OkuM** for the mint
-and for transfers, showing the true, non-$1-pegged OkuM amounts.
+This eliminates wrap/unwrap, the vault program, dead shares, collateral
+ratios, and the two-program CPI chain that the EVM two-token model requires.
 
-The **`name`/`symbol` strings are a single source of truth** —
+### The mint extension is NOT the source of truth
+
+It is a **write-only display mirror**: the program pushes values into it for
+wallets to render and never reads them back. The canonical multiplier is
+computed on read from the rate schedule on `PsmConfig` (`helpers/multiplier.rs`
+→ `oku_shared::rate`), exactly as EVM computes `okuMMultiplier()` from its
+schedule. There is no duplicate multiplier field on `PsmConfig` and no read
+path from the extension — do not add one.
+
+The reason is structural. `ScaledUiAmountConfig::current_multiplier()` is a
+step function with exactly one pre-armable future step, so it cannot represent
+a continuously-accruing value. The extension that *can*
+(`InterestBearingConfig`) is mutually exclusive with it on-chain
+(`spl-token-2022-interface` `extension/mod.rs:1359-1361`) and would cost the
+bounded rate window, the pre-staged successor, and the ability to re-anchor —
+three correctness properties traded for one cosmetic one.
+
+**Continuous accrual, discrete display.** The canonical multiplier compounds
+every second with no transactions at all. The mirror is a staircase refreshed
+by a permissionless crank (60s recommended), always at or below the canonical
+value — so a redeem pays at least what the wallet showed. At 20% APY the
+under-read is about $0.35 per $1,000,000.
+
+**f64 precision.** The extension stores the multiplier as an IEEE 754 `f64`
+(~15.9 significant decimal digits), which is sub-nano-dollar precision for
+practical stablecoin multipliers. Since it is display-only, this is a display
+concern rather than a pricing one — see § Precision model.
+
+### Naming: OkuM on-chain, usdOku in the wallet
+
+The on-chain token is **OkuM (OkuMoney)** in all code, instructions and field
+names (`oku_m_mint`, `mint_oku_m`, `MintOkuM`). The mint's `TokenMetadata`
+extension carries that same identity — `name: "OkuMoney", symbol: "OkuM"` —
+matching the EVM `OkuMoney` token. Wallets and explorers therefore display
+**OkuM** for the mint and for transfers, showing true, non-$1-pegged amounts.
+
+The name/symbol strings are a **single source of truth**,
 `OKU_M_METADATA_NAME` / `OKU_M_METADATA_SYMBOL` in
-`programs/lite-psm/src/constants.rs` — consumed by both `initialize`
-(mint creation) and `update_token_metadata` (in-place rename of an
-already-deployed mint by `role_admin`).
+`programs/lite-psm/src/constants.rs`, consumed by both `initialize` (mint
+creation) and `update_token_metadata` (in-place rename by `role_admin`).
 
-**OkuM vs usdOku (display layer).** "usdOku" is NOT the on-chain
-symbol. The $1-pegged **usdOku** value is a *presentation-layer*
-number produced by the mint's `ScaledUiAmount` extension
-(`raw_amount * multiplier`), which Token-2022-aware wallets render
-automatically. So: on-chain identity = OkuM (value-appreciating,
-T-Bill-backed); the wallet/UI display of that same balance as a
-$1-pegged usdOku figure is the scaled UI amount. (On EVM, usdOku
-/ `OkuDollar` is a *separate* wrapper token; SVM collapses that role
-into the ScaledUiAmount display of the single OkuM mint.)
+**"usdOku" is NOT the on-chain symbol.** It is a *presentation-layer* number
+produced by the `ScaledUiAmount` extension (`raw_amount * multiplier`), which
+Token-2022-aware wallets render automatically. On-chain identity = OkuM
+(value-appreciating, T-Bill-backed); the wallet rendering of that same balance
+as a $1-pegged figure is the scaled UI amount. On EVM, usdOku / `OkuDollar` is
+a *separate* wrapper token; SVM collapses that role into the display layer of
+the single OkuM mint.
 
-**Why we keep the symbol as `OkuM` (not `usdOku`).** A Token-2022
-mint has a *single* `symbol` field; it cannot serve one label to
-explorers and another to wallets. Renaming the symbol to `usdOku`
-would not remove the raw layer — it would only relabel it, and a
-`usdOku` label on a raw (unscaled) number falsely asserts a $1 peg.
-Keeping `OkuM` means the raw number always reads as what it truly
-is (the underlying token count), while ScaledUiAmount-aware wallets
-still show the $1-pegged dollar value. **Testers will see the raw,
-non-scaled OkuM amount** (lower than the wallet's dollar figure
-whenever the multiplier > 1) in: non-ScaledUiAmount explorers, raw
-RPC (`amount` vs `uiAmount`), `spl-token accounts`, transfer
-instruction arguments in tx history, the mint's `supply`, and any
-program/AMM integration operating on base units. This is expected —
-those surfaces denominate in raw OkuM, not in the usdOku display.
+**Why the symbol stays `OkuM`.** A Token-2022 mint has a *single* `symbol`
+field; it cannot serve one label to explorers and another to wallets. Renaming
+it to `usdOku` would not remove the raw layer — it would relabel it, and a
+`usdOku` label on a raw (unscaled) number falsely asserts a $1 peg. Keeping
+`OkuM` means the raw number always reads as what it is. **Testers will see the
+raw, non-scaled OkuM amount** (lower than the wallet's dollar figure whenever
+the multiplier > 1) in: non-ScaledUiAmount explorers, raw RPC (`amount` vs
+`uiAmount`), `spl-token accounts`, transfer instruction arguments in tx
+history, the mint's `supply`, and any program/AMM integration operating on
+base units. Those surfaces denominate in raw OkuM, not in the usdOku display.
 
----
+### Other SVM-specific choices
 
-## Key SVM design choices
+**Single-slot sandwich lock.** Only `set_okum_multiplier()` (the emergency
+override) sets `last_yield_distribution_slot = Clock::get().slot`. PSM
+operations check `current_slot != last_yield_distribution_slot` before
+executing, which also self-fences same-slot re-entry by the rebaser. Mirrors
+EVM's `lastYieldDistributionBlock`.
 
-**Single token with ScaledUiAmount.** `OkuM` ("OkuMoney") is the
-sole protocol token. It is a Token-2022 mint with the
-`ScaledUiAmountConfig` extension, which stores an f64 multiplier.
-Wallets and explorers that support `ScaledUiAmount` render the
-scaled dollar-value balance automatically (e.g. 1 000 000 raw OkuM
-tokens at multiplier 1.05 displays as a "1.05" usdOku value — the
-mint's on-chain symbol is still OkuM; "usdOku" is the UI label for
-the scaled figure).
-
-**The mint extension is NOT the source of truth.** It used to be. Since
-the streaming-accrual port it is a **write-only display mirror**: the
-program pushes values into it for wallets to render and never reads
-them back. The canonical multiplier is computed on read from the rate
-schedule on `PsmConfig` — see § Streaming accrual below.
-
-The reason is structural. `ScaledUiAmountConfig::current_multiplier()`
-is a step function with exactly one pre-armable future step, so it
-cannot represent a continuously-accruing value. The extension that
-*can* (`InterestBearingConfig`) is mutually exclusive with it on-chain
-(`spl-token-2022-interface` `extension/mod.rs:1359-1361`) and would
-cost the bounded rate window, the pre-staged successor, and the ability
-to re-anchor — three correctness properties traded for one cosmetic
-one.
-
-`helpers/scaled_ui.rs` and its `read_multiplier()` were deleted with
-the port, taking the zero-init edge case with them.
-
-**f64 precision characteristics.** The `ScaledUiAmountConfig`
-extension stores the multiplier as an IEEE 754 `f64`. f64 has ~15.9
-significant decimal digits; for practical stablecoin multipliers
-(1.0 to ~2.0 over years of yield), this provides sub-nano-dollar
-precision. The `MAX_MULTIPLIER` constant documents the upper bound
-where precision degrades, but the practical operating range is well
-within f64's capabilities.
-
-**Continuous accrual, discrete display.** The canonical multiplier
-compounds every second with no transactions at all. The display mirror
-is a staircase refreshed roughly every 60 seconds by a permissionless
-crank, always at or below the canonical value — so a redeem pays at
-least what the wallet showed. At 20% APY the under-read is about $0.35
-per $1,000,000.
-
-**DeFi compatible by construction.** Raw token amounts are static —
-AMMs, lending protocols, and orderbooks operate on raw balances that
-never change from yield accrual. UI amounts (dollar values) are
-derived from the `ScaledUiAmount` extension. Raydium CPMM/CLMM
-explicitly allow `ScaledUiAmount` tokens; Jupiter routes through
-them natively.
-
-**Single-slot sandwich lock.** Only `set_okum_multiplier()` (the
-emergency override) sets `last_yield_distribution_slot =
-Clock::get().slot`. PSM operations check `current_slot !=
-last_yield_distribution_slot` before executing. Self-fence prevents
-same-slot re-entry by the rebaser. Mirrors EVM's
-`lastYieldDistributionBlock`.
-
-**6-decimal token.** `OkuM` uses 6 decimals, matching USDC on
-Solana. EVM uses 18 decimals. The off-chain orchestrator handles
-decimal conversion when reflecting value across chains.
+**6-decimal token.** `OkuM` uses 6 decimals, matching USDC on Solana; EVM uses
+18. The off-chain orchestrator handles decimal conversion when reflecting
+value across chains. This is unrelated to `PRECISION`, which is 1e18 on both
+stacks.
 
 ---
 
@@ -212,10 +178,10 @@ crates/
 programs/
   lite-psm/
     src/
-      lib.rs                       # 21 instruction entry points
-      state.rs                     # PsmConfig only (seed: psm_config, 562B) —
+      lib.rs                       # 25 instruction entry points
+      state.rs                     # PsmConfig only (seed: psm_config, LEN = 754) —
                                    # no RedemptionQueue account; buffer-only PSM
-      errors.rs                    # 26 error variants
+      errors.rs                    # 31 error variants
       events.rs
       roles.rs                     # AuthorityRole enum (12 roles)
       constants.rs                 # Re-exports oku_shared::*
@@ -237,18 +203,22 @@ programs/
         direct_mint.rs             # mint_oku_m_direct (bridge/fiat on-ramp)
         direct_burn.rs             # burn_oku_m_direct (bridge off-ramp)
         yield_ops.rs               # rate-schedule writers + emergency override + display crank
+        migrate.rs                 # migrate_config_space (one-shot, idempotent account resize)
       contexts/                    # Per-instruction account contexts
 
 tests/
-  bankrun/                  # Default in-process suite (npm test, 94 bankrun tests)
+  bankrun/                  # Default in-process suite (124 tests)
     smoke.ts
     lite-psm.ts
     direct-mint.ts
     direct-burn.ts
     init-invariants.ts
-    rate-over-time.ts
+    config-layout.ts             # PsmConfig size/discriminator pin + migrate_config_space
+    token-metadata.ts
+    streaming-accrual.ts         # the rate-schedule model
+    display-mirror.ts            # the write-only ScaledUiAmount mirror
+    compute-budget.ts            # CU ceilings, pinned
     crossChainBridging.ts
-    scaled-ui-amount.ts          # ScaledUiAmount-specific suite
     coverage-additions.ts
     scenarios/
       realWorldUsage.ts
@@ -272,16 +242,36 @@ pub struct PsmConfig {
     // Token references: usdc_mint, oku_m_mint, vault_usdc
     // Limits: max_supply, minter_allowance, direct_minter_allowance,
     //   direct_burner_allowance, is_paused
-    // Yield: last_yield_distribution_slot
+    // Yield schedule (6 fields, mirroring EVM): okum_base_multiplier,
+    //   okum_rate_per_second, okum_last_accrual_time, okum_rate_end,
+    //   okum_pending_rate_per_second, okum_pending_rate_end
+    // Sandwich lock: last_yield_distribution_slot
     // Two-step RoleAdmin: pending_role_admin
+    pub reserved: [u8; 128],   // tail padding for future fields
 }
 ```
 
-`PsmConfig` is the only state account. Its byte length is pinned at 562
-bytes by a compile-time `assert!`. There is no `RedemptionQueue` account
+`PsmConfig` is the only state account. `PsmConfig::LEN` is **754** bytes
+(8-byte discriminator + `InitSpace`), pinned by a compile-time `assert!` so
+any field-width change fails the build. There is no `RedemptionQueue` account
 and no on-chain escrow-vault field — the PSM is buffer-only (see "Why no
 redemption queue" below), and the OkuM escrow ATA is derived client-side,
 not stored on `PsmConfig`.
+
+### `reserved: [u8; 128]` and `migrate_config_space`
+
+The config is a singleton PDA, so without tail padding any new field would
+require closing and re-initialising it — losing every role assignment and the
+accrual anchor. `reserved` is 128 bytes of slack (≈4 more pubkeys or 16 more
+`u64`s, ~0.0009 SOL of rent). **Consume from the FRONT when adding a field and
+shrink the array to match, keeping `LEN` constant.**
+
+Already-deployed configs predating the padding are smaller than `LEN`. The
+`migrate_config_space` instruction grows an existing account to the current
+struct size in place, preserving all state; it is **one-shot and idempotent**
+(a config already at `target_len` is a logged no-op). Driven by
+`scripts/admin/migrate-config-space.ts`, which honours `--dry-run` like every
+other admin script.
 
 The PsmConfig PDA is the **mint authority**, **freeze authority**, and
 **ScaledUiAmount authority** for the `OkuM` mint. All mint/freeze/
@@ -341,11 +331,12 @@ Routine accrual produces no discrete jump to sandwich, and the display
 sync deliberately does not stamp it — doing so would make the PSM
 unavailable for one slot per sync interval for no security benefit.
 
-The multiplier is computed from the rate schedule via `helpers::multiplier`
-(in `helpers/multiplier.rs`), which calls
-`get_extension::<ScaledUiAmountConfig>()` on the mint account data.
-This is the only path for reading the current multiplier — there is
-no duplicate field on `PsmConfig`.
+The multiplier is computed from the rate schedule by
+`helpers::multiplier::current` (`helpers/multiplier.rs`), which projects
+`PsmConfig`'s six schedule fields into `oku_shared::rate::Schedule` and
+compounds against `Clock::unix_timestamp`. **That is the only path for reading
+the current multiplier.** It does not touch the mint's `ScaledUiAmountConfig`
+extension, and there is no duplicate multiplier field on `PsmConfig`.
 
 ### PSM
 
@@ -414,30 +405,26 @@ const PRECISION: u128 = 1_000_000_000_000_000_000; // 1e18 (WAD) — identical t
 // reproduces MakerDAO's half-up.
 ```
 
-**Why 1e18, and why it used to be 1e9.** This crate previously used
-`PRECISION = 1e9`, on the reasoning that `u64` token amounts times 1e9
-peak around `1.8e28` and stay comfortably inside `u128`. That reasoning
-was sound for a *static* multiplier an operator bumped in discrete
-ticks. It is fatal for a per-second rate:
+**Why 1e18 and not a narrower scale.** A `u64`-friendly `PRECISION = 1e9`
+would keep `raw_amount x multiplier` inside `u128`, and that is sufficient for
+a *static* multiplier bumped in discrete ticks. It is fatal for a per-second
+rate:
 
 ```text
 one ulp of a per-second rate at 1e9  = 3.20385 % APY
 one ulp of a per-second rate at 1e18 = 0.00000000315 % APY
 ```
 
-At 1e9 the smallest expressible non-zero yield rate is over **3% APY**.
-The rate schedule is not merely imprecise at that scale — it is
-inexpressible. Moving to 1e18 was therefore forced by the streaming
-model, not chosen for elegance.
+At 1e9 the smallest expressible non-zero yield rate is over **3% APY** — the
+rate schedule is not merely imprecise at that scale, it is inexpressible. 1e18
+is therefore forced by the streaming model, not chosen for elegance. It also
+buys cross-stack parity: because `PRECISION`, `MAX_RATE` and the `rpow`
+rounding match EVM exactly, a schedule broadcast to every chain produces a
+**bit-identical** multiplier at the same wall-clock second, with no messaging.
 
-It also buys something the old scale could not: because `PRECISION`,
-`MAX_RATE` and the `rpow` rounding now match EVM exactly, a schedule
-broadcast to every chain produces a **bit-identical** multiplier at the
-same wall-clock second, with no messaging.
-
-**The cost.** Every multiplier-bearing value widened from `u64` to
-`u128`, and `raw_amount x multiplier` (up to ~1.8e43) no longer fits
-`u128`. Multiplier math routes through
+**The cost.** Every multiplier-bearing value is `u128` rather than `u64`, and
+`raw_amount x multiplier` (up to ~1.8e43) does not fit `u128`. Multiplier math
+routes through
 [`crates/oku-shared/src/wad.rs`](oku-programs/crates/oku-shared/src/wad.rs),
 which carries a full 256-bit intermediate — `full_mul` plus a
 small-divisor long division, the same decomposition OpenZeppelin's
@@ -475,14 +462,14 @@ position a `u64` can express.
 and steps up at each one, never ahead of a monotonically-increasing
 curve. `display <= canonical` therefore holds **unconditionally**.
 
-An earlier version also pre-armed `m(now + 60s)`, so the display kept
-advancing if the crank stopped. That was removed: a step armed under one
-schedule fires under whatever schedule is live when its timestamp
-arrives, so after a rate *decrease* — routine at an epoch roll — the
-armed value landed **above** the new canonical. Small ($0.25 per $1M on
-a 20%→5% roll) and self-correcting, but the wrong direction. Dropping
-the pre-arm made the invariant unconditional, halved the crank cost, and
-removed a dependency on Token-2022's future-timestamp resolve semantics.
+Deliberately **no pre-armed second step.** Arming `m(now + 60s)` would keep
+the display advancing if the crank stopped, but a step armed under one
+schedule fires under whatever schedule is live when its timestamp arrives —
+so after a rate *decrease* (routine at an epoch roll) the armed value lands
+**above** the new canonical. Small ($0.25 per $1M on a 20%→5% roll) and
+self-correcting, but the wrong direction. Writing one point keeps the
+invariant unconditional, halves the crank cost, and avoids depending on
+Token-2022's future-timestamp resolve semantics. See `DECISIONS.md` D-16.
 
 The crank cadence is **not a protocol constant** — nothing on-chain
 enforces or assumes one. 60s is the operational recommendation.
@@ -513,14 +500,14 @@ Two things were necessary to get here:
    emits native 64x64→128 multiplies instead of `__multi3` libcalls, and
    takes a fast path (one multiply, one division) whenever the product
    fits `u128` — which covers essentially every real operation.
-2. The opportunistic "piggyback" display sync was **removed** from
-   `mint_oku_m` / `redeem_oku_m`. It cost ~31k CU for a cosmetic refresh
-   on an already-tight path.
-3. The display mirror's pre-armed second step was removed, halving
-   `sync_display_multiplier` (103,753 → 54,309 CU). That change was made
-   for correctness rather than cost — see below.
+2. `mint_oku_m` / `redeem_oku_m` carry **no opportunistic display sync**. A
+   piggybacked refresh costs ~31k CU for a cosmetic update on an
+   already-tight path.
+3. The display mirror writes **one point per sync**, not two, which halves
+   `sync_display_multiplier` (103,753 → 54,309 CU). That is a correctness
+   decision that happens to pay for itself — see § Precision model.
 
-**Operational consequence of (2):** display freshness is now entirely the
+**Operational consequence of (2):** display freshness is entirely the
 permissionless crank's job. An idle PSM with nobody running
 `scripts/admin/sync-display.ts` shows a stale balance. This is bounded and
 safe in one direction only — the mirror reads **low**, never high, so a redeem
@@ -543,7 +530,7 @@ None can be changed without a program upgrade.
 | `MAX_RATE` | `PRECISION + 1e11` (~2242% APY) | Sanity bound on `rpow` inputs. Mirrors EVM `Constants.MAX_RATE`. |
 | `BASIS_POINTS` | `10_000` | Universal bps denominator. Unused on-chain; retained for EVM constant parity. |
 | `MAX_MULTIPLIER` | `1_000_000_000_000_000_000_000_000` (1e24, = $1M/token) | Math-sanity bound. `compound_for` CLAMPS here; the emergency override REJECTS above it. Mirrors EVM `Constants.MAX_MULTIPLIER`. |
-| `TOKEN_DECIMALS` | `6` | OkuM uses 6 decimals on SVM (matches USDC). Asserted at init. Unrelated to `PRECISION` — these were confusingly adjacent at the old 1e9 scale and are now unambiguously distinct. |
+| `TOKEN_DECIMALS` | `6` | OkuM uses 6 decimals on SVM (matches USDC). Asserted at init. **Unrelated to `PRECISION`** — token decimals govern raw balances, `PRECISION` governs multiplier/rate fixed-point. Do not conflate them. |
 
 ### Lite-PSM
 
@@ -590,9 +577,6 @@ client-side by the deploy script via a standard idempotent
 associated-token-account instruction — there is no separate on-chain
 escrow-setup instruction.
 
-No on-chain bridge, router, or redemption queue is deployed — the PSM is
-buffer-only and cross-chain transfers are orchestrator-mediated.
-
 ### Two binding authority constraints at init
 
 `initialize` enforces two rules that, taken together, force the deployer
@@ -628,11 +612,10 @@ solana transfer $(solana-keygen pubkey keys/devnet-authority.json) 0.5 \
 
 Override the path with `DEVNET_AUTHORITY_PATH` if CI stages it elsewhere.
 
-> Historical note: `scripts/config/authorities.ts` originally pointed all
-> 9 roles at the deployer. That made `initialize` revert with
-> `InvalidAuthority` (6024) — the devnet deploy path could not complete at
-> all. `direct_minter`/`direct_burner` had already been split out for this
-> exact reason; the other 9 were missed.
+> **Trap:** pointing any of the 9 granular roles at the deployer makes
+> `initialize` revert with `InvalidAuthority` (6024) and the deploy cannot
+> complete at all. `scripts/config/authorities.ts` must keep them on the
+> operator key.
 
 ---
 
@@ -662,46 +645,33 @@ these; they are the considered output of design discussion.
 
 ### 1. Operator-compromise is out of scope
 
-okuMoney is a centralized US-regulated MSB. The on-chain authority
-model encodes separation-of-duties within the company (see
-`Authority model` above), but the threat model does NOT include "what
-if the cold multisig is malicious." That scenario is managed via
-off-chain controls (key custody, change-management procedures,
-regulatory framework).
-
-Guards like `MAX_MULTIPLIER` and per-role allowance caps are present
-as math-sanity bounds (keeping `u64 * u64 -> u128` paths in the
-overflow-safe region, and stopping operator typos), not as defense
-against a compromised rebaser key.
+The threat model does NOT include "what if the cold multisig is malicious" —
+see [`../README.md` § Signer trust implications](../README.md#signer-trust-implications)
+for the model that applies to both stacks. SVM-specific consequence: guards
+like `MAX_MULTIPLIER` and the per-role allowance caps are **math-sanity
+bounds** (keeping the widening-multiply paths in the overflow-safe region, and
+stopping operator typos), not defence against a compromised rebaser key.
 
 ### 2. No on-chain Proof-of-Reserves or oracle
 
-There is no on-chain Proof-of-Reserves feed or USDC-peg circuit-breaker.
-A PoR feed controlled by the operator cannot detect operator-side
-reserve fraud, and USDC-depeg handling is a monitoring concern rather
-than an on-chain guard. The protocol relies on off-chain monitoring for
-USDC depeg events.
+Same posture as EVM (see `EVM/README.md` Accepted Risk 3): no PoR feed and no
+USDC-peg circuit-breaker on-chain. A PoR feed controlled by the operator cannot
+detect operator-side reserve fraud, and depeg handling is a monitoring concern.
+`lite-psm` carries no oracle relay and no storage reserved for one.
 
 ### 3. Buffer-only PSM (no redemption queue)
 
-`redeem_oku_m` is buffer-only: it reverts with `InsufficientBuffer` if
-`vault_usdc.amount` can't cover the redemption, rather than escrowing the
-request in an on-chain queue. This matches how every other stablecoin
-issuer operates on Solana and keeps the operational surface small — no
-queue capacity limits, batch-drain SLAs, or spam-DoS considerations.
-Operators keep the buffer topped up via `deposit_buffer` /
-`withdraw_buffer`; there is nothing to drain or rescue.
+A redeem the buffer cannot cover **reverts** rather than being escrowed. This
+is a deliberate divergence from EVM, not a parity gap — rationale in § Why no
+redemption queue. The accepted consequence: redemption availability is an
+operational property (keep `vault_usdc` topped up), not a protocol guarantee.
 
-### 4. SVM ↔ EVM constant parity — RESOLVED
+### 4. SVM ↔ EVM constant parity
 
-This entry used to record SVM's `PRECISION = 1e9` against EVM's 1e18 as
-a permanent, structural divergence, justified by `u64` token amounts.
-
-It is gone. SVM now uses 1e18, because the streaming rate schedule is
-inexpressible at 1e9 (one ulp = 3.2% APY). `PRECISION`, `MAX_RATE`,
-`MAX_MULTIPLIER` and the `rpow` rounding are now byte-identical across
-the two stacks, which is what lets a single broadcast schedule produce
-the same multiplier everywhere with no messaging.
+`PRECISION` (1e18), `MAX_RATE`, `MAX_MULTIPLIER` (1e24) and the `rpow`
+rounding are **byte-identical** across the two stacks, which is what lets a
+single broadcast schedule produce the same multiplier everywhere with no
+messaging. There is no constant-scale divergence.
 
 What genuinely remains is narrower and documented in
 [`DECISIONS.md`](DECISIONS.md):
@@ -715,6 +685,10 @@ What genuinely remains is narrower and documented in
   not a drift — but drift monitoring must compare at equal *chain*
   timestamps.
 - Wallet *display* still steps, because `ScaledUiAmount` cannot stream.
+
+---
+
+## Testing
 
 ### Token-2022 binary override for bankrun
 
@@ -733,9 +707,14 @@ bankrun can load it at test startup. Without this override,
 the streaming-accrual and display-mirror tests will fail with an
 "invalid instruction" error from the Token-2022 program.
 
-### Streaming-accrual test suites
+### Suites
 
-`tests/bankrun/streaming-accrual.ts` (18 tests) covers the model:
+The bankrun suite is **124 tests** (`npm run test:bankrun`); the pure-Rust
+suite is **58** (`npm run test:rust`). `npm test` runs both. The cross-language
+agreement of `compute_multiplier` is enforced separately by the 3,290-vector
+differential corpus (`npm run test:differential` from the repo root).
+
+`tests/bankrun/streaming-accrual.ts` covers the model:
 
 - The multiplier advances with **no transaction** as time passes
 - A pre-staged successor activates at `rateEnd` with **no transaction**
@@ -748,25 +727,25 @@ the streaming-accrual and display-mirror tests will fail with an
   or missing window, non-rebaser
 - Pause gate blocks rate increases but permits decreases and halts
 
-`tests/bankrun/display-mirror.ts` (8 tests) covers the mirror:
+`tests/bankrun/display-mirror.ts` covers the mirror:
 
-- `display <= canonical` across a full sync interval
+- `display <= canonical` across a full sync interval, unconditionally
 - Permissionless cranking
-- The pre-armed step advancing with no further transaction
+- A single point written per sync (no pre-armed second step)
 - The sync NOT stamping the sandwich lock
-- The emergency override force-syncing, leaving no stale armed step
+- The emergency override force-syncing the display
 
-`rate-over-time.ts` and `scaled-ui-amount.ts` were deleted as
-superseded. The former is worth noting: its central assertion was that
-wall-clock progression alone does *not* move the multiplier. That was
-correct for the discrete model and is now exactly backwards.
+`tests/bankrun/config-layout.ts` pins `PsmConfig`'s size and discriminator
+and exercises `migrate_config_space` (including the idempotent no-op path).
 
 The `readMultiplierFromMint()` helper in the test shared code reads
 the `ScaledUiAmountConfig` extension directly from a mint account's
-data, parsing the TLV structure to extract the f64 multiplier. This
-mirrors `ScaledUiAmountConfig::current_multiplier()`. For the CANONICAL
-value use `computeCanonicalMultiplier()`, which recomputes from the rate
-schedule via `scripts/utils/multiplier.ts`.
+data, parsing the TLV structure to extract the f64 multiplier — i.e. it reads
+the *display mirror*. For the CANONICAL value use
+`computeCanonicalMultiplier()`, which recomputes from the rate schedule via
+`packages/yield-tooling` (`@okumoney/yield-tooling`, the same TypeScript
+implementation held bit-identical to the Solidity and Rust ones by the
+differential corpus).
 
 ### Runner notes
 
@@ -795,23 +774,17 @@ explicitly.
 
 ## Deployment
 
-See [`../README.md § Deployment runbook`](../README.md) for the full
-two-chain + SVM deploy walk-through. SVM-side highlights:
+> **The deployment runbook — prerequisites, Surfpool fork pre-flight, the
+> two-phase `deploy:programs` → `deploy:init` sequence, stale-deployment
+> recovery, verification smoke, and the mainnet upgrade-authority ceremony —
+> is documented once for both stacks in
+> [`../README.md` § Deployment runbook`](../README.md#deployment-runbook).**
 
-```bash
-# Pre-flight cost estimate
-anchor build
-npm run cost                  # estimate one-time rent for program + PsmConfig + mint + ATAs
-
-# Phase 1 — deploy program .so file
-NETWORK=devnet npm run deploy:programs
-
-# Phase 2 — create OkuM mint + initialize PSM
-NETWORK=devnet npm run deploy:init
-
-# Mainnet — transfer program upgrade authority to cold multisig
-solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
-```
+SVM-specific gotchas not covered there are the two binding authority
+constraints at init (below), the `Anchor.toml [programs.<network>]` /
+`deployments/<network>.json` mismatch warning, and — for an already-deployed
+config predating the tail padding — `scripts/admin/migrate-config-space.ts`
+before any instruction that reads a new field.
 
 ---
 
@@ -868,26 +841,24 @@ if you need to rotate an individual governance role.
 
 ### Orchestrator key
 
-In v1 the orchestrator holds a single Solana keypair that
-is granted roles for `buffer_depositor`, `rebaser`, `direct_minter`,
-and `direct_burner`. For cross-chain transfers it calls
-`burn_oku_m_direct` / `mint_oku_m_direct`. It also holds
-the matching EVM key on the other side. Both keys KMS-backed.
+In v1 the orchestrator holds a single Solana keypair granted
+`buffer_depositor`, `rebaser`, `direct_minter` and `direct_burner`, plus the
+matching EVM EOA (`PSM_BUFFER_DEPOSITOR`, `PSM_QUEUE_PROCESSOR`,
+`OKUM_REBASER` — SVM has no queue-processor equivalent). Both KMS-backed.
+Cross-chain settlement on the SVM side is `burn_oku_m_direct` /
+`mint_oku_m_direct`. There is no on-chain bridge state, chain whitelist, nonce
+or refund flow; all coordination is off-chain.
 
-A future on-chain bridge (NTT, CCIP, native OkuBridge port) would
-add a separate signing scheme — out of v1 scope.
+A future on-chain bridge (NTT, CCIP, native OkuBridge port) would add a
+separate signing scheme — out of v1 scope.
 
 ### Buffer discipline
-
-The PSM is buffer-only — `redeem_oku_m` reverts with
-`InsufficientBuffer` if `vault_usdc.amount` can't cover the
-redemption (see "Why no redemption queue" earlier in this doc).
-Operational discipline:
 
 - Keep `vault_usdc.amount` topped up via `deposit_buffer` so
   `redeem_oku_m` always succeeds for expected redemption volume.
 - Monitor buffer balance against a rolling estimate of daily
-  redemption volume; alert well before it's depleted.
+  redemption volume; alert well before it's depleted (thresholds:
+  [`../README.md` § Monitoring SLAs](../README.md#monitoring-slas)).
 - If a redeem reverts with `InsufficientBuffer`, the fix is simply
   `deposit_buffer` — there is nothing "stuck" to rescue or drain,
   since no queue exists to hold a failed redemption.
@@ -926,6 +897,7 @@ All admin scripts live under `scripts/admin/`. Each:
 | `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |
 | `admin:deposit-buffer` / `admin:withdraw-buffer` | `deposit_buffer` / `withdraw_buffer` | `buffer_depositor` / `buffer_withdrawer` |
 | `admin:close-programs` | `solana program close` (BPF loader) — recover rent from stale program deployments. | BPF upgrade authority (deployer wallet) |
+| `scripts/admin/migrate-config-space.ts` | `migrate_config_space` — grow an already-deployed `PsmConfig` to the current `LEN` in place. One-shot and idempotent; no npm alias, run via `tsx`. | `role_admin` |
 
 ---
 
@@ -947,50 +919,36 @@ EVM groups protocol-wide invariants into `EVM/src/lib/`:
 | `lib/Roles.sol` | `programs/lite-psm/src/roles.rs` (single program owns all RBAC) |
 | `lib/Errors.sol` | `programs/lite-psm/src/errors.rs` |
 | `lib/events/*.sol` | `programs/lite-psm/src/events.rs` |
-| `lib/SafeApprove.sol` | not ported — SPL Token-2022 doesn't have the EIP-20 allowance-zeroing footgun |
 | `lib/ReentrancyGuardUpgradeable.sol` | not ported — Solana's account-lock model + no fallback fns means reentrancy isn't reachable the same way |
 
 ### Single-token architecture
 
-EVM has two tokens: `OkuMoney` (non-rebasing, stored price) and
-`OkuDollar` (rebasing wrapper vault). SVM has a single token:
-`OkuM`, which is a Token-2022 mint with the `ScaledUiAmountConfig`
-extension. Raw balances are static (like EVM OkuMoney); displayed
-dollar values scale with the multiplier (like EVM OkuDollar).
+EVM has two tokens; SVM has one. Raw `OkuM` balances are static (like EVM
+`OkuMoney`); displayed dollar values scale with the multiplier (like EVM
+`OkuDollar`). Rationale and consequences: § Why a single token on SVM.
 
-This eliminates the need for wrap/unwrap, the vault program, dead
-shares, collateral ratios, and the two-program CPI chain.
+### Where the canonical multiplier lives — NOT a divergence
 
-### ScaledUiAmount vs stored price
+On both stacks it is **computed**, never stored: EVM's
+`OkuMoney.okuMMultiplier()` and SVM's `helpers::multiplier::current` are the
+same `rpow` accumulator over the same six schedule fields at the same
+`PRECISION = 1e18` (`oku-shared/src/rate.rs` is a line-for-line port of
+`MathLib.sol` over a 256-bit `mul_div`). Identical schedule state returns
+bit-identical multipliers on both.
 
-EVM stores `okumPrice` as a `uint256` in the PSM contract storage.
-SVM stores the multiplier as an `f64` in the Token-2022
-`ScaledUiAmountConfig` extension on the mint itself. There is no
-PsmConfig field for the price — the mint extension is the single
-a WRITE-ONLY display mirror. The canonical multiplier is computed from
-the `PsmConfig` rate schedule; nothing reads the extension back.
+The genuine divergence is only in **display**. EVM exposes the streamed value
+directly through `OkuDollar`'s rebasing `balanceOf()`. SVM cannot: the
+Token-2022 `ScaledUiAmount` extension stores a flat `f64` scalar with no
+per-second compounding, so it is maintained as a write-only, lagging mirror
+that nothing prices against. There is no multiplier field on `PsmConfig` and
+no read path from the extension.
 
-### Rebasing model
+### No `distributeYield` on either stack
 
-EVM `OkuMoney` accrues USD yield continuously between calls via
-`MathLib.rpow`. SVM now uses the SAME `rpow`, ported line-for-line into
-`oku-shared/src/rate.rs` over a 256-bit `mul_div`, so both stacks return
-bit-identical multipliers from identical schedule state.
-by the orchestrator. Solana's Token-2022 `ScaledUiAmount` extension
-stores a flat scalar (no per-second compounding), so wallets cannot
-show continuously-growing balances. Discrete updates are
-economically identical between orchestrator calls.
-
-### `distributeYield` zero-yield guard
-
-Both EVM and SVM reject a `yieldAmount` / `yield_amount` that
-truncates to zero per token. Without this guard, a sub-threshold
-yield call would stamp `lastYieldDistributionBlock` /
-`last_yield_distribution_slot` without actually moving the
-multiplier, wasting the sandwich-lock window for the entire
-block/slot.
-
-- EVM: `OkuMoney.distributeYield` reverts `YieldTooSmall()`.
+Neither stack has a "distribute N dollars" primitive. Such a call must divide
+by local supply, which produces a different multiplier delta per chain — the
+exact cross-chain divergence the streaming model exists to remove. Dollars→rate
+conversion is off-chain, against a *global* value, on both sides.
 
 ### Pause-bypass deltas
 
@@ -1008,13 +966,6 @@ block/slot.
 | Multiplier during bridge | not applicable (USDC is 1:1) | raw amounts conserved; multiplier synced separately by rebaser |
 
 The orchestrator handles this asymmetry transparently.
-
-### Redemption model — queue (EVM) vs buffer-only (SVM)
-
-EVM keeps a `RedemptionQueue` to escrow a redeem when the buffer is
-insufficient; SVM has no queue at all (`redeem_oku_m` reverts
-`InsufficientBuffer` instead). See "Why no redemption queue" above —
-this is a deliberate SVM-specific simplification, not a parity gap.
 
 ### DeFi compatibility
 
@@ -1038,20 +989,6 @@ PSM mint/redeem rounding direction is identical on both sides
 (round down, favouring the protocol). End-to-end USDC → OkuM → USDC
 round-trips lose at most 1 wei (EVM) / 1 micro-USDC (SVM) of dust
 per round-trip from integer-division truncation.
-
-### Cross-chain operational requirements (v1)
-
-The orchestrator holds:
-
-- A Solana keypair with `buffer_depositor`, `rebaser`, `direct_minter`,
-  and `direct_burner` roles. Uses `burn_oku_m_direct` /
-  `mint_oku_m_direct` for cross-chain settlement.
-- An EVM EOA with `PSM_BUFFER_DEPOSITOR`, `PSM_QUEUE_PROCESSOR`,
-  `OKUM_REBASER` (and a separate EVM owner key for relevant LitePSM
-  admin actions). SVM has no queue-processor equivalent.
-
-Both KMS-backed. No on-chain bridge state, no chain whitelist, no
-nonces, no refund flow — all cross-chain coordination is off-chain.
 
 ### Programs that exist on one side only
 

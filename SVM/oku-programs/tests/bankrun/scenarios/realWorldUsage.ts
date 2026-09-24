@@ -297,6 +297,9 @@ async function orchestratorBridge(
   // Destination leg: orchestrator mints okuM for recipient
   const recipientOkuMAta = ctx.userOkuMAtas[recipientIndex];
   const orchOkuMBefore = await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID);
+  // MEASURED, not assumed equal to usdcOut — returning the source figure twice
+  // made the drift identically zero, so I4 could not fail.
+  const orchUsdcBeforeMint = await tokenBalance(ctx.h, ctx.orchUsdcAta, TOKEN_PROGRAM_ID);
   await mintOkuMViaProgram(
     ctx.psm, psmOrchestrator, new BN(usdcOut.toString()),
     ctx.configPda, ctx.usdcMint, ctx.okuMMint,
@@ -304,6 +307,7 @@ async function orchestratorBridge(
   );
   const orchOkuMAfter = await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID);
   const okuMMinted = orchOkuMAfter - orchOkuMBefore;
+  const usdcIn = orchUsdcBeforeMint - (await tokenBalance(ctx.h, ctx.orchUsdcAta, TOKEN_PROGRAM_ID));
 
   // Forward to recipient
   if (okuMMinted > 0n) {
@@ -320,7 +324,7 @@ async function orchestratorBridge(
     await ctx.h.provider.sendAndConfirm!(fwdTx, [psmOrchestrator]);
   }
 
-  return { usdcOut, usdcIn: usdcOut };
+  return { usdcOut, usdcIn };
 }
 
 
@@ -338,11 +342,13 @@ describe(
     // Invariant trackers
     let cumulativeDrift: bigint;
     let totalBridges: number;
+    let lastMultiplier: bigint;
 
     before(async function () {
       this.timeout(300_000);
       ctx = await buildCtx();
       rng = mulberry32(SEED);
+      lastMultiplier = PRECISION;
 
       // Seed the PSM buffer for instant redeems
       await mintUsdc(ctx.h, ctx.vaultUsdcAta, ctx.usdcMint, 500_000_000_000); // 500k USDC
@@ -385,9 +391,18 @@ describe(
             const ri = (ui + 1 + Math.floor(rng() * 4)) % 5;
             const bal = await tokenBalance(ctx.h, ctx.userOkuMAtas[ui], TOKEN_2022_PROGRAM_ID);
             if (bal > 1_000n) {
+              // Only the ATTEMPT is soft-skipped — a bridge can legitimately
+              // fail to start (paused PSM, empty buffer). Once it completes,
+              // its invariants must hold, so the assertions sit outside the
+              // catch. Inside it, a failed assertion was swallowed and I1/I4
+              // could never fail.
+              let legs: { usdcOut: bigint; usdcIn: bigint } | undefined;
               try {
-                const bridgeAmt = bal / 2n;
-                const { usdcOut, usdcIn } = await orchestratorBridge(ctx, ui, ri, bridgeAmt);
+                legs = await orchestratorBridge(ctx, ui, ri, bal / 2n);
+              } catch { /* soft-skip bridge failures */ }
+
+              if (legs) {
+                const { usdcOut, usdcIn } = legs;
                 const drift = usdcOut > usdcIn ? usdcOut - usdcIn : usdcIn - usdcOut;
                 cumulativeDrift += drift;
                 assertLte(drift, 1n, `day ${day} per-bridge drift`);
@@ -395,7 +410,7 @@ describe(
                 const float = await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID);
                 assertEq(float, 0n, `day ${day} orch float`);
                 totalBridges++;
-              } catch { /* soft-skip bridge failures */ }
+              }
             }
 
           } else if (r < 0.75) {
@@ -474,8 +489,10 @@ describe(
           // (the invariant checks below will surface real violations)
         }
 
-        // I2: multiplier non-decreasing — verified by reading the mint extension
-        // (set_multiplier only ever increases it).
+        // I2: multiplier non-decreasing.
+        const multNow = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
+        assertGte(multNow, lastMultiplier, `day ${day} I2: multiplier non-decreasing`);
+        lastMultiplier = multNow;
 
         // I4: cumulative drift bounded
         assertLte(cumulativeDrift, BigInt(totalBridges) * 2n + 10n, `day ${day} I4: cumulative drift`);

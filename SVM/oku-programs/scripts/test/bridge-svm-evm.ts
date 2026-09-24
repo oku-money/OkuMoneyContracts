@@ -92,6 +92,8 @@ import {
   PRECISION,
   computeMultiplier,
   scheduleFromConfig,
+  EVM_MAINNET_NETWORKS,
+  SVM_MAINNET_NETWORKS,
 } from '@okumoney/yield-tooling';
 
 import { LitePsm } from '../../target/types/lite_psm';
@@ -135,17 +137,11 @@ if (!PRIVATE_KEY) {
 
 const SVM_NETWORK = SVM_NETWORK_ARG as NetworkName;
 
-// Mainnet guard
-// MUST stay in sync with `MAINNET_NETWORKS` in `EVM/scripts/utils/mainnetGuard.ts`
-// (the canonical EVM mainnet guard). Not imported directly: that file lives in
-// a sibling package and this repo's cross-package sharing mechanism is
-// `@okumoney/yield-tooling`, which `mainnetGuard.ts` isn't published through.
-// Previously this set was MISSING `optimism` and `arbitrum` relative to the
-// canonical guard (and relative to `test-bridge-evm-evm.ts`'s own copy) —
-// both are real deployable mainnet targets in `EVM/scripts/config/chains.ts`.
-const EVM_MAINNETS = new Set(['base', 'bsc', 'mainnet', 'ethereum', 'optimism', 'arbitrum']);
-const SVM_MAINNETS = new Set(['mainnet-beta', 'mainnet-fork']);
-if (EVM_MAINNETS.has(EVM_CHAIN) || SVM_MAINNETS.has(SVM_NETWORK)) {
+// Mainnet guard. Sourced from `@okumoney/yield-tooling` so it cannot drift from
+// the EVM-side gate; a hand-copied set here previously omitted optimism and
+// arbitrum, both real deployable targets.
+const EVM_MAINNETS = EVM_MAINNET_NETWORKS;
+if (EVM_MAINNETS.has(EVM_CHAIN) || SVM_MAINNET_NETWORKS.has(SVM_NETWORK)) {
   throw new Error(
     `Refusing to run bridge test on a mainnet network ` +
       `(evm=${EVM_CHAIN}, svm=${SVM_NETWORK}). Use operator-tool scripts instead.`

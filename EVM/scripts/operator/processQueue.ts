@@ -15,7 +15,7 @@
  * Environment:
  *   DRY_RUN=true      Print intent without submitting
  *   BATCH_SIZE        Entries per processQueue call (default 50)
- *   LIMIT             Maximum number of batches (default unlimited)
+ *   LIMIT             Maximum number of batches (default 1000)
  *   YES_MAINNET=true  Required to broadcast on a mainnet network
  *
  * Also exported as `runProcessQueue()` for in-process callers (e.g. the drill).
@@ -85,12 +85,30 @@ export async function runProcessQueue(
 
     const tx = await (psm as any).processQueue(head, endIndex, psmUsdcBalance);
     const receipt = await tx.wait(1);
-    logger.success(`Batch ${i + 1} tx: ${receipt.hash} (${thisBatch} entries)`);
 
     const advTx = await (queue as any).advanceHead(thisBatch);
     await advTx.wait(1);
 
-    totalDrained += Number(thisBatch);
+    // Count what actually cleared, not what was requested. `advanceHead` stops
+    // at the first entry still holding a user (insufficient buffer, or a
+    // soft-skipped transfer), so a partially-filled batch advances less than
+    // `thisBatch` and reporting the request would overstate the drain.
+    const newHead: bigint = await (queue as any).queueHead();
+    const advanced = BigInt(newHead) - BigInt(head);
+    logger.success(
+      `Batch ${i + 1} tx: ${receipt.hash} (${advanced}/${thisBatch} entries cleared)`
+    );
+
+    if (advanced === 0n) {
+      logger.warning(
+        `Batch ${i + 1} cleared nothing — head is stuck at ${head}. Buffer is ` +
+          `exhausted or the entry is unpayable. Stopping rather than resubmitting; ` +
+          `top up the buffer, or use rescueQueueEntry for a stuck recipient.`
+      );
+      break;
+    }
+
+    totalDrained += Number(advanced);
     batches++;
   }
 

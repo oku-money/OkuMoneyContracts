@@ -8,17 +8,15 @@
  *
  * V(t) = Σ_chains totalSupply(chain, t) * multiplier(chain, t)
  *
- * "Chains" means EVM chains AND SVM. SVM was excluded while it ran a different
- * yield model; both stacks now share one schedule, so leaving it out is an
- * economic bug rather than an omission — V is the DENOMINATOR of every derived
- * rate, so under-counting it makes the published rate too HIGH and the protocol
- * over-pays yield on every chain, including the ones that were counted.
+ * "Chains" means EVM chains AND SVM. Omitting any chain is an economic bug, not
+ * just an incomplete number: V is the DENOMINATOR of every derived rate, so
+ * under-counting it makes the published rate too HIGH and the protocol over-pays
+ * yield on every chain, including the ones that were counted.
  *
- * Nothing on-chain aggregates this — it is inherently a cross-chain,
- * off-chain computation, same as the rate schedule itself. This module reads
- * `totalSupply()` + `okuMMultiplier()` per chain (reusing the multi-chain read
- * pattern from `checkMultiplierDrift.ts`), sums them into one global-value
- * sample per poll, and persists samples to a local JSON file so
+ * Nothing on-chain aggregates this — it is inherently a cross-chain, off-chain
+ * computation, same as the rate schedule itself. This module reads
+ * `totalSupply()` + `okuMMultiplier()` per chain, sums them into one
+ * global-value sample per poll, and persists samples to a local JSON file so
  * `timeWeightedAverage` (from `yieldRate.ts`) can integrate over an arbitrary
  * window after the fact.
  *
@@ -59,9 +57,8 @@ export interface GlobalValueSample {
  * Converts an on-chain `totalSupply() * okuMMultiplier() / PRECISION` dollar
  * value (18-decimal `bigint`) to a JS `number`. Safe for values well under
  * `Number.MAX_SAFE_INTEGER` dollars (~9e15) after scaling down from 18
- * decimals — i.e. any realistic AUM. `timeWeightedAverage` operates on plain
- * numbers because it is arithmetic reasoning about USD amounts for humans and
- * off-chain rate derivation, not an on-chain-precision-critical path.
+ * decimals — i.e. any realistic AUM. Off-chain rate derivation is not an
+ * on-chain-precision-critical path.
  */
 function toUsdNumber(raw: bigint, decimals = 18): number {
   return Number(raw) / 10 ** decimals;
@@ -99,12 +96,10 @@ export async function sampleGlobalValueUsd(chains?: string[]): Promise<GlobalVal
   // isn't live on for the MVP). V̄'s denominator and the broadcast's
   // recipient set must never diverge; see epochChains.ts's module doc.
   //
-  // An explicit `chains` list is routed through the SAME validation rather
-  // than trusted verbatim. Bypassing it for explicit lists (as an earlier
-  // revision did) reopened the exact divergence this scoping exists to
-  // prevent: `CHAINS=base,bsc` would have silently added two mainnets to V̄'s
-  // denominator while `broadcastSchedule.ts` — which does validate — refused
-  // them, inflating V̄ relative to the set actually receiving the rate.
+  // An explicit `chains` list MUST be routed through the SAME validation
+  // rather than trusted verbatim: `CHAINS=base,bsc` would otherwise add two
+  // mainnets to V̄'s denominator while `broadcastSchedule.ts` refuses them,
+  // inflating V̄ relative to the set actually receiving the rate.
   const resolvedChains = participatingChains({
     requested: chains,
     yesMainnet: isYesMainnet(),
@@ -152,21 +147,11 @@ export { SVM_CHAIN_KEY };
 /**
  * Read SVM's contribution using environment-provided endpoints.
  *
- * ## Why this throws rather than warns
- *
- * V(t) is the DENOMINATOR of every derived rate:
- *
- * ```text
- *   rate  ~=  realisedYield / (V̄ x window)
- * ```
- *
- * So a chain omitted from V does not merely make the sample incomplete — it
- * makes the derived rate too HIGH, and the protocol over-distributes. If SVM
- * held 20% of supply and were silently excluded, V̄ would come out 20% low and
- * the rate 25% high, every epoch, with nothing failing.
- *
- * A warning is not a control for that; it is a line in a cron log. So once SVM
- * is live, `SVM_EXPECTED=true` makes a missing configuration a hard error.
+ * Throws rather than warns when `SVM_EXPECTED=true`. V(t) is the DENOMINATOR
+ * of every derived rate (`rate ≈ realisedYield / (V̄ x window)`), so a chain
+ * omitted from V makes the derived rate too HIGH and the protocol
+ * over-distributes: SVM holding 20% of supply and silently excluded means V̄
+ * 20% low and the rate 25% high, every epoch, with nothing failing.
  *
  * The flag exists because "SVM is absent" is a legitimate state pre-launch and
  * must stay distinguishable from "SVM is misconfigured". Set it the moment SVM
@@ -253,11 +238,8 @@ export function samplesInWindow(
  * Linearly interpolate the global-value sample series at an arbitrary
  * timestamp. Used as a lightweight FORECAST when no better model is
  * available — e.g. `deriveSettlementRate`'s `settlementForecastAvgValueUsd`
- * can default to `valueAt(samples, now)` (effectively "assume the settlement
- * window's average equals the most recent observed value"), which is
- * adequate precisely because the settlement window is short (see
- * `epochSchedule.ts`'s `DEFAULT_SETTLEMENT_FRACTION` and the accuracy tables
- * in EVM/README.md § Rear-Facing Epoch Accounting).
+ * can default to `valueAt(samples, now)`, adequate because the settlement
+ * window is short (see `epochSchedule.ts`'s `DEFAULT_SETTLEMENT_FRACTION`).
  *
  * Clamps to the first/last sample's value outside the series' covered range,
  * same convention as `epochDistribution.ts::multiplierAt`.
@@ -285,11 +267,10 @@ export function valueAt(
 }
 
 /**
- * Convenience wrapper: cumulative dollars distributed over `[startSec, endSec]`,
- * reading value samples straight from the persisted store rather than
- * requiring the caller to pre-select them. Thin composition of
- * `samplesInWindow` + `epochDistribution.ts::distributedUsdOverWindow` — see
- * that function's doc for the left-Riemann approximation this relies on.
+ * Cumulative dollars distributed over `[startSec, endSec]`, reading value
+ * samples straight from the persisted store. Composition of `samplesInWindow`
+ * + `epochDistribution.ts::distributedUsdOverWindow` — see that function's doc
+ * for the left-Riemann approximation this relies on.
  */
 export function cumulativeDistributedUsd(
   segments: RateSegment[],

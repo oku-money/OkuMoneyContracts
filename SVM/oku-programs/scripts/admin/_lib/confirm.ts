@@ -20,14 +20,10 @@ import { Connection } from '@solana/web3.js';
  * True if a dry run was requested, via either the `--dry-run` CLI flag
  * OR the `DRY_RUN=true` environment variable.
  *
- * Both conventions exist across this repo's scripts (some non-admin
- * scripts, e.g. bridge-svm-evm.ts, historically only supported the env
- * var). Supporting both here prevents an operator who reaches for the
- * "wrong" convention from silently executing a real, non-simulated
- * mutation. This bit us for real once: `DRY_RUN=true tsx
- * scripts/admin/grant-roles.ts` (no `--dry-run` flag) submitted 9 live
- * role-rotation transactions against devnet because only the flag was
- * checked.
+ * BOTH must be honoured: checking only one lets an operator who reaches for
+ * the other convention silently execute a real, non-simulated mutation —
+ * e.g. `DRY_RUN=true tsx scripts/admin/grant-roles.ts` with no `--dry-run`
+ * flag submitting live role-rotation transactions.
  */
 export function isDryRun(): boolean {
   return process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
@@ -79,8 +75,12 @@ export async function confirmIfMainnet(
   });
 
   if (answer !== 'yes') {
+    // Non-zero: a declined confirmation is a refusal to act, and callers that
+    // spawn this as a subprocess (EVM's broadcastSchedule.ts) treat exit 0 as
+    // "the chain was updated". Exiting 0 here let a declined prompt be recorded
+    // as a successful broadcast, permanently skipping the chain on re-run.
     console.log('Aborted.');
-    process.exit(0);
+    process.exit(1);
   }
 }
 

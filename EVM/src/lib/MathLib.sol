@@ -10,24 +10,20 @@ import {Constants} from "./Constants.sol";
  * @notice Shared math utilities for OkuMoney contracts
  * @dev See Constants.sol for terminology legend.
  *
- *      ROUNDING POLICY: All conversion functions use OpenZeppelin
- *      `Math.mulDiv` for full-precision 512-bit intermediate computation and
- *      explicit `Math.Rounding` semantics. Floor is the default direction;
- *      the only Ceil site in the protocol is `OkuDollar.unwrap`'s
- *      `sharesToBurn` computation, which favors the vault on user
- *      withdrawals (ERC-4626 convention). `rpow` retains MakerDAO's
- *      half-up assembly rounding because it has no direct `mulDiv`
- *      equivalent.
+ *      ROUNDING POLICY: conversions use OpenZeppelin `Math.mulDiv` for 512-bit
+ *      intermediates and explicit `Math.Rounding`. Floor is the default; the only
+ *      Ceil site in the protocol is `OkuDollar.unwrap`'s `sharesToBurn`, which
+ *      favors the vault on user withdrawals (ERC-4626 convention). `rpow` keeps
+ *      MakerDAO's half-up assembly rounding — it has no direct `mulDiv` equivalent.
  */
 library MathLib {
     /**
      * @notice Raise x to the power of n, modulo base b (exponentiation by squaring)
-     * @dev Adapted verbatim from MakerDAO's `rpow` — battle-tested since 2017.
-     *      Taken from https://github.com/makerdao/dss/blob/master/src/pot.sol
-     *      Used by {compoundFor} / {computeMultiplier} for OkuMoney's continuous
-     *      streaming accrual (which OkuDollar's `usdMultiplier()` delegates to
-     *      directly). `setOkuMMultiplier`, the discrete emergency override, does
-     *      NOT use rpow — it writes the base multiplier directly.
+     * @dev Adapted verbatim from MakerDAO's `rpow` (battle-tested since 2017):
+     *      https://github.com/makerdao/dss/blob/master/src/pot.sol
+     *      Used by {compoundFor} / {computeMultiplier}. `setOkuMMultiplier`, the
+     *      discrete emergency override, does NOT use rpow — it writes the base
+     *      multiplier directly.
      * @param x Base value (typically ratePerSecond, scaled by PRECISION)
      * @param n Exponent (typically elapsed seconds)
      * @param b Precision base (typically 1e18)
@@ -68,17 +64,13 @@ library MathLib {
 
     /**
      * @notice Compound `base` by `rate^elapsed`, capped at {Constants.MAX_MULTIPLIER}.
-     * @dev Identity when `elapsed == 0`. Every caller bounds `elapsed` via the
-     *      mandatory rate-window timestamps enforced in `OkuMoney.setOkuMYieldRate` /
-     *      `setNextOkuMYieldRate` — every yielding rate carries a bounded window.
-     *      That requirement exists primarily so an open-ended rate can never end
-     *      at a transaction-dependent, per-chain moment (which would reintroduce
-     *      the cross-chain divergence streaming accrual exists to eliminate — see
-     *      EVM/README.md § Streaming Accrual). A secondary benefit of the same
-     *      bound: the `MAX_MULTIPLIER` cap only bounds the OUTPUT — it cannot
-     *      prevent `rpow` from reverting internally on a huge `elapsed` (at
-     *      `MAX_RATE`, `rpow` itself overflows past ~30 years) — so the mandatory
-     *      window also keeps `rpow` in its safe range.
+     * @dev Identity when `elapsed == 0`. Callers bound `elapsed` via the mandatory
+     *      rate-window timestamps on OkuMoney's schedule — every yielding rate carries
+     *      a bounded window. That requirement exists so an open-ended rate can never end
+     *      at a transaction-dependent, per-chain moment (EVM/README.md § Streaming
+     *      Accrual), and it keeps `rpow` in range: the `MAX_MULTIPLIER` cap bounds only
+     *      the OUTPUT and cannot stop `rpow` reverting internally on a huge `elapsed`
+     *      (at `MAX_RATE`, `rpow` itself overflows past ~15 years).
      * @param base Starting multiplier (PRECISION-scaled)
      * @param rate Per-second rate (PRECISION = no yield)
      * @param elapsed Seconds to compound over
@@ -103,25 +95,11 @@ library MathLib {
     /**
      * @notice Continuous streaming accrual — the protocol's single multiplier function.
      * @dev Shared by {OkuMoney.okuMMultiplier} and (transitively) {OkuDollar.usdMultiplier}
-     *      so the two can never diverge. Pure function of the rate schedule and
-     *      `nowTs`; contains no supply term, which is what makes the multiplier
-     *      identical across chains given identical schedule state and timestamp.
-     *
-     *      Branches:
-     *        1. Active rate is the no-yield placeholder (`<= PRECISION`): return
-     *           `base`. (`rateEnd` is always 0 in this state — `OkuMoney` never
-     *           writes a bounded window against a halted rate — so there is no
-     *           overhang to compound here.)
-     *        2. Active rate is yielding and the window has closed: compound to
-     *           `rateEnd`, then compound the pending rate over the overhang, itself
-     *           bounded by `pendingRateEnd`.
-     *        3. Otherwise: compound the active rate from `anchor` to `nowTs`. Bounded
-     *           because `nowTs <= rateEnd` here and any yielding `rate` always has
-     *           `rateEnd` set at write time (enforced on-chain — see
-     *           `OkuMoney.setOkuMYieldRate`).
-     *
-     *      A `pendingRate` activates with no transaction at the boundary, which is
-     *      what keeps multi-chain epoch handovers simultaneous.
+     *      so the two can never diverge. Pure function of the rate schedule and `nowTs`,
+     *      with no supply term — which is what makes the multiplier identical across
+     *      chains given identical schedule state and timestamp. `pendingRate` activates
+     *      with no transaction at the boundary, keeping multi-chain epoch handovers
+     *      simultaneous. See the three branch comments in the body.
      * @param base Snapshot multiplier taken at `anchor`
      * @param rate Active per-second rate (PRECISION = no yield)
      * @param anchor Timestamp `base` was snapshotted at
@@ -145,12 +123,10 @@ library MathLib {
         pure
         returns (uint256)
     {
-        // Branch 1: active rate is the no-yield placeholder. `rateEnd` is always 0
-        // here by construction (see NatSpec) — OkuMoney never writes a bounded
-        // window against a halted rate — so under the current writer set this is
-        // just the flat base. Defensive fallback below mirrors branch 2's overhang
-        // handling in case that invariant is ever violated by a future writer,
-        // rather than silently dropping a pending rate that should be accruing.
+        // Branch 1: active rate is the no-yield placeholder. `rateEnd` is 0 here under
+        // the current writer set (OkuMoney never writes a window against a halted rate),
+        // so this is the flat base. The fallback defensively mirrors branch 2's overhang
+        // handling rather than silently dropping a pending rate that should be accruing.
         if (rate <= Constants.PRECISION) {
             if (rateEnd != 0 && nowTs > rateEnd && pendingRate > Constants.PRECISION) {
                 uint256 overhangEnd =
@@ -164,17 +140,15 @@ library MathLib {
 
         // Branch 2: active rate is yielding and its window has closed.
         if (rateEnd != 0 && nowTs > rateEnd) {
-            // Defensive: `anchor` should never be past `rateEnd` given the writers in
-            // OkuMoney (every write that moves `anchor` either clears `rateEnd` or sets
-            // a fresh one strictly in the future), but guard the subtraction anyway
-            // rather than let a future writer bug underflow this view forever.
+            // Defensive: `anchor` is never past `rateEnd` under OkuMoney's writers (every
+            // write moving `anchor` clears `rateEnd` or sets a fresh future one); guard
+            // the subtraction anyway so a future writer bug cannot brick this view.
             uint256 elapsedInWindow = anchor < rateEnd ? rateEnd - anchor : 0;
             uint256 compounded = compoundFor(base, rate, elapsedInWindow);
             if (pendingRate > Constants.PRECISION) {
                 uint256 overhangStart = anchor > rateEnd ? anchor : rateEnd;
                 // Bound the overhang at `pendingRateEnd`: an unattended successor
-                // compounds only up to its own expiry, then accrual halts (safe)
-                // rather than running unbounded until the next schedule write.
+                // compounds only to its own expiry, then accrual halts.
                 uint256 overhangEnd =
                     (pendingRateEnd != 0 && nowTs > pendingRateEnd) ? pendingRateEnd : nowTs;
                 if (overhangEnd > overhangStart) {
@@ -258,13 +232,4 @@ library MathLib {
     {
         return usdcAmount * decimalMultiplier;
     }
-
-    // REMOVED (single-multiplier collapse): wrappedSharesFromOkuM / okuMToWrappedUsd.
-    // Both took independent okuMMult/usdMult parameters from the pre-refactor
-    // dual-multiplier design. Since `OkuDollar.usdMultiplier() == okuMoney.okuMMultiplier()`
-    // always (enforced at `LitePSM.initialize` / `OkuDollar.asset()` wiring),
-    // `wrappedSharesFromOkuM(a, m, m) == mulDiv(a, m, m) == a` exactly — `wrap`'s
-    // share-minting is now the identity — and `okuMToWrappedUsd(a, m, m)` collapses
-    // to `okuMToDollars(a, m)`. See `OkuDollar.wrap` / `_unwrap` and
-    // `LitePSM.mintUsdOku`.
 }

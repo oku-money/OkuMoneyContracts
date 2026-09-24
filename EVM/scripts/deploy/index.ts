@@ -27,6 +27,8 @@ import {
 } from "../config/chains";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { ROLES, getRoleName } from "../config/roles";
+import { mainnetGuard } from "../utils/mainnetGuard";
+import { isYesMainnet } from "../utils/cli";
 import { recordRoleGrant } from "../utils/roleRegistry";
 import { logger } from "../utils/logger";
 import {
@@ -85,17 +87,11 @@ function getDeploymentConfig(): DeploymentConfig {
 // ============================================================================
 //
 // Live deploys regularly hit RPC-level races that aren't real failures:
-//
-//   - "nonce too low" / "nonce too high": ethers' per-tx getTransactionCount
-//     returned a stale value (chain advanced between getNonce and sendTx).
-//   - "replacement transaction underpriced": OZ/ethers internally retried a
-//     tx without bumping fee enough to satisfy the sequencer's 10% rule.
-//   - "already known": same tx was submitted twice via different paths.
-//   - "could not coalesce error" / network timeouts.
-//
-// All of these are recoverable by waiting briefly and retrying — re-running
-// the operation re-fetches a fresh nonce and re-broadcasts. Without retry,
-// any one of ~25 sequential txs in a full deploy can torpedo the whole run.
+// stale nonces ("nonce too low"/"too high"), "replacement transaction
+// underpriced" (an internal retry that didn't clear the sequencer's 10% bump
+// rule), "already known", and network timeouts. All are recoverable by waiting
+// briefly and retrying, which re-fetches a fresh nonce and re-broadcasts.
+// Without retry any one of ~25 sequential txs can torpedo a whole deploy.
 
 const TRANSIENT_PATTERNS = [
   /nonce too low/i,
@@ -108,10 +104,9 @@ const TRANSIENT_PATTERNS = [
   /ETIMEDOUT/i,
   /ECONNRESET/i,
   /ENOTFOUND/i,
-  // BSC pending-tx response quirk (`to: ""` instead of `to: null`). Our
-  // rpcCompat shim should normally prevent this from ever surfacing, but if
-  // a path slips through, the same response a few seconds later (after the
-  // tx mines) will have `to: null` correctly, so retry resolves it.
+  // BSC pending-tx response quirk (`to: ""` instead of `to: null`). The
+  // rpcCompat shim normally prevents this surfacing; if a path slips through,
+  // the same response after the tx mines has `to: null`, so retry resolves it.
   /invalid value for value\.to/i,
   /invalid address.*value=""/i,
   /BAD_DATA/i,
@@ -276,10 +271,9 @@ async function deployUUPSProxy(
             `CREATE2 proxy deploy for ${contractName} failed (tx ${tx.hash})`
           );
         }
-        // Poll for bytecode at the predicted address. Load-balanced public
-        // RPCs can return stale `getCode` results for several seconds after
-        // a tx mines; the receipt already confirmed success, we just need
-        // to give the RPC network a chance to propagate.
+        // Poll for bytecode at the predicted address: load-balanced public
+        // RPCs can return stale `getCode` for several seconds after a tx
+        // mines, and the receipt already confirmed success.
         const pollMaxMs = 30_000;
         const pollIntervalMs = 2_000;
         const pollStart = Date.now();
@@ -599,18 +593,14 @@ async function configureRoles(
   // cross-chain mint/burn flows route through it via the orchestrator's USDC
   // custody.
   //
-  // RedemptionQueue deliberately does NOT get OKUM_MINTER. It used to, with
-  // the justification "RedemptionQueue mints rebase deltas" — that described
-  // the pre-streaming-accrual design and is long dead. The current contract
-  // calls exactly two OkuMoney methods, `burn` and `okuMMultiplier` (grep it),
-  // so the grant plus its 1e27 minter allowance was a live, unused
-  // mint-anything capability parked on an upgradeable contract whose
-  // QUEUE_UPGRADER is the same admin key. Least privilege: removed. The
-  // OKUM_BURNER grant below is the one it actually needs.
+  // RedemptionQueue deliberately does NOT get OKUM_MINTER: it calls exactly
+  // two OkuMoney methods, `burn` and `okuMMultiplier`, so the grant would be
+  // an unused mint-anything capability parked on an upgradeable contract whose
+  // QUEUE_UPGRADER is the same admin key. The OKUM_BURNER grant below is the
+  // one it actually needs.
   await sendAndWait("Grant OKUM_MINTER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_MINTER, litePSMAddress));
 
-  // Cycle 4 (EVM-15): OKUM_BURNER was split out of OKUM_MINTER. Both consumers
-  // of `OkuMoney.burn(...)` need the burner role:
+  // Both consumers of `OkuMoney.burn(...)` need OKUM_BURNER:
   //   - LitePSM redeem flows (`_redeemOkuMShared`)
   //   - RedemptionQueue.processQueue (per-entry burn after USDC payout)
   // Without these grants every redeem reverts with AccessControlUnauthorizedAccount.
@@ -666,8 +656,8 @@ async function configureRoles(
  * made, as `[label, contract-key, role, holder-kind]` tuples.
  *
  * Exported so the deploy drill asserts against the SAME source of truth the
- * deploy itself verifies — a test with its own hand-copied list would silently
- * drift from `configureRoles` the moment a role is added or removed.
+ * deploy itself verifies; a hand-copied list in a test would drift the moment
+ * a role is added or removed.
  */
 export type RoleHolderKind = "litePSM" | "redemptionQueue" | "deployer";
 
@@ -739,14 +729,10 @@ async function verifyDeployment(
     deployer: deployerAddress,
   };
 
-  // Assert the FULL role matrix, not a 4-role spot check.
-  //
-  // This previously logged four `hasRole` results and, on a missing
-  // OKUM_BURNER, printed "redeem paths will revert!" as a *warning* and then
-  // exited 0 — a deployment with a broken redeem path reported success. Role
-  // misconfiguration is the failure mode most likely to brick a fresh deploy
-  // (or silently leave a privilege hole), so it must fail loudly here, while
-  // the operator is still watching, rather than surface later as a revert.
+  // Assert the FULL role matrix, not a spot check, and FAIL rather than warn.
+  // Role misconfiguration is the failure mode most likely to brick a fresh
+  // deploy (or silently leave a privilege hole), so it must surface here while
+  // the operator is still watching, not later as a revert.
   const grants = expectedRoleGrants();
   const missingRoles: string[] = [];
 
@@ -768,12 +754,10 @@ async function verifyDeployment(
     if (held) {
       logger.info(`  OK  ${g.label}`);
       // Record each CONFIRMED grant durably. Hooked to the verification pass
-      // rather than to the ~20 individual `sendAndWait("Grant ...")` calls in
-      // `configureRoles`, so the ledger reflects what is actually live rather
-      // than what was merely attempted, and so a re-run over an existing
-      // deployment still populates the ledger. Forks excluded — their state is
-      // discarded, and recording it would pollute the ledger with grants that
-      // never existed on a real chain. See utils/roleRegistry.ts.
+      // rather than to `configureRoles`'s individual sends, so the ledger
+      // reflects what is actually live rather than what was merely attempted,
+      // and a re-run over an existing deployment still populates it. Forks
+      // excluded: their state is discarded. See utils/roleRegistry.ts.
       if (!isForkKey(bookKey)) {
         const rec = recordRoleGrant({
           at: new Date().toISOString(),
@@ -804,10 +788,9 @@ async function verifyDeployment(
   logger.info(`  LitePSM minter allowance: ${psmAllowance}`);
 
   // RedemptionQueue must have NEITHER the minter role NOR an allowance — it
-  // only burns. This is asserted as a NEGATIVE check rather than simply
-  // dropped, so that a future re-grant (or a stale prior deployment being
-  // reused via the address book) fails the deploy loudly instead of silently
-  // restoring a 1e27 mint capability. See the OKUM_MINTER grant block above.
+  // only burns. Asserted as a NEGATIVE check so a future re-grant, or a stale
+  // prior deployment reused via the address book, fails the deploy loudly
+  // instead of silently restoring a mint capability.
   const queueAllowance = await okuMoney.minterAllowance(queueAddress);
   const queueHasMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, queueAddress);
   if (queueAllowance !== 0n) {
@@ -862,10 +845,9 @@ export interface RunDeployOptions {
    * Override the deployer signer. Defaults to the CLI behaviour: impersonate
    * `DEV_WALLET` on a fork, or use `getSigners()[0]` on a live network.
    *
-   * In-process callers (the deploy drill, the operator drill) pass an explicit
-   * signer so the resulting role matrix is anchored to a signer the test also
-   * holds — without this, a fork deploy grants every role to `DEV_WALLET` and
-   * a test using `getSigners()[0]` as admin would hold none of them.
+   * In-process callers (the deploy/operator drills) pass an explicit signer so
+   * the role matrix is anchored to a signer the test also holds; otherwise a
+   * fork deploy grants every role to `DEV_WALLET`.
    */
   deployer?: Signer;
 }
@@ -873,10 +855,9 @@ export interface RunDeployOptions {
 /**
  * Full deployment, callable in-process.
  *
- * Extracted from the former `main()` so tests can exercise the REAL deploy
- * path — proxies, address-book writes, and the complete role matrix — rather
- * than re-implementing a parallel fixture that can drift from production. The
- * CLI entry point at the bottom of this file is now a thin wrapper.
+ * Tests exercise the REAL deploy path through this — proxies, address-book
+ * writes, and the complete role matrix — rather than a parallel fixture that
+ * can drift. The CLI entry point at the bottom of this file is a thin wrapper.
  */
 export async function runDeploy(
   opts: RunDeployOptions = {}
@@ -886,6 +867,13 @@ export async function runDeploy(
   const ctx = await resolveNetworkContext();
   const { networkName, bookKey, isFork, chainConfig } = ctx;
   const config = getDeploymentConfig();
+
+  // Deploying a fresh proxy set to a production chain is at least as
+  // consequential as any single operator transaction, all of which are gated.
+  // Forks are exempt: they are throwaway chains that reuse the mainnet name.
+  if (!isFork) {
+    mainnetGuard(networkName, { yesMainnet: isYesMainnet(), dryRun: false });
+  }
 
   logger.header(`OkuMoney Deployment to ${chainConfig.name}${isFork ? " (LOCAL FORK)" : ""}`);
   logger.info(`Network: ${networkName} (chainId: ${chainConfig.chainId})`);

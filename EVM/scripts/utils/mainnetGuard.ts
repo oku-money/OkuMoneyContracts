@@ -7,23 +7,14 @@
  */
 
 import { logger } from "./logger";
+import { isEvmMainnet } from "@okumoney/yield-tooling";
 
 /**
- * Every EVM mainnet this repo can actually deploy/broadcast to.
- *
- * MUST stay in sync with the mainnet entries in `scripts/config/chains.ts`
- * (`CHAIN_METADATA`) and `hardhat.config.ts`'s `FORK_TARGETS` — both `optimism`
- * and `arbitrum` are real, configured mainnet targets there (Alchemy RPC,
- * chain ID, fork support) and were previously ABSENT from this set, which
- * meant `NETWORK=optimism` / `NETWORK=arbitrum` bypassed the guard entirely
- * for every operator script that imports `mainnetGuard` (deploy, runEpoch,
- * deriveEpochSchedule, applyScheduleSingleChain, ...).
- *
- * Exported so other mainnet guards (the bridge test scripts, which used to
- * hand-roll their own duplicate — and divergent — sets) can consume this one
- * directly instead of drifting from it.
+ * Re-exported from `@okumoney/yield-tooling` so the EVM and SVM gates share one
+ * definition. Every mainnet gate in this package must consume this rather than
+ * redeclare a set of its own.
  */
-export const MAINNET_NETWORKS = new Set(["base", "bsc", "mainnet", "ethereum", "optimism", "arbitrum"]);
+export { EVM_MAINNET_NETWORKS as MAINNET_NETWORKS, isEvmMainnet as isMainnetNetwork } from "@okumoney/yield-tooling";
 
 export interface GuardOptions {
   /** Pass true if --yes-mainnet flag was supplied. */
@@ -37,7 +28,7 @@ export interface GuardOptions {
  * Warn but allow when yesMainnet=true or dryRun=true.
  */
 export function mainnetGuard(networkName: string, opts: GuardOptions = {}): void {
-  if (!MAINNET_NETWORKS.has(networkName)) return;
+  if (!isEvmMainnet(networkName)) return;
   if (opts.dryRun) {
     logger.warning(`DRY_RUN on mainnet network ${networkName} — review carefully before live use.`);
     return;

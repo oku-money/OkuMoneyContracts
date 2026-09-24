@@ -144,18 +144,12 @@ pub struct SetAuthority<'info> {
     pub config: Account<'info, PsmConfig>,
 }
 
-/// Update the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol`
-/// in place on an already-deployed mint.
+/// Update the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol` in place
+/// on an already-deployed mint. Does NOT touch the ScaledUiAmount multiplier.
 ///
-/// This rewrites the TRUE on-chain identity (OkuM / "OkuMoney") that
-/// wallets and block explorers display for the mint and its transfers.
-/// It does NOT touch the ScaledUiAmount multiplier, so the "$1-pegged
-/// usdOku" display value is unaffected.
-///
-/// Authority model mirrors `SetAuthority`: only `role_admin` (the
-/// most-privileged config-level admin) may rename the token. The actual
-/// Token-2022 metadata `update_authority` is the `config` PDA, which
-/// signs the CPI via `invoke_signed` in the handler.
+/// Authority model mirrors `SetAuthority`: only `role_admin` may rename the
+/// token. The Token-2022 metadata `update_authority` is the `config` PDA,
+/// which signs the CPI via `invoke_signed` in the handler.
 #[derive(Accounts)]
 pub struct UpdateTokenMetadata<'info> {
     /// Role admin — only `role_admin` may rename the token.

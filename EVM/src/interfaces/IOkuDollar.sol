@@ -36,6 +36,4 @@ interface IOkuDollar {
     function totalOkuMReserves() external view returns (uint256);
     /// @notice Total OkuDollar obligations (in dollar terms).
     function totalUsdObligations() external view returns (uint256);
-    // REMOVED (single-multiplier refactor): collateralizationRatio, surplus —
-    // collateralization is exactly 1.0 by construction.
 }

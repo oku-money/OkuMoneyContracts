@@ -16,7 +16,9 @@
  */
 
 import { Connection, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { detectNetwork, createProvider, getNetworkConfig, isForkNetwork, getParentNetwork } from '../utils/network';
+import { detectNetwork, createProvider,
+  createProviderWithClusterCheck, getNetworkConfig, isForkNetwork, getParentNetwork } from '../utils/network';
+import { confirmIfMainnet } from '../admin/_lib/confirm';
 import { logger } from '../utils/logger';
 import { saveDeployment } from '../utils/addressBook';
 import { NETWORK_CONFIGS, getActiveRpcInfo } from '../config/networks';
@@ -51,14 +53,26 @@ async function main() {
   }
   logger.log('');
 
-  // Create provider
-  const provider = createProvider(network);
+  // Create provider. Cluster-checked: deploying a program is irreversible, and
+  // a SOLANA_RPC_URL pointed at the wrong cluster is not otherwise detectable.
+  const provider = await createProviderWithClusterCheck(network);
   const deployerPubkey = provider.wallet.publicKey;
   const balance = await provider.connection.getBalance(deployerPubkey);
   
   logger.info(`Deployer: ${deployerPubkey.toBase58()}`);
   logger.info(`Balance: ${formatSol(balance)} SOL`);
-  
+
+  await confirmIfMainnet(
+    network,
+    [
+      `network   ${network}`,
+      `deployer  ${deployerPubkey.toBase58()}`,
+      `balance   ${formatSol(balance)} SOL`,
+      `action    deploy lite_psm program (irreversible)`,
+    ].join('\n'),
+    provider.connection
+  );
+
   if (isFork) {
     const parentNetwork = getParentNetwork(network);
     const parentConfig = NETWORK_CONFIGS[parentNetwork];

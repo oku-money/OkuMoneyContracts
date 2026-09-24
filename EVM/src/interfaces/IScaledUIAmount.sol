@@ -6,29 +6,23 @@ pragma solidity 0.8.28;
  * @notice Scaled UI Amount Extension for ERC-20 Tokens.
  * @dev See https://eips.ethereum.org/EIPS/eip-8056
  *
- *      STATUS: ERC-8056 is a **Draft** standard at time of writing. The interface
- *      IDs below are taken from the current draft and MAY change before Final.
+ *      STATUS: ERC-8056 is a **Draft**. The interface IDs below come from the current
+ *      draft and MAY change before Final.
  *
- *      OkuMoney implements this as a *derived view* over its streaming yield
- *      schedule: `uiMultiplier()` returns `okuMMultiplier()`, which is computed
- *      continuously via {MathLib.computeMultiplier}. This is a deliberate
- *      deviation in spirit from the EIP's reference implementation, which stores
- *      a discrete multiplier and rotates it on a schedule:
+ *      OkuMoney implements this as a *derived view* over its streaming yield schedule:
+ *      `uiMultiplier()` returns `okuMMultiplier()`, computed continuously via
+ *      {MathLib.computeMultiplier}. Two deliberate deviations from the EIP's reference
+ *      implementation, which stores a discrete multiplier and rotates it on a schedule:
  *
- *      - The EIP requires `UIMultiplierUpdated` be emitted "whenever the
- *        multiplier is changed". Under continuous accrual the multiplier changes
- *        every second, so a per-change event is not satisfiable. OkuMoney emits
- *        it on **rate-schedule changes** instead, which are the only discrete
- *        events in the system.
- *      - `newUIMultiplier()` / `effectiveAt()` presume a scheduled *value*.
- *        OkuMoney schedules a pending *rate*, so `newUIMultiplier()` returns the
- *        multiplier projected to be in effect at `effectiveAt()` (= the active
- *        rate's end timestamp) — but ONLY when a successor rate is actually
- *        armed. If no successor is staged (or the active window has no bound,
- *        i.e. accrual is halted), `effectiveAt()` returns `0` and
+ *      - The EIP requires `UIMultiplierUpdated` "whenever the multiplier is changed".
+ *        Under continuous accrual that is every second, so OkuMoney emits it on
+ *        **rate-schedule changes** — the only discrete events in the system.
+ *      - `newUIMultiplier()` / `effectiveAt()` presume a scheduled *value*; OkuMoney
+ *        schedules a pending *rate*. `newUIMultiplier()` returns the multiplier
+ *        projected for `effectiveAt()` (the active rate's end timestamp) ONLY when a
+ *        successor rate is armed. Otherwise `effectiveAt()` returns `0` and
  *        `newUIMultiplier()` returns the current `uiMultiplier()` — "nothing
- *        scheduled", not a fabricated projection of the current rate's own
- *        natural continuation.
+ *        scheduled", not a fabricated projection of the current rate's continuation.
  *
  *      Interface ID: 0xa60bf13d
  */

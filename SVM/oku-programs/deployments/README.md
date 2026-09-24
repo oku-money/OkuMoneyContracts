@@ -5,8 +5,11 @@
 (pre streaming-accrual refactor) and are known-stale in several ways:
 
 - `pdas.psmConfig` points at a 562-byte account under the OLD PsmConfig layout
-  (626 bytes now). The current program cannot deserialize it — it is an
-  orphaned account, not a usable config.
+  (`PsmConfig::LEN` is **754** now — 626 before the `reserved: [u8; 128]` tail
+  padding was added). The current program cannot deserialize it — it is an
+  orphaned account, not a usable config, and `migrate_config_space` does not
+  apply: that instruction grows a *current-layout* config, it does not
+  translate a pre-single-token one.
 - `tokens.okuMoney` / `tokens.usdOku`, `pdas.redemptionQueue`,
   `pdas.vaultConfig`, `pdas.vaultOkuMoney` are two-token-model keys from before
   the single-token collapse. Dead.

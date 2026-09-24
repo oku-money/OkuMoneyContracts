@@ -21,10 +21,7 @@
  * Environment:
  *   NEW_MULTIPLIER=<1e18-scaled>    (required)
  *   DRY_RUN=true                    simulate without submitting
- *   YES_MAINNET=true                bypass mainnet guard (standard guard only —
- *                                    no extra confirmation flag; this is an
- *                                    ordinary role-gated admin action like any
- *                                    other setter, not a uniquely dangerous one)
+ *   YES_MAINNET=true                bypass the standard mainnet guard
  *
  * Also exported as `runSetOkuMMultiplier()` for in-process callers (e.g. the drill).
  */

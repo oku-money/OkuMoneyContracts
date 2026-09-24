@@ -61,7 +61,6 @@ import { runSetOkuMMultiplier } from "../../../scripts/operator/setOkuMMultiplie
 import { runSetOkuMYieldRate } from "../../../scripts/operator/setOkuMYieldRate";
 import { runPsmOp } from "../../../scripts/operator/psmOps";
 import { runVaultOp } from "../../../scripts/operator/vaultOps";
-import { runStageSettlement, runRollEpoch } from "../../../scripts/operator/runEpoch";
 import { appendSample, loadSamples } from "../../../scripts/utils/globalValue";
 import { deriveStageSettlement, deriveRollEpoch } from "../../../scripts/operator/deriveEpochSchedule";
 import { loadArtifact } from "../../../scripts/utils/epochArtifact";
@@ -266,7 +265,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         expect(confirmedRate).to.be.greaterThan(PRECISION);
     });
 
-    it("runEpoch: stage-settlement derives and atomically stages the settlement rate", async function () {
+    it("deriveEpochSchedule: stage-settlement derives and atomically stages the settlement rate", async function () {
         const PRECISION = 10n ** 18n;
         // Deliberately tiny rate (~0.01% APY): by this point in the drill,
         // prior tests have minted a substantial OkuM supply (~137k). A target
@@ -295,12 +294,45 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         // target and would CLAMP at 111% of MAX_RATE in a 24h window.
         const realisedYieldUsd = supply * 0.0005;
 
+        // Seed the V(t) store. `deriveStageSettlement` hard-errors on an empty
+        // sample set rather than falling back to this chain's local supply —
+        // deriving a rate from an unmeasured denominator is the failure that
+        // fallback existed to hide. Two samples spanning the elapsed base
+        // window are the minimum for a time-weighted average.
+        const multNow = Number(await okuMoney.okuMMultiplier()) / 1e18;
+        // Anchor read from the contract, not recomputed: the window starts at
+        // `okuMLastAccrualTime`, which is the block the rate tx mined in, not
+        // the timestamp observed just before sending it.
+        const anchorSec = Number(await okuMoney.okuMLastAccrualTime());
+        appendSample({
+            timestampSec: anchorSec,
+            valueUsd: supply * multNow,
+            perChain: { [ctx.bookKey]: supply * multNow },
+        });
+        appendSample({
+            timestampSec: await time.latest(),
+            valueUsd: supply * multNow,
+            perChain: { [ctx.bookKey]: supply * multNow },
+        });
+
         const pendingEnd = rateEnd + BigInt(5760); // one 24h-epoch settlement window (1/15)
-        const result = await runStageSettlement(ctx, admin, {
+        const artifact = await deriveStageSettlement(ctx, admin, {
+            epochId: `drill-stage-${Date.now()}`,
             realisedYieldUsd,
             pendingEndTimestamp: pendingEnd,
         });
-        expect(result.rSettleFloat).to.be.greaterThan(1);
+        expect(BigInt(artifact.schedule.nextRate)).to.be.greaterThan(PRECISION);
+
+        // Derivation and submission are separate steps in the production
+        // pipeline (derive once, fan out to every chain); the drill submits the
+        // artifact here the same way `applyScheduleSingleChain.ts` does.
+        await runSetOkuMYieldRate(ctx, admin, {
+            mode: "withSuccessor",
+            rate: BigInt(artifact.schedule.rate),
+            endTimestamp: BigInt(artifact.schedule.rateEnd),
+            nextRate: BigInt(artifact.schedule.nextRate),
+            pendingEndTimestamp: BigInt(artifact.schedule.nextRateEnd),
+        });
         // The settlement rate must actually be armed as the successor on-chain
         // (this was a self-comparison bug — `x > x` — in an earlier version of
         // this assertion, which is always false and would have silently
@@ -309,7 +341,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         expect(await okuMoney.okuMPendingRateEnd()).to.equal(pendingEnd);
     });
 
-    it("runEpoch: roll-epoch reconciles and stages the next epoch's base rate", async function () {
+    it("deriveEpochSchedule: roll-epoch reconciles and stages the next epoch's base rate", async function () {
         const rateEnd = await okuMoney.okuMRateEnd();
         await time.increaseTo(Number(rateEnd) + 1); // now inside the settlement window
 
@@ -319,7 +351,8 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const nextRealisedYieldUsd = supply * 0.0005;
         const mult = Number(await okuMoney.okuMMultiplier()) / 1e18;
 
-        const result = await runRollEpoch(ctx, admin, {
+        const artifact = await deriveRollEpoch(ctx, admin, {
+            epochId: `drill-roll-${Date.now()}`,
             nextRealisedYieldUsd,
             // One settlement window, NOT a full epoch. `deriveRollEpoch` computes
             // nextRateEnd = <current on-chain rateEnd> + epochLength*(1-1/15),
@@ -333,7 +366,16 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             // isn't — see runEpoch.ts's `globalValueUsdOverride` doc.
             globalValueUsdOverride: supply * mult,
         });
-        expect(result.rBaseNextFloat).to.be.greaterThan(1);
+        expect(BigInt(artifact.schedule.nextRate)).to.be.greaterThan(10n ** 18n);
+
+        await runSetOkuMYieldRate(ctx, admin, {
+            mode: "withSuccessor",
+            rate: BigInt(artifact.schedule.rate),
+            endTimestamp: BigInt(artifact.schedule.rateEnd),
+            nextRate: BigInt(artifact.schedule.nextRate),
+            pendingEndTimestamp: BigInt(artifact.schedule.nextRateEnd),
+        });
+        expect(await okuMoney.okuMPendingRatePerSecond()).to.be.greaterThan(10n ** 18n);
     });
 
     it("deriveEpochSchedule + broadcastSchedule's carry-ledger wiring: two full derive cycles, exercising artifact identity and the reconciledCarryUsd/carryForwardUsd split end-to-end", async function () {

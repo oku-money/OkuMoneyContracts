@@ -9,13 +9,10 @@
  *   Warm Multisig   → all PAUSER, all BLACKLISTER
  *   Orchestrator    → OKUM_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR
  *
- * QUEUE_PSM is intentionally NOT in this list — it must remain on the LitePSM
- * proxy address (set at deploy time via configureRoles).
- *
- * OKUM_MINTER and OKUM_BURNER (cycle 4 / EVM-15) are likewise intentionally
- * NOT in this list — they must remain on the LitePSM and RedemptionQueue
- * proxy addresses (granted at deploy time via configureRoles). This script
- * verifies those grants exist before proceeding; missing grants are fatal.
+ * QUEUE_PSM, OKUM_MINTER and OKUM_BURNER are intentionally NOT in this list —
+ * they must remain on the LitePSM / RedemptionQueue proxy addresses, granted
+ * at deploy time via configureRoles. This script verifies those grants exist
+ * before proceeding; missing grants are fatal.
  *
  * Final step: revokes DEFAULT_ADMIN_ROLE from the deployer key, making the
  * Cold Multisig the sole meta-role holder.
@@ -36,11 +33,10 @@
  *   DRY_RUN=true MAINNET_COLD_MULTISIG=0x... ... \
  *     npx hardhat run scripts/operator/grantRolesMainnet.ts --network localhost
  *
- * Safety: requires explicit opt-in on mainnet-beta networks (base, bsc).
- * Set YES_MAINNET=1 in the environment to bypass the gate (preferred; works
- * under `hardhat run`). The legacy --yes-mainnet CLI flag also works when the
- * script is invoked directly via `ts-node`, but Hardhat v2 rejects unknown
- * CLI flags so it can't be used with `hardhat run`.
+ * Safety: requires explicit opt-in on mainnet-beta networks (base, bsc). Set
+ * YES_MAINNET=1 in the environment — the legacy --yes-mainnet CLI flag only
+ * works via direct `ts-node` invocation, since Hardhat v2 rejects unknown CLI
+ * flags under `hardhat run`.
  */
 
 import { ethers, network } from "hardhat";
@@ -51,12 +47,11 @@ import { getDeployedContract } from "../utils/deploy";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
 import { recordRoleGrant } from "../utils/roleRegistry";
+import { isMainnetNetwork } from "../utils/mainnetGuard";
 
 // ============================================================================
 // Configuration — from environment (REQUIRED on mainnet)
 // ============================================================================
-
-const MAINNET_NETWORKS = new Set(["base", "bsc", "mainnet", "ethereum"]);
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -145,7 +140,7 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
 // ============================================================================
 
 async function confirmIfMainnet(networkName: string): Promise<void> {
-  if (!MAINNET_NETWORKS.has(networkName)) return;
+  if (!isMainnetNetwork(networkName)) return;
   if (YES_MAINNET) {
     logger.warning(`YES_MAINNET set; skipping confirmation for ${networkName}`);
     return;
@@ -154,10 +149,8 @@ async function confirmIfMainnet(networkName: string): Promise<void> {
     logger.info("DRY_RUN=true; skipping mainnet confirmation");
     return;
   }
-  // In a real CLI prompt we'd read stdin. For the CI-unfriendly interactive case,
-  // require the caller to set YES_MAINNET=1 explicitly. (The CLI flag
-  // `--yes-mainnet` is also honored when invoked directly, but Hardhat v2's
-  // `hardhat run` rejects unknown CLI flags before the script sees them.)
+  // No stdin prompt: YES_MAINNET=1 is the only opt-in that survives
+  // `hardhat run`, which rejects unknown CLI flags before the script runs.
   throw new Error(
     `Refusing to broadcast on ${networkName} without explicit YES_MAINNET opt-in.\n` +
     `Re-run with: YES_MAINNET=1 npx hardhat run ... --network ${networkName}`
@@ -166,9 +159,8 @@ async function confirmIfMainnet(networkName: string): Promise<void> {
 
 /**
  * Identity of a privilege mutation, carried so it can be written to the
- * durable grant ledger. Previously only the display `label` existed, which
- * meant the grantee address survived nowhere but the terminal — see
- * `utils/roleRegistry.ts` for why that is the specific failure this closes.
+ * durable grant ledger — see `utils/roleRegistry.ts`. The display `label`
+ * alone is not enough: the grantee address must survive the terminal.
  */
 interface GrantMeta {
   chain: string;
@@ -368,7 +360,26 @@ async function main() {
   // -------- Revoke DEFAULT_ADMIN_ROLE from deployer --------
   logger.step(4, `Revoking deployer (${deployerAddress}) DEFAULT_ADMIN_ROLE`);
   logger.warning("  This step makes the Cold Multisig the sole meta-role holder.");
-  logger.warning("  Verify ALL prior role grants succeeded before proceeding.");
+
+  // Verified, not merely warned about: this is the one irreversible step in the
+  // script. If the cold multisig does not already hold DEFAULT_ADMIN_ROLE on a
+  // contract, revoking the deployer's leaves that contract with NO admin and no
+  // way to grant one. A contract missing from the address book is skipped by the
+  // grant loops above but would still be revoked here, so check every one.
+  const adminless: string[] = [];
+  for (const [name, c] of Object.entries(contracts)) {
+    if (!(await c.hasRole(ROLES.DEFAULT_ADMIN_ROLE, cold))) adminless.push(name);
+  }
+  if (adminless.length > 0) {
+    throw new Error(
+      `Refusing to revoke deployer admin: cold multisig ${cold} does NOT hold ` +
+        `DEFAULT_ADMIN_ROLE on ${adminless.join(", ")}. Revoking now would leave ` +
+        `${adminless.length === 1 ? "that contract" : "those contracts"} permanently ` +
+        `without an admin. Re-run step 1 and confirm it succeeded.`
+    );
+  }
+  logger.success(`  Verified cold multisig holds DEFAULT_ADMIN_ROLE on all ${Object.keys(contracts).length} contracts`);
+
   for (const [name, c] of Object.entries(contracts)) {
     await revokeIfNeeded(
       `${name}.DEFAULT_ADMIN_ROLE from deployer`,

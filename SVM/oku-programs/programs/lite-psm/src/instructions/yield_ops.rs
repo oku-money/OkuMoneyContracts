@@ -1,35 +1,20 @@
 //! Rate-schedule instructions — the streaming accrual writer set.
 //!
-//! ## What changed, and why
-//!
-//! This used to be a two-instruction discrete model: `set_multiplier` wrote a
-//! new scalar, and `distribute_yield` bumped the scalar by
-//! `yield_amount * PRECISION / total_supply`. Both wrote directly into the
-//! mint's `ScaledUiAmountConfig`.
-//!
-//! That model is gone. It had the flaw EVM's refactor set out to remove: a
-//! discrete jump in the multiplier is a riskless, perfectly-predictable profit
-//! for anyone who mints immediately before it and redeems immediately after.
-//! Widening the sandwich lock cannot fix this — the searcher only has to
-//! straddle the tick by one slot on each side.
-//!
-//! Under streaming accrual there is no tick to straddle. The multiplier is a
-//! continuous function of time, so the operator's transactions carry no
-//! economic event at all: they merely change the *slope* of a curve, always at
-//! a bounded, pre-announced instant.
-//!
-//! `distribute_yield` has no successor here. Under rear-facing epochs the
-//! operator measures realised yield off-chain and derives a *rate*; there is
-//! no on-chain "distribute N dollars" primitive to port.
+//! The multiplier is a continuous function of time, so these instructions
+//! carry no economic event: they merely change the *slope* of a curve, always
+//! at a bounded, pre-announced instant. There is no discrete tick for a
+//! searcher to straddle, and correspondingly no "distribute N dollars"
+//! primitive — under rear-facing epochs the operator measures realised yield
+//! off-chain and derives a *rate*.
 //!
 //! ## The writer set
 //!
 //! | Instruction | EVM counterpart |
 //! |---|---|
-//! | `set_okum_yield_rate` | `OkuMoney.setOkuMYieldRate` (`:389`) |
-//! | `set_next_okum_yield_rate` | `OkuMoney.setNextOkuMYieldRate` (`:499`) |
-//! | `set_okum_yield_rate_with_successor` | `OkuMoney.setOkuMYieldRateWithSuccessor` (`:558`) |
-//! | `set_okum_multiplier` (emergency) | `OkuMoney.setOkuMMultiplier` (`:587`) |
+//! | `set_okum_yield_rate` | `OkuMoney.setOkuMYieldRate` |
+//! | `set_next_okum_yield_rate` | `OkuMoney.setNextOkuMYieldRate` |
+//! | `set_okum_yield_rate_with_successor` | `OkuMoney.setOkuMYieldRateWithSuccessor` |
+//! | `set_okum_multiplier` (emergency) | `OkuMoney.setOkuMMultiplier` |
 //! | `sync_display_multiplier` | *(none — SVM-specific display mirror)* |
 //!
 //! Every write re-snapshots `okum_base_multiplier` at the current computed
@@ -49,18 +34,17 @@ use oku_shared::{MAX_MULTIPLIER, MAX_RATE, MAX_RATE_WINDOW_SECONDS, PRECISION};
 // Shared validation
 // ---------------------------------------------------------------------------
 
-/// Validate a `(rate, end_timestamp)` pair against the rails EVM enforces at
-/// `OkuMoney.sol:401-406`.
+/// Validate a `(rate, end_timestamp)` pair against the rails EVM enforces in
+/// `OkuMoney._setOkuMYieldRate`.
 ///
 /// The two asymmetric rules are the important ones:
 ///
-/// - **A yielding rate MUST carry a window.** Without it the rate would end
-///   whenever an operator happened to land a transaction — a per-chain,
-///   transaction-dependent moment, which is precisely the cross-chain
-///   divergence streaming accrual exists to eliminate.
-/// - **A halted rate MUST NOT carry one.** A window against a halted rate is
-///   meaningless and would put branch 1 of `compute_multiplier` into its
-///   defensive fallback.
+/// - **A yielding rate MUST carry a window**, or the rate would end whenever
+///   an operator happened to land a transaction — a per-chain,
+///   transaction-dependent moment, i.e. the cross-chain divergence streaming
+///   accrual exists to eliminate.
+/// - **A halted rate MUST NOT carry one**; it would be meaningless and would
+///   put branch 1 of `compute_multiplier` into its defensive fallback.
 fn validate_rate_window(rate: u64, end_timestamp: i64, now_ts: i64) -> Result<()> {
     let rate = rate as u128;
 
@@ -90,8 +74,8 @@ fn validate_rate_window(rate: u64, end_timestamp: i64, now_ts: i64) -> Result<()
 /// Re-snapshot the base multiplier at `now_ts` so accrual is continuous across
 /// a schedule write.
 ///
-/// EVM does the same at `OkuMoney.sol:421`. Skipping this would either strand
-/// or double-count everything accrued since the last anchor.
+/// EVM does the same in `OkuMoney._setOkuMYieldRate`. Skipping this would
+/// either strand or double-count everything accrued since the last anchor.
 fn reanchor(config: &mut PsmConfig, now_ts: i64) -> Result<u128> {
     let snapshot = multiplier::at(config, now_ts)?;
     config.okum_base_multiplier = snapshot;
@@ -109,7 +93,8 @@ fn reanchor(config: &mut PsmConfig, now_ts: i64) -> Result<u128> {
 /// Compares against the EFFECTIVE rate, not the stored one. Once the active
 /// window has closed the stored rate is stale and higher than what is actually
 /// accruing, so comparing against storage would let an operator dress an
-/// increase up as a decrease. EVM closes the same hole at `OkuMoney.sol:420`.
+/// increase up as a decrease. EVM closes the same hole in
+/// `OkuMoney._setOkuMYieldRate`.
 fn check_pause_gate(config: &PsmConfig, new_rate: u64, now_ts: i64) -> Result<()> {
     if config.is_paused && (new_rate as u128) > multiplier::effective_rate(config, now_ts) {
         return err!(LitePsmError::Paused);
@@ -121,30 +106,25 @@ fn check_pause_gate(config: &PsmConfig, new_rate: u64, now_ts: i64) -> Result<()
 // Private writers
 // ---------------------------------------------------------------------------
 //
-// These two mirror `OkuMoney.sol`'s `_setOkuMYieldRate` (`:399`) and
-// `_setNextOkuMYieldRate` (`:509`). Keeping them as separate writers that each
-// perform their OWN validation, pause gate, and write is not stylistic: it is
-// what makes `set_okum_yield_rate_with_successor` behave identically to EVM,
-// where the atomic setter is literally the two private helpers called in
-// sequence (`OkuMoney.sol:570-571`).
+// These two mirror `OkuMoney._setOkuMYieldRate` and `_setNextOkuMYieldRate`.
+// Keeping them as separate writers that each perform their OWN validation,
+// pause gate, and write is not stylistic: it is what makes
+// `set_okum_yield_rate_with_successor` behave identically to EVM, where the
+// atomic setter is literally the two private helpers called in sequence.
 //
-// An earlier version of this file validated everything up front and then wrote
-// once. That looked cleaner and was wrong in two ways, both of which came from
-// the successor's checks not seeing the active rate's write:
+// Do NOT merge them into a single validate-everything-then-write pass. The
+// successor's checks MUST see the active rate's write, otherwise:
 //
-//   1. `withSuccessor(PRECISION, 0, rate, end)` was accepted. On EVM the second
-//      helper reads `rateEnd == 0` and reverts `NoRateEndSet`, because a
+//   1. `withSuccessor(PRECISION, 0, rate, end)` is accepted, where EVM's
+//      second helper reads `rateEnd == 0` and reverts `NoRateEndSet` — a
 //      successor to a halted rate is meaningless.
-//   2. While paused, the successor's gate compared against the OLD effective
-//      rate instead of the rate just written, so `withSuccessor(3%, .., 4%, ..)`
-//      from a 5% baseline let a rate INCREASE through while paused — the exact
-//      thing the gate exists to stop.
-//
-// Do not re-merge these.
+//   2. While paused, the successor's gate compares against the OLD effective
+//      rate instead of the rate just written, so `withSuccessor(3%, .., 4%,
+//      ..)` from a 5% baseline slips a rate INCREASE past the gate.
 
 /// Write the active rate and its window, clearing any armed successor.
 ///
-/// Mirrors `EVM/src/token/OkuMoney.sol:399-427` (`_setOkuMYieldRate`).
+/// Mirrors EVM `OkuMoney._setOkuMYieldRate`.
 fn apply_active_rate(
     config: &mut PsmConfig,
     new_rate: u64,
@@ -180,7 +160,7 @@ fn apply_active_rate(
 /// Reads `config.okum_rate_end` rather than taking it as a parameter — that is
 /// precisely what makes the atomic path see the active rate's write.
 ///
-/// Mirrors `EVM/src/token/OkuMoney.sol:509-528` (`_setNextOkuMYieldRate`).
+/// Mirrors EVM `OkuMoney._setNextOkuMYieldRate`.
 fn apply_successor(
     config: &mut PsmConfig,
     new_rate: u64,
@@ -234,17 +214,27 @@ fn apply_successor(
 /// Emit `PendingRateCancelled` if a successor was armed and is about to be
 /// discarded or replaced.
 ///
-/// Cross-chain monitoring reconstructs each chain's schedule history from
-/// events; silently dropping an armed successor would make a chain look like it
-/// still has one staged. Mirrors `OkuMoney._emitPendingRateCancelledIfArmed`.
+/// Cross-chain monitoring reconstructs schedule history from events, so
+/// silently dropping an armed successor would make a chain look like it still
+/// has one staged.
+///
+/// Past `rate_end` the successor has already ACTIVATED — it is the rate now
+/// accruing — so replacing it is not a cancellation. Without that guard every
+/// re-anchor after a window elapsed (routine, not an edge case) would emit a
+/// spurious cancellation. Matches
+/// `OkuMoney._emitPendingRateCancelledIfArmed`.
 fn emit_pending_cancelled_if_armed(config: &PsmConfig, now_ts: i64) {
-    if (config.okum_pending_rate_per_second as u128) > PRECISION {
-        emit!(PendingRateCancelled {
-            cancelled_rate: config.okum_pending_rate_per_second,
-            cancelled_pending_rate_end: config.okum_pending_rate_end,
-            timestamp: now_ts,
-        });
+    if (config.okum_pending_rate_per_second as u128) <= PRECISION || config.okum_rate_end == 0 {
+        return;
     }
+    if now_ts >= config.okum_rate_end {
+        return;
+    }
+    emit!(PendingRateCancelled {
+        cancelled_rate: config.okum_pending_rate_per_second,
+        cancelled_pending_rate_end: config.okum_pending_rate_end,
+        timestamp: now_ts,
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +247,7 @@ fn emit_pending_cancelled_if_armed(config: &PsmConfig, now_ts: i64) {
 /// any armed successor: a fresh active rate invalidates a successor that was
 /// staged against the old window.
 ///
-/// Mirrors `EVM/src/token/OkuMoney.sol:389-397`.
+/// Mirrors EVM `OkuMoney.setOkuMYieldRate`.
 pub fn set_okum_yield_rate(
     ctx: Context<SetYieldRate>,
     new_rate: u64,
@@ -273,16 +263,15 @@ pub fn set_okum_yield_rate(
 
 /// Pre-stage the successor rate that takes over at `okum_rate_end`.
 ///
-/// This is the instruction that makes cross-chain epoch handovers free: the
-/// successor activates off the ABSOLUTE `okum_rate_end` inside the multiplier
-/// computation, not off a transaction. Staging may therefore land on different
-/// chains at different times — even days apart — and the activation is still
-/// simultaneous to the second.
+/// Makes cross-chain epoch handovers free: the successor activates off the
+/// ABSOLUTE `okum_rate_end` inside the multiplier computation, not off a
+/// transaction, so staging may land on different chains days apart and still
+/// activate simultaneously to the second.
 ///
 /// Deliberately does NOT re-anchor: the active rate and its window are
 /// untouched, so there is nothing to snapshot.
 ///
-/// Mirrors `EVM/src/token/OkuMoney.sol:499-507`.
+/// Mirrors EVM `OkuMoney.setNextOkuMYieldRate`.
 pub fn set_next_okum_yield_rate(
     ctx: Context<SetYieldRate>,
     new_rate: u64,
@@ -303,17 +292,17 @@ pub fn set_next_okum_yield_rate(
 
 /// Set the active rate and its successor atomically.
 ///
-/// This is the instruction the epoch orchestrator uses. Doing both writes in
-/// one transaction matters because the settlement-window handover re-anchors at
-/// the SAME rate — which is exactly skew-free — while simultaneously arming the
-/// next epoch's base rate. Splitting it would leave a window in which one chain
-/// has the successor and another does not.
+/// The instruction the epoch orchestrator uses. Both writes must be in one
+/// transaction: the settlement-window handover re-anchors at the SAME rate
+/// (exactly skew-free) while arming the next epoch's base rate, and splitting
+/// it would leave a window in which one chain has the successor and another
+/// does not.
 ///
-/// Composition order is load-bearing, not incidental: `apply_successor` reads
-/// the `okum_rate_end` that `apply_active_rate` just wrote. See the module note
+/// Composition order is load-bearing: `apply_successor` reads the
+/// `okum_rate_end` that `apply_active_rate` just wrote. See the module note
 /// above the private writers.
 ///
-/// Mirrors `EVM/src/token/OkuMoney.sol:558-572`.
+/// Mirrors EVM `OkuMoney.setOkuMYieldRateWithSuccessor`.
 pub fn set_okum_yield_rate_with_successor(
     ctx: Context<SetYieldRate>,
     new_rate: u64,
@@ -333,17 +322,16 @@ pub fn set_okum_yield_rate_with_successor(
 
 /// Emergency: force the multiplier to an explicit value.
 ///
-/// This is the ONLY instruction that produces a discrete multiplier jump, and
-/// therefore the only one that engages the sandwich lock. It exists for
-/// incident response — correcting a mis-derived schedule that has already
-/// accrued, or re-anchoring a chain that fell out of step — not for routine
-/// operation.
+/// The ONLY instruction that produces a discrete multiplier jump, and
+/// therefore the only one that engages the sandwich lock. For incident
+/// response — correcting a mis-derived schedule that has already accrued, or
+/// re-anchoring a chain that fell out of step — not routine operation.
 ///
 /// Halts accrual as a side effect: an explicit override is an admission that
 /// the schedule was wrong, so continuing to run it would be incoherent. The
 /// operator must publish a fresh schedule afterwards.
 ///
-/// Mirrors `EVM/src/token/OkuMoney.sol:587-610`.
+/// Mirrors EVM `OkuMoney.setOkuMMultiplier`.
 pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128) -> Result<()> {
     // Self-fence: two overrides in one slot would defeat the lock.
     check_yield_lock(&ctx.accounts.config)?;
@@ -354,13 +342,8 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
 
     // Pause DOES gate this lever — a discrete value move is a state-effect
     // and must freeze alongside transfers during an incident, rather than
-    // remaining live while everything else is halted.
-    //
-    // Exact parity with EVM's `setOkuMMultiplier`, which carries
-    // `whenNotPaused` (`OkuMoney.sol`). The comment here previously asserted
-    // the opposite ("pausing must not become a way to freeze the emergency
-    // lever") while the code did — and still does — the correct thing; the
-    // comment was the defect, not the `require!`.
+    // remaining live while everything else is halted. Exact parity with EVM's
+    // `setOkuMMultiplier`, which carries `whenNotPaused`.
     require!(!config.is_paused, LitePsmError::Paused);
 
     let current = multiplier::at(config, now_ts)?;
@@ -388,13 +371,10 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
 
     config.last_yield_distribution_slot = clock.slot;
 
-    // Force-sync the display mirror, effective immediately and with NO
-    // pre-arm. This is a correctness step, not a nicety: a previous sync may
-    // have pre-armed a step computed under the schedule we just halted, and
-    // that stale step could read ABOVE the new canonical value — the one
-    // direction the mirror must never take. Writing an immediate value
-    // overwrites it. Unlike the piggyback sync this is NOT best-effort: if the
-    // display cannot be corrected, the override must not proceed.
+    // Force-sync the display mirror, effective immediately. This is a
+    // correctness step, not a nicety, and is NOT best-effort: if the display
+    // cannot be brought to the new canonical value, the override must not
+    // proceed, or the mirror would be left reading against a halted schedule.
     write_display_multiplier(
         new_multiplier,
         now_ts,
@@ -420,11 +400,10 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
 
 /// Refresh the wallet-facing display mirror. **Permissionless.**
 ///
-/// Permissionless is safe and deliberate: the value written is fully
-/// determined by on-chain state, so a caller has no degrees of freedom to
-/// abuse. The `PsmConfig` PDA signs the CPI, not the caller. Making this
-/// rebaser-gated would turn display freshness into an operator liveness
-/// dependency for no security gain.
+/// Safe and deliberate: the written value is fully determined by on-chain
+/// state, so a caller has no degrees of freedom to abuse, and the `PsmConfig`
+/// PDA signs the CPI rather than the caller. Rebaser-gating this would make
+/// display freshness an operator-liveness dependency for no security gain.
 ///
 /// Writes ONE point: the canonical multiplier as of now, effective
 /// immediately. The display is therefore a pure lag — a staircase that steps
@@ -432,30 +411,22 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
 ///
 /// ## Why there is no pre-armed next step
 ///
-/// An earlier version also pre-armed `m(now + 60s)` at its own effective
-/// timestamp, so the display kept advancing for one interval if the crank
-/// stopped. That was removed, because it was the sole cause of a real
-/// violation of the only invariant the mirror has to hold.
+/// A step armed for a future timestamp fires under whatever schedule is live
+/// when that timestamp arrives. After a rate DECREASE — routine at an epoch
+/// roll, where the settlement rate is usually lower than the base rate — a
+/// value computed from the old, faster curve lands ABOVE the new canonical
+/// value, the one direction the mirror must never take. (Measured worst
+/// cases: ~$0.25 per $1M for a 20%→5% roll, ~$6 per $1M for `MAX_RATE`→halt.)
 ///
-/// A step armed under one schedule fires under whatever schedule is live when
-/// its timestamp arrives. After a rate DECREASE — which is routine at an epoch
-/// roll, where the settlement rate is usually lower than the base rate — the
-/// armed value is computed from the old, faster curve and lands ABOVE the new
-/// canonical value. Measured worst cases: ~$0.25 per $1M for a 20%→5% roll,
-/// ~$6 per $1M for `MAX_RATE`→halt. Small and self-correcting within one
-/// interval, but the wrong direction: the display would briefly promise more
-/// than the PSM will pay.
+/// The alternative fix — having every rate write re-sync the display — would
+/// put the mint back into `SetYieldRate`, re-coupling the one instruction that
+/// must land reliably at epoch boundaries to the token program. Writing only
+/// an immediate point instead makes the invariant unconditional and drops any
+/// dependency on Token-2022's future-timestamp resolve semantics.
 ///
-/// Closing that by having every rate write also re-sync the display would mean
-/// putting the mint back into `SetYieldRate`, re-coupling the one instruction
-/// that must land reliably at epoch boundaries to the token program. Dropping
-/// the pre-arm instead makes the invariant unconditional, halves the cost of
-/// this instruction, and removes the dependency on Token-2022's
-/// future-timestamp resolve semantics entirely.
-///
-/// What is lost: if the crank stops, the display freezes rather than advancing
-/// one more step. It is stale-LOW, which is safe, and nothing prices against
-/// it (`SVM/DECISIONS.md` D-16).
+/// The cost: if the crank stops the display freezes rather than advancing one
+/// more step. That is stale-LOW, which is safe, and nothing prices against it
+/// (`SVM/DECISIONS.md` D-16).
 ///
 /// Does NOT stamp the sandwich lock — see `PsmConfig::last_yield_distribution_slot`.
 pub fn sync_display_multiplier(ctx: Context<SyncDisplayMultiplier>) -> Result<()> {

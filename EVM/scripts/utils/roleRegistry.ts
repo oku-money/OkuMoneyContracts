@@ -3,52 +3,26 @@
  * granted or revoked on an EVM chain — plus the address-labelling used to
  * make an audit of live chain state readable.
  *
- * ## The gap this closes
- *
  * `OkuMoney`, `OkuDollar`, `LitePSM` and `RedemptionQueue` all extend
- * OpenZeppelin's `AccessControlUpgradeable` — **not** `AccessControlEnumerable`.
- * That distinction is the whole problem:
- *
- *   - `hasRole(role, account)` answers "does THIS address hold it?"
- *   - there is **no** `getRoleMemberCount` / `getRoleMember`
- *
- * So the chain cannot be asked "who holds OKUM_MINTER?". Once a grant tx has
- * scrolled out of an operator's terminal, the grantee address exists only in
- * `RoleGranted` event logs — recoverable, but dependent on RPC log retention
- * and `eth_getLogs` range limits, and not at all on a chain an operator has
- * forgotten was even touched.
- *
- * Before this file, the scripts that hand out privilege
- * (`deploy/index.ts::configureRoles`, `operator/grantRoles.ts`,
- * `operator/grantRolesMainnet.ts`) printed the grantee to stdout and then
- * dropped it. `grantRoles.ts` in particular defaults `MASTER_EOA` to a
- * hardcoded address its own NatSpec describes as "NOT held by this
- * repo/deployer" — so the single most security-relevant address in the whole
- * flow was a default nobody was forced to look at, recorded nowhere.
- *
- * Every privilege mutation now appends here, so the grantee address survives
- * the terminal it was printed to.
- *
- * ## Why this file is the record of last resort
- *
- * Because the chain cannot enumerate holders, this ledger is not merely a
- * convenience — on a chain whose logs have been pruned it is the ONLY record.
- * That is not hypothetical: every free bscTestnet endpoint answers
+ * OpenZeppelin's `AccessControlUpgradeable`, **not** `AccessControlEnumerable`:
+ * `hasRole(role, account)` answers "does THIS address hold it?", but there is
+ * no `getRoleMemberCount` / `getRoleMember`. The chain therefore cannot be
+ * asked "who holds OKUM_MINTER?" — the grantee address exists only in
+ * `RoleGranted` event logs, subject to RPC log retention. At least one chain
+ * we deploy to has pruned those logs (free bscTestnet endpoints answer
  * `eth_getLogs` over the deployment range with "History has been pruned for
- * this block", so the grants made there are unrecoverable from chain data
- * alone. Hence `config/roleGrants.json` is tracked in git rather than
- * gitignored like the other generated stores.
+ * this block"), making this ledger the ONLY record of those grants. That is
+ * why `config/roleGrants.json` is tracked in git rather than gitignored like
+ * the other generated stores.
  *
- * ## Append-only, deliberately
- *
- * Revocations append a `revoke` entry rather than deleting the `grant` — the
- * history of who *used* to hold a privilege is exactly what an incident
- * review needs. Current holders are derived by replaying the ledger in
- * timestamp order (`deriveLedgerHolders`), not by mutating rows in place.
+ * Append-only, deliberately: revocations append a `revoke` entry rather than
+ * deleting the `grant`, because the history of who *used* to hold a privilege
+ * is what an incident review needs. Current holders are derived by replaying
+ * the ledger in timestamp order (`deriveLedgerHolders`), never by mutating
+ * rows in place.
  *
  * Hardhat-free on purpose (pure `fs` + `ethers` string helpers) so both
- * Hardhat-bound scripts and standalone `tsx` scripts can import it — same
- * constraint, same reason, as `utils/epochArtifact.ts`.
+ * Hardhat-bound scripts and standalone `tsx` scripts can import it.
  */
 
 import * as fs from "fs";

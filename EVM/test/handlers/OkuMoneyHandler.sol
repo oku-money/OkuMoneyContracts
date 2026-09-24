@@ -162,11 +162,31 @@ contract OkuMoneyHandler is Test {
         vm.prank(rebaser);
         try okuMoney.setOkuMMultiplier(newPrice) {
             ghostLastWasRebase = true;
-            ghostLastOkuMMultiplier = newPrice;
+            // Deliberately does NOT update ghostLastOkuMMultiplier here. The
+            // ghost is the PREVIOUS observation, recorded in afterInvariant
+            // after the assertion has run; writing it here made the ghost equal
+            // the value just written, so the monotonicity invariant compared a
+            // number against itself and could not fail.
             vm.roll(block.number + 1);
         } catch {
             ghostRebaseRevertCount++;
         }
+    }
+
+    /// @notice Drive the STREAMING rate — the production accrual path.
+    /// @dev Without this the invariant suite only ever moved the multiplier via
+    ///      `setOkuMMultiplier`, the emergency override, leaving the mechanism
+    ///      that actually runs in production unexercised.
+    function setStreamingRate(uint256 rateSeed, uint256 warpSeed) external {
+        uint256 rate = bound(rateSeed, PRECISION + 1, PRECISION + 1e10);
+        uint256 window = bound(warpSeed, 1 hours, 30 days);
+
+        vm.prank(rebaser);
+        try okuMoney.setOkuMYieldRate(rate, block.timestamp + window) {
+            // Advance into the window so accrual is actually observable.
+            vm.warp(block.timestamp + window / 2);
+            vm.roll(block.number + 1);
+        } catch {}
     }
 
     /// @notice Observe okuMMultiplier from outside the handler (e.g. from

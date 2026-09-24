@@ -5,25 +5,20 @@
 //! It is **computed**, never stored. The source of truth is the six-field
 //! rate schedule on [`PsmConfig`] plus `Clock::unix_timestamp`.
 //!
-//! This is a reversal of the previous design, where the multiplier was read
-//! back out of the mint's Token-2022 `ScaledUiAmountConfig` extension. That
-//! extension is now a **write-only display mirror**: the program pushes values
-//! to it for wallets to render, and never reads them back. Consequences worth
-//! internalising before touching this file:
+//! The mint's Token-2022 `ScaledUiAmountConfig` extension is a **write-only
+//! display mirror**: the program pushes values to it for wallets to render and
+//! never reads them back. Consequences worth internalising before touching
+//! this file:
 //!
 //! - The extension value **lags** the canonical value by up to one display
 //!   sync interval. That is by design and is safe in one direction only:
 //!   display must always be `<=` canonical, so a redeem pays at least what
 //!   the wallet showed. See `helpers::display_sync`.
 //! - Nothing in the PSM may price against the extension. Mint, redeem, direct
-//!   mint and direct burn all call [`current`].
-//! - `helpers::scaled_ui::read_multiplier` was deleted along with its
-//!   zero-init edge case and `f64 -> u64` round-trip. Do not reintroduce a
-//!   read path.
+//!   mint and direct burn all call [`current`]. Do not add a read path.
 //!
-//! EVM counterpart: `OkuMoney.okuMMultiplier()`
-//! (`EVM/src/token/OkuMoney.sol:282-293`), which is likewise a view over
-//! schedule state with no stored index.
+//! EVM counterpart: `OkuMoney.okuMMultiplier()`, likewise a view over schedule
+//! state with no stored index.
 
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
@@ -48,10 +43,11 @@ pub fn schedule_of(config: &PsmConfig) -> Schedule {
     }
 }
 
-/// The canonical multiplier at an arbitrary timestamp.
+/// The canonical multiplier at a given timestamp.
 ///
-/// Used by [`current`] and by the display sync, which needs to evaluate the
-/// schedule at a *future* instant in order to pre-arm the next staircase step.
+/// Every caller passes the current clock reading; the explicit parameter only
+/// lets one `Clock::get()` be threaded through an instruction that also needs
+/// `now_ts` for its own writes.
 #[inline]
 pub fn at(config: &PsmConfig, unix_timestamp: i64) -> Result<u128> {
     schedule_of(config)
@@ -75,9 +71,8 @@ pub fn current(config: &PsmConfig) -> Result<u128> {
 /// to dress an increase up as a decrease and slip past the gate while the
 /// protocol is paused.
 ///
-/// EVM counterpart: `OkuMoney._effectiveRate`
-/// (`EVM/src/token/OkuMoney.sol:321-331`); the same hole is closed there and
-/// regression-tested at `EVM/test/token/OkuMoney.t.sol:637`.
+/// EVM counterpart: `OkuMoney._effectiveRate`; the same hole is closed there
+/// and regression-tested in `EVM/test/token/OkuMoney.t.sol`.
 #[inline]
 pub fn effective_rate(config: &PsmConfig, unix_timestamp: i64) -> u128 {
     schedule_of(config).effective_rate(unix_timestamp)

@@ -7,13 +7,11 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  * @title IOkuMoney
  * @notice Shared interface for OkuMoney used by LitePSM, RedemptionQueue, OkuDollar,
  *         and the test mocks/handlers.
- * @dev OkuMoney is a non-rebasing standard ERC-20; `okuMMultiplier()` tracks the dollar
- *      value per token separately from `balanceOf()`. Extends `IERC20` so static
- *      analyzers can match the inherited ERC-20 surface against the OkuMoney
- *      implementation without a custom resolver. The OkuMoney-specific surface
- *      (mint/burn, multiplier ops) is declared explicitly below.
- *      Production call sites that need ERC-20 transfer semantics should still cast
- *      via `IERC20` to use SafeERC20. See Constants.sol for terminology legend.
+ * @dev OkuMoney is a non-rebasing standard ERC-20; `okuMMultiplier()` tracks dollar value
+ *      per token separately from `balanceOf()`. Extends `IERC20` so static analyzers can
+ *      match the inherited ERC-20 surface without a custom resolver; call sites needing
+ *      transfer semantics should still cast via `IERC20` to use SafeERC20.
+ *      See Constants.sol for terminology legend.
  */
 interface IOkuMoney is IERC20 {
     /// @notice Mint raw tokens to `to`.

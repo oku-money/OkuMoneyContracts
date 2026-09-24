@@ -17,10 +17,9 @@ const PSM_CONFIG_DISCRIMINATOR_HEX = '91ddc833e9c956b4';
  * Verify all deployment addresses exist on-chain.
  *
  * Existence alone is not enough: an orphaned account from a prior program
- * generation (e.g. the pre-streaming-accrual PsmConfig, which is 562 bytes
- * against the current 626) EXISTS at some address without being usable by the
- * current program. This previously would have reported that orphan as a pass.
- * Now checks owner + size + discriminator for the PSM config specifically.
+ * generation (e.g. a 562-byte pre-streaming-accrual PsmConfig against the
+ * current 754) EXISTS at some address without being usable by the current
+ * program. So this checks owner + size + discriminator for the PSM config.
  */
 export async function verifyDeployment(
   provider: AnchorProvider,

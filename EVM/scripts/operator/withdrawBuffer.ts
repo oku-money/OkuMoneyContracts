@@ -46,8 +46,15 @@ export async function runWithdrawBuffer(
   const usdcAddr = loadAddress(ctx.bookKey, "MockUSDC") ?? loadAddress(ctx.bookKey, "USDC");
   if (!psmAddr || !usdcAddr) throw new Error(`Missing LitePSM or USDC in address book for ${ctx.bookKey}`);
 
+  if (amount <= 0n) throw new Error("amount must be > 0");
+
   const signerAddr = await signer.getAddress();
-  const to = recipient && isAddress(recipient) ? recipient : signerAddr;
+  // A malformed recipient must fail, not silently redirect the withdrawal to
+  // the signer. Omitting it entirely still defaults to the signer.
+  if (recipient !== undefined && !isAddress(recipient)) {
+    throw new Error(`--to is not a valid address: ${recipient}`);
+  }
+  const to = recipient ?? signerAddr;
 
   const psm = (await getDeployedContract("LitePSM", psmAddr)).connect(signer);
   const usdc = (await ethers.getContractAt("IERC20", usdcAddr)).connect(signer);
@@ -82,7 +89,7 @@ if (require.main === module) {
     logger.header(`withdrawBuffer (${ctx.networkName})`);
     mainnetGuard(ctx.networkName, { yesMainnet: isYesMainnet(), dryRun: isDryRun() });
 
-    const amountStr = parseArg("amount") ?? parseArg("AMOUNT");
+    const amountStr = parseArg("amount");
     if (!amountStr) throw new Error("Required: --amount=<6-decimal USDC> or AMOUNT env var");
     const to = parseArg("to") ?? parseArg("TO");
 

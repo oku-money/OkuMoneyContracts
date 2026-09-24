@@ -3,11 +3,10 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import {
-    appendLedgerEntry,
+    upsertLedgerEntry,
     loadLedger,
     summarizeLedger,
     buildLedgerEntry,
-    upsertLedgerEntry,
     backfillReconciliation,
     CarryLedgerEntry,
 } from "../../../scripts/utils/carryLedger";
@@ -43,7 +42,7 @@ describe("scripts/utils/carryLedger", () => {
             ratePerSecond: "1000000000158549",
             carryForwardUsd: 0.01,
         };
-        appendLedgerEntry(entry, tmpPath);
+        upsertLedgerEntry(entry, tmpPath);
         expect(loadLedger(tmpPath)).to.deep.equal([entry]);
     });
 
@@ -86,7 +85,7 @@ describe("scripts/utils/carryLedger", () => {
                 result,
                 timestampSec: epoch * windowSeconds,
             });
-            appendLedgerEntry(entry, tmpPath);
+            upsertLedgerEntry(entry, tmpPath);
             carry = result.carryForwardUsd;
         }
 

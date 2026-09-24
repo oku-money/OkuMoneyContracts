@@ -751,14 +751,8 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
- "bytemuck",
  "oku-shared",
- "solana-instructions-sysvar",
- "solana-keccak-hasher",
- "solana-pubkey 3.0.0",
  "solana-security-txt",
- "solana-sha256-hasher",
- "solana-sysvar",
 ]
 
 [[package]]
@@ -1390,16 +1384,6 @@ dependencies = [
  "solana-instruction",
  "solana-program-entrypoint",
  "solana-stable-layout",
-]
-
-[[package]]
-name = "solana-keccak-hasher"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed1c0d16d6fdeba12291a1f068cdf0d479d9bff1141bf44afd7aa9d485f65ef8"
-dependencies = [
- "solana-define-syscall 4.0.1",
- "solana-hash",
 ]
 
 [[package]]

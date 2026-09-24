@@ -1,16 +1,16 @@
 /**
  * TypeScript mirror of the streaming-accrual math.
  *
- * This is the THIRD implementation of the same function. The other two are:
+ * One of THREE implementations of the same function:
  *
  *   - `EVM/src/lib/MathLib.sol`                      (Solidity, uint256)
  *   - `SVM/oku-programs/crates/oku-shared/src/rate.rs` (Rust, u128 + 256-bit mul_div)
+ *   - this file                                      (TypeScript, bigint)
  *
- * All three must agree bit-for-bit. That is not a nice-to-have: the protocol's
- * cross-chain determinism rests entirely on every deployment returning the same
- * multiplier at the same wall-clock second, and there is no on-chain layer on
- * either stack that can detect a divergence (see `EVM/README.md` § Accepted
- * Risks (10)).
+ * All three MUST agree bit-for-bit: the protocol's cross-chain determinism
+ * rests entirely on every deployment returning the same multiplier at the same
+ * wall-clock second, and no on-chain layer on either stack can detect a
+ * divergence (`EVM/README.md` § Accepted Risks (10)).
  *
  * They are held honest by the differential harness: `EVM/test/differential`
  * generates vectors from the Solidity, and both this file and the Rust replay
@@ -18,17 +18,12 @@
  * `cargo test --package oku-shared differential` there. If you change any one
  * of the three, regenerate the vectors and run all three.
  *
- * ## Why a TS implementation is needed at all
+ * A TS implementation is needed because Solana has no view functions: anything
+ * off-chain needing the canonical value — drift monitoring, the epoch
+ * orchestrator's V(t) sampler, integrators — recomputes it from `PsmConfig`.
  *
- * Solana has no view functions, so nothing can simply `call()` the multiplier
- * the way `checkMultiplierDrift.ts` does against EVM. Anything off-chain that
- * needs the canonical value — drift monitoring, the epoch orchestrator's V(t)
- * sampler, integrators — has to recompute it from `PsmConfig`.
- *
- * ## BigInt, not number
- *
- * Every value here is a `bigint`. `number` cannot hold a WAD-scaled multiplier
- * (1e24 > 2^53) and floating-point rounding would break exactness immediately.
+ * Every value here is a `bigint`, never `number`: `number` cannot hold a
+ * WAD-scaled multiplier (1e24 > 2^53) and float rounding would break exactness.
  */
 
 /** Fixed-point scale. Identical to EVM `Constants.PRECISION` and Rust `PRECISION`. */

@@ -33,12 +33,11 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     require!(!is_paused, LitePsmError::Paused);
     require!(usdc_amount > 0, LitePsmError::ZeroAmount);
 
-    // Price against the CANONICAL multiplier, computed from the rate schedule
-    // on `PsmConfig`. Deliberately NOT the mint's ScaledUiAmount extension,
-    // which is a lagging display mirror — see `helpers::multiplier`.
+    // Price against the CANONICAL multiplier from the rate schedule, NOT the
+    // mint's ScaledUiAmount extension (a lagging display mirror).
     let multiplier = multiplier::current(&ctx.accounts.config)?;
 
-    // Calculate OkuM raw amount (multiplier-aware): treat usdc_amount as a dollar value.
+    // Treat usdc_amount as a dollar value.
     let raw_oku_m_amount = dollars_to_raw(usdc_amount, multiplier)?;
 
     // Reject zero-output mints — at high `multiplier`, the division can
@@ -127,16 +126,16 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     Ok(())
 }
 
-// NOTE: the opportunistic "piggyback" display sync that used to live here was
-// removed after measurement. It added ~31k compute units to a cold mint (and
-// more in the two-rpow overhang branch) for a purely cosmetic refresh, on a
-// hot path that was already uncomfortably close to Solana's 200k per-instruction
-// default. Display freshness is now solely the permissionless crank's job --
-// see `sync_display_multiplier` and `scripts/admin/sync-display.ts`.
+// NOTE: do not piggyback an opportunistic display sync onto this path. It
+// measured ~31k compute units on a cold mint (more in the two-rpow overhang
+// branch) for a purely cosmetic refresh, on a hot path already uncomfortably
+// close to Solana's 200k per-instruction default. Display freshness is solely
+// the permissionless crank's job -- see `sync_display_multiplier` and
+// `scripts/admin/sync-display.ts`.
 //
 // Consequence, stated plainly: an idle PSM with no crank running will show a
-// stale (always LOW, never high) wallet balance. Nothing about pricing changes,
-// because nothing ever priced against the mirror.
+// stale (always LOW, never high) wallet balance. Pricing is unaffected,
+// because nothing prices against the mirror.
 
 /// Redeem OkuM for USDC (multiplier-aware, with slippage protection)
 ///
@@ -145,11 +144,10 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
 ///
 /// # Arguments
 /// * `raw_oku_m_amount` - Raw OkuM tokens to redeem
-/// * `min_usdc_out` - Minimum USDC output the user will accept (slippage
-///   protection). Pass `0` to skip the check. EVM parity:
-///   `LitePSM.redeemOkuM(amount)` — while EVM's monotonic multiplier makes
-///   slippage structurally impossible, we include the parameter for
-///   defense-in-depth and client-side safety.
+/// * `min_usdc_out` - Minimum USDC output the user will accept. Pass `0` to
+///   skip. EVM's `LitePSM.redeemOkuM(amount)` has no equivalent because its
+///   monotonic multiplier makes slippage structurally impossible; kept here
+///   for defense-in-depth and client-side safety.
 ///
 /// Reverts if buffer is insufficient.
 /// Blocked during same slot as yield distribution (sandwich prevention).
@@ -169,12 +167,11 @@ pub fn redeem_oku_m(
     require!(!is_paused, LitePsmError::Paused);
     require!(raw_oku_m_amount > 0, LitePsmError::ZeroAmount);
 
-    // Price against the CANONICAL multiplier, computed from the rate schedule
-    // on `PsmConfig`. Deliberately NOT the mint's ScaledUiAmount extension,
-    // which is a lagging display mirror — see `helpers::multiplier`.
+    // Price against the CANONICAL multiplier from the rate schedule, NOT the
+    // mint's ScaledUiAmount extension (a lagging display mirror).
     let multiplier = multiplier::current(&ctx.accounts.config)?;
 
-    // Calculate USDC amount (multiplier-aware): treat dollar value as USDC.
+    // Treat the dollar value as USDC.
     let usdc_amount = raw_to_dollars(raw_oku_m_amount, multiplier)?;
 
     // Reject zero-output redeems.
@@ -289,8 +286,8 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
 ///
 /// Used to reclaim excess buffer after redemptions processed.
 ///
-/// **Intentionally NOT pause-gated.** Mirrors EVM `LitePSM.withdrawUsdc`, which
-/// has no `whenNotPaused` modifier (verified `EVM/src/psm/LitePSM.sol:540`).
+/// **Intentionally NOT pause-gated.** Mirrors EVM `LitePSM.withdrawUsdc`,
+/// which carries no `whenNotPaused` modifier.
 /// Pause is a user-side incident lever: it blocks mints/redeems but must NOT
 /// block the cold multisig from rebalancing buffer USDC during an incident
 /// response.

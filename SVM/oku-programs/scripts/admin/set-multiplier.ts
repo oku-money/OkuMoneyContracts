@@ -6,9 +6,8 @@
  * for the one case that isn't a rate: forcibly re-anchoring the multiplier to
  * an exact value, discarding whatever schedule is currently running.
  *
- * ## What this instruction does as a side effect — read before using
- *
- * `set_okum_multiplier` HALTS the schedule. On-chain (`yield_ops.rs`):
+ * SIDE EFFECT — `set_okum_multiplier` HALTS the schedule. On-chain
+ * (`yield_ops.rs`):
  *
  *   config.okum_rate_per_second         = PRECISION   // 0% APY
  *   config.okum_rate_end                = 0           // halted

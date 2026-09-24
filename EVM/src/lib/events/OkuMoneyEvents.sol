@@ -4,10 +4,9 @@ pragma solidity 0.8.28;
 /**
  * @title OkuMoneyEvents
  * @notice Event declarations for the OkuMoney token contract.
- * @dev Solidity does not allow contracts to emit events declared in libraries, so
- *      events are extracted into per-contract abstract event contracts that the
- *      main contract inherits. This keeps the contract bodies focused on logic
- *      while preserving normal `emit` semantics.
+ * @dev Solidity cannot emit events declared in libraries, so events live in per-contract
+ *      abstract contracts that the main contract inherits — keeping contract bodies
+ *      focused on logic while preserving normal `emit` semantics.
  */
 abstract contract OkuMoneyEvents {
     /// @notice Emitted when the discrete emergency override {setOkuMMultiplier} re-anchors
@@ -17,9 +16,8 @@ abstract contract OkuMoneyEvents {
     /// @param oldMultiplier  Multiplier immediately before the override
     /// @param newMultiplier  New base multiplier
     /// @param totalSupply    Token supply at time of update
-    /// @param blockNumber    `block.number` at update time (indexed, so
-    ///                       subgraphs can shard yield events without
-    ///                       re-deriving it from the log).
+    /// @param blockNumber    `block.number` at update time; indexed so subgraphs can
+    ///                       shard yield events without re-deriving it from the log
     event OkuMMultiplierUpdated(
         uint256 oldMultiplier,
         uint256 newMultiplier,

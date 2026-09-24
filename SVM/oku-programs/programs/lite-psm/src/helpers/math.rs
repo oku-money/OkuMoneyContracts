@@ -3,9 +3,6 @@
 //! Thin wrappers around the pure-math primitives in `oku-shared` that
 //! map `None` → `LitePsmError::Overflow` so the rest of the program can
 //! use the `?` operator naturally.
-//!
-//! Anything tested in `oku_shared::math` is also tested there; the
-//! tests below cover only the Anchor-error mapping.
 
 use crate::errors::LitePsmError;
 use anchor_lang::prelude::*;
@@ -17,9 +14,8 @@ use oku_shared::math as shared;
 ///
 /// Formula: `dollar_value = floor(raw_amount * multiplier / PRECISION)`.
 ///
-/// `multiplier` is `u128` since the PRECISION migration: at 1e18 it ranges to
-/// `MAX_MULTIPLIER = 1e24`. Callers get it from `helpers::multiplier::current`,
-/// NOT from the mint extension.
+/// `multiplier` is `u128` because at 1e18 it ranges to `MAX_MULTIPLIER = 1e24`.
+/// Callers get it from `helpers::multiplier::current`, NOT the mint extension.
 pub fn raw_to_dollars(raw_amount: u64, multiplier: u128) -> Result<u64> {
     shared::raw_to_dollars(raw_amount, multiplier).ok_or_else(|| error!(LitePsmError::Overflow))
 }
@@ -52,9 +48,8 @@ mod tests {
         // At multiplier 1.05 (5% yield), 100_000_000 raw tokens
         // should redeem for 105_000_000 USDC lamports ($105).
         //
-        // NOTE the multiplier is WAD-scaled (1e18) since the PRECISION
-        // migration — it used to be `1_050_000_000` at 1e9. The token amounts
-        // are unchanged: those are still 6-decimal `u64`.
+        // NOTE the multiplier is WAD-scaled (1e18); the token amounts are
+        // 6-decimal `u64`.
         let multiplier = 1_050_000_000_000_000_000u128; // 1.05 * PRECISION
         let raw_amount = 100_000_000u64; // 100 OkuM (6 decimals)
         let dollars = raw_to_dollars(raw_amount, multiplier).unwrap();
@@ -65,9 +60,8 @@ mod tests {
         assert_eq!(raw_back, 95_238_095); // floor rounding
     }
 
-    /// The migration's headline property, asserted at the program's own
-    /// boundary: a rate schedule can now express a realistic APY, which at
-    /// PRECISION = 1e9 was impossible (one ulp was >3% APY).
+    /// PRECISION = 1e18 asserted at the program's own boundary: a rate
+    /// schedule can express a realistic APY. At 1e9 one ulp was >3% APY.
     #[test]
     fn multiplier_resolution_is_fine_enough_to_be_useful() {
         // 1.05 and 1.05 + 1e-9 must be distinguishable, and must price

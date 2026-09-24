@@ -1,13 +1,9 @@
 /**
  * Transfer or disable the BPFLoaderUpgradeable upgrade authority for a program.
  *
- * This is the operational complement to `anchor upgrade`: after deploying a new
+ * The operational complement to `anchor upgrade`: after deploying a new
  * version, the upgrade authority should be transferred to a Squads multisig
- * (production) or left on the developer keypair (testnet). This script wraps
- * `solana program set-upgrade-authority` with:
- *   - Dry-run support (--dry-run)
- *   - Mainnet confirmation gate
- *   - Clear logging of authority transitions
+ * (production) or left on the developer keypair (testnet).
  *
  * Usage:
  *   # Transfer authority to a multisig

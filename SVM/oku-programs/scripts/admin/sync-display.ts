@@ -1,15 +1,11 @@
 /**
  * Refresh the wallet-facing ScaledUiAmount display mirror.
  *
- * ## What this is (and is not)
- *
- * It is **cosmetic**. The canonical multiplier is computed on read from the
+ * **Cosmetic only.** The canonical multiplier is computed on read from the
  * rate schedule and streams with no transactions at all; this instruction only
  * refreshes what Phantom, Solflare, Jupiter and `getTokenAccountBalance`
  * render, because Token-2022's `ScaledUiAmount` extension is a step function
- * and cannot stream.
- *
- * Consequences worth being clear about before wiring this into a keeper:
+ * and cannot stream. Before wiring this into a keeper:
  *
  * - Missing a run does NOT stop yield. It only makes wallet balances read
  *   slightly low. At 60s cadence and 20% APY the under-read is about

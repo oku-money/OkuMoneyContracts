@@ -1,10 +1,11 @@
 /**
  * Publish the OkuM rate schedule (rebaser-only).
  *
- * Replaces `set-multiplier.ts` and `distribute-yield.ts`, both deleted with
- * the discrete model. Under streaming accrual the operator does not push a
- * multiplier or a dollar amount — it publishes a per-second RATE and a bounded
- * window, and the multiplier follows continuously from elapsed time.
+ * This is the normal operator path for yield. Under streaming accrual the
+ * operator does not push a multiplier or a dollar amount — it publishes a
+ * per-second RATE and a bounded window, and the multiplier follows
+ * continuously from elapsed time. (`set-multiplier.ts` still exists, but is an
+ * emergency halt-and-reanchor override, not part of this flow.)
  *
  * Wraps three instructions:
  *

@@ -1,28 +1,17 @@
 /**
  * Epoch-schedule artifact I/O — pure `fs`, deliberately hardhat-free.
  *
- * ## Why this was split out of `deriveEpochSchedule.ts`
- *
- * `deriveEpochSchedule.ts` imports `ethers` from `"hardhat"` (it reads
- * on-chain schedule state). `broadcastSchedule.ts` is a chain-agnostic
+ * Keep this module hardhat-free: `broadcastSchedule.ts` is a chain-agnostic
  * driver that must run standalone (`tsx broadcastSchedule.ts`, no bound
- * `--network`) and spawn per-chain subprocesses — but it originally imported
- * `loadArtifact`/`saveArtifactInPlace` FROM `deriveEpochSchedule.ts`, which
- * transitively pulled in hardhat's runtime just to read/write a JSON file.
- * That made `broadcastSchedule.ts` unable to run under plain `tsx` at all.
+ * `--network`) and spawn per-chain subprocesses. Importing these helpers from
+ * `deriveEpochSchedule.ts` instead would pull in hardhat's runtime just to
+ * read/write a JSON file, breaking that. `deriveEpochSchedule.ts` re-exports
+ * from here.
  *
- * This module has no hardhat dependency, so `broadcastSchedule.ts` and
- * `applyScheduleSingleChain.ts` can both import it directly.
- * `deriveEpochSchedule.ts` re-exports from here for backward compatibility.
- *
- * ## Artifact identity: `(epochId, phase)`, not `epochId` alone
- *
- * One epoch has exactly two phases — `stage-settlement` then `roll-epoch` —
- * and both are addressed by the SAME `epochId`. Keying the artifact file on
- * `epochId` alone meant the second phase's `saveArtifact` call collided with
- * the first phase's file and threw. Every artifact is now addressed by the
- * pair, so `deriveStageSettlement` and `deriveRollEpoch` for the same epoch
- * write to different files.
+ * Artifact identity is the PAIR `(epochId, phase)`, not `epochId` alone: one
+ * epoch has two phases — `stage-settlement` then `roll-epoch` — under the same
+ * `epochId`, so keying on `epochId` alone would make the second phase's
+ * `saveArtifact` collide with the first phase's file.
  */
 
 import * as fs from "fs";
@@ -59,8 +48,7 @@ export interface EpochScheduleArtifact {
      * at derivation time and is DIFFERENT from ex-post reconciliation
      * (actual-vs-target once the epoch has actually run) — see
      * `reconciledCarryUsd` on `carryLedger.ts`'s `CarryLedgerEntry`, which is
-     * filled in one epoch LATER, once it's measurable. Conflating the two
-     * under one name was a real bug (see `carryLedger.ts`'s module doc).
+     * filled in one epoch LATER, once it's measurable. Do not conflate them.
      * `stage-settlement` doesn't close an epoch, so this is always `0` there.
      */
     carryForwardUsd: number;

@@ -2,20 +2,18 @@
  * RPC compatibility shims.
  *
  * Some chains' JSON-RPC nodes return responses that violate the strict shape
- * ethers v6 expects. The most painful one we hit is BSC: for a contract-
- * creation tx that's been broadcast but not yet mined, BSC's RPC returns
- * `"to": ""` instead of `"to": null`, which makes hardhat-ethers'
- * `formatTransactionResponse` throw `BAD_DATA: invalid address (value="")`.
- * The exact same RPC returns `to: null` correctly once the tx mines, so it's
- * a transient-window bug in BSC's pending-tx representation.
+ * ethers v6 expects. BSC: for a contract-creation tx broadcast but not yet
+ * mined, its RPC returns `"to": ""` instead of `"to": null`, making
+ * hardhat-ethers' `formatTransactionResponse` throw
+ * `BAD_DATA: invalid address (value="")`. The same RPC returns `to: null`
+ * once the tx mines, so it is a transient pending-tx representation bug.
  *
  * `installRpcCompatFixes(network)` monkey-patches BOTH the legacy `send` API
  * AND the EIP-1193 `request` API on hardhat's network.provider, normalising
- * responses BEFORE they reach the ethers formatter. We have to patch both
- * because hardhat-ethers' `HardhatEthersProvider` calls `send(method, params)`
- * exclusively (verified in node_modules/@nomicfoundation/hardhat-ethers/
- * src/internal/hardhat-ethers-provider.ts), while other code paths (some
- * upgrades-core utilities, custom scripts) use `request({method, params})`.
+ * responses BEFORE they reach the ethers formatter. Both are required:
+ * hardhat-ethers' `HardhatEthersProvider` calls `send(method, params)`
+ * exclusively, while other code paths (upgrades-core utilities, custom
+ * scripts) use `request({method, params})`.
  *
  * Apply once per process, ideally as the first thing your script does.
  * Subsequent calls are no-ops (idempotency tracked via a sentinel symbol).

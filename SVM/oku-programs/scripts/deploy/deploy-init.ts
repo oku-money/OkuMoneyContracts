@@ -15,7 +15,9 @@
 
 import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 
-import { detectNetwork, createProvider, getNetworkConfig } from '../utils/network';
+import { detectNetwork, createProvider,
+  createProviderWithClusterCheck, getNetworkConfig } from '../utils/network';
+import { confirmIfMainnet } from '../admin/_lib/confirm';
 import { logger } from '../utils/logger';
 import { loadDeployment, saveDeployment, DeploymentAddresses } from '../utils/addressBook';
 import { syncSvmRegistry } from '../utils/testnetRegistry';
@@ -71,8 +73,8 @@ async function main() {
   logger.info(`  lite_psm: ${programIds.litePsm.toBase58()}`);
   logger.log('');
 
-  // Create provider
-  const provider = createProvider(network);
+  // Create provider. Cluster-checked — see deploy-programs.ts.
+  const provider = await createProviderWithClusterCheck(network);
   const authorities = loadAuthorities(
     network,
     provider.wallet.publicKey,
@@ -84,6 +86,17 @@ async function main() {
   logger.info(`Deployer: ${deployerPubkey.toBase58()}`);
   logger.info(`Balance: ${formatSol(balance)} SOL`);
   logger.log('');
+
+  await confirmIfMainnet(
+    network,
+    [
+      `network   ${network}`,
+      `deployer  ${deployerPubkey.toBase58()}`,
+      `program   ${programIds.litePsm.toBase58()}`,
+      `action    initialize psm_config + mints (irreversible)`,
+    ].join('\n'),
+    provider.connection
+  );
 
   // Derive PSM config PDA (needed for mint authority)
   const [psmConfigPDA] = derivePsmConfigPDA(programIds.litePsm);

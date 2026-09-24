@@ -63,9 +63,8 @@ function isAlreadyInitialized(error: any): boolean {
  * not the deployer (see `config/authorities.ts::allRolesToOperatorKey` — the
  * on-chain init guard forbids any granular role from equalling role_admin).
  *
- * An earlier version of this file hardcoded `allowanceManager:
- * provider.wallet.publicKey`, which silently degraded to a non-fatal
- * "Unauthorized" warning the moment the roles were split — leaving the
+ * Do NOT hardcode this to `provider.wallet.publicKey`: once the roles are
+ * split that degrades to a non-fatal "Unauthorized" warning, leaving the
  * direct-mint/burn allowances at zero and the fiat/bridge paths dead.
  *
  * Returns the array to hand to `.signers()`:
@@ -307,10 +306,9 @@ export async function initializePsm(
   }
 
   // ---- Step 5: Configure direct-burner role + allowance (mirrors Step 4) ----
-  // Previously left unwired here: `direct_burner` defaults to Pubkey::default()
-  // same as direct_minter, but only the minter side was set up post-init. The
-  // SVM->EVM bridge burn path was therefore dead until a separate grant-roles
-  // run, with no error to signal it -- a silent capability gap.
+  // `direct_burner` defaults to Pubkey::default(), same as direct_minter.
+  // Without this step the SVM->EVM bridge burn path stays dead until a
+  // separate grant-roles run, with no error to signal it.
   const directBurner = authorities.psm.directBurner;
   if (directBurner && !directBurner.equals(PublicKey.default)) {
     logger.info('Configuring direct-burner role...');

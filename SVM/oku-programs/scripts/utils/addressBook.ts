@@ -6,19 +6,13 @@
  * `deployments/devnet.json` should hold devnet program IDs, `localnet.json`
  * the localnet IDs, and so on.
  *
- * Stale-file failure mode the assertion below guards against: it is easy
- * for `deployments/devnet.json` to get left behind from a previous run
- * (e.g. against the localnet program IDs in `Anchor.toml [programs.localnet]`)
- * after a `Anchor.toml [programs.devnet]` redeploy. Any script that loads
- * the wrong file then sends instructions to a *different* program than the
- * one currently active for `NETWORK=devnet`. Symptoms: `Cross-program
+ * Stale-file failure mode this guards against: a `deployments/<network>.json`
+ * left behind from a previous run points scripts at a *different* program than
+ * the one currently active for that NETWORK. Symptoms are `Cross-program
  * invocation with unauthorized signer` or `AccountNotFound` for PDAs that
- * "should" exist. Hard to debug from the script side.
- *
- * Mitigation: every `loadDeployment` call cross-checks the on-disk program
- * IDs against `Anchor.toml [programs.<network>]` and prints a loud warning
- * if they don't match. Callers that want to refuse to proceed on mismatch
- * can use `loadDeploymentStrict()` which throws instead.
+ * "should" exist. Every `loadDeployment` call therefore cross-checks the
+ * on-disk program IDs against `Anchor.toml [programs.<network>]` and warns
+ * loudly on mismatch; use `loadDeploymentStrict()` to throw instead.
  *
  * Operational note (rent recovery): when an old `deployments/<network>.json`
  * holds program IDs from a previous deploy, the program data accounts at

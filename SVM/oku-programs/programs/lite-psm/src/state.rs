@@ -1,23 +1,21 @@
 //! Account state definitions for the Lite-PSM program.
 //!
 //! Single-token design: the PSM deals exclusively in **OkuM** (a
-//! Token-2022 mint with the `ScaledUiAmount` extension). The multiplier
-//! that converts raw token amounts to dollar-display values lives on the
-//! mint itself, not in PsmConfig.
+//! Token-2022 mint with the `ScaledUiAmount` extension). The multiplier is
+//! not stored anywhere — it is computed from the rate-schedule fields below
+//! plus the clock; see `helpers::multiplier`.
 //!
-//! Storage patterns adapted from a few upstream sources:
-//! - The minter-allowance + blacklist-exempt fields on `PsmConfig` mirror
-//!   Circle's FiatToken minter / blacklist controller pattern.
-//!   Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2_2.sol
-//!   Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol
+//! The minter-allowance + blacklist-exempt fields on `PsmConfig` follow
+//! Circle's FiatToken minter / blacklist controller pattern:
+//! https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2_2.sol
+//! https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol
 
 use anchor_lang::prelude::*;
 
 /// PSM configuration PDA.
 ///
-/// Seeds: `["psm_config"]`. This is the single, program-wide config
-/// account; it holds the granular authorities, token references, limits,
-/// and the yield-distribution slot.
+/// Seeds: `["psm_config"]`. The single program-wide config account: granular
+/// authorities, token references, limits, and the rate schedule.
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
@@ -50,8 +48,9 @@ pub struct PsmConfig {
     /// USDC mint address
     pub usdc_mint: Pubkey,
     /// OkuM mint address (Token-2022 with ScaledUiAmount extension).
-    /// The multiplier for USDC ↔ OkuM conversion is read from the
-    /// mint's ScaledUiAmountConfig extension, not stored on PsmConfig.
+    /// The multiplier for USDC ↔ OkuM conversion is computed from this
+    /// account's rate-schedule fields, never read from the mint; the
+    /// extension is a write-only display mirror.
     pub oku_m_mint: Pubkey,
     /// PSM's USDC buffer vault (ATA)
     pub vault_usdc: Pubkey,
@@ -69,27 +68,26 @@ pub struct PsmConfig {
     /// (`set_okum_multiplier`), for sandwich prevention. PSM operations are
     /// blocked in the same slot.
     ///
-    /// Under streaming accrual the multiplier advances continuously, so there
-    /// is no discrete jump for a searcher to sandwich — that is the entire
-    /// point of the model. This lock therefore fires ONLY on the explicit
-    /// override path, and in particular is NOT stamped by the routine display
-    /// sync. Mirrors EVM, where `YieldSandwichGuard` keys on
-    /// `lastYieldDistributionBlock`, which only `setOkuMMultiplier` writes
-    /// (`EVM/src/token/OkuMoney.sol:107`, `EVM/src/lib/YieldSandwichGuard.sol:21-26`).
+    /// The multiplier advances continuously, so there is no discrete jump to
+    /// sandwich; this fires ONLY on the explicit override path and is NOT
+    /// stamped by the routine display sync. Mirrors EVM's
+    /// `YieldSandwichGuard`, which keys on
+    /// `OkuMoney.lastYieldDistributionBlock` — written only by
+    /// `setOkuMMultiplier`.
     pub last_yield_distribution_slot: u64,
 
     // ===== Streaming accrual rate schedule =====
     //
-    // The OkuM multiplier is NOT stored. It is computed on read from the six
-    // fields below plus `Clock::unix_timestamp`, via
-    // `oku_shared::rate::compute_multiplier`. Because the function has no
-    // supply term, every chain holding the same schedule returns the same
-    // value at the same wall-clock second — with no messaging, and with no
-    // transaction at the epoch boundary.
+    // The OkuM multiplier is NOT stored. It is computed from the six fields
+    // below plus `Clock::unix_timestamp` via
+    // `oku_shared::rate::compute_multiplier`, which has no supply term — so
+    // every chain holding the same schedule returns the same value at the same
+    // wall-clock second, with no messaging and no transaction at the epoch
+    // boundary.
     //
-    // 1:1 with the EVM accrual storage at `EVM/src/token/OkuMoney.sol:78-96`.
-    // EVM bit-packs these into two slots (uint96/uint64/uint48); SVM has no
-    // equivalent pressure, so each field gets its natural width.
+    // 1:1 with the EVM `OkuMoneyStorage` accrual fields. EVM bit-packs these
+    // into two slots (uint96/uint64/uint48); SVM has no equivalent pressure,
+    // so each field gets its natural width.
     /// Multiplier snapshot taken at `okum_last_accrual_time`, WAD-scaled.
     /// Starts at `PRECISION`. Re-snapshotted on every schedule write so
     /// accrual is continuous across the write.
@@ -120,17 +118,16 @@ pub struct PsmConfig {
 
     /// Unix timestamp of the last `sync_display_multiplier`.
     ///
-    /// Display-only bookkeeping: drives the staleness threshold for the
-    /// opportunistic piggyback sync on PSM instructions. Has no influence on
-    /// pricing — the canonical multiplier is always computed fresh.
+    /// Observability only: it tells an operator (and
+    /// `scripts/admin/sync-display.ts`) how stale the display mirror is.
+    /// Nothing on-chain reads it, so it has no influence on pricing.
     pub last_display_sync_ts: i64,
 
-    /// Pending `role_admin` rotation target — the two-step admin-transfer
-    /// model (OpenZeppelin `Ownable2Step` pattern). `set_authority(RoleAdmin,
-    /// new_admin)` writes to this slot only; the rotation does NOT take
-    /// effect until `new_admin` signs `accept_role_admin`, which moves the
-    /// value into `role_admin` and clears the slot. This protects the
-    /// protocol from a typo or stale key on the proposing side silently
+    /// Pending `role_admin` rotation target — two-step admin transfer
+    /// (OpenZeppelin `Ownable2Step`). `set_authority(RoleAdmin, new_admin)`
+    /// writes here only; the rotation takes effect when `new_admin` signs
+    /// `accept_role_admin`, which moves the value into `role_admin` and clears
+    /// this slot. Protects against a typo or stale key on the proposing side
     /// locking out the meta-role.
     ///
     /// `Pubkey::default()` means "no pending rotation".
@@ -138,9 +135,9 @@ pub struct PsmConfig {
 
     // ===== Direct Mint (fiat on-ramp) =====
     //
-    // Permissioned direct OkuM mint path — no USDC collateral required
-    // on-chain. Matches EVM `OkuM.mint(to, amount)` called by an
-    // authorised minter role holder. The fiat collateral is held off-chain.
+    // Permissioned direct OkuM mint — no on-chain USDC collateral; the fiat
+    // collateral is held off-chain. Matches EVM `OkuM.mint(to, amount)` called
+    // by an authorised minter role holder.
     /// Operator / fiat gateway — can mint OkuM directly without USDC.
     /// `Pubkey::default()` means "not configured / disabled".
     pub direct_minter: Pubkey,
@@ -152,9 +149,9 @@ pub struct PsmConfig {
 
     // ===== Direct Burn (bridge / off-ramp) =====
     //
-    // Permissioned direct OkuM burn path — burns OkuM from the
-    // caller's ATA without USDC payout. Enables SVM→EVM bridging
-    // where the KMS-backed orchestrator burns on the source chain.
+    // Permissioned direct OkuM burn from the caller's ATA, no USDC payout.
+    // Enables SVM→EVM bridging, where the KMS-backed orchestrator burns on the
+    // source chain.
     /// Operator / bridge backend — can burn OkuM directly without
     /// triggering a USDC redemption.
     /// `Pubkey::default()` means "not configured / disabled".
@@ -163,6 +160,16 @@ pub struct PsmConfig {
     /// Per-direct-burner allowance. Decremented on each direct burn;
     /// reset by `allowance_manager` via `set_direct_burner_allowance`.
     pub direct_burner_allowance: u64,
+
+    /// Space for future fields, appended at the tail.
+    ///
+    /// The account is a singleton PDA and the program has no `realloc`
+    /// instruction, so without this any new field requires closing and
+    /// re-initialising the config — losing every role assignment and the
+    /// accrual anchor. 128 bytes covers 4 more pubkeys or 16 more u64s at a
+    /// rent cost of ~0.0009 SOL. Consume from the FRONT when adding a field
+    /// and shrink the array to match, keeping `LEN` constant.
+    pub reserved: [u8; 128],
 }
 
 impl PsmConfig {
@@ -175,44 +182,16 @@ impl PsmConfig {
 
     /// PDA signer seeds for CPIs signed by the config PDA.
     ///
-    /// Single source of truth for the `[SEED, [bump]]` seed shape that every
-    /// PDA-signed CPI in this program needs. The caller owns the 1-byte bump
-    /// array and passes a reference, so no allocation or lifetime juggling is
-    /// required:
-    ///
-    /// ```ignore
-    /// let bump = [ctx.accounts.config.bump];
-    /// let seeds = PsmConfig::signer_seeds(&bump);
-    /// let signer = &[&seeds[..]];
-    /// // ... CpiContext::new_with_signer(..., signer)
-    /// ```
+    /// Single source of truth for the `[SEED, [bump]]` seed shape. The caller
+    /// owns the 1-byte bump array and passes a reference, so no allocation or
+    /// lifetime juggling is required.
     #[inline]
     pub fn signer_seeds(bump: &[u8; 1]) -> [&[u8]; 2] {
         [Self::SEED, bump]
     }
 }
 
-// Compile-time assertion: if the PsmConfig layout changes, this fails to
-// compile. Byte breakdown (626 total):
-//
-//   8   account discriminator
-//   1   bump (u8)
-//   512 16 pubkeys * 32:
-//         12 authorities (role_admin, pauser, unpauser, freezer, unfreezer,
-//            buffer_depositor, buffer_withdrawer, cap_manager,
-//            allowance_manager, rebaser, direct_minter, direct_burner)
-//         1  pending_role_admin
-//         3  token refs (usdc_mint, oku_m_mint, vault_usdc)
-//   40  5 u64 * 8 (max_supply, minter_allowance, last_yield_distribution_slot,
-//         direct_minter_allowance, direct_burner_allowance)
-//   1   is_paused (bool)
-//  --- streaming accrual (added with the rate-schedule port) ---
-//   16  okum_base_multiplier (u128)
-//   16  2 u64 * 8 (okum_rate_per_second, okum_pending_rate_per_second)
-//   32  4 i64 * 8 (okum_last_accrual_time, okum_rate_end,
-//         okum_pending_rate_end, last_display_sync_ts)
-//
-// The 562 -> 626 growth means existing accounts cannot be reallocated in
-// place. SVM is devnet-only (`deployments/` has no mainnet entry), so this
-// is a fresh deploy — already tracked in TRACKER.md and SVM/DECISIONS.md D-07.
-const _: () = assert!(PsmConfig::LEN == 626);
+// Layout pin: any change to a field's width or count fails this at compile
+// time. Changing it is an account-size change, so already-deployed configs
+// cannot be reallocated in place (SVM/DECISIONS.md D-07).
+const _: () = assert!(PsmConfig::LEN == 754);

@@ -37,9 +37,9 @@ Exported contracts (5):
 | `RedemptionQueue.json` | FIFO queue for PSM-buffer-depleted redemptions |
 | `MockUSDC.json` | 6-decimal ERC-20 used on testnets |
 
-> `OkuBridge.json`, `OkuBridgeRouter.json`, and `NttAdapter.json` were removed
-> in the noBridge refactor. v1 cross-chain transfers are PSM-mediated
-> mint/burn orchestrated off-chain. See `contracts/README.md` for the design.
+> There are **no bridge artifacts** — v1 has no on-chain bridge on either
+> stack. Cross-chain transfers are PSM-mediated mint/burn orchestrated
+> off-chain; see [`../README.md` § Cross-chain transfers](../README.md#cross-chain-transfers-v1-off-chain-orchestrated).
 
 **Refresh:**
 
@@ -59,14 +59,11 @@ Exported programs (1):
 |------|---------|
 | `lite_psm.json` | PSM (buffer-only — no redemption queue) + yield ops + compliance — single-token OkuM design with ScaledUiAmount extension (sole user-facing mint/burn surface in v1) |
 
-> `oku_bridge_router.json` was removed in the noBridge refactor along
-> with the EVM-side bridge artifacts (see note above). `oku_dollar.json`
-> was removed in the single-token refactor (the vault program no longer
-> exists; OkuM is now the sole mint managed by `lite-psm`). The
-> redemption queue was subsequently removed entirely (buffer-only PSM
-> — reverts `InsufficientBuffer` instead of escrowing). v1 cross-chain
-> transfers are PSM-mediated mint/burn orchestrated off-chain on both
-> sides.
+> `lite_psm` is the **only** SVM program. There is no bridge program and no
+> vault program — SVM is single-token, with `OkuM` the sole mint and its
+> `ScaledUiAmount` extension supplying the $1-pegged display. The PSM is
+> buffer-only: a redeem the buffer cannot cover reverts `InsufficientBuffer`
+> rather than escrowing. See [`../SVM/README.md`](../SVM/README.md).
 
 **Refresh:**
 

@@ -352,14 +352,11 @@ export function getNetworkNameByChainId(chainId: number): string | undefined {
 // ============================================================================
 
 /**
- * Dev wallet address for local fork testing
- * This wallet is impersonated and funded with ETH when running on forks
- */
-/**
- * Dev wallet address — overridable via DEV_WALLET_ADDRESS env var.
- * Hardcoded default is the original deployer address used for testnet.
- * Mainnet RBAC is handled separately via grantRolesMainnet.ts using
- * MAINNET_COLD_MULTISIG / MAINNET_WARM_MULTISIG / MAINNET_ORCHESTRATOR env vars.
+ * Dev wallet address — overridable via the DEV_WALLET_ADDRESS env var. Default
+ * is the deployer address used for testnet; impersonated and funded with ETH
+ * when running on forks. Mainnet RBAC is handled separately via
+ * grantRolesMainnet.ts using MAINNET_COLD_MULTISIG / MAINNET_WARM_MULTISIG /
+ * MAINNET_ORCHESTRATOR.
  */
 export const DEV_WALLET_ADDRESS =
   process.env.DEV_WALLET_ADDRESS ?? "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
@@ -369,15 +366,12 @@ export const DEV_WALLET_ADDRESS =
  * on testnets. Overridable via the `MASTER_EOA` env var.
  *
  * Declared HERE rather than inside `grantRoles.ts` because it is the single
- * most security-relevant address in the deployment and it was previously a
- * bare literal inside the script that grants it privilege — invisible to
- * anything that wanted to answer "which addresses hold power over these
- * contracts?". `utils/roleRegistry.ts` now labels live role holders from this
- * constant, so an audit names it instead of reporting it as UNKNOWN.
+ * most security-relevant address in the deployment, and `utils/roleRegistry.ts`
+ * labels live role holders from this constant so an audit names it rather than
+ * reporting it as UNKNOWN.
  *
- * Note this is NOT the deployer: per `grantRoles.ts`'s own NatSpec it is
- * "currently controlled by the backend engineer operating this deployment —
- * NOT held by this repo/deployer".
+ * This is NOT the deployer: it is controlled by the backend engineer operating
+ * this deployment, NOT held by this repo/deployer.
  */
 export const MASTER_OPERATOR_EOA =
   process.env.MASTER_EOA ?? "0x971A3e2b0031dE23715Fa1ce53843B5B045dae00";

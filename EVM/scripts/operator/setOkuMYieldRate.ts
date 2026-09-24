@@ -1,25 +1,24 @@
 /**
  * Set OkuMoney's streaming yield rate (OKUM_REBASER role).
  *
- * Replaces the removed `distributeYield.ts`. `distributeYield` divided a dollar
- * amount by LOCAL `totalSupply()`, which produced a different multiplier delta on
- * every chain — incompatible with cross-chain uniformity. Yield is now expressed
- * as a RATE, which is supply-independent by construction.
+ * Yield is expressed as a RATE, which is supply-independent by construction and
+ * therefore produces the same multiplier delta on every chain.
  *
  * THREE PATHS:
  *
- *   STAGE=true (PREFERRED for pre-staging alone) -> setNextOkuMYieldRate(rate, pendingEndTimestamp)
- *       Pre-stages the successor rate. It activates off the absolute `okuMRateEnd`
- *       timestamp INSIDE the view function, with NO transaction at the boundary.
- *
- *   --with-successor (PREFERRED under the base+settlement / B3 epoch model)
+ *   --with-successor (PREFERRED — what the epoch pipeline uses)
  *                       -> setOkuMYieldRateWithSuccessor(rate, endTimestamp, nextRate, pendingEndTimestamp)
  *       Atomically re-anchors the active rate AND stages its successor in ONE
  *       transaction. Closes the two-transaction race the separate STAGE=true path
  *       has: if the re-anchor lands but a second, separate staging tx fails or
  *       is delayed, the schedule is left with NO successor armed and accrual
- *       silently halts at `endTimestamp`. See `scripts/operator/runEpoch.ts`,
- *       which uses this path for both B3 phase transitions.
+ *       silently halts at `endTimestamp`. `applyScheduleSingleChain.ts` uses this
+ *       path for both epoch phase transitions.
+ *
+ *   STAGE=true          -> setNextOkuMYieldRate(rate, pendingEndTimestamp)
+ *       Pre-stages the successor rate only, without re-anchoring. It activates
+ *       off the absolute `okuMRateEnd` timestamp INSIDE the view function, with
+ *       NO transaction at the boundary.
  *
  *   (default)             -> setOkuMYieldRate(rate, endTimestamp)
  *       Re-anchors the accrual base at `block.timestamp` with NO successor

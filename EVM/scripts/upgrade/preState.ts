@@ -67,10 +67,8 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
 //   - Share accounting (totalUsdShares) preserved.
 //   - Pause state preserved.
 //
-// REMOVED (single-multiplier refactor): the vault no longer owns a rate schedule,
-// so usdBaseMultiplier / usdRatePerSecond / usdLastAccrualTime / usdRateEnd /
-// usdPendingRatePerSecond / minCollateralRatio no longer exist. The schedule that
-// used to live here is now snapshotted on OkuMoney (see readOkuMoneyState).
+// The vault owns no rate schedule under the single-multiplier design; the
+// schedule is snapshotted on OkuMoney instead (see readOkuMoneyState).
 //
 // We deliberately *do not* snapshot `usdMultiplier()` because it forwards to
 // `okuMoney.okuMMultiplier()`, which is computed from (base, rate, elapsed) at read
@@ -99,21 +97,19 @@ export async function readOkuDollarState(c: Contract): Promise<StateSnapshot> {
 //   - ERC20 identity (name, symbol, decimals) preserved.
 //   - Supply cap (maxSupply) and current totalSupply preserved.
 //   - Yield-schedule storage (okuMBaseMultiplier, okuMRatePerSecond,
-//     okuMLastAccrualTime, okuMRateEnd, okuMPendingRatePerSecond) preserved. Since
-//     the single-multiplier refactor this is the ONLY rate schedule in the system —
-//     OkuDollar derives from it — so an upgrade that scrambled it would silently
-//     reprice both tokens on every chain. These are plain storage reads and are
-//     stable across two reads absent a setOkuMYieldRate call.
-//   - okuMMultiplier — derived state. It CAN drift between two reads when a
-//     non-zero rate is being applied (and rolls the pending rate at okuMRateEnd
-//     without any storage write). We deliberately do NOT snapshot it; the five
-//     schedule fields above are the right things to pin.
+//     okuMLastAccrualTime, okuMRateEnd, okuMPendingRatePerSecond) preserved.
+//     This is the ONLY rate schedule in the system — OkuDollar derives from it
+//     — so an upgrade that scrambled it would silently reprice both tokens on
+//     every chain. Plain storage reads, stable across two reads absent a
+//     setOkuMYieldRate call.
+//   - okuMMultiplier is derived state and CAN drift between two reads under a
+//     non-zero rate, so it is deliberately NOT snapshotted; the five schedule
+//     fields above are the right things to pin.
 //   - Pause state preserved.
 //
-// We do not snapshot DEFAULT_ADMIN_ROLE / OKUM_MINTER role grants here because
-// OZ AccessControl's `hasRole` requires a target address — there's no
-// "list all role holders" call. The deploy script's role configuration is
-// orthogonal to an impl-only upgrade and would not be touched by it.
+// Role grants are not snapshotted: OZ AccessControl's `hasRole` requires a
+// target address and there is no "list all role holders" call. Role
+// configuration is orthogonal to an impl-only upgrade.
 
 export async function readOkuMoneyState(c: Contract): Promise<StateSnapshot> {
   const [
@@ -190,15 +186,6 @@ export async function readRedemptionQueueState(c: Contract): Promise<StateSnapsh
     totalQueuedOkuM: totalQueuedOkuM.toString(),
   };
 }
-
-// ============================================================================
-// OkuBridge / OkuBridgeRouter
-// ============================================================================
-//
-// State readers for OkuBridge and OkuBridgeRouter were removed in the noBridge
-// refactor. If a live deployment still has those proxies on-chain and an
-// upgrade is required, re-add the readers (and the corresponding STATE_READERS
-// entries) referencing the master-branch implementations.
 
 // ============================================================================
 // Registry

@@ -182,9 +182,8 @@ pub mod lite_psm {
     // not bumped. These instructions change the SLOPE of a continuous curve;
     // none of them produces a discrete jump except the emergency override.
     //
-    // `distribute_yield` was removed with the streaming port: under
-    // rear-facing epochs the operator derives a RATE off-chain from measured
-    // realised yield, so there is no on-chain "distribute N dollars" primitive.
+    // There is no "distribute N dollars" primitive: under rear-facing epochs
+    // the operator derives a RATE off-chain from measured realised yield.
 
     /// Set the active per-second rate and its bounded window (REBASER only).
     ///
@@ -243,6 +242,14 @@ pub mod lite_psm {
     /// Refresh the wallet-facing ScaledUiAmount display mirror.
     /// **Permissionless** — the written value is fully determined by on-chain
     /// state, so the caller has no discretion. No EVM counterpart.
+    /// Grow `psm_config` to the current struct size, preserving all state.
+    ///
+    /// One-shot migration for a deployment predating `PsmConfig::reserved`.
+    /// No-op once the account is already at `LEN`.
+    pub fn migrate_config_space(ctx: Context<MigrateConfigSpace>) -> Result<()> {
+        instructions::migrate::migrate_config_space(ctx)
+    }
+
     pub fn sync_display_multiplier(ctx: Context<SyncDisplayMultiplier>) -> Result<()> {
         instructions::yield_ops::sync_display_multiplier(ctx)
     }

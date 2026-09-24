@@ -10,10 +10,6 @@
 //!   mirror. Cosmetic; nothing prices against it.
 //! - `yield_lock` — the same-slot sandwich fence, which under streaming
 //!   accrual fires only on the emergency multiplier override.
-//!
-//! `scaled_ui` was deleted with the streaming-accrual port. It existed to
-//! READ the multiplier back out of the mint extension, which is no longer a
-//! source of truth — see `multiplier` for why that direction is now one-way.
 
 pub mod display_sync;
 pub mod math;

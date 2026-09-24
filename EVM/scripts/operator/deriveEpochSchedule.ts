@@ -1,39 +1,19 @@
 /**
  * Pure epoch-schedule derivation, decoupled from submission.
  *
- * ## Why this file exists
+ * Derives ONCE and writes a signed-shape JSON artifact containing the WAD
+ * integers and absolute timestamps. `broadcastSchedule.ts` reads that artifact
+ * and fans it out to every EVM chain and SVM. Deriving once per epoch rather
+ * than once per chain is what guarantees every chain receives the same rate,
+ * and is what makes the carry ledger correct: one derivation, one ledger entry.
  *
- * `runEpoch.ts` used to derive AND submit in one function body, once per
- * `--network` invocation. That has two problems for a protocol with more than
- * one chain:
+ * `measuredAvgValueUsd` MUST be the GLOBAL time-weighted value across every
+ * chain, never a single chain's local `totalSupply() * okuMMultiplier()` — a
+ * local denominator produces a different multiplier delta on every chain.
  *
- *   1. It re-derives from scratch on every chain, so N chains can produce N
- *      different rates unless every derivation input is identical across runs.
- *   2. It never prints the derived WAD integers anywhere a second stack could
- *      read them — `floatRateToBigint`'s output reached the transaction and
- *      nothing else. There was no artifact to hand to SVM.
- *
- * This file derives ONCE and writes a signed-shape JSON artifact containing
- * the WAD integers and absolute timestamps. `broadcastSchedule.ts` reads that
- * artifact and fans it out to every EVM chain and SVM. Splitting these apart
- * is also what makes the carry ledger correct: one derivation, one ledger
- * entry, rather than one per chain.
- *
- * ## The fix this also carries
- *
- * The previous `runRollEpoch` derived `measuredAvgValueUsd` from the LOCAL
- * chain's `totalSupply() * okuMMultiplier()` (`schedule.totalSupplyFloat *
- * schedule.currentMultiplierFloat`). `yieldRate.ts`'s own module doc states the
- * rule this violated: the denominator must be the GLOBAL time-weighted value
- * across every chain, never a single chain's local supply — "that is precisely
- * why `distributeYield` was removed: it produced a different multiplier delta
- * on every chain." Reading from one chain and deriving once removes the
- * violation structurally rather than patching the formula.
- *
- * `stage-settlement`'s synthetic-sample fallback (silently using local supply
- * when the V̄ store is empty) is also removed. A missing sample store is now a
- * hard error: deriving a real rate from an unmeasured V̄ is exactly the failure
- * this file exists to prevent, not something to paper over.
+ * A missing V̄ sample store is a hard error, including in `stage-settlement`:
+ * deriving a real rate from an unmeasured V̄ is exactly the failure this file
+ * exists to prevent, not something to paper over.
  */
 
 import { ethers } from "hardhat";
@@ -69,9 +49,8 @@ import {
   EpochPhase,
 } from "../utils/epochArtifact";
 
-// Re-exported for backward compatibility — every I/O helper now lives in
-// `epochArtifact.ts` (deliberately hardhat-free; see that file's module doc
-// for why `broadcastSchedule.ts` needed this split out of this file).
+// Re-exported for convenience; the I/O helpers live in `epochArtifact.ts`,
+// which is deliberately hardhat-free.
 export { EpochScheduleArtifact, saveArtifact, loadArtifact, saveArtifactInPlace, artifactPath, artifactKey, EpochPhase };
 
 async function readSchedule(okuM: any) {
@@ -131,8 +110,7 @@ export async function deriveStageSettlement(
   // is currently open (pending reconciliation at the next roll). The carry
   // relevant HERE is what was already baked into THIS epoch's own target
   // when its base rate was rolled (`currentEpochCarryInUsd`); re-applying
-  // `outstandingCarryUsd` would double-count it (defect #3 in the deploy-
-  // readiness audit — see carryLedger.ts's module doc for the full account).
+  // `outstandingCarryUsd` would double-count it. See carryLedger.ts.
   const carryInUsd = opts.carryInUsd ?? summarizeLedger().currentEpochCarryInUsd;
   const adjustedTargetUsd = opts.realisedYieldUsd * conservativeFactor + carryInUsd;
 
@@ -221,13 +199,10 @@ export interface DeriveRollEpochOpts {
   /**
    * Bypass the live `sampleGlobalValueUsd()` read with a supplied value.
    *
-   * TEST-ONLY SEAM, same rationale as `runEpoch.ts`'s
-   * `RollEpochOpts.globalValueUsdOverride`: `sampleGlobalValueUsd()` reads
-   * real per-chain RPCs for every entry in `participatingChains()`
-   * (`sepolia`, `baseSepolia`, etc.) — chains a local single-network drill
-   * has no live address-book entries or RPC access for, so it always samples
-   * to `0` there. Without this seam, `deriveRollEpoch` would be exercised
-   * only by hand against live testnets, never by the operator drill.
+   * TEST-ONLY SEAM: `sampleGlobalValueUsd()` reads real per-chain RPCs for
+   * every entry in `participatingChains()` (`sepolia`, `baseSepolia`, etc.) —
+   * chains a local single-network drill has no address-book entries or RPC
+   * access for, so it always samples to `0` there.
    */
   globalValueUsdOverride?: number;
 }
@@ -247,11 +222,11 @@ export async function deriveRollEpoch(
   const okuM = await referenceOkuM(ctx, signer);
   const schedule = await readSchedule(okuM);
 
-  // GLOBAL value only, sampled fresh — not the reference chain's local
-  // supply — and scoped to the SAME chain set the broadcaster will target
-  // (`participatingChains()`), not every chain in CHAIN_METADATA. Sampling a
-  // wider set than the broadcast reaches would inflate V̄ with chains that
-  // never receive this rate (defect #4 in the deploy-readiness audit).
+  // GLOBAL value only, sampled fresh — not the reference chain's local supply —
+  // and scoped to the SAME chain set the broadcaster will target
+  // (`participatingChains()`), not every chain in CHAIN_METADATA. A wider
+  // sample set than the broadcast reaches would inflate V̄ with chains that
+  // never receive this rate.
   const chains = opts.chains ?? participatingChains();
   const globalNow =
     opts.globalValueUsdOverride !== undefined
@@ -307,7 +282,6 @@ export async function deriveRollEpoch(
   // on one chain — it reverts `RateTooHigh` on ALL of them simultaneously, in the
   // settlement window, with yield already halted. `floatRateToBigint` clamps to
   // MAX_RATE instead, and the shortfall is carried forward by the ledger.
-  // Every sibling rate-producing path already clamps; this one did not.
   const nextRateBig = floatRateToBigint(rBaseNextFloat);
 
   logger.info(`Derived next base rate:     ${describeRate(nextRateBig)}`);
@@ -328,8 +302,8 @@ export async function deriveRollEpoch(
       realisedYieldUsd: opts.nextRealisedYieldUsd,
       conservativeFactor,
       // Carry-in to THIS epoch's target is the PRIOR epoch's reconciliation —
-      // NOT this epoch's own carryForwardUsd (see interface doc + the
-      // carryLedger.ts module doc for why conflating them was a bug).
+      // NOT this epoch's own carryForwardUsd. Do not conflate them; see
+      // carryLedger.ts's module doc.
       carryInUsd: reconciledCarryUsd,
       // THIS epoch's own derivation-time residual: `deriveBaseRate` is a
       // pure float division with no clamping, so there is none yet. It will

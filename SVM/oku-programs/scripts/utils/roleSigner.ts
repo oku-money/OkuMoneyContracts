@@ -2,25 +2,17 @@
  * Resolve WHO must sign for a given on-chain PSM role, and which extra
  * keypairs the client has to attach.
  *
- * ---------------------------------------------------------------------------
- * WHY THIS EXISTS
- * ---------------------------------------------------------------------------
- * Every admin script used to hardcode the role account as
- * `provider.wallet.publicKey` — i.e. "the deployer holds every role". That
- * was true only while `scripts/config/authorities.ts` seated all roles on the
- * deployer, which the lite-psm program actually FORBIDS:
+ * Never hardcode a role account to `provider.wallet.publicKey`: the deployer
+ * does NOT hold every role, because the lite-psm program forbids it —
+ * `contexts/init.rs` pins `role_admin` to the BPF upgrade authority (the
+ * deploying wallet), and `instructions/init.rs` rejects any of the 9 granular
+ * authorities that equals `role_admin`.
  *
- *   - `contexts/init.rs` pins `role_admin` to the BPF upgrade authority
- *     (the deploying wallet).
- *   - `instructions/init.rs` rejects any of the 9 granular authorities that
- *     equals `role_admin`.
- *
- * So on devnet/localnet the granular roles necessarily live on a SECOND key
- * (`keys/devnet-authority.json`), and every script that signs as one of them
- * with the deployer wallet fails with `Unauthorized` (6000). On mainnet they
- * live on Squads vaults / KMS signers that this process cannot sign for at
- * all, and the correct behaviour is a clear diagnostic rather than a raw
- * program error.
+ * So on devnet/localnet the granular roles live on a SECOND key
+ * (`keys/devnet-authority.json`), and signing as one of them with the deployer
+ * wallet fails with `Unauthorized` (6000). On mainnet they live on Squads
+ * vaults / KMS signers this process cannot sign for at all, where the correct
+ * behaviour is a clear diagnostic rather than a raw program error.
  *
  * `resolveRoleSigner` reads the CURRENT on-chain authority for the role —
  * never an assumption about who "should" hold it — and reports how to sign:

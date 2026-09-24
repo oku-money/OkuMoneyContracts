@@ -17,20 +17,9 @@ use oku_shared::yield_lock_engaged;
 /// Check the sandwich lock — reverts if in the same slot as an EMERGENCY
 /// multiplier override.
 ///
-/// ## What this does and does not defend against, post-streaming-accrual
-///
-/// It used to guard the routine yield path: `distribute_yield` moved the
-/// multiplier in a discrete step, and an attacker could mint immediately
-/// before and redeem immediately after for riskless profit.
-///
-/// That attack no longer exists, because the step no longer exists. The
-/// multiplier is now a continuous function of time, so there is nothing to
-/// straddle — which is precisely why EVM moved to streaming accrual, since
-/// widening the lock can never fix a discrete tick (the searcher simply
-/// straddles it by one more block on each side).
-///
-/// What remains is the EMERGENCY override (`set_okum_multiplier`), which is
-/// the one instruction that still produces a jump. That is the only writer of
+/// Under streaming accrual the multiplier is a continuous function of time, so
+/// routine accrual offers nothing to straddle. `set_okum_multiplier` is the
+/// one instruction that still produces a discrete jump, and the only writer of
 /// `last_yield_distribution_slot`, so in normal operation this check is free
 /// and never fires.
 ///
@@ -41,9 +30,8 @@ use oku_shared::yield_lock_engaged;
 /// The lock uses Solana slots (~400 ms each) and auto-releases in
 /// subsequent slots.
 ///
-/// EVM mirror: `YieldSandwichGuard.whenYieldNotDistributing`
-/// (`EVM/src/lib/YieldSandwichGuard.sol:21-26`), which likewise keys on a
-/// field written only by `setOkuMMultiplier`.
+/// EVM mirror: `YieldSandwichGuard.whenYieldNotDistributing`, which likewise
+/// keys on a field written only by `setOkuMMultiplier`.
 pub fn check_yield_lock(config: &PsmConfig) -> Result<()> {
     let clock = Clock::get()?;
     require!(

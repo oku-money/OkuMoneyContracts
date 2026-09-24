@@ -8,8 +8,8 @@
  *   - A live network: uses the signer derived from PRIVATE_KEY. Aborts if the
  *     signer doesn't already hold the contract-specific upgrader role.
  *
- * v1 supports `LitePSM` and `OkuDollar`. Future targets are added by extending
- * the UPGRADE_TARGETS table and adding a matching state reader in ./preState.ts.
+ * Supported targets are the keys of the UPGRADE_TARGETS table below. New ones
+ * need a table entry plus a matching state reader in ./preState.ts.
  *
  * Usage:
  *
@@ -52,6 +52,7 @@ import { resolveNetworkContext } from "../utils/networkContext";
 import { ROLES, getRoleName } from "../config/roles";
 import { logger } from "../utils/logger";
 import { STATE_READERS, StateSnapshot, diffSnapshots } from "./preState";
+import { isMainnetNetwork } from "../utils/mainnetGuard";
 
 // ============================================================================
 // Upgrade target registry
@@ -59,20 +60,19 @@ import { STATE_READERS, StateSnapshot, diffSnapshots } from "./preState";
 //
 // Each entry pins four things:
 //   - factory:       hardhat contract name (matches src/*.sol and getContractFactory()).
-//   - upgraderRole:  bytes32 role hash that gates _authorizeUpgrade on that contract.
-//     For Transparent proxies the upgrade is gated by the ProxyAdmin owner, not
-//     the contract's own role — we still record the contract-level role so a
-//     pre-flight check can surface "you also lack the in-contract upgrader role"
-//     warnings, but the actual transparent upgrade flow doesn't depend on it.
+//   - upgraderRole:  bytes32 role hash gating _authorizeUpgrade on that
+//                    contract. For Transparent proxies the upgrade is actually
+//                    gated by the ProxyAdmin owner; the contract-level role is
+//                    still recorded so the pre-flight check can warn on it.
 //   - proxyKind:     "uups" (default) or "transparent". Drives which OZ helper
-//                    the script calls to broadcast the upgrade. Must match the
-//                    `.openzeppelin/<chain>.json` manifest; mismatch causes OZ
-//                    to abort during prepareUpgrade/upgradeProxy.
+//                    broadcasts the upgrade. Must match the
+//                    `.openzeppelin/<chain>.json` manifest; a mismatch aborts
+//                    during prepareUpgrade/upgradeProxy.
 //   - stateKey:      key into STATE_READERS for pre/post snapshot. Falls back to
 //                    `factory` when omitted.
 //
 // Extending: add a row here and a reader in preState.ts. The main loop is
-// target-agnostic, so no other code needs to change.
+// target-agnostic.
 
 type ProxyKind = "uups" | "transparent";
 
@@ -83,9 +83,6 @@ interface UpgradeTarget {
   stateKey?: string;
 }
 
-// OkuBridge / OkuBridgeRouter targets were removed in the noBridge refactor.
-// Live deployments from prior to the refactor may still have those proxies
-// on-chain; they can be upgraded by re-adding entries here when needed.
 const UPGRADE_TARGETS: Record<string, UpgradeTarget> = {
   // UUPS proxies — upgrade gated by the contract's own _authorizeUpgrade role.
   OkuMoney:        { factory: "OkuMoney",        upgraderRole: ROLES.OKUM_UPGRADER },
@@ -111,14 +108,13 @@ const VERIFIABLE_NETWORKS = [
 ];
 
 // ============================================================================
-// Transient-error Retry Helpers (cloned from deploy/index.ts)
+// Transient-error Retry Helpers
 // ============================================================================
 //
 // Live broadcasts hit the same RPC quirks the deploy script handles: stale
 // nonces, "already known", BSC pending-tx response shape, transient timeouts.
-// We share the patterns rather than importing because deploy/index.ts isn't a
-// module — its helpers are scoped to `main()`. Lifting them into a shared util
-// is a separate cleanup; for now we copy the small subset we need.
+// Duplicated from deploy/index.ts rather than imported because that file's
+// helpers are scoped to `main()`.
 
 const TRANSIENT_PATTERNS = [
   /nonce too low/i,
@@ -131,19 +127,13 @@ const TRANSIENT_PATTERNS = [
   /ETIMEDOUT/i,
   /ECONNRESET/i,
   /ENOTFOUND/i,
-  // BSC + flaky-RPC tier: the upstream node is overloaded / rate-limiting.
-  // bscTestnet's Alchemy endpoint surfaces this as "Unable to complete request
-  // at this time" (HTTP 503 wrapped in Hardhat's ProviderError). Retrying
-  // a few seconds later almost always succeeds. Confirmed empirically during
-  // the May 2026 upgrade rollout on bscTestnet.
+  // Upstream node overloaded / rate-limiting.
   /Unable to complete request at this time/i,
   /service unavailable/i,
   /503/i,
   /502/i,
   /504/i,
-  // Quicknode / public-RPC throttling — usually clears within a couple of
-  // seconds. The exponential backoff in `withRetry` keeps the retry rate
-  // gentle even under sustained throttling.
+  // Public-RPC throttling; `withRetry`'s exponential backoff handles it.
   /rate limit/i,
   /too many requests/i,
 ];
@@ -189,45 +179,36 @@ async function withRetry<T>(
 //
 // Avoid paying for a fresh implementation deploy + upgrade tx when the local
 // source compiles to the same runtime bytecode that's already at the proxy's
-// current implementation slot. This is the common case when re-running the
-// upgrade script after a config-only or comment-only change.
+// current implementation slot — the common case when re-running after a
+// config-only or comment-only change.
 //
 // Two normalizations have to happen for a fair comparison:
 //
-//   1. Metadata stripping. Solidity appends a CBOR-encoded metadata footer
-//      to runtime bytecode containing an IPFS hash of the source + compiler
-//      version. Comments, file paths, or a solc patch bump change the hash
-//      even with otherwise-identical compiled output. We strip the trailing
-//      `a264...0033` footer from both sides before comparing.
+//   1. Metadata stripping. Solidity appends a CBOR-encoded metadata footer to
+//      runtime bytecode containing an IPFS hash of the source + compiler
+//      version, so comments, file paths, or a solc patch bump change the hash
+//      even with identical compiled output. Footer format:
+//      `a2 64 69 70 66 73 ...` (CBOR map of 2 entries: "ipfs" -> 0x12 0x20
+//      0x<32-byte hash>, "solc" -> 3 bytes version) plus a 2-byte length
+//      suffix `0033` (~51 bytes typical). Regex anchored on $ so the strip is
+//      unambiguous.
 //
-//      Footer format: `a2 64 69 70 66 73 ...` (CBOR map of 2 entries:
-//      "ipfs" -> 0x12 0x20 0x<32-byte hash>, "solc" -> 3 bytes version) plus a
-//      2-byte length suffix `0033` (~51 bytes typical). Regex anchored on $
-//      so the strip is unambiguous.
+//   2. Immutables zeroing. OZ's UUPSUpgradeable stores `address(this)` of the
+//      impl as an `immutable`, so each deployed impl has its OWN address
+//      inlined at the same offset while the local artifact's
+//      `deployedBytecode` has zeros there — raw equality always fails for
+//      UUPS impls. Solidity emits the exact byte ranges of all immutables in
+//      the build-info's `immutableReferences` map (per-contract,
+//      per-immutable-id, list of `{start, length}`); we zero those ranges on
+//      the on-chain side too before comparing.
 //
-//   2. Immutables zeroing. UUPSUpgradeable (and any contract using
-//      `immutable` storage) bakes runtime values into the deployed bytecode
-//      at fixed offsets. Critically, OZ's UUPSUpgradeable stores
-//      `address(this)` of the impl as an immutable — meaning each deployed
-//      impl has its OWN address inlined at the same offset. The local
-//      artifact's `deployedBytecode` has zeros at those positions (they're
-//      filled at deploy time). So raw equality always fails for UUPS impls.
+// If neither normalization says "definitely unchanged" we fall through to OZ's
+// `prepareUpgrade`, which has its own manifest-backed duplicate detection, so
+// the worst case is one extra round-trip rather than a real redeploy.
 //
-//      Solidity's compiler emits the exact byte ranges of all immutables
-//      in the build-info's `immutableReferences` map (per-contract,
-//      per-immutable-id, list of `{start, length}`). We zero out those
-//      ranges on the on-chain side too before comparing.
-//
-// If neither normalization tells us "definitely unchanged", we fall through
-// to OZ's `prepareUpgrade` — which has its own (manifest-backed) duplicate
-// detection. So the worst case is one extra round-trip to OZ's deduplicator,
-// not a real redeploy.
-//
-// Alternative we considered and rejected: setting
-// `solc.metadata.bytecodeHash = "none"` in hardhat.config.ts. Cleaner in
-// isolation but a one-way door — every contract diffs vs. current bytecode
-// on the first run after the flip. The strip-at-compare approach keeps
-// the existing deployed bytecode comparable across the change.
+// Do NOT "simplify" this by setting `solc.metadata.bytecodeHash = "none"` in
+// hardhat.config.ts: that is a one-way door — every contract would diff against
+// its current on-chain bytecode on the first run after the flip.
 
 const METADATA_FOOTER_RE = /a264[0-9a-f]{2,500}0033$/i;
 
@@ -244,13 +225,9 @@ interface ByteRange {
 }
 
 /**
- * Read all immutable byte ranges for `contractName` from the build-info.
- * Hardhat artifacts don't surface this directly — we have to load the
- * build-info that produced the artifact and look up the contract by its
- * fully-qualified source path.
- *
- * Returns an empty array if the build-info has no immutables for this
- * contract, or if the lookup fails for any reason.
+ * Read all immutable byte ranges for `contractName` from the build-info
+ * (hardhat artifacts don't surface these directly). Returns an empty array if
+ * there are no immutables, or if the lookup fails for any reason.
  */
 async function readImmutableRanges(contractName: string): Promise<ByteRange[]> {
   try {
@@ -312,10 +289,9 @@ async function isImplementationBytecodeUnchanged(
     const onChainRuntimeStripped = stripMetadata(await ethers.provider.getCode(oldImpl));
     if (!localRuntimeStripped || !onChainRuntimeStripped) return false;
 
-    // Zero immutable byte ranges on BOTH sides. The local artifact already
-    // has zeros there but normalize anyway in case future Solidity revs
-    // change the placeholder bytes. On-chain has real values that we
-    // explicitly want to ignore for this comparison.
+    // Zero immutable byte ranges on BOTH sides: the on-chain side has real
+    // values to ignore, and the local artifact is normalized too in case a
+    // future Solidity rev changes the placeholder bytes.
     const localNormalized = zeroRanges(localRuntimeStripped, immRanges);
     const onChainNormalized = zeroRanges(onChainRuntimeStripped, immRanges);
 
@@ -335,30 +311,22 @@ async function isImplementationBytecodeUnchanged(
 //
 // `upgrades.upgradeProxy(proxy, Factory, { kind: "transparent" })` in
 // hardhat-upgrades + ethers v6 returns a Contract handle whose
-// `deploymentTransaction()` is OFTEN null for Transparent proxies — the
-// helper re-attaches to the proxy address rather than wrapping the
-// ProxyAdmin.upgrade() tx, so ethers' "what tx deployed this Contract"
-// bookkeeping has nothing to surface. The actual upgrade tx DID go to
-// chain; we just can't reach it via the returned handle.
+// `deploymentTransaction()` is OFTEN null for Transparent proxies — it
+// re-attaches to the proxy address rather than wrapping the
+// ProxyAdmin.upgrade() tx. The upgrade tx DID land on chain; it just isn't
+// reachable through the returned handle.
 //
-// This helper scans the proxy's logs since `fromBlock` for the most
-// recent `Upgraded(address)` event and reconstructs a receipt-shape
-// object the rest of the script understands. The lower bound is the
-// block height captured BEFORE calling `upgradeProxy`, so we never pick
-// up an Upgraded event from a prior upgrade in the same run.
-//
-// Returned object satisfies the same minimal shape the script uses
-// downstream:
+// This helper scans the proxy's logs since `fromBlock` for the most recent
+// `Upgraded(address)` event and reconstructs a receipt-shape object:
 //   - .hash: real tx hash from chain
 //   - .blockNumber: block the upgrade tx was mined in
 //   - .logs: the proxy's log array for that tx (includes the Upgraded log,
 //            which the step-7 event check then validates)
 //
-// On miss (no Upgraded event since fromBlock), returns a synthetic
-// "<no-upgrade-event-found>" hash. Callers should treat that as
-// equivalent to a no-op (slot didn't move) — the step-7 invariant check
-// catches a contradiction (slot moved but no event found) via the
-// post-call check in the upgradeProxy branch.
+// `fromBlock` must be the height captured BEFORE calling `upgradeProxy`, so a
+// prior upgrade in the same run is never picked up. On miss, returns a
+// synthetic "<no-upgrade-event-found>" hash, which callers treat as a no-op
+// (slot didn't move); step 7 catches the contradiction if the slot DID move.
 
 const UPGRADED_TOPIC_HEX =
   "0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b";
@@ -379,15 +347,9 @@ async function recoverTransparentUpgradeReceipt(
   const safeFrom = Math.max(0, fromBlock - 1);
   const latest = await ethers.provider.getBlockNumber();
 
-  // Cap the scan window. The upgrade tx is normally mined within a handful
-  // of blocks of `fromBlock`; in the worst case (heavy congestion + slow
-  // confirmation) it's still within a few minutes' worth of blocks. We cap
-  // to 10 blocks because some hosted-RPC tiers (notably Alchemy's free
-  // tier on BSC / BSC testnet) reject `eth_getLogs` with ranges wider than
-  // 10 blocks. If we're within that window, one call suffices; if we're
-  // not, we widen in 10-block steps. Worst-case 100 blocks (~5 min on most
-  // chains) before giving up — by then the recovery is almost certainly
-  // futile because the proxy never moved.
+  // Scan in 10-block steps because some hosted-RPC tiers reject `eth_getLogs`
+  // with ranges wider than 10 blocks. Worst case 100 blocks (~5 min on most
+  // chains) before giving up.
   const MAX_STEPS = 10;
   const STEP = 10;
   let logs: any[] = [];
@@ -402,9 +364,8 @@ async function recoverTransparentUpgradeReceipt(
         toBlock: scanTo,
       });
     } catch (err: any) {
-      // Surface a clear message rather than the cryptic Alchemy "Upgrade
-      // to PAYG" wording. If the RPC rejects even a 10-block window,
-      // something is off (network down, wrong endpoint) — propagate.
+      // If the RPC rejects even a 10-block window something is off (network
+      // down, wrong endpoint) — propagate with a clear message.
       throw new Error(
         `Transparent recovery getLogs failed on blocks ${scanFrom}..${scanTo}: ` +
           `${err?.message ?? err}. Cannot recover upgrade tx hash.`
@@ -428,12 +389,9 @@ async function recoverTransparentUpgradeReceipt(
     };
   }
 
-  // Most recent Upgraded event in the window is the one we just caused.
-  // ethers returns logs in chronological order (ascending block, ascending
-  // logIndex), so the last entry is the freshest. If we somehow get
-  // multiple in our window (e.g. a concurrent admin upgrade — should not
-  // happen on a single-deployer chain but be defensive), we trust the last
-  // one and surface a warning.
+  // ethers returns logs in chronological order, so the last entry in the
+  // window is the one we just caused. Multiple hits mean a concurrent admin
+  // upgrade; trust the last one and warn.
   if (logs.length > 1) {
     logger.warning(
       `  ${logs.length} Upgraded(address) events found in window ` +
@@ -446,17 +404,12 @@ async function recoverTransparentUpgradeReceipt(
   const txHash = upgradedLog.transactionHash;
   const blockNumber = upgradedLog.blockNumber;
 
-  // Fetch the full tx receipt so step-7's `Upgraded` event check can scan
-  // all logs from the same tx, not just the proxy's. Belt-and-braces:
-  // some Transparent proxies emit multiple events per upgrade
-  // (AdminChanged, Upgraded) and the step-7 check is keyed on the proxy's
-  // log only, so technically we could pass just `[upgradedLog]` — but
-  // returning the full log array keeps parity with what UUPS receipts
-  // surface.
+  // Fetch the full tx receipt so step-7's `Upgraded` event check sees all logs
+  // from the tx, matching what UUPS receipts surface.
   const txReceipt = await ethers.provider.getTransactionReceipt(txHash);
   if (!txReceipt) {
-    // Race: tx hash exists in logs (mined) but receipt not yet
-    // indexed by this RPC node. Surface clearly rather than crash.
+    // Race: tx hash exists in logs (mined) but the receipt is not yet indexed
+    // by this RPC node. Surface clearly rather than crash.
     logger.warning(
       `  Recovered Upgraded event for tx ${txHash} but no receipt yet; ` +
         `using log-only data.`
@@ -566,11 +519,10 @@ async function ensureUpgraderRole(
     `  Signer lacks ${roleName} on fork — attempting auto-grant from DEFAULT_ADMIN`
   );
 
-  // On a freshly-restarted fork, ROLES.DEFAULT_ADMIN_ROLE is held by whoever
-  // originally called `initialize`. For OkuMoney's role-grant policy that is
-  // also the dev wallet, so the same impersonated signer should be able to
-  // self-grant. We still go through grantRole to keep this path generic in
-  // case the admin diverges from the signer.
+  // On a freshly-restarted fork, DEFAULT_ADMIN_ROLE is held by whoever called
+  // `initialize` — for OkuMoney's policy that is also the dev wallet, so the
+  // impersonated signer can self-grant. Still routed through grantRole to stay
+  // generic if the admin diverges from the signer.
   const adminRole = ROLES.DEFAULT_ADMIN_ROLE;
   const signerIsAdmin = await contract.hasRole(adminRole, signerAddress);
   if (!signerIsAdmin) {
@@ -667,22 +619,15 @@ async function upgradeOne(
   // 5b. Bytecode-equality short-circuit.
   //
   //     If the locally-compiled runtime bytecode (sans Solidity metadata
-  //     footer) is identical to what's already at `oldImpl`, the upgrade
-  //     would be a no-op: prepareUpgrade would either redeploy the same
-  //     bytes (wasting gas / rent on a contract that's structurally identical
-  //     to the current impl) or return the existing impl address and then
-  //     upgradeToAndCall would no-op. Either way it costs gas and adds
-  //     noise to the audit trail for zero benefit.
+  //     footer) matches what's already at `oldImpl`, the upgrade is a no-op
+  //     that still costs gas and adds noise to the audit trail. We record an
+  //     audit entry with the `<bytecode-unchanged>` sentinel and skip the rest
+  //     of the per-target flow.
   //
-  //     We log + record an audit entry with the `<bytecode-unchanged>`
-  //     sentinel and skip the rest of the per-target flow.
-  //
-  //     This is layered on TOP of the OZ plugin's prepareUpgrade idempotency
-  //     (which dedupes identical impl deployments via the manifest), not
-  //     a replacement: prepareUpgrade still also blocks layout-incompat
-  //     changes, which a bytecode-equality skip wouldn't catch by itself.
-  //     But the bytecode skip happens *before* prepareUpgrade, sparing the
-  //     network round-trips when there's nothing to do.
+  //     Layered on TOP of the OZ plugin's prepareUpgrade idempotency, not a
+  //     replacement: prepareUpgrade also blocks layout-incompatible changes,
+  //     which a bytecode-equality skip would not catch. This check just runs
+  //     first, sparing the network round-trips when there is nothing to do.
   const skipBytecodeCheck = process.env.SKIP_BYTECODE_CHECK === "true";
   if (!skipBytecodeCheck && (await isImplementationBytecodeUnchanged(target.factory, oldImpl))) {
     logger.success(
@@ -741,10 +686,10 @@ async function upgradeOne(
   //      Phase B (`upgradeToAndCall`): we call the UUPS hook directly so we own
   //      the resulting tx receipt (the plugin's upgradeProxy wraps these into one
   //      call that surfaces only the impl-deploy tx, which isn't useful here).
-  //      Empty calldata: no re-initialization needed for the mintUsdOku fix or
-  //      any state-preserving patch. Future migrations that need to call a
-  //      reinitializer should extend the dispatch table with a `migrationCalldata`
-  //      field rather than hard-coding it here.
+  //      Empty calldata: no re-initialization is needed for a state-preserving
+  //      patch. A migration that must call a reinitializer should extend the
+  //      dispatch table with a `migrationCalldata` field rather than
+  //      hard-coding it here.
   //
   //    Transparent:
   //      Single-phase via `upgrades.upgradeProxy`. The plugin still does the
@@ -753,30 +698,22 @@ async function upgradeOne(
   //      ERC1967 Upgraded event fires from the proxy address (same topic), so
   //      the downstream event check in step 7 works identically.
   //
-  //      We cannot use the UUPS two-phase pattern here because a Transparent
-  //      proxy has no `upgradeToAndCall` selector exposed to the signer — the
-  //      proxy admin's calldata is dispatched only via the ProxyAdmin contract.
-  //      The single-phase path means we surface the ProxyAdmin.upgrade tx as
-  //      the "upgrade tx hash" in the audit record, which is the right level
-  //      of granularity (the impl-deploy tx is recorded separately on-chain
-  //      but isn't useful for state-change audit).
+  //      The UUPS two-phase pattern is unusable here: a Transparent proxy
+  //      exposes no `upgradeToAndCall` selector to the signer. So the audit
+  //      record's "upgrade tx hash" is the ProxyAdmin.upgrade tx.
   const proxyKind: ProxyKind = target.proxyKind ?? "uups";
   let newImpl: string = "";
   let receipt: any;
 
-  // Helper: if OZ's manifest is missing an entry for this proxy or its
-  // current impl (which happens when a previous deploy was done on a
-  // different machine / via a non-OZ tool), the first `prepareUpgrade` or
-  // `upgradeProxy` call fails with "Deployment at address ... is not
-  // registered". We can recover by registering the existing proxy + impl
-  // into our local manifest via `upgrades.forceImport`, then retrying.
+  // If OZ's manifest is missing an entry for this proxy or its current impl
+  // (a previous deploy on a different machine, or via a non-OZ tool), the
+  // first `prepareUpgrade` / `upgradeProxy` call fails with "Deployment at
+  // address ... is not registered". Recover by registering the existing
+  // proxy + impl into the local manifest via `upgrades.forceImport`.
   //
-  // Safety: forceImport reads the proxy's current impl, the storage layout
-  // of the new factory we'd be deploying, and writes them into
-  // `.openzeppelin/<chain>.json`. It does NOT broadcast any tx and does
-  // NOT modify on-chain state — purely metadata bookkeeping. Repeated
-  // calls are no-ops, so this is safe to invoke speculatively in a
-  // recovery path.
+  // Safety: forceImport only writes `.openzeppelin/<chain>.json` — it
+  // broadcasts no tx and modifies no on-chain state, and repeated calls are
+  // no-ops, so it is safe to invoke speculatively in a recovery path.
   async function forceImportIfMissing(): Promise<boolean> {
     try {
       logger.warning(
@@ -789,8 +726,9 @@ async function upgradeOne(
     } catch (err: any) {
       logger.error(
         `  forceImport failed for ${name}: ${err.message ?? err}. ` +
-          `Manual remediation: run \`npx hardhat run scripts/utils/forceImport.ts --network <chain>\` ` +
-          `(if present) or replicate the .openzeppelin/<chain>.json from a machine that has it.`
+          `Manual remediation: copy .openzeppelin/<chain>.json from a machine ` +
+          `that has the manifest entry for ${proxyAddress}, or re-run this ` +
+          `upgrade from that machine.`
       );
       return false;
     }
@@ -865,23 +803,19 @@ async function upgradeOne(
     // for the audit-record tx hash. The new impl address is read from the
     // ERC1967 slot after the call returns — the plugin guarantees the slot
     // is updated before the call resolves.
-    // Snapshot the block height BEFORE the upgrade call so the post-call
-    // log scan has a tight lower bound. We use this when
-    // `deploymentTransaction()` comes back null (a known ethers-v6 +
-    // hardhat-upgrades quirk for Transparent proxies; see the recovery
-    // helper below for details).
+    // Snapshot the block height BEFORE the upgrade call so the post-call log
+    // scan has a tight lower bound, for when `deploymentTransaction()` comes
+    // back null (an ethers-v6 + hardhat-upgrades quirk for Transparent
+    // proxies).
     const preUpgradeBlock = await ethers.provider.getBlockNumber();
 
     await withRetry(`upgradeProxy(${name})`, async () => {
-      // Pass `kind: "transparent"` explicitly. Without it, OZ infers the kind
-      // from the implementation contract's source — and any impl that inherits
-      // UUPSUpgradeable carries an _authorizeUpgrade hook even when the deployed
-      // proxy is actually Transparent. OZ then asserts "Requested an upgrade of
-      // kind uups but proxy is transparent" against the manifest's recorded kind.
-      // The fix: tell OZ explicitly that we know it's transparent, matching the
-      // manifest. The _authorizeUpgrade method in the impl is dead code for
-      // Transparent proxies and harmless. (Historical note: this branch existed
-      // primarily for OkuBridge, removed in the noBridge refactor.)
+      // Pass `kind: "transparent"` explicitly. Without it OZ infers the kind
+      // from the implementation's source, and any impl inheriting
+      // UUPSUpgradeable carries an _authorizeUpgrade hook even when the
+      // deployed proxy is Transparent — OZ then aborts with "Requested an
+      // upgrade of kind uups but proxy is transparent". The impl's
+      // _authorizeUpgrade is dead code for Transparent proxies and harmless.
       let upgraded;
       try {
         upgraded = await upgrades.upgradeProxy(proxyAddress, Factory, {
@@ -896,13 +830,10 @@ async function upgradeOne(
           throw err;
         }
       }
-      // ethers v6: deploymentTransaction() returns the tx that "deployed" the
-      // returned Contract instance. For Transparent proxies this is OFTEN
-      // null even when the ProxyAdmin tx really was broadcast — the helper
-      // returns a re-attached Contract handle rather than a fresh-deployed
-      // one, and ethers' deploymentTransaction() bookkeeping doesn't
-      // surface the ProxyAdmin call. We need a fallback that recovers the
-      // real tx hash from chain state.
+      // ethers v6: deploymentTransaction() is OFTEN null for Transparent
+      // proxies even when the ProxyAdmin tx really was broadcast, because the
+      // helper returns a re-attached Contract handle rather than a
+      // fresh-deployed one. Hence the chain-state fallback below.
       const txResp = (upgraded as any).deploymentTransaction?.() ?? null;
       if (txResp) {
         receipt = await txResp.wait();
@@ -911,38 +842,30 @@ async function upgradeOne(
         );
       } else {
         // Fallback: recover the upgrade tx hash by scanning for the proxy's
-        // most recent Upgraded(address) event since `preUpgradeBlock`. This
-        // gives us the real on-chain tx hash to put in the audit record
-        // instead of an `<already-upgraded>` sentinel, which is what the
-        // previous implementation incorrectly used when the slot HAD moved.
+        // most recent Upgraded(address) event since `preUpgradeBlock`, so the
+        // audit record carries the real on-chain hash rather than a sentinel.
         receipt = await recoverTransparentUpgradeReceipt(
           proxyAddress,
           preUpgradeBlock
         );
       }
-      // Re-read ERC1967 slot for the new impl. We do this regardless of
-      // whether a tx was broadcast, because either way the slot value is
-      // what we want to record.
+      // Re-read the ERC1967 slot regardless of whether a tx was broadcast —
+      // either way the slot value is what gets recorded.
       newImpl = await upgrades.erc1967.getImplementationAddress(proxyAddress);
       logger.info(`  New implementation: ${newImpl}`);
     });
 
-    // Note: a Transparent upgrade where `oldImpl === newImpl` is a legit
-    // no-op, not a contradiction. OZ's manifest deduplicator returns the
-    // same impl address when the bytecode is unchanged, ProxyAdmin's
-    // upgrade() still fires Upgraded(sameImpl), and the slot effectively
-    // doesn't move. The step-7 Upgraded-event check below correctly
-    // accepts this (the event's impl matches `newImpl`), and the
-    // slot-poll check passes because slot == newImpl. So we don't need a
-    // contradiction guard here — the existing checks handle it.
+    // A Transparent upgrade where `oldImpl === newImpl` is a legitimate
+    // no-op: OZ's manifest deduplicator returns the same impl when the
+    // bytecode is unchanged, ProxyAdmin.upgrade() still fires
+    // Upgraded(sameImpl), and step 7's checks both pass. No guard needed.
   }
 
   // 7. Confirm the implementation slot moved.
   //
-  //    Two-pronged check that tolerates RPC propagation delay (which has bitten
-  //    us on public Base RPCs: the upgrade tx mines, but a follow-up read on a
-  //    different load-balanced node returns the *pre-upgrade* slot value
-  //    momentarily). The order is:
+  //    Two-pronged check that tolerates RPC propagation delay: the upgrade tx
+  //    mines, but a follow-up read on a different load-balanced node can
+  //    momentarily return the *pre-upgrade* slot value. The order is:
   //
   //      a) Authoritative: parse the ERC-1967 `Upgraded(address)` event from
   //         the receipt's own logs. If the event reports the expected impl,
@@ -1142,9 +1065,8 @@ const UPGRADE_YES_MAINNET =
   process.argv.includes("--yes-mainnet") ||
   process.env.YES_MAINNET === "1" ||
   process.env.YES_MAINNET === "true";
-const UPGRADE_MAINNET_NETWORKS = new Set(["base", "bsc", "mainnet", "ethereum"]);
 function assertNotMainnetUpgrade(networkName: string) {
-  if (!UPGRADE_MAINNET_NETWORKS.has(networkName)) return;
+  if (!isMainnetNetwork(networkName)) return;
   if (UPGRADE_YES_MAINNET) {
     logger.warning(`YES_MAINNET set; proceeding with upgrade on ${networkName}`);
     return;
@@ -1164,12 +1086,10 @@ async function main() {
   const { networkName, isFork, chainConfig } = ctx;
   if (!isFork) assertNotMainnetUpgrade(networkName);
 
-  // Upgrade scripts always target the LIVE address-book key, even on a fork.
-  // Rationale: a fork rehearsal upgrades the *real* deployed proxies (whose
-  // bytecode is mirrored into the fork from live state). The deploy script's
-  // `fork:<chain>` namespace exists to keep throwaway fork deployments from
-  // overwriting live entries — but there are no fork-only proxies to upgrade,
-  // so we deliberately ignore that namespace here.
+  // Upgrade scripts always target the LIVE address-book key, even on a fork: a
+  // fork rehearsal upgrades the *real* deployed proxies, mirrored into the fork
+  // from live state. The deploy script's `fork:<chain>` namespace is
+  // deliberately ignored here — there are no fork-only proxies to upgrade.
   const bookKey = networkName;
 
   const targets = parseTargets();
@@ -1189,9 +1109,8 @@ async function main() {
       method: "hardhat_impersonateAccount",
       params: [DEV_WALLET_ADDRESS],
     });
-    // Fund the impersonated account if it's low on ETH (real on-chain balance
-    // is mirrored from the fork, but a fresh node may need a top-up). 1 ETH
-    // is plenty for several upgrades worth of gas.
+    // Top up the impersonated account if low on ETH. 1 ETH covers several
+    // upgrades' worth of gas.
     const bal = await ethers.provider.getBalance(DEV_WALLET_ADDRESS);
     if (bal < ethers.parseEther("0.1")) {
       logger.info(`  Dev wallet balance low (${ethers.formatEther(bal)} ETH); topping up`);

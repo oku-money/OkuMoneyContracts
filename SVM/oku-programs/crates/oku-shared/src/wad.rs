@@ -2,17 +2,15 @@
 //!
 //! ## Why this module exists
 //!
-//! Once `PRECISION` moved from 1e9 to 1e18 (see [`crate::constants`]), the
-//! multiplier itself can reach `MAX_MULTIPLIER = 1e24`. A single
-//! `multiplier × amount` product therefore reaches ~1.8e43, which does not
-//! fit in `u128` (max ≈ 3.4e38). EVM does this arithmetic in `uint256`
-//! natively; SVM has no 256-bit primitive, so we carry the intermediate
-//! ourselves.
+//! At `PRECISION = 1e18` the multiplier reaches `MAX_MULTIPLIER = 1e24`, so a
+//! `multiplier × amount` product reaches ~1.8e43, which does not fit in `u128`
+//! (max ≈ 3.4e38). EVM does this arithmetic in `uint256` natively; SVM has no
+//! 256-bit primitive, so we carry the intermediate ourselves.
 //!
 //! ## The algorithm (not novel — deliberately)
 //!
-//! This is the standard `full_mul` + `div_mod_small` pair from the
-//! `uint` / `primitive-types` crate family, which is the same decomposition
+//! The standard `full_mul` + `div_mod_small` pair from the
+//! `uint` / `primitive-types` crate family — the same decomposition
 //! OpenZeppelin's `Math.mulDiv` implements in assembly and which
 //! `EVM/src/lib/MathLib.sol` routes every conversion through. Two steps:
 //!
@@ -35,9 +33,9 @@
 //!
 //! [`mul_div_wad_floor`] truncates. [`mul_div_wad_half_up`] adds `WAD/2`
 //! before dividing, reproducing MakerDAO `rpow`'s half-up assembly rounding
-//! bit-for-bit — see `EVM/src/lib/MathLib.sol:52` (`xxRound`) and `:60`
-//! (`zxRound`). `rpow` is the one place the protocol does NOT floor; that
-//! carve-out is documented at `EVM/src/lib/MathLib.sol:13-20`.
+//! bit-for-bit — see the `xxRound` / `zxRound` steps of `MathLib.rpow`.
+//! `rpow` is the one place the protocol does NOT floor; that carve-out is
+//! documented at the head of `EVM/src/lib/MathLib.sol`.
 
 use crate::constants::PRECISION;
 
@@ -79,9 +77,8 @@ const _: () = assert!(PRECISION < (1u128 << 64));
 /// a `u128 * u128` lowers to a `__multi3` libcall. Writing the partial products
 /// as `(x as u128) * (y as u128)` with `x, y: u64` lets LLVM see a genuine
 /// 64x64 -> 128 widening multiply and emit a handful of native instructions
-/// instead. An earlier version of this function held the limbs as `u128`, which
-/// produced four `__multi3` calls per invocation and was a significant part of
-/// why `mint_oku_m` cost over 150k compute units.
+/// instead. Holding the limbs as `u128` produces four `__multi3` calls per
+/// invocation, which alone pushed `mint_oku_m` over 150k compute units.
 #[inline]
 const fn widening_mul(a: u128, b: u128) -> (u128, u128) {
     let a_lo = a as u64;
@@ -175,10 +172,10 @@ const fn div_wad(hi: u128, lo: u128) -> Option<u128> {
 /// inside `u128::MAX ≈ 3.4e38`; likewise the accumulator step and
 /// `raw_to_dollars` at any realistic multiplier.
 ///
-/// The general path exists for correctness at the extremes, not for throughput.
-/// Skipping it when it is not needed took `mint_oku_m` from ~150k compute units
-/// to a small fraction of that — `div_wad` costs eight software-division
-/// libcalls, and this path costs one.
+/// The general path exists for correctness at the extremes, not throughput:
+/// `div_wad` costs eight software-division libcalls, this path costs one,
+/// which is the difference between `mint_oku_m` at ~150k compute units and a
+/// small fraction of that.
 #[inline]
 pub const fn mul_div_wad_floor(a: u128, b: u128) -> Option<u128> {
     if let Some(product) = a.checked_mul(b) {
@@ -198,8 +195,7 @@ pub const fn mul_div_wad_floor(a: u128, b: u128) -> Option<u128> {
 /// carry the product out of `u128`, so the fast path requires BOTH the multiply
 /// and the add to stay in range.
 ///
-/// EVM equivalent: the `xxRound` / `zxRound` steps of
-/// `EVM/src/lib/MathLib.sol:52-62`.
+/// EVM equivalent: the `xxRound` / `zxRound` steps of `MathLib.rpow`.
 #[inline]
 pub const fn mul_div_wad_half_up(a: u128, b: u128) -> Option<u128> {
     if let Some(product) = a.checked_mul(b) {

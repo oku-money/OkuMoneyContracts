@@ -50,11 +50,10 @@ pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
 
 /// Update max supply (cap_manager only).
 ///
-/// Refuses any new cap below the current circulating supply — that would
-/// silently brick every subsequent `mint_oku_m` because the mint path
-/// checks `current_supply + amount <= max_supply` and `add(0) > cap` is
-/// true on a starting state of `current_supply > cap`. Mirrors EVM
-/// `OkuM.setMaxSupply`'s `BelowCurrentSupply` revert.
+/// Refuses any cap below the current circulating supply: the mint path checks
+/// `current_supply + amount <= max_supply`, so such a cap would silently brick
+/// every subsequent `mint_oku_m`. Mirrors EVM `OkuM.setMaxSupply`'s
+/// `BelowCurrentSupply` revert.
 pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<()> {
     let current_supply = ctx.accounts.oku_m_mint.supply;
     require!(
@@ -189,18 +188,12 @@ pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
 /// Update a specific authority role.
 ///
 /// Only `role_admin` can call this. All non-meta roles commit immediately;
-/// `RoleAdmin` is special-cased into a two-step (propose + accept) flow
-/// modelled on OpenZeppelin's `Ownable2Step`:
-///
-/// 1. The current `role_admin` calls `set_authority(RoleAdmin, new_admin)`.
-///    This writes `new_admin` to `pending_role_admin`. The live
-///    `role_admin` is unchanged.
-/// 2. `new_admin` calls `accept_role_admin`, which moves the value into
-///    `role_admin` and clears the slot.
-///
-/// Step 1 can be repeated or cleared via `cancel_role_admin_transfer`. A
-/// typo or stale-key proposal therefore does not lock the protocol out
-/// of its meta-role.
+/// `RoleAdmin` is special-cased into a two-step propose/accept flow modelled
+/// on OpenZeppelin's `Ownable2Step`: this writes `new_admin` to
+/// `pending_role_admin` (the live `role_admin` is unchanged), and
+/// `accept_role_admin` commits it. Step 1 can be repeated or cleared via
+/// `cancel_role_admin_transfer`, so a typo or stale-key proposal does not lock
+/// the protocol out of its meta-role.
 pub fn set_authority(
     ctx: Context<SetAuthority>,
     role: AuthorityRole,
@@ -214,11 +207,9 @@ pub fn set_authority(
 
     let config = &mut ctx.accounts.config;
 
-    // Reject `new_authority == role_admin` for non-RoleAdmin roles.
-    // Collapsing the cold-multisig key into a warm-multisig role would
-    // destroy the separation-of-duties model, and a typo or stale key in
-    // the proposing flow is the most likely way it would happen. The
-    // `RoleAdmin` two-step branch below handles its own equality check.
+    // Reject `new_authority == role_admin` for non-RoleAdmin roles: collapsing
+    // the cold-multisig key into a warm-multisig role destroys separation of
+    // duties. The `RoleAdmin` branch below does its own equality check.
     if !matches!(role, AuthorityRole::RoleAdmin) {
         require!(
             new_authority != config.role_admin,
@@ -249,11 +240,10 @@ pub fn set_authority(
         return Ok(());
     }
 
-    // Swap in the new authority and return the old value. Each arm is
-    // structurally identical (`let old = config.X; config.X = new; old`),
-    // so a one-line macro dispatches on the role enum and collapses the
-    // match. `RoleAdmin` is intentionally absent — it's handled by the
-    // two-step branch above.
+    // Swap in the new authority and return the old value. Every arm is
+    // structurally identical (`let old = config.X; config.X = new; old`), so a
+    // macro collapses the match. `RoleAdmin` is absent by design — handled by
+    // the two-step branch above.
     macro_rules! rotate_role {
         ( $( $variant:ident => $field:ident ),+ $(,)? ) => {
             match role {
@@ -293,11 +283,10 @@ pub fn set_authority(
 
 /// Step 2 of the two-step `role_admin` transfer.
 ///
-/// Must be signed by the `pending_role_admin` previously proposed by the
-/// outgoing admin via `set_authority(RoleAdmin, ...)`. Moves the value
-/// into `role_admin` and clears the pending slot. Emits the canonical
-/// `AuthorityUpdatedEvent` so downstream indexers do not need to special-
-/// case the two-step path.
+/// Must be signed by the `pending_role_admin` proposed via
+/// `set_authority(RoleAdmin, ...)`. Moves the value into `role_admin`, clears
+/// the pending slot, and emits the canonical `AuthorityUpdatedEvent` so
+/// indexers need not special-case the two-step path.
 pub fn accept_role_admin(ctx: Context<AcceptRoleAdmin>) -> Result<()> {
     let config = &mut ctx.accounts.config;
 
@@ -356,22 +345,11 @@ pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
 /// Set the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol` in place
 /// (`role_admin` only).
 ///
-/// # What it does
-/// Sets the mint's on-chain identity to the canonical OkuM ("OkuMoney")
-/// name/symbol. This is a metadata-only edit: existing balances and ATAs are
-/// untouched, and no new mint is created.
+/// Metadata-only edit: existing balances and ATAs are untouched and no new
+/// mint is created. Values come from `OKU_M_METADATA_*` (constants.rs) so they
+/// cannot drift from `initialize`; see that module for OkuM vs usdOku.
 ///
-/// # OkuM vs usdOku
-/// The `name`/`symbol` set here are the TRUE on-chain identity of the
-/// base token — **OkuM ("OkuMoney")** — which wallets and block explorers
-/// display for the mint and for transfers. Values come from the single
-/// source of truth `OKU_M_METADATA_*` (constants.rs) so they cannot drift
-/// from `initialize`. The "$1-pegged usdOku" figure is a separate
-/// ScaledUiAmount display value (raw_amount * multiplier) and is NOT
-/// affected by this instruction.
-///
-/// # Authority
-/// The metadata `update_authority` is the `config` PDA; it CPI-signs the
+/// The metadata `update_authority` is the `config` PDA, which CPI-signs the
 /// two `update_field` calls (Name, Symbol) via `invoke_signed`. Access is
 /// gated to `role_admin` via `has_one` on the context.
 pub fn update_token_metadata(ctx: Context<UpdateTokenMetadata>) -> Result<()> {

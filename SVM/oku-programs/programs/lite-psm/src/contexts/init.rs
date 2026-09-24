@@ -35,17 +35,14 @@ pub struct Initialize<'info> {
     /// `role_admin` is the upgrade authority.
     ///
     /// Checked against the upgrade authority rather than a hardcoded
-    /// `const DEPLOY_AUTHORITY` so the binary is identical across devnet /
-    /// mainnet and there is no environment-specific constant to get wrong at
-    /// build time. Anyone who could pass this check could already replace the
-    /// whole program via `bpf_loader_upgradeable::Upgrade`, so it grants no
-    /// authority that wasn't already held — it just stops anyone ELSE
-    /// claiming the config.
+    /// `const DEPLOY_AUTHORITY`, so the binary is identical across devnet and
+    /// mainnet. Anyone passing this check could already replace the whole
+    /// program via `bpf_loader_upgradeable::Upgrade`, so it grants no new
+    /// authority — it just stops anyone ELSE claiming the config.
     ///
     /// `Account<'info, ProgramData>` enforces `owner == BPFLoaderUpgradeable`
-    /// and the `ProgramData` discriminant; the `address =` constraint pins it
-    /// to THIS program's ProgramData PDA, so an unrelated program's account
-    /// can't be substituted.
+    /// and the discriminant; `address =` pins it to THIS program's ProgramData
+    /// PDA, so another program's account cannot be substituted.
     #[account(
         address = program_data_address() @ LitePsmError::Unauthorized,
         constraint = program_data.upgrade_authority_address == Some(role_admin.key())
@@ -64,11 +61,9 @@ pub struct Initialize<'info> {
 
     /// USDC mint (standard SPL).
     ///
-    /// Must have exactly `TOKEN_DECIMALS` (= 6) decimals on Solana —
-    /// this matches the `OkuM` decimal model. EVM resolves
-    /// a runtime `usdcDecimalMultiplier` from `IERC20Metadata.decimals()`;
-    /// SVM hardcodes the value via the shared constant and asserts at
-    /// init.
+    /// Must have exactly `TOKEN_DECIMALS` (= 6) decimals, matching the OkuM
+    /// decimal model. EVM resolves a runtime `usdcDecimalMultiplier` from
+    /// `IERC20Metadata.decimals()`; SVM hardcodes it and asserts at init.
     #[account(
         constraint = usdc_mint.decimals == TOKEN_DECIMALS @ LitePsmError::InvalidUsdcDecimals
     )]
@@ -76,11 +71,10 @@ pub struct Initialize<'info> {
 
     /// Fresh keypair for the OkuM mint (Token-2022).
     ///
-    /// The instruction creates this mint via manual CPIs with
-    /// ScaledUiAmount + MetadataPointer + TokenMetadata extensions.
-    /// The PsmConfig PDA is set as mint authority, freeze authority,
-    /// and ScaledUiAmount authority. Passed as a `Signer` because
-    /// `CreateAccount` requires the new account to sign.
+    /// Created via manual CPIs with ScaledUiAmount + MetadataPointer +
+    /// TokenMetadata extensions; the PsmConfig PDA becomes mint, freeze, and
+    /// ScaledUiAmount authority. A `Signer` because `CreateAccount` requires
+    /// the new account to sign.
     #[account(mut)]
     pub oku_m_mint: Signer<'info>,
 

@@ -1,10 +1,6 @@
 /**
  * Grant OPERATIONAL (non-governance) roles to a delegate EOA.
  *
- * ============================================================================
- * NATSPEC / DESIGN NOTES -- READ BEFORE MODIFYING THIS SCRIPT
- * ============================================================================
- *
  * Ownership vs. operation
  * ------------------------
  * This script implements "operate, don't own" delegation. It grants ONLY
@@ -33,16 +29,12 @@
  *                       same party being capped
  *   - bufferWithdrawer  pulls USDC back out of the buffer
  *
- * INCIDENT CONTEXT: an earlier version of this script granted all 10
- * non-roleAdmin roles (including the 7 governance/safety roles above) to a
- * single delegate pubkey. That is safe ONLY if the delegate key is one you
- * control (e.g. a recovery/governance key you hold) -- it is NOT safe to
- * point it at a third party's operating key, because it would hand them
- * pause/freeze/cap/allowance/buffer-withdraw power alongside operations.
- * If you need "single dev wallet does everything" behavior for local
- * smoke-testing, grant the governance roles separately (e.g. via
- * `set-authority.ts`) to a key you actually hold, and use THIS script only
- * for the operational subset.
+ * WARNING: do NOT extend this script to grant the governance/safety roles to
+ * `--delegate`. Handing a third party's operating key pause/freeze/cap/
+ * allowance/buffer-withdraw power alongside operations defeats the whole
+ * split. For "single dev wallet does everything" local smoke-testing, grant
+ * the governance roles separately via `set-authority.ts` to a key you actually
+ * hold, and use THIS script only for the operational subset.
  *
  * Idempotent: skips any role whose current authority already equals the
  * delegate. RoleAdmin itself is never touched by this script.
@@ -106,7 +98,7 @@ function hasFlag(name: string): boolean {
 const delegateArg = parseArg('delegate');
 const DELEGATE_PUBKEY = new PublicKey(delegateArg ?? DEFAULT_DELEGATE);
 
-/** Opt-in: mint mock USDC to a recipient. Off by default (see incident note above). */
+/** Opt-in: mint mock USDC to a recipient. Off by default. */
 const MINT_USDC = hasFlag('mint-usdc');
 
 /** Amount of mock USDC to mint (100k USDC, 6 decimals). */

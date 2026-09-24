@@ -1,8 +1,7 @@
 /**
  * Centralized network resolution for deploy / test / admin scripts.
  *
- * A "network context" cleanly separates three things that scripts repeatedly
- * confused before:
+ * A "network context" separates three things that are easy to conflate:
  *
  *   1. `networkName`   — which chain we're targeting (drives chain config,
  *                        chain ID, USDC fallback, etc.). Sourced from the

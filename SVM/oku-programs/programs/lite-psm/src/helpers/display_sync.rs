@@ -5,18 +5,16 @@
 //! The canonical multiplier streams continuously and costs no transactions.
 //! Wallets, however, cannot see it: Phantom, Solflare, Jupiter and the RPC's
 //! `getTokenAccountBalance` all render a Token-2022 mint's UI amount via
-//! `ScaledUiAmountConfig::current_multiplier()`, which is a **step function**
-//! (`spl-token-2022-interface-2.1.0/src/extension/scaled_ui_amount/mod.rs:57-63`).
+//! `ScaledUiAmountConfig::current_multiplier()`, which is a **step function**.
 //!
 //! There is therefore no transaction-free way to make a wallet balance stream
 //! on SVM. The alternative extension that *does* accrue continuously,
-//! `InterestBearingConfig`, is mutually exclusive with `ScaledUiAmount`
-//! (`.../extension/mod.rs:1359-1361`) and would cost us the bounded rate
-//! window, the pre-staged successor, and the ability to re-anchor — i.e. it
-//! trades a cosmetic problem for three correctness ones.
+//! `InterestBearingConfig`, is mutually exclusive with `ScaledUiAmount` and
+//! would cost us the bounded rate window, the pre-staged successor, and the
+//! ability to re-anchor — i.e. it trades a cosmetic problem for three
+//! correctness ones.
 //!
-//! So: the extension is a **lagging display mirror**, cranked permissionlessly,
-//! and the economics never touch it.
+//! So: the extension is a **lagging display mirror**, cranked permissionlessly.
 //!
 //! ## The one invariant
 //!
@@ -24,27 +22,24 @@
 //!     display <= canonical,  always
 //! ```
 //!
-//! A user then redeems for at least what their wallet showed — surprises are in
-//! their favour. Two things make it hold **unconditionally**:
+//! A user redeems for at least what their wallet showed. Two things make it
+//! hold **unconditionally**:
 //!
 //! 1. Each sync writes only `m(now)`, effective immediately. The display is a
 //!    pure lag: flat between cranks, stepping up at each one, never ahead of a
 //!    monotonically-increasing curve. There is no pre-armed future step that
 //!    could fire under a schedule different from the one that computed it —
-//!    see `sync_display_multiplier` for why that mattered.
+//!    see `sync_display_multiplier` for why that matters.
 //! 2. The `f64` conversion is biased **downward** (see
 //!    [`multiplier_to_f64_floor`]), because `x as f64` rounds to nearest and
 //!    could otherwise land a hair above the canonical integer.
 //!
 //! ## Cost of the lag
 //!
-//! The display under-reads by one crank interval of yield. At a 60s cadence and
-//! 20% APY that is ~3.5e-5 %, about **$0.35 per $1,000,000** — the same order as
-//! EVM's per-block granularity. Integrators pricing off the extension rather
-//! than off `PsmConfig` see at most that, always in the protocol's favour.
-//!
-//! The cadence is an operator choice, not a protocol constant: nothing on-chain
-//! enforces or assumes any particular interval.
+//! The display under-reads by one crank interval of yield: at a 60s cadence and
+//! 20% APY, ~3.5e-5 %, about **$0.35 per $1,000,000** — the same order as EVM's
+//! per-block granularity, and always in the protocol's favour. The cadence is
+//! an operator choice; nothing on-chain enforces or assumes an interval.
 
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
@@ -58,11 +53,10 @@ use oku_shared::PRECISION;
 /// ## Why an unconditional bias rather than a check
 ///
 /// The obvious implementation is to compute `m as f64 / 1e18` and step down one
-/// ULP only if the result reconstructs above `m`. That check does not work, and
-/// the first version of this function got it wrong: `m as f64` is ITSELF lossy
-/// at WAD scale (the ULP of an `f64` near 1e18 is 128), so both sides of the
-/// comparison are rounded and it cannot detect an excess smaller than the
-/// rounding it is trying to detect.
+/// ULP only if the result reconstructs above `m`. That check does not work:
+/// `m as f64` is ITSELF lossy at WAD scale (the ULP of an `f64` near 1e18 is
+/// 128), so both sides of the comparison are rounded and it cannot detect an
+/// excess smaller than the rounding it is trying to detect.
 ///
 /// The error budget, for a multiplier `m` near 1e18:
 ///
@@ -79,20 +73,17 @@ use oku_shared::PRECISION;
 /// ## What this actually guarantees
 ///
 /// `display <= canonical` up to ~1e-16 relative — an arithmetic bound, not an
-/// exact proof. In practice the guarantee is far stronger than that bound
-/// suggests, for two independent reasons:
+/// exact proof. Two independent reasons it is stronger in practice:
 ///
-/// 1. The display is a staircase that lags canonical by up to one
-///    one crank interval. At a 60s cadence and 20% APY that is ~3.5e-7
-///    relative — nine
+/// 1. The display is a staircase that lags canonical by up to one crank
+///    interval. At a 60s cadence and 20% APY that is ~3.5e-7 relative — nine
 ///    orders of magnitude larger than the f64 error, so outside the instant of
 ///    a sync the display is nowhere near the bound.
 /// 2. OkuM has 6 decimals, so a rendered balance is truncated to 1e-6. A 1e-16
 ///    relative error on a $1,000,000 balance is ~$1e-10. It cannot change a
 ///    displayed figure at any balance that fits in a `u64`.
 ///
-/// The cost of the bias is symmetric and equally invisible: the display reads
-/// ~4e-16 relative low.
+/// The bias itself costs ~4e-16 relative, equally invisible.
 #[inline]
 pub fn multiplier_to_f64_floor(multiplier: u128) -> f64 {
     let scaled = multiplier as f64 / PRECISION as f64;
@@ -145,12 +136,9 @@ pub fn write_display_multiplier<'info>(
     Ok(())
 }
 
-// NOTE: `display_is_stale` lived here to gate an opportunistic "piggyback"
-// sync on the PSM instructions. It was removed after measurement showed the
-// piggyback cost ~31k compute units on a cold mint, on a hot path already
-// close to Solana's 200k default. `last_display_sync_ts` is retained on
-// PsmConfig purely as an observability field -- it tells an operator (and
-// `scripts/admin/sync-display.ts`) how stale the mirror is.
+// NOTE: do not piggyback a display sync onto the PSM instructions. Measured at
+// ~31k compute units on a cold mint, on a hot path already close to Solana's
+// 200k default.
 
 #[cfg(test)]
 mod tests {
@@ -159,12 +147,11 @@ mod tests {
     /// The mirror's safety property, stated as what it actually is: a BOUNDED
     /// downward bias, not an exact floor.
     ///
-    /// Note this test cannot prove `f * 1e18 <= m` exactly, because evaluating
-    /// that expression in `f64` is subject to the same rounding it would be
-    /// checking — which is precisely the trap the first implementation fell
-    /// into. What it can and does check is that the conversion sits strictly
-    /// below the input by a margin larger than the f64 error budget and
-    /// smaller than one unit of rendered precision.
+    /// This test cannot prove `f * 1e18 <= m` exactly, because evaluating that
+    /// expression in `f64` is subject to the same rounding it would be
+    /// checking. What it can and does check is that the conversion sits
+    /// strictly below the input by a margin larger than the f64 error budget
+    /// and smaller than one unit of rendered precision.
     #[test]
     fn f64_conversion_is_biased_downward_within_bounds() {
         let cases = [
@@ -198,14 +185,10 @@ mod tests {
         }
     }
 
-    /// Bound the bias in the unit that actually matters: dollars.
-    ///
-    /// An earlier version of this test asserted the bias could never change a
-    /// *rendered unit*, and failed — at `u64::MAX` raw it costs 8192 units.
-    /// That framing was wrong: 8192 units of a 6-decimal token is $0.008, and
-    /// `u64::MAX` raw is a ~$18 trillion position. The relative bias is fixed,
-    /// so the meaningful statement is about relative and absolute dollar error,
-    /// not unit counts.
+    /// Bound the bias in the unit that actually matters: dollars. The relative
+    /// bias is fixed, so a *rendered unit count* is the wrong framing — at
+    /// `u64::MAX` raw the bias costs 8192 units, but that is $0.008 on a ~$18
+    /// trillion position.
     ///
     /// It only becomes a whole rendered unit above roughly $2.3B of balance,
     /// and even at the largest position expressible in a `u64` the shortfall is

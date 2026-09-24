@@ -44,6 +44,9 @@ import {
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, upgrades, network } from "hardhat"
 import { expect } from "chai"
+import { apyToRatePerSecond } from "../../../scripts/utils/yieldRate"
+import { EPOCH_LENGTH_SECONDS } from "../../../scripts/config/epoch"
+import { ROLES } from "../../../scripts/config/roles"
 
 // ---------------------------------------------------------------------------
 // Seeded PRNG (mulberry32)
@@ -68,25 +71,24 @@ const DAY = 86400
 // Role constants
 // ---------------------------------------------------------------------------
 
-const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
-// Cycle 4 (EVM-15): OKUM_BURNER split from OKUM_MINTER.
-const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
-const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
-const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
-const OKUM_BLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BLACKLISTER"))
-const OKUM_UNBLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_UNBLACKLISTER"))
-const PSM_BUFFER_DEPOSITOR = ethers.keccak256(ethers.toUtf8Bytes("PSM_BUFFER_DEPOSITOR"))
-const PSM_BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("PSM_BUFFER_WITHDRAWER"))
-const PSM_QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("PSM_QUEUE_PROCESSOR"))
-const PSM_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("PSM_PAUSER"))
-const PSM_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("PSM_UNPAUSER"))
-const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
+const {
+    OKUM_MINTER, OKUM_BURNER, OKUM_REBASER, OKUM_ALLOWANCE_MANAGER,
+    OKUM_BLACKLISTER, OKUM_UNBLACKLISTER,
+    PSM_BUFFER_DEPOSITOR, PSM_BUFFER_WITHDRAWER, PSM_QUEUE_PROCESSOR,
+    PSM_PAUSER, PSM_UNPAUSER, QUEUE_PSM,
+} = ROLES
 
 const MAX_SUPPLY = parseEther("1000000000")
 const MINTER_ALLOWANCE = parseEther("1000000000")
 
-// 5% continuous APY = (1.05)^(1/31536000) per second ≈ 1_000_000_001_546_857_e3
-const FIVE_PCT_APY_RATE = 1_000_000_001_546_857_000n // per-second rate (1e18 precision)
+// Derived, not transcribed: a hand-written literal here disagreed with the one
+// in LitePSMRebasingRedeem.t.sol for the same nominal APY.
+const FIVE_PCT_APY_RATE = apyToRatePerSecond(0.05)
+
+// One production epoch. `Constants.MAX_RATE_WINDOW` caps any single window at
+// 90 days, so a simulation spanning a year cannot arm one window up front — it
+// re-anchors on the grid exactly as the operator pipeline does.
+const EPOCH_SECONDS = EPOCH_LENGTH_SECONDS
 
 // ---------------------------------------------------------------------------
 // Chain deployment helper
@@ -99,6 +101,7 @@ type Chain = {
     queue: RedemptionQueue
     psm: LitePSM
     label: string
+    admin: Signer
 }
 
 async function deployChain(label: string, admin: Signer): Promise<Chain> {
@@ -168,12 +171,34 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     await okuDollar.connect(admin).grantRole(OKUM_BLACKLISTER, adminAddr)
     await okuDollar.connect(admin).grantRole(OKUM_UNBLACKLISTER, adminAddr)
 
-    return { usdc, okuMoney, okuDollar, queue, psm, label }
+    return { usdc, okuMoney, okuDollar, queue, psm, label, admin }
 }
 
 async function warpDays(days: number) {
     await network.provider.send("evm_increaseTime", [days * DAY])
     await network.provider.send("evm_mine", [])
+}
+
+/**
+ * Re-anchor the active window and stage its successor, on the production grid.
+ *
+ * Uses the atomic form for the same reason the operator pipeline does: a
+ * separate re-anchor and stage leaves a gap at the boundary if the second tx
+ * is delayed. Two windows are always armed, so accrual never lapses — which
+ * also keeps the effective rate above PRECISION, so a re-anchor is never an
+ * "increase" that `OkuMoney` would reject while the PSM is paused.
+ */
+async function armEpoch(chain: Chain) {
+    const now = (await ethers.provider.getBlock("latest"))!.timestamp
+    const end = now + EPOCH_SECONDS
+    await chain.okuMoney
+        .connect(chain.admin)
+        .setOkuMYieldRateWithSuccessor(
+            FIVE_PCT_APY_RATE,
+            BigInt(end),
+            FIVE_PCT_APY_RATE,
+            BigInt(end + EPOCH_SECONDS)
+        )
 }
 
 async function warpBlock() {
@@ -211,14 +236,19 @@ async function orchestratorBridge(
     // Off-chain leg: credit USDC to orchestrator on dst
     await dst.usdc.mint(orchAddr, usdcOut)
 
-    // Destination leg: deposit USDC, mint OkuM, forward to recipient
+    // Destination leg: deposit USDC, mint OkuM, forward to recipient.
+    // `usdcIn` is MEASURED as the orchestrator's USDC balance delta across the
+    // mint, not assumed equal to `usdcOut`. Returning the source figure twice
+    // made the drift identically zero, so I4 could not fail.
     await dst.usdc.connect(orchestrator).approve(await dst.psm.getAddress(), usdcOut)
     const okuMBeforeDst = await dst.okuMoney.balanceOf(orchAddr)
+    const usdcBeforeDst = await dst.usdc.balanceOf(orchAddr)
     await dst.psm.connect(orchestrator).mintOkuM(usdcOut)
+    const usdcIn = usdcBeforeDst - (await dst.usdc.balanceOf(orchAddr))
     const okuMOnDst = (await dst.okuMoney.balanceOf(orchAddr)) - okuMBeforeDst
     await dst.okuMoney.connect(orchestrator).transfer(recipientAddr, okuMOnDst)
 
-    return { usdcOut, usdcIn: usdcOut }
+    return { usdcOut, usdcIn }
 }
 
 /** Drain the redemption queue on a chain. */
@@ -279,10 +309,8 @@ describe(`RealWorldUsage — ${DURATION_DAYS}-day stochastic simulation (seed 0x
         // okuMMultiplier(), so setting the rate here drives BOTH tokens.
         // Identical (rate, endTimestamp) on both chains is what makes the multiplier
         // agree cross-chain with no messaging.
-        const now = (await ethers.provider.getBlock("latest"))!.timestamp
-        const fiveYears = now + 5 * 365 * DAY
-        await chainA.okuMoney.connect(admin).setOkuMYieldRate(FIVE_PCT_APY_RATE, BigInt(fiveYears))
-        await chainB.okuMoney.connect(admin).setOkuMYieldRate(FIVE_PCT_APY_RATE, BigInt(fiveYears))
+        await armEpoch(chainA)
+        await armEpoch(chainB)
 
         rng = mulberry32(SEED)
         lastMultiplierA = await chainA.okuDollar.usdMultiplier()
@@ -346,25 +374,31 @@ describe(`RealWorldUsage — ${DURATION_DAYS}-day stochastic simulation (seed 0x
         const bridgeAmt = okuMAmount / 2n
         if (bridgeAmt === 0n) return 0n
 
+        // A bridge can legitimately fail to START (paused PSM, empty buffer), but
+        // once it completes its invariants must hold. Only the attempt is
+        // guarded; the assertions below are deliberately outside any catch —
+        // wrapping them swallowed the chai AssertionError and made I1 and I4
+        // unfalsifiable.
+        let legs: { usdcOut: bigint; usdcIn: bigint }
         try {
-            const { usdcOut, usdcIn } = await orchestratorBridge(
-                srcChain, dstChain, orchestrator, user, bob, bridgeAmt
-            )
-            const drift = usdcOut > usdcIn ? usdcOut - usdcIn : usdcIn - usdcOut
-            cumulativeDrift += drift
-
-            // I1: Orchestrator OkuM float == 0 between completed bridges
-            const orchOkuMBalance = await dstChain.okuMoney.balanceOf(orchAddr)
-            expect(orchOkuMBalance, `Orch float non-zero after bridge on ${dstChain.label}`).to.equal(0n)
-
-            // I4: Per-bridge drift ≤ 1 wei
-            expect(drift, `Per-bridge USDC drift ${drift} > 1 wei`).to.be.lte(1n)
-
-            totalBridges++
-            return drift
+            legs = await orchestratorBridge(srcChain, dstChain, orchestrator, user, bob, bridgeAmt)
         } catch {
             return 0n
         }
+
+        const { usdcOut, usdcIn } = legs
+        const drift = usdcOut > usdcIn ? usdcOut - usdcIn : usdcIn - usdcOut
+        cumulativeDrift += drift
+
+        // I1: Orchestrator OkuM float == 0 between completed bridges
+        const orchOkuMBalance = await dstChain.okuMoney.balanceOf(orchAddr)
+        expect(orchOkuMBalance, `Orch float non-zero after bridge on ${dstChain.label}`).to.equal(0n)
+
+        // I4: Per-bridge drift ≤ 1 wei
+        expect(drift, `Per-bridge USDC drift ${drift} > 1 wei`).to.be.lte(1n)
+
+        totalBridges++
+        return drift
     }
 
     /** Bump okuMMultiplier by 0.01% to 0.5% on both chains. */
@@ -425,6 +459,12 @@ describe(`RealWorldUsage — ${DURATION_DAYS}-day stochastic simulation (seed 0x
         for (let day = 0; day < DURATION_DAYS; day++) {
             // Advance time by one day
             await warpDays(1)
+
+            // Roll the epoch before the armed pair can lapse. Mirrors the daily
+            // operator cadence and is what keeps a year-long run inside the
+            // 90-day per-window bound.
+            await armEpoch(chainA)
+            await armEpoch(chainB)
 
             const r = rng()
 
@@ -755,35 +795,59 @@ describe("RealWorldUsage edge cases", () => {
         it("mintOkuM reverts in same block as setOkuMMultiplier; next block succeeds", async () => {
             const { chainA } = await freshChains()
             const aliceAddr = await alice.getAddress()
+            const mintAmt = parseUnits("10", 6)
 
-            // Disable automining so we can batch txs in same block
+            // Pre-fund and approve BEFORE automining is disabled, so the only
+            // transactions contending for the shared block are the two under
+            // test and ordering is deterministic.
+            await chainA.usdc.mint(aliceAddr, mintAmt * 2n)
+            await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), mintAmt * 2n)
+
             await network.provider.send("evm_setAutomine", [false])
+            let mintReceipt
             try {
-                // Send both transactions in the same block
                 const curMult = await chainA.okuMoney.okuMMultiplier()
-                const bumpTx = chainA.okuMoney.connect(admin).setOkuMMultiplier(curMult + 1000n)
-                const mintAmt = parseUnits("10", 6)
-                await chainA.usdc.mint(aliceAddr, mintAmt)
-                await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), mintAmt)
-                const mintTx = chainA.psm.connect(alice).mintOkuM(mintAmt)
-
-                // Mine the block with both transactions
-                await Promise.all([bumpTx, mintTx])
+                // Both txs must sit in the mempool before the block is mined, and
+                // both need an explicit gasLimit: ethers otherwise runs
+                // eth_estimateGas against pending state, which reverts the mint
+                // at send time so it never reaches the block under test.
+                // Gas price pins the ordering (bump first) — senders differ, so
+                // Hardhat's price-ordered mempool is what decides it.
+                const bump = await chainA.okuMoney
+                    .connect(admin)
+                    .setOkuMMultiplier(curMult + 1000n, {
+                        gasLimit: 500_000n,
+                        maxPriorityFeePerGas: 50_000_000_000n,
+                        maxFeePerGas: 200_000_000_000n,
+                    })
+                const mint = await chainA.psm.connect(alice).mintOkuM(mintAmt, {
+                    gasLimit: 500_000n,
+                    maxPriorityFeePerGas: 1_000_000_000n,
+                    maxFeePerGas: 200_000_000_000n,
+                })
                 await network.provider.send("evm_mine", [])
 
-                // The mint may or may not revert depending on tx order in block.
-                // What we assert is that AFTER the block, on the NEXT block, mint succeeds.
-            } catch {
-                // Batch submission may throw - that's fine
+                const bumpReceipt = await ethers.provider.getTransactionReceipt(bump.hash)
+                mintReceipt = await ethers.provider.getTransactionReceipt(mint.hash)
+                expect(bumpReceipt!.status).to.equal(1, "multiplier bump should succeed")
+                expect(mintReceipt!.blockNumber).to.equal(
+                    bumpReceipt!.blockNumber,
+                    "both txs must share a block for this to test anything"
+                )
             } finally {
                 await network.provider.send("evm_setAutomine", [true])
             }
 
-            // Next block: mint succeeds
+            // The actual property this suite is named for. Previously the test
+            // asserted nothing here and would have passed with the guard deleted.
+            expect(mintReceipt!.status).to.equal(0, "same-block mint must revert")
+            expect(await chainA.okuMoney.balanceOf(aliceAddr)).to.equal(
+                0n,
+                "same-block mint must not have credited OkuM"
+            )
+
+            // Next block: the same mint succeeds.
             await warpBlock()
-            const mintAmt = parseUnits("10", 6)
-            await chainA.usdc.mint(aliceAddr, mintAmt)
-            await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), mintAmt)
             await chainA.psm.connect(alice).mintOkuM(mintAmt)
             expect(await chainA.okuMoney.balanceOf(aliceAddr)).to.be.gt(0n, "mint succeeds on next block")
         })

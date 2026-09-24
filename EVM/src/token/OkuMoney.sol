@@ -34,18 +34,18 @@ import {
  * @title OkuMoney
  * @notice Non-rebasing base token (ticker `OkuM`) backed by US T-Bills with rear-facing yield
  * @dev Standard ERC-20 balances (static). `okuMMultiplier()` is NOT stored — it is
- *      COMPUTED continuously from a rate schedule via {MathLib.computeMultiplier}.
- *      See README.md § Streaming Accrual for the full MEV / cross-chain rationale.
- *      `setOkuMMultiplier` survives as a discrete emergency override only.
+ *      COMPUTED continuously from a rate schedule via {MathLib.computeMultiplier};
+ *      see README.md § Streaming Accrual for the MEV / cross-chain rationale.
+ *      `setOkuMMultiplier` is a discrete emergency override only.
  *
  *      Also implements ERC-8056 (Scaled UI Amount) over the same multiplier — see
  *      {IScaledUIAmount} for the deviations continuous accrual necessitates.
  *
- *      Key distinction: balanceOf() returns raw token count (standard ERC-20).
- *      okuMMultiplier() is a separate view function for pricing — used by PSM and vault.
+ *      `balanceOf()` returns a raw token count (standard ERC-20); `okuMMultiplier()` is
+ *      a separate pricing view, consumed by the PSM and vault.
  *
  *      Minter-allowance design (per-minter cap, decremented on mint) follows Circle's
- *      FiatToken pattern: https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2.sol
+ *      FiatToken: https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2.sol
  *
  *      See Constants.sol for terminology legend. Storage uses ERC-7201 namespaced
  *      storage (https://eips.ethereum.org/EIPS/eip-7201) for upgrade safety.
@@ -70,40 +70,31 @@ contract OkuMoney is
     struct OkuMoneyStorage {
         // ---- Streaming yield schedule (written by OKUM_REBASER), packed into 2 slots ----
         // The multiplier is COMPUTED from these six fields via MathLib.computeMultiplier(),
-        // never stored directly. See okuMMultiplier(). Field widths are bounded by
-        // MAX_MULTIPLIER (1e24, fits uint96), MAX_RATE (~1e18, fits uint64), and
-        // Unix timestamps (fit uint48 until year ~8.9M) — all enforced by SafeCast at
-        // every write site, so a truncating downcast can never silently corrupt state.
+        // never stored; see okuMMultiplier(). Widths are bounded by MAX_MULTIPLIER (1e24,
+        // fits uint96), MAX_RATE (~1e18, fits uint64) and Unix timestamps (uint48 holds to
+        // year ~8.9M). Runtime-variable values are downcast with SafeCast; the remaining
+        // raw casts write compile-time constants and are in range by inspection.
         //
         // Slot 1: base | rate | pendingRate (96 + 64 + 64 = 224 bits)
-        // Snapshot multiplier taken at `okuMLastAccrualTime` (starts at 1e18 = $1.00).
-        uint96 okuMBaseMultiplier;
-        // Active per-second rate (PRECISION = no yield). Bounded by Constants.MAX_RATE.
-        uint64 okuMRatePerSecond;
-        // Successor rate, activates after `okuMRateEnd` with no transaction at the
-        // boundary. This is what keeps multi-chain epoch handovers simultaneous.
+        uint96 okuMBaseMultiplier; // snapshot at `okuMLastAccrualTime`; starts 1e18 = $1.00
+        uint64 okuMRatePerSecond; // active per-second rate; PRECISION = no yield
+        // Successor rate; activates after `okuMRateEnd` with no transaction at the
+        // boundary, which keeps multi-chain epoch handovers simultaneous.
         uint64 okuMPendingRatePerSecond;
         // Slot 2: lastAccrualTime | rateEnd | pendingRateEnd (48 + 48 + 48 = 144 bits)
-        // Timestamp `okuMBaseMultiplier` was snapshotted at.
-        uint48 okuMLastAccrualTime;
+        uint48 okuMLastAccrualTime; // timestamp `okuMBaseMultiplier` was snapshotted at
         // Timestamp the active rate expires. 0 only when `okuMRatePerSecond == PRECISION`
-        // (the halted sentinel) — any yielding rate always carries a bounded window; see
-        // {setOkuMYieldRate}.
+        // (halted sentinel); every yielding rate carries a bounded window.
         uint48 okuMRateEnd;
-        // Timestamp the pending (successor) rate itself expires, bounding how long it
-        // can compound unattended past `okuMRateEnd` before accrual halts. 0 only when
-        // `okuMPendingRatePerSecond == PRECISION` (none armed).
+        // Timestamp the successor itself expires, bounding how long it compounds
+        // unattended past `okuMRateEnd` before accrual halts. 0 = none armed.
         uint48 okuMPendingRateEnd;
-        // Minter allowance system (Circle FiatToken pattern; see contract NatSpec for source)
-        mapping(address => uint256) minterAllowance;
-        // Supply cap in token units
-        uint256 maxSupply;
-        // Blacklist
+        mapping(address => uint256) minterAllowance; // Circle FiatToken pattern
+        uint256 maxSupply; // supply cap in raw token units
         mapping(address => bool) isBlacklisted;
-        // Block number of the last discrete multiplier override. Used by
-        // YieldSandwichGuard consumers (OkuDollar, LitePSM) to block PSM/vault
-        // operations in the same block as a discrete write. Continuous accrual
-        // creates no step and therefore never stamps this.
+        // Block number of the last discrete multiplier override. Read by
+        // YieldSandwichGuard consumers (OkuDollar, LitePSM) to block PSM/vault operations
+        // in the same block as a discrete write. Continuous accrual never stamps this.
         uint256 lastYieldDistributionBlock;
     }
 
@@ -120,9 +111,6 @@ contract OkuMoney is
     // ============ Custom Errors ============
 
     // Common errors (ZeroAddress, MultiplierCannotDecrease) live in lib/Errors.sol.
-    // REMOVED (streaming-accrual refactor): ZeroSupply — was only reachable from
-    // the deleted `distributeYield(uint256)`; the rate-schedule setters have no
-    // supply-dependent math and never revert on zero supply.
     error ExceedsSupplyCap();
     error BelowCurrentSupply();
     error ExceedsAllowance();
@@ -130,41 +118,32 @@ contract OkuMoney is
     error RecipientBlacklisted();
     error AlreadyBlacklisted();
     error NotBlacklisted();
-    /// @dev Math-sanity ceiling — caps the dollar-value-per-token at
-    ///      `Constants.MAX_MULTIPLIER` (= $1,000,000) so downstream
-    ///      multiplications (PSM mint/redeem, OkuDollar wrap/unwrap) cannot
-    ///      lose precision or overflow. The cap is far above any realistic
-    ///      yield trajectory; its purpose is to keep the `uint256 * uint256`
-    ///      paths within the overflow-safe region, not to constrain a trusted
-    ///      operator. Mirrors the explicit `MAX_MULTIPLIER` guard on the SVM side
-    ///      (`oku-shared::constants::MAX_MULTIPLIER`, scaled for SVM's 1e9 precision).
+    /// @dev Math-sanity ceiling: caps dollar-value-per-token at
+    ///      `Constants.MAX_MULTIPLIER` ($1,000,000) so downstream `uint256 * uint256`
+    ///      paths (PSM mint/redeem, OkuDollar wrap/unwrap) stay overflow-safe. Mirrors
+    ///      SVM's `oku-shared::constants::MAX_MULTIPLIER`.
     error MultiplierTooHigh();
     /// @dev Rate below `Constants.PRECISION` would shrink the multiplier, violating
     ///      monotonicity. `PRECISION` exactly is the no-yield placeholder.
     error InvalidRate();
     /// @dev Rate above `Constants.MAX_RATE` (~2242% APY), the rpow input sanity bound.
     error RateTooHigh();
-    /// @dev Halting (`newRate == PRECISION`) requires `endTimestamp == 0` — a halted
-    ///      rate has no window to bound. Passing a non-zero timestamp here reverts
-    ///      even if that timestamp is validly in the future.
+    /// @dev Halting (`newRate == PRECISION`) requires `endTimestamp == 0`; a non-zero
+    ///      timestamp reverts even if validly in the future.
     error EndTimestampNotAllowed();
     /// @dev A yielding rate's `endTimestamp` must be strictly in the future.
     error EndTimestampInPast();
-    /// @dev A single rate window may not exceed `Constants.MAX_RATE_WINDOW`
-    ///      (90 days). See that constant for why: an unbounded window can drive
-    ///      {MathLib.rpow} into overflow, and once `okuMMultiplier()` reverts
-    ///      every recovery path — including the emergency override — reverts
-    ///      with it, leaving a UUPS upgrade as the only escape.
+    /// @dev A single rate window may not exceed `Constants.MAX_RATE_WINDOW` (90 days);
+    ///      see that constant for why an unbounded window is unrecoverable.
     error RateWindowTooLong();
-    /// @dev {setNextOkuMYieldRate}'s `pendingEndTimestamp` must be strictly after
-    ///      the active rate's `okuMRateEnd` — it bounds how long the successor can
-    ///      compound unattended past activation.
+    /// @dev {setNextOkuMYieldRate}'s `pendingEndTimestamp` must be strictly after the
+    ///      active `okuMRateEnd` — it bounds how long the successor compounds unattended.
     error PendingEndNotAfterRateEnd();
     /// @dev {setNextOkuMYieldRate} requires a bounded active window to schedule against.
     error NoRateEndSet();
-    /// @dev Staging a successor after the active rate already expired would let the
-    ///      pending rate accrue from a past `okuMRateEnd` the moment it activates,
-    ///      snapshotting unearned yield. Force a fresh {setOkuMYieldRate} instead.
+    /// @dev Staging a successor after the active rate expired would let it accrue from a
+    ///      past `okuMRateEnd` on activation, snapshotting unearned yield. Use a fresh
+    ///      {setOkuMYieldRate} instead.
     error RateAlreadyExpired();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -177,10 +156,9 @@ contract OkuMoney is
     /// @param symbol_ ERC-20 symbol (canonical ticker is `OkuM`)
     /// @param _admin Admin address (receives the full role set; see role-grant policy below)
     /// @param initialMaxSupply Initial supply cap
-    /// @dev Admin is granted every role at deployment. Operators are expected to
-    ///      redistribute operational roles to multisigs, hot wallets, and bridge
-    ///      contracts post-deploy. The other contracts in the suite follow the same
-    ///      policy and link back here for the canonical description.
+    /// @dev Admin receives every role at deployment; operators redistribute operational
+    ///      roles to multisigs, hot wallets, and bridge contracts post-deploy. The other
+    ///      contracts in the suite follow this policy and link back here.
     function initialize(
         string memory name_,
         string memory symbol_,
@@ -210,42 +188,13 @@ contract OkuMoney is
         _grantRole(Roles.OKUM_PAUSER, _admin);
         _grantRole(Roles.OKUM_UNPAUSER, _admin);
         _grantRole(Roles.OKUM_MINTER, _admin);
-        // Both mint and burn are granted to `_admin` at init; operational
-        // scripts grant both to the LitePSM proxy after deploy.
+        // Deploy scripts grant OKUM_MINTER and OKUM_BURNER to the LitePSM proxy.
         _grantRole(Roles.OKUM_BURNER, _admin);
         _grantRole(Roles.OKUM_REBASER, _admin);
         _grantRole(Roles.OKUM_BLACKLISTER, _admin);
         _grantRole(Roles.OKUM_UNBLACKLISTER, _admin);
         _grantRole(Roles.OKUM_CAP_MANAGER, _admin);
         _grantRole(Roles.OKUM_ALLOWANCE_MANAGER, _admin);
-    }
-
-    // ============ ERC20 + IOkuMoney Overrides ============
-    // ERC20Upgradeable and IOkuMoney both declare these functions; explicit override
-    // specifiers satisfy the Solidity compiler's diamond-inheritance requirement.
-
-    function balanceOf(address account)
-        public
-        view
-        override(ERC20Upgradeable, IERC20)
-        returns (uint256)
-    {
-        return super.balanceOf(account);
-    }
-
-    function totalSupply() public view override(ERC20Upgradeable, IERC20) returns (uint256) {
-        return super.totalSupply();
-    }
-
-    function transfer(
-        address to,
-        uint256 amount
-    )
-        public
-        override(ERC20Upgradeable, IERC20)
-        returns (bool)
-    {
-        return super.transfer(to, amount);
     }
 
     // ============ Storage Accessor Views ============
@@ -265,8 +214,8 @@ contract OkuMoney is
         return _getOkuMoneyStorage().isBlacklisted[account];
     }
 
-    /// @notice Block number of the last yield distribution (used by YieldSandwichGuard,
-    ///         0 if no distribution has occurred).
+    /// @notice Block number of the last discrete override (0 if none); read by
+    ///         YieldSandwichGuard.
     function lastYieldDistributionBlock() external view returns (uint256) {
         return _getOkuMoneyStorage().lastYieldDistributionBlock;
     }
@@ -274,17 +223,13 @@ contract OkuMoney is
     // ============ Multiplier Logic (Continuous Streaming Accrual) ============
 
     /// @notice Current OkuM multiplier (dollar value per token, 1e18 = $1.00).
-    /// @dev COMPUTED, not stored. Streams continuously from the rate schedule via
-    ///      {MathLib.computeMultiplier}, so there is no discrete step for an
-    ///      arbitrageur to sandwich (mint before / redeem after a jump).
-    ///
-    ///      Contains no supply term. Given identical schedule state, every chain
-    ///      returns the identical `uint256` at the identical `block.timestamp` —
-    ///      which is what makes cross-chain agreement hold with no messaging,
-    ///      light client, or state proof.
-    ///
-    ///      `balanceOf()` is unaffected (OkuM is non-rebasing); the multiplier is
-    ///      consumed by the PSM and vault for pricing.
+    /// @dev COMPUTED, not stored: streams continuously from the rate schedule via
+    ///      {MathLib.computeMultiplier}, so there is no discrete step for an arbitrageur
+    ///      to sandwich (mint before / redeem after a jump). Contains no supply term, so
+    ///      given identical schedule state every chain returns the identical `uint256` at
+    ///      the identical `block.timestamp` — cross-chain agreement with no messaging,
+    ///      light client, or state proof. `balanceOf()` is unaffected (OkuM is
+    ///      non-rebasing).
     function okuMMultiplier() public view returns (uint256) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         return MathLib.computeMultiplier(
@@ -299,27 +244,22 @@ contract OkuMoney is
     }
 
     /// @notice The schedule's stored active-window rate (1e18 = no yield).
-    /// @dev Raw storage, not lazily rolled forward. Once `block.timestamp >
-    ///      okuMRateEnd`, {okuMMultiplier} is already accruing at
-    ///      `okuMPendingRatePerSecond` instead (see {MathLib.computeMultiplier}) —
-    ///      no transaction is required at the boundary, by design, so this getter
-    ///      can lag the multiplier's actual accrual rate until the next schedule
-    ///      write. Use {okuMEffectiveRatePerSecond} for the rate actually accruing
-    ///      right now.
+    /// @dev Raw storage, not rolled forward. Once `block.timestamp > okuMRateEnd`,
+    ///      {okuMMultiplier} is already accruing at `okuMPendingRatePerSecond` (no
+    ///      transaction fires at the boundary, by design), so this getter can lag the
+    ///      actual accrual rate until the next schedule write. Use
+    ///      {okuMEffectiveRatePerSecond} for the rate accruing right now.
     function okuMRatePerSecond() external view returns (uint256) {
         return _getOkuMoneyStorage().okuMRatePerSecond;
     }
 
     /// @notice The per-second rate actually accruing right now.
-    /// @dev Returns `okuMPendingRatePerSecond` once `okuMRateEnd` has elapsed and a
-    ///      successor was armed, `PRECISION` once that successor's own
-    ///      `okuMPendingRateEnd` has also elapsed (accrual halted — see
-    ///      {MathLib.computeMultiplier}), otherwise `okuMRatePerSecond`. Prefer
-    ///      this over the raw {okuMRatePerSecond} getter for monitoring/drift-
-    ///      checking, since the raw field is never rolled forward at either
-    ///      window boundary. Also used internally by the pause gates on
-    ///      {setOkuMYieldRate} / {setNextOkuMYieldRate} so "is this an increase"
-    ///      is judged against what is actually accruing, not stale storage.
+    /// @dev Returns `okuMPendingRatePerSecond` once `okuMRateEnd` has elapsed with a
+    ///      successor armed, `PRECISION` once that successor's `okuMPendingRateEnd` has
+    ///      also elapsed (accrual halted), otherwise `okuMRatePerSecond`. Prefer this to
+    ///      the raw getter for monitoring/drift checks, which never rolls forward. Also
+    ///      used by the pause gates on {setOkuMYieldRate} / {setNextOkuMYieldRate}, so
+    ///      "is this an increase" is judged against what is accruing, not stale storage.
     function okuMEffectiveRatePerSecond() public view returns (uint256) {
         return _effectiveRate(_getOkuMoneyStorage());
     }
@@ -365,33 +305,22 @@ contract OkuMoney is
     /// @notice Set the active yield rate, re-anchoring the accrual base.
     /// @param newRate Per-second rate, in [PRECISION, MAX_RATE]. PRECISION halts accrual.
     /// @param endTimestamp Unix timestamp the rate expires. Must be 0 when
-    ///        `newRate == PRECISION` (halted); must be strictly future otherwise —
-    ///        every yielding rate carries a bounded window. An open-ended rate
-    ///        would only stop when the next transaction happens to land, and that
-    ///        transaction lands at different wall-clock times on different chains —
-    ///        reintroducing exactly the cross-chain divergence streaming accrual
-    ///        exists to eliminate (see EVM/README.md § Streaming Accrual). The
-    ///        `rpow` overflow bound (~30 years at MAX_RATE) is a secondary benefit
-    ///        of the same requirement, not the primary reason for it.
+    ///        `newRate == PRECISION` (halted); strictly future and within
+    ///        {Constants.MAX_RATE_WINDOW} otherwise — every yielding rate carries a
+    ///        bounded window, so it cannot end at a transaction-dependent, per-chain
+    ///        moment (EVM/README.md § Streaming Accrual). Keeping `rpow` inside its
+    ///        overflow bound (~15 years at MAX_RATE) is a secondary benefit.
     /// @dev Snapshots the current multiplier into `okuMBaseMultiplier` and resets
-    ///      `okuMLastAccrualTime` to now, so the curve is CONTINUOUS across the
-    ///      write — there is no step, and nothing to sandwich. This is why the
-    ///      function does not stamp `lastYieldDistributionBlock`.
-    ///
+    ///      `okuMLastAccrualTime` to now, so the curve is CONTINUOUS across the write —
+    ///      no step, nothing to sandwich, hence no `lastYieldDistributionBlock` stamp.
     ///      Clears any armed pending rate: a fresh schedule supersedes it.
     ///
-    ///      Intentionally NOT pause-gated for decreases. Operators may need to ZERO
-    ///      the rate during an incident response; see the pause check below, which
-    ///      only blocks INCREASES while paused (an inflated multiplier realised by
-    ///      whoever redeems first on unpause is the failure mode being guarded).
+    ///      Only INCREASES are pause-gated (see the check below): incident response must
+    ///      be able to ZERO the rate while paused.
     ///
-    ///      OPERATIONAL NOTE: for rear-facing epochs, prefer {setNextOkuMYieldRate}
-    ///      to pre-stage the successor — see EVM/README.md for the epoch pipeline.
-    ///      Under the base+settlement epoch model, prefer
-    ///      {setOkuMYieldRateWithSuccessor} instead of calling this and
-    ///      {setNextOkuMYieldRate} as two separate transactions — see that
-    ///      function's NatSpec for the atomicity hazard doing so separately
-    ///      creates.
+    ///      OPERATIONAL: prefer {setOkuMYieldRateWithSuccessor} over calling this and
+    ///      {setNextOkuMYieldRate} as two separate transactions — see that function for
+    ///      the atomicity hazard.
     function setOkuMYieldRate(
         uint256 newRate,
         uint256 endTimestamp
@@ -410,9 +339,8 @@ contract OkuMoney is
             if (endTimestamp != 0) revert EndTimestampNotAllowed();
         } else {
             if (endTimestamp <= block.timestamp) revert EndTimestampInPast();
-            // Enforces the bound MathLib.compoundFor documents but never
-            // checked — see Constants.MAX_RATE_WINDOW for why an unbounded
-            // window is unrecoverable rather than merely wrong.
+            // See Constants.MAX_RATE_WINDOW for why an unbounded window is
+            // unrecoverable rather than merely wrong.
             if (endTimestamp - block.timestamp > Constants.MAX_RATE_WINDOW) {
                 revert RateWindowTooLong();
             }
@@ -420,15 +348,12 @@ contract OkuMoney is
 
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 oldRate = $.okuMRatePerSecond;
-        // While paused, only decreases relative to the EFFECTIVE rate are allowed
-        // (incident response needs to be able to zero accrual). Comparing against
-        // raw storage instead would let a caller "increase" up to a stale rate that
-        // is actually higher than what's presently accruing (e.g. after a lower
-        // pending rate has already taken over) — that's still a real increase in
-        // practice, so the check must use the same value {okuMMultiplier} does.
-        // An increase while paused would let an inflated multiplier be realised
-        // entirely by whoever redeems first on unpause, since no one can exit in
-        // between to arbitrage it away.
+        // While paused only decreases relative to the EFFECTIVE rate are allowed;
+        // incident response must be able to zero accrual. Comparing against raw storage
+        // would let a caller "increase" up to a stale rate higher than what is presently
+        // accruing (e.g. after a lower pending rate took over). An increase while paused
+        // would let an inflated multiplier be realised entirely by whoever redeems first
+        // on unpause, with no one able to exit in between to arbitrage it away.
         if (newRate > _effectiveRate($) && paused()) revert PausableUpgradeable.EnforcedPause();
         uint256 snapshot = okuMMultiplier();
 
@@ -443,32 +368,24 @@ contract OkuMoney is
 
         emit OkuMYieldRateUpdated(oldRate, newRate, endTimestamp, snapshot);
         // ERC-8056: the multiplier schedule changed. Under continuous accrual the
-        // multiplier itself changes every second, so the EIP's "emit on every
-        // change" is not satisfiable; rate changes are the discrete events.
-        // old == new is deliberate, not a bug: the write is continuous across the
-        // curve (see NatSpec above), so the VALUE has no discontinuity at this
-        // instant even though the RATE governing it going forward just did —
-        // faithfully representing that as "oldMultiplier == newMultiplier ==
-        // snapshot, effective now" is more accurate than inventing a future value
-        // for a field the EIP defines as the *current* multiplier.
+        // multiplier moves every second, so the EIP's "emit on every change" is not
+        // satisfiable; rate changes are the discrete events. `old == new` is deliberate —
+        // the write is continuous, so the VALUE has no discontinuity at this instant even
+        // though the RATE governing it going forward just changed, and the EIP defines
+        // this field as the *current* multiplier, not a projected future one.
         emit UIMultiplierUpdated(snapshot, snapshot, block.timestamp);
     }
 
-    /// @dev Emits {IScaledUIAmount-UIMultiplierUpdateCancelled} if a successor rate
-    ///      is currently staged AND HAS NOT YET ACTIVATED, using the schedule state
-    ///      as it stands BEFORE the caller mutates it. Shared by every writer that
-    ///      clears `okuMPendingRatePerSecond` ({setOkuMYieldRate}, {setOkuMMultiplier})
-    ///      or replaces it ({setNextOkuMYieldRate}).
+    /// @dev Emits {IScaledUIAmount-UIMultiplierUpdateCancelled} if a successor rate is
+    ///      staged AND HAS NOT YET ACTIVATED, reading the schedule as it stands BEFORE the
+    ///      caller mutates it. Shared by every writer that clears or replaces
+    ///      `okuMPendingRatePerSecond`.
     ///
-    ///      The `block.timestamp < rateEnd` guard matters once `rateEnd` has already
-    ///      elapsed: at that point the "pending" rate has already ACTIVATED (see
-    ///      {MathLib.computeMultiplier} branch 2) and this call is promoting or
-    ///      re-anchoring the schedule, not cancelling a still-future successor.
-    ///      Without this guard, a re-anchor performed any time after `rateEnd` would
-    ///      spuriously emit `UIMultiplierUpdateCancelled` every time — wrong
-    ///      ERC-8056 semantics, and misleading to any indexer or monitor that reads
-    ///      the event as "an operator changed their mind before the successor took
-    ///      effect."
+    ///      The `block.timestamp < rateEnd` guard matters once `rateEnd` has elapsed: the
+    ///      "pending" rate has already ACTIVATED ({MathLib.computeMultiplier} branch 2),
+    ///      so the call is promoting/re-anchoring, not cancelling a future successor.
+    ///      Without it, every post-`rateEnd` re-anchor would spuriously emit a
+    ///      cancellation — wrong ERC-8056 semantics and misleading to indexers.
     function _emitPendingRateCancelledIfArmed(OkuMoneyStorage storage $) private {
         uint256 pendingRate = $.okuMPendingRatePerSecond;
         uint256 rateEnd = $.okuMRateEnd;
@@ -490,24 +407,19 @@ contract OkuMoney is
     /// @notice Pre-stage the successor rate that activates after {okuMRateEnd}.
     /// @param newRate Per-second rate, in [PRECISION, MAX_RATE].
     /// @param pendingEndTimestamp Timestamp the successor itself expires. Must be
-    ///        strictly after `okuMRateEnd` — bounds how long the successor can
-    ///        compound unattended before accrual halts (see {MathLib.computeMultiplier}).
+    ///        strictly after `okuMRateEnd` — bounds how long the successor can compound
+    ///        unattended before accrual halts (see {MathLib.computeMultiplier}).
     /// @dev The handover fires off the absolute `okuMRateEnd` timestamp inside
-    ///      {okuMMultiplier}, with NO transaction at the boundary. Staging
-    ///      transactions may therefore land on different chains at different
-    ///      times — even days apart — and the activation is still simultaneous
-    ///      to the second. This is the primitive that makes the rear-facing
-    ///      epoch pipeline cross-chain safe.
+    ///      {okuMMultiplier}, with NO transaction at the boundary: staging transactions
+    ///      may land on different chains days apart and the activation is still
+    ///      simultaneous to the second. This is the primitive that makes the rear-facing
+    ///      epoch pipeline cross-chain safe. Requires a bounded active window
+    ///      (`okuMRateEnd != 0`) that has not already elapsed.
     ///
-    ///      Requires a bounded active window (`okuMRateEnd != 0`) that has not
-    ///      already elapsed.
-    ///
-    ///      Pause-gated the same way as {setOkuMYieldRate}: while paused, staging
-    ///      a successor above the current effective rate reverts. Without this, an
-    ///      operator could stage a `MAX_RATE` successor during a pause that later
-    ///      activates at `okuMRateEnd` with no transaction at the boundary — the
-    ///      exact inflate-while-users-can't-exit vector the gate on the active
-    ///      setter closes.
+    ///      Pause-gated like {setOkuMYieldRate}: while paused, staging a successor above
+    ///      the current effective rate reverts. Otherwise an operator could stage a
+    ///      `MAX_RATE` successor during a pause that later activates with no transaction
+    ///      at the boundary — the inflate-while-users-cannot-exit vector.
     function setNextOkuMYieldRate(
         uint256 newRate,
         uint256 pendingEndTimestamp
@@ -528,11 +440,10 @@ contract OkuMoney is
         if (rateEnd == 0) revert NoRateEndSet();
         if (block.timestamp >= rateEnd) revert RateAlreadyExpired();
         if (pendingEndTimestamp <= rateEnd) revert PendingEndNotAfterRateEnd();
-        // The successor's OWN window is [rateEnd, pendingEndTimestamp]; that is
-        // the span branch 3 of {MathLib.computeMultiplier} feeds to a single
-        // `rpow`, so it is what must be bounded. Each segment is bounded
-        // independently — a 90-day active window followed by a 90-day successor
-        // is two separate bounded `rpow` calls, not one 180-day one.
+        // The successor's OWN window is [rateEnd, pendingEndTimestamp] — the span branch 3
+        // of {MathLib.computeMultiplier} feeds to a single `rpow`, so that is what must be
+        // bounded. Segments bound independently: a 90-day active window followed by a
+        // 90-day successor is two bounded `rpow` calls, not one 180-day call.
         if (pendingEndTimestamp - rateEnd > Constants.MAX_RATE_WINDOW) {
             revert RateWindowTooLong();
         }
@@ -556,25 +467,18 @@ contract OkuMoney is
     ///        [PRECISION, MAX_RATE]. See {setNextOkuMYieldRate}.
     /// @param nextEndTimestamp Unix timestamp `nextRate` itself expires; must be
     ///        strictly after `endTimestamp`. See {setNextOkuMYieldRate}.
-    /// @dev MOTIVATION: the base+settlement epoch model (EVM/README.md § Rear-Facing
-    ///      Epoch Accounting) re-anchors to a new rate AND stages its successor at
-    ///      every epoch boundary — twice per epoch, forever. Doing that as two
-    ///      separate transactions has a real failure window: {setOkuMYieldRate}
-    ///      unconditionally clears any pending rate (see its NatSpec), so if the
-    ///      first transaction lands and the second fails or is delayed, the chain
-    ///      is left with NO successor staged. Accrual then silently halts at
-    ///      `endTimestamp` (see {MathLib.computeMultiplier}) until the operator
-    ///      notices and re-arms — exactly the accrual-gap failure mode
-    ///      `checkMultiplierDrift.ts` now treats as an error rather than a warning.
-    ///      This function closes that window entirely: both writes land in one
-    ///      transaction or neither does.
+    /// @dev The base+settlement epoch model (EVM/README.md § Rear-Facing Epoch Accounting)
+    ///      re-anchors AND stages a successor at every epoch boundary. As two separate
+    ///      transactions that has a failure window: {setOkuMYieldRate} unconditionally
+    ///      clears any pending rate, so if the first lands and the second does not, NO
+    ///      successor is staged and accrual silently halts at `endTimestamp` until an
+    ///      operator re-arms (`checkMultiplierDrift.ts` reports that gap as an error).
+    ///      Here both writes land or neither does.
     ///
-    ///      Pure composition of the two shared bodies — every check, event, and
-    ///      pause-gate behavior of {setOkuMYieldRate} and {setNextOkuMYieldRate}
-    ///      applies unchanged, in the same order, including that the first call's
-    ///      `_emitPendingRateCancelledIfArmed` observes the schedule as it stood
-    ///      before EITHER write (so a previously-armed successor is correctly
-    ///      reported cancelled, then the new one is armed by the second call).
+    ///      Pure composition of the two shared bodies: every check, event, and pause gate
+    ///      applies unchanged and in order, including that the first call's
+    ///      `_emitPendingRateCancelledIfArmed` sees the schedule as it stood before EITHER
+    ///      write.
     function setOkuMYieldRateWithSuccessor(
         uint256 newRate,
         uint256 endTimestamp,
@@ -593,17 +497,16 @@ contract OkuMoney is
     /// @dev ESCAPE HATCH ONLY. Normal yield flows through {setOkuMYieldRate}.
     ///
     ///      Collapses the schedule to halted: writes `okuMBaseMultiplier = newMultiplier`,
-    ///      resets `okuMLastAccrualTime` to now, and zeroes the active/pending rate and
-    ///      `okuMRateEnd` / `okuMPendingRateEnd`. An operator must call
+    ///      resets `okuMLastAccrualTime` to now, and zeroes the active/pending rates and
+    ///      `okuMRateEnd` / `okuMPendingRateEnd`, so an operator must call
     ///      {setOkuMYieldRate} afterward to resume accrual.
     ///
     ///      This DOES create a discontinuity, so it stamps `lastYieldDistributionBlock`
-    ///      and every PSM/vault path guarded by `whenYieldNotDistributing` reverts for
-    ///      the remainder of the block. That guard exists solely for this function.
+    ///      and every PSM/vault path guarded by `whenYieldNotDistributing` reverts for the
+    ///      rest of the block. That guard exists solely for this function.
     ///
-    ///      Rejects `newMultiplier <= current` so a no-op cannot burn the
-    ///      sandwich-lock window. Pause-gated: a discrete value move is a
-    ///      state-effect and must freeze alongside transfers during an incident.
+    ///      Rejects `newMultiplier <= current` so a no-op cannot burn the sandwich-lock
+    ///      window. Pause-gated: a discrete value move must freeze alongside transfers.
     function setOkuMMultiplier(uint256 newMultiplier)
         external
         onlyRole(Roles.OKUM_REBASER)
@@ -640,15 +543,11 @@ contract OkuMoney is
     }
 
     /// @inheritdoc IScaledUIAmountNewUIMultiplier
-    /// @dev OkuMoney schedules a pending *rate*, not a pending *value*. This
-    ///      returns the multiplier projected to be in effect at {effectiveAt}.
-    ///      When no window OR no pending rate is armed, returns the current
-    ///      multiplier (nothing scheduled) — this must check BOTH conditions:
-    ///      a bounded window with no successor staged is not a scheduled
-    ///      change, it's just the current rate continuing (fixed regression;
-    ///      an earlier version only checked `rateEnd`, so it reported a
-    ///      "scheduled" multiplier — really just the current rate's natural
-    ///      continuation to `rateEnd` — even when nothing was actually armed).
+    /// @dev OkuMoney schedules a pending *rate*, not a pending *value*; this returns the
+    ///      multiplier projected to be in effect at {effectiveAt}. Returns the current
+    ///      multiplier when no window OR no successor is armed. Both conditions matter:
+    ///      a bounded window with nothing staged is not a scheduled change, just the
+    ///      current rate continuing to `rateEnd`.
     function newUIMultiplier() external view returns (uint256) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 rateEnd = $.okuMRateEnd;
@@ -670,12 +569,9 @@ contract OkuMoney is
     }
 
     /// @inheritdoc IScaledUIAmountNewUIMultiplier
-    /// @dev Returns 0 ("nothing scheduled") unless a successor rate is
-    ///      actually armed AND its window hasn't already elapsed — matching
-    ///      {newUIMultiplier}'s condition exactly, so the two views never
-    ///      disagree about whether a change is scheduled (fixed regression;
-    ///      an earlier version returned `okuMRateEnd` whenever a bounded
-    ///      window existed, regardless of whether a successor was armed).
+    /// @dev Returns 0 ("nothing scheduled") unless a successor rate is armed AND its
+    ///      window has not elapsed — matching {newUIMultiplier}'s condition exactly, so
+    ///      the two views never disagree about whether a change is scheduled.
     function effectiveAt() external view returns (uint256) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 rateEnd = $.okuMRateEnd;
@@ -775,10 +671,9 @@ contract OkuMoney is
         }
 
         super._update(from, to, amount);
-        // No TransferValue emission. Under streaming accrual the dollar value would
-        // require an rpow on every transfer (~5-10k gas, forever); without the
-        // dollar-value field the event duplicates ERC-20 `Transfer` exactly.
-        // Indexers derive dollar value off-chain from the rate schedule.
+        // No TransferValue emission: the dollar value would cost an rpow on every
+        // transfer (~5-10k gas, forever), and without that field the event would
+        // duplicate ERC-20 `Transfer`. Indexers derive value from the rate schedule.
     }
 
     // ============ Minting & Burning ============
@@ -786,9 +681,8 @@ contract OkuMoney is
     /// @notice Mint raw tokens to an address.
     /// @param to Recipient of the minted tokens.
     /// @param amount Number of raw tokens to mint.
-    /// @dev Creates raw tokens; minting 100 tokens at okuMMultiplier=$1.05 creates $105 of value.
-    ///      The PSM handles USDC <-> OkuM conversion using okuMMultiplier(). See contract
-    ///      NatSpec for the Circle FiatToken minter-allowance source reference.
+    /// @dev Creates raw tokens; minting 100 at okuMMultiplier=$1.05 creates $105 of value.
+    ///      The PSM handles USDC <-> OkuM conversion using okuMMultiplier().
     function mint(address to, uint256 amount) external onlyRole(Roles.OKUM_MINTER) whenNotPaused {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
 
@@ -803,9 +697,8 @@ contract OkuMoney is
 
     /// @notice Burn raw tokens from the caller's balance. Allowed while paused.
     /// @param amount Number of raw tokens to burn.
-    /// @dev Gated on `OKUM_BURNER`, split from `OKUM_MINTER` — grant both to
-    ///      LitePSM at deploy time; separating the two lets a future upgrade
-    ///      revoke burn privileges without touching mint plumbing.
+    /// @dev Gated on `OKUM_BURNER`, separate from `OKUM_MINTER` so burn privileges can be
+    ///      revoked without touching mint plumbing. Grant both to LitePSM at deploy time.
     function burn(uint256 amount) external onlyRole(Roles.OKUM_BURNER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();

@@ -2,16 +2,15 @@
  * Apply one epoch-schedule artifact's WAD integers to whichever EVM chain
  * this process is bound to.
  *
- * Split out of `broadcastSchedule.ts` because Hardhat's `network` runtime is
+ * Separate from `broadcastSchedule.ts` because Hardhat's `network` runtime is
  * bound to the process at `hardhat run --network <chain>` and cannot be
  * redirected mid-process (`resolveNetworkContext()` reads that binding, it
  * does not accept a chain name). Broadcasting to N chains is therefore N
  * subprocess invocations of THIS file, one per `--network`, orchestrated by
- * `broadcastSchedule.ts` — the same pattern the old single-chain `runEpoch.ts`
- * already used, just driven by a script instead of by hand.
+ * `broadcastSchedule.ts`.
  *
  * Usage:
- *   NETWORK=base EPOCH_ID=2026-01 EPOCH_PHASE=roll-epoch npx hardhat run \
+ *   NETWORK=base EPOCH_ID=2026-01 PHASE=roll-epoch npx hardhat run \
  *     scripts/operator/applyScheduleSingleChain.ts --network base
  */
 
@@ -29,7 +28,7 @@ if (require.main === module) {
     const phase = parseArg("phase") as EpochPhase | undefined;
     if (!epochId) throw new Error("Required: --epochId=<id> (env: EPOCH_ID)");
     if (phase !== "stage-settlement" && phase !== "roll-epoch") {
-      throw new Error("Required: --phase=stage-settlement|roll-epoch (env: EPOCH_PHASE)");
+      throw new Error("Required: --phase=stage-settlement|roll-epoch (env: PHASE)");
     }
     const dryRun = isDryRun();
 

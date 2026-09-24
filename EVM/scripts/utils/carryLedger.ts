@@ -23,48 +23,27 @@ import type { RateWithCarry } from "./yieldRate";
 /**
  * One epoch's rate derivation, recorded for audit + cumulative reporting.
  *
- * ## Two DIFFERENT carry fields — do not conflate them
- *
  * `carryForwardUsd` and `reconciledCarryUsd` answer different questions and
- * are known at different TIMES. Conflating them (setting both to the same
- * value at derivation time) was a real bug: `broadcastSchedule.ts` would feed
- * `carryForwardUsd` into `summarizeLedger().outstandingCarryUsd`, which
- * actually held this entry's carry-IN, propagating the wrong figure into the
- * next epoch and silently double-counting it.
- *
- *   - `carryForwardUsd` — the DERIVATION-TIME residual from
- *     `RateWithCarry.carryForwardUsd` (clamping at `MAX_RATE`, rounding, or
- *     deliberate `conservativeFactor` withholding). Known immediately when
- *     the rate is derived. `deriveBaseRate` (float division, no clamping)
- *     currently always produces `0` here; the field exists for schema
- *     stability and any future derivation path that DOES clamp.
- *
- *   - `reconciledCarryUsd` — the EX-POST reconciliation
- *     (`reconcileActualPayout(target, actual)`) of what this epoch's rate
- *     ACTUALLY paid, once its own time-weighted average is measurable. This
- *     is only knowable one epoch LATER, at the next `roll-epoch`, and is
- *     backfilled onto this entry via {@link backfillReconciliation} at that
- *     point — it is `undefined` until then. THIS is the value that becomes
- *     the NEXT entry's `carryInUsd`.
+ * are known at different TIMES — do not conflate them. Only
+ * `reconciledCarryUsd` becomes the NEXT entry's `carryInUsd`; see the two
+ * field docs below.
  */
 export interface CarryLedgerEntry {
   /**
    * Operator-assigned identifier (e.g. "2025-01" or a sequence number).
    *
-   * ## What this entry actually describes — read before interpreting a row
-   *
    * An entry is written by the `roll-epoch` phase, which derives the rate for
    * the epoch that is ABOUT TO START. So `realisedYieldUsd`, `carryInUsd`,
    * `measuredAvgValueUsd` and `ratePerSecond` on this row all describe the
-   * epoch this roll OPENED — not the epoch that just closed. The epoch that
-   * just closed is referenced only indirectly: its ex-post reconciliation is
-   * written back onto ITS OWN (previous) row via {@link reconciledCarryUsd}.
+   * epoch this roll OPENED — not the epoch that just closed. The closed
+   * epoch's ex-post reconciliation is written back onto ITS OWN (previous)
+   * row via {@link reconciledCarryUsd}.
    *
-   * `epochId` is a free-form operator label and nothing derives meaning from
-   * it — the carry chain is positional (each roll reconciles whatever the
+   * `epochId` is a free-form operator label; nothing derives meaning from it
+   * — the carry chain is positional (each roll reconciles whatever the
    * ledger's last row is). Label rows by the epoch being OPENED to keep the
-   * file readable; mislabelling misleads a human reader but cannot corrupt
-   * the arithmetic.
+   * file readable; mislabelling misleads a reader but cannot corrupt the
+   * arithmetic.
    */
   epochId: string;
   /** When this entry was recorded, Unix seconds. */
@@ -80,12 +59,20 @@ export interface CarryLedgerEntry {
   conservativeFactor: number;
   /** Resulting per-second rate, as a decimal string (bigint doesn't survive JSON). */
   ratePerSecond: string;
-  /** Derivation-time residual — see interface doc. NOT the value threaded
-   *  into the next epoch's `carryInUsd`; that is {@link reconciledCarryUsd}. */
+  /** DERIVATION-TIME residual from `RateWithCarry.carryForwardUsd` (MAX_RATE
+   *  clamping, rounding, or deliberate `conservativeFactor` withholding),
+   *  known as soon as the rate is derived. `deriveBaseRate` (float division,
+   *  no clamping) always produces `0` here; the field exists for schema
+   *  stability and future derivation paths that DO clamp. NOT the value
+   *  threaded into the next epoch's `carryInUsd` — that is
+   *  {@link reconciledCarryUsd}. */
   carryForwardUsd: number;
-  /** Ex-post reconciliation, backfilled one epoch later — see interface doc.
-   *  `undefined` means "this epoch hasn't been reconciled yet" (it may still
-   *  be open, or the next roll simply hasn't happened). */
+  /** EX-POST reconciliation (`reconcileActualPayout(target, actual)`) of what
+   *  this epoch's rate ACTUALLY paid, knowable only one epoch LATER once its
+   *  own time-weighted average is measurable, and backfilled onto this entry
+   *  by {@link backfillReconciliation} at the next `roll-epoch`. THIS is the
+   *  value that becomes the NEXT entry's `carryInUsd`. `undefined` means not
+   *  yet reconciled (still open, or the next roll hasn't happened). */
   reconciledCarryUsd?: number;
 }
 
@@ -113,29 +100,14 @@ export function buildLedgerEntry(params: {
 
 const DEFAULT_LEDGER_PATH = path.join(__dirname, "../config/carryLedger.json");
 
-/** Append one entry to the on-disk ledger (see module doc for the "reference implementation" caveat). */
-export function appendLedgerEntry(entry: CarryLedgerEntry, ledgerPath = DEFAULT_LEDGER_PATH): void {
-  const existing = loadLedger(ledgerPath);
-  existing.push(entry);
-  fs.writeFileSync(ledgerPath, JSON.stringify(existing, null, 2) + "\n");
-}
-
 /**
  * Write one entry per EPOCH, not per invocation.
  *
- * `appendLedgerEntry` is a blind push — call it once per chain a broadcast
- * touches (as the old single-chain `runEpoch.ts` did) and one logical epoch
- * roll produces N ledger entries, with the carry balance drifting between the
- * first chain's run and the last chain's run (§ `EpochScheduleArtifact` in
- * `deriveEpochSchedule.ts`).
- *
- * This is the replacement `broadcastSchedule.ts` uses: keyed on `epochId`, it
- * replaces an existing entry for that epoch rather than duplicating it, so
- * calling it more than once for the same epoch (e.g. a re-run after a partial
- * broadcast failure) is idempotent. It refuses to SILENTLY replace a
- * DIFFERENT derivation for the same epochId — that would hide a real
- * inconsistency (the schedule was re-derived with different inputs but kept
- * the same label) behind an ordinary re-run.
+ * Keyed on `epochId`, it replaces an
+ * existing entry for that epoch rather than duplicating it, so re-running
+ * after a partial broadcast failure is idempotent. It refuses to SILENTLY
+ * replace a DIFFERENT derivation under the same epochId, which would hide a
+ * real inconsistency behind an ordinary re-run.
  */
 export function upsertLedgerEntry(entry: CarryLedgerEntry, ledgerPath = DEFAULT_LEDGER_PATH): void {
   const existing = loadLedger(ledgerPath);

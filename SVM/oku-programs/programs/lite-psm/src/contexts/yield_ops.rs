@@ -9,11 +9,9 @@ use anchor_spl::token_interface::Mint as MintInterface;
 /// `set_okum_yield_rate_with_successor`).
 ///
 /// Note what is absent: **the mint**. The rate schedule lives entirely on
-/// `PsmConfig`, and changing it writes nothing to the token. That is the
-/// structural difference from the old discrete model, where every yield
-/// operation had to CPI into Token-2022. It also means these instructions
-/// cannot fail on a token-program error, which matters because they are the
-/// ones that must land reliably at epoch boundaries.
+/// `PsmConfig`, and changing it writes nothing to the token, so these
+/// instructions cannot fail on a token-program error — which matters because
+/// they are the ones that must land reliably at epoch boundaries.
 #[derive(Accounts)]
 pub struct SetYieldRate<'info> {
     /// Rebaser role — the single authority over yield on both stacks.
@@ -32,14 +30,11 @@ pub struct SetYieldRate<'info> {
 /// Context for the emergency multiplier override.
 ///
 /// The mint is MUTABLE because this instruction force-syncs the display
-/// mirror rather than waiting for the next crank. That is not an
-/// optimisation — it closes a real inversion of the mirror's safety
-/// invariant. An earlier sync may have pre-armed a step computed under the
-/// old, still-running schedule; the override halts that schedule, so the
-/// outstanding pre-armed value can exceed the new canonical multiplier. The
-/// strict-increase check guards against the CURRENT canonical value, not
-/// against an already-armed future one. Writing the display immediately (with
-/// no pre-arm) overwrites the stale step and collapses the window to zero.
+/// mirror rather than waiting for the next crank. That is not an optimisation:
+/// the override halts the schedule the mirror was last written against, and
+/// the strict-increase check only guards the CURRENT canonical value, so
+/// leaving the mirror to the crank could let it read above canonical — the one
+/// direction it must never take.
 #[derive(Accounts)]
 pub struct SetOkuMMultiplier<'info> {
     pub rebaser: Signer<'info>,

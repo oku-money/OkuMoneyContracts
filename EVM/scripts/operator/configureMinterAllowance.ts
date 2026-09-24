@@ -85,7 +85,12 @@ if (require.main === module) {
 
     const psmAddr = loadAddress(ctx.bookKey, "LitePSM");
     const minterArg = parseArg("minter");
-    const minter = minterArg && isAddress(minterArg) ? minterArg : psmAddr;
+    // A malformed --minter must fail, not silently re-point the allowance
+    // change at LitePSM. Omitting it entirely still defaults to LitePSM.
+    if (minterArg !== undefined && !isAddress(minterArg)) {
+      throw new Error(`--minter is not a valid address: ${minterArg}`);
+    }
+    const minter = minterArg ?? psmAddr;
     if (!minter || !isAddress(minter)) {
       throw new Error("Required: --minter=<address> (or LitePSM in address book)");
     }

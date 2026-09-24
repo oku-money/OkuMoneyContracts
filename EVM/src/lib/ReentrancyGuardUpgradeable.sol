@@ -10,11 +10,10 @@ import {StorageSlot} from "@openzeppelin/contracts/utils/StorageSlot.sol";
  * @dev Adapted from OpenZeppelin Contracts v5.x.
  *      Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/ReentrancyGuard.sol
  *
- *      Uses the ERC-7201 namespaced storage pattern at the SAME slot as OZ's
- *      `ReentrancyGuard` 5.x so this wrapper is wire-compatible: a contract
- *      previously inheriting OZ's non-upgradeable guard can switch to this
- *      upgradeable version without storage migration.
- *      Taken from https://eips.ethereum.org/EIPS/eip-7201
+ *      Uses the ERC-7201 (https://eips.ethereum.org/EIPS/eip-7201) namespaced storage
+ *      pattern at the SAME slot as OZ's `ReentrancyGuard` 5.x, so a contract
+ *      inheriting OZ's non-upgradeable guard can switch to this one with no storage
+ *      migration.
  *
  *      Must call __ReentrancyGuard_init() in the initializer of inheriting contracts;
  *      this performs the NOT_ENTERED initialization that OZ's constructor normally does.
@@ -22,8 +21,6 @@ import {StorageSlot} from "@openzeppelin/contracts/utils/StorageSlot.sol";
 abstract contract ReentrancyGuardUpgradeable is Initializable {
     using StorageSlot for bytes32;
 
-    // Same storage slot as OpenZeppelin ReentrancyGuard 5.x — preserved verbatim so
-    // proxies upgraded from OZ's non-upgradeable guard see the same slot.
     // keccak256(abi.encode(uint256(keccak256("openzeppelin.storage.ReentrancyGuard")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant REENTRANCY_GUARD_STORAGE =
         0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00;

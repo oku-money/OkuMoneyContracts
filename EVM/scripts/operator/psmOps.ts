@@ -1,9 +1,6 @@
 /**
  * PSM-mediated OkuM / UsdOku mint & redeem operations (noBridge orchestrator
- * workflow), consolidated into one script. Replaces the standalone
- * `mintOkuM.ts` / `redeemOkuM.ts` and adds the two levers that had no
- * operator script at all (`mintUsdOku`, `redeemUsdOku`), plus a direct
- * `burn` (requires `OKUM_BURNER`).
+ * workflow), consolidated into one script.
  *
  *   ACTION=mintOkuM     USDC  -> OkuM   via LitePSM.mintOkuM(usdcAmount)
  *   ACTION=redeemOkuM   OkuM  -> USDC   via LitePSM.redeemOkuM(okuMAmount)

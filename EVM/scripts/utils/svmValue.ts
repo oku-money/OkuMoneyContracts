@@ -1,36 +1,28 @@
 /**
  * SVM's contribution to the global value V(t).
  *
- * ## Why this file exists
- *
  * `globalValue.ts` sums `totalSupply x multiplier` across every chain, and that
  * sum is the DENOMINATOR of every derived yield rate:
  *
  *     rate = (1 + realisedYield / V̄) ^ (1 / windowSeconds)
  *
- * Omitting a chain from V therefore does not merely make the number
- * incomplete — it makes the derived rate too HIGH, and the protocol
- * systematically over-pays yield across every chain including the ones that
- * were counted. SVM was excluded for as long as it ran a different yield model;
- * now that both stacks share one schedule, leaving it out is an economic bug.
+ * Omitting a chain from V does not merely make the number incomplete — it
+ * makes the derived rate too HIGH, so the protocol systematically over-pays
+ * yield across every chain including the ones that were counted. SVM must
+ * be included.
  *
- * ## Why SVM needs its own reader
- *
- * On EVM the multiplier is a `view` and you simply `call()` it. Solana has no
- * view functions, so the canonical multiplier has to be recomputed off-chain
- * from `PsmConfig` using the shared mirror of the on-chain math
- * (`@okumoney/yield-tooling`, held bit-identical to the Solidity by the
- * differential corpus in `EVM/test/differential`).
+ * SVM needs its own reader because Solana has no view functions: the canonical
+ * multiplier is recomputed off-chain from `PsmConfig` using the shared mirror
+ * of the on-chain math (`@okumoney/yield-tooling`, held bit-identical to the
+ * Solidity by the differential corpus in `EVM/test/differential`).
  *
  * Deliberately NOT read from the mint's `ScaledUiAmountConfig`: that extension
  * is a lagging display mirror, so pricing V off it would under-count AUM by up
  * to one sync interval and — because V is a denominator — over-pay yield.
  *
- * ## Decimal asymmetry
- *
- * OkuM is 18 decimals on EVM and 6 on SVM. Both sides normalise to plain USD
- * `number`s before summing, so the asymmetry is handled at the boundary rather
- * than leaking into the aggregate.
+ * Decimal asymmetry: OkuM is 18 decimals on EVM and 6 on SVM. Both sides
+ * normalise to plain USD `number`s before summing, so the asymmetry is handled
+ * at the boundary rather than leaking into the aggregate.
  */
 
 import { computeMultiplier, scheduleFromConfig, PRECISION } from "@okumoney/yield-tooling";
@@ -45,10 +37,15 @@ const PSM_CONFIG_SEED = "psm_config";
 /** Byte offsets of the accrual fields inside the `PsmConfig` account.
  *
  *  Decoded by hand rather than via Anchor so this module does not drag the
- *  entire Anchor/Solana client stack into the EVM package for one read. The
- *  layout is pinned on the Rust side by `assert!(PsmConfig::LEN == 626)`, and
- *  {@link SVM_CONFIG_LEN} below fails loudly if it ever moves. */
-const SVM_CONFIG_LEN = 626;
+ *  entire Anchor/Solana client stack into the EVM package for one read.
+ *
+ *  Only the accrual block matters here, and it sits at a fixed offset near the
+ *  start. `PsmConfig` carries tail padding so future fields can be appended
+ *  without moving it, so this checks a MINIMUM length rather than equality —
+ *  an equality check would make every tail append a breaking change for this
+ *  reader, which is the opposite of what the padding is for. A SHORTER account
+ *  than the accrual block requires is a real layout change and still fails. */
+const SVM_CONFIG_MIN_LEN = 626;
 
 export interface SvmValueReading {
   /** Dollar value of all OkuM on SVM at this instant. */
@@ -99,10 +96,11 @@ export async function readSvmValueUsd(
       logger.warning("svm: PsmConfig account not found");
       return null;
     }
-    if (configInfo.data.length !== SVM_CONFIG_LEN) {
+    if (configInfo.data.length < SVM_CONFIG_MIN_LEN) {
       logger.warning(
-        `svm: PsmConfig is ${configInfo.data.length} bytes, expected ${SVM_CONFIG_LEN}. ` +
-          "The account layout changed — update svmValue.ts before trusting this reading.",
+        `svm: PsmConfig is ${configInfo.data.length} bytes, below the ${SVM_CONFIG_MIN_LEN} ` +
+          "this decoder requires. The account layout changed — update svmValue.ts " +
+          "before trusting this reading.",
       );
       return null;
     }
@@ -148,9 +146,8 @@ export async function readSvmValueUsd(
  * ```
  *
  * Anchor orders account fields exactly as declared, so these offsets follow the
- * struct definition. Note the 13 — an earlier version of this comment said 16,
- * counting `pending_role_admin` and the two `direct_*` keys that actually come
- * AFTER the accrual block.
+ * struct definition. Note the pubkey count is 13, not 16:
+ * `pending_role_admin` and the two `direct_*` keys come AFTER the accrual block.
  *
  * Two guards against drift: the length check in {@link readSvmValueUsd}, and
  * `tests/bankrun/config-layout.ts` on the SVM side, which decodes a real
@@ -191,17 +188,13 @@ export interface SvmScheduleReading {
 /**
  * Read SVM's rate schedule and evaluate its multiplier at SVM's OWN clock.
  *
- * ## Why the chain's clock, not wall clock
- *
- * `Clock::unix_timestamp` on Solana is derived from validator vote timestamps
- * and can trail real time. The multiplier is a pure function of it, so a
- * lagging clock yields a lagging multiplier — that is a **self-correcting lag,
- * not a drift**: when the clock catches up, so does the multiplier.
- *
- * A monitor that compared SVM's multiplier against EVM's at the same wall-clock
- * instant would therefore report divergence that does not exist. Reporting the
- * evaluation timestamp alongside the value lets the caller normalise: evaluate
- * every chain's schedule at one common `T` and compare exactly.
+ * The chain's clock, not wall clock: `Clock::unix_timestamp` on Solana is
+ * derived from validator vote timestamps and can trail real time. The
+ * multiplier is a pure function of it, so a lagging clock yields a lagging
+ * multiplier — a **self-correcting lag, not a drift**. Comparing SVM's
+ * multiplier against EVM's at the same WALL-clock instant would report
+ * divergence that does not exist; the evaluation timestamp is returned
+ * alongside the value so callers can evaluate every chain at one common `T`.
  */
 export async function readSvmSchedule(
   rpcUrl: string,
@@ -227,10 +220,11 @@ export async function readSvmSchedule(
     logger.warning("svm: PsmConfig account not found");
     return null;
   }
-  if (configInfo.data.length !== SVM_CONFIG_LEN) {
+  if (configInfo.data.length < SVM_CONFIG_MIN_LEN) {
     logger.warning(
-      `svm: PsmConfig is ${configInfo.data.length} bytes, expected ${SVM_CONFIG_LEN}. ` +
-        "Layout changed — update svmValue.ts (and tests/bankrun/config-layout.ts).",
+      `svm: PsmConfig is ${configInfo.data.length} bytes, below the ${SVM_CONFIG_MIN_LEN} ` +
+        "this decoder requires. Layout changed — update svmValue.ts " +
+        "(and tests/bankrun/config-layout.ts).",
     );
     return null;
   }

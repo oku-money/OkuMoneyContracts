@@ -83,7 +83,7 @@ if (require.main === module) {
     logger.header(`depositBuffer (${ctx.networkName})`);
     mainnetGuard(ctx.networkName, { yesMainnet: isYesMainnet(), dryRun: isDryRun() });
 
-    const amountStr = parseArg("amount") ?? parseArg("AMOUNT");
+    const amountStr = parseArg("amount");
     if (!amountStr) throw new Error("Required: --amount=<6-decimal USDC> or AMOUNT env var");
 
     const [signer] = await ethers.getSigners();

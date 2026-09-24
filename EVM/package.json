@@ -53,7 +53,6 @@
     "operator:redeem": "ACTION=redeemOkuM hardhat run scripts/operator/psmOps.ts",
     "operator:psmOps": "hardhat run scripts/operator/psmOps.ts",
     "operator:vaultOps": "hardhat run scripts/operator/vaultOps.ts",
-    "operator:runEpoch": "hardhat run scripts/operator/runEpoch.ts",
     "operator:deriveEpochSchedule": "hardhat run scripts/operator/deriveEpochSchedule.ts",
     "operator:broadcastSchedule": "tsx scripts/operator/broadcastSchedule.ts",
     "operator:applyScheduleSingleChain": "hardhat run scripts/operator/applyScheduleSingleChain.ts",

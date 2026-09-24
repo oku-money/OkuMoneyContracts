@@ -172,5 +172,16 @@ fn matches_solidity_reference_exactly() {
             .join("\n\n")
     );
 
+    // The revert half of the corpus is the easiest thing to lose silently: if
+    // GenerateVectors stopped emitting revert cases, every value check would
+    // still pass and the "one stack accepts what the other rejects" guard would
+    // simply evaporate.
+    assert!(
+        revert_cases >= 4,
+        "corpus contains only {revert_cases} revert case(s) — the revert half of \
+         the differential has degraded. Regenerate with: cd EVM && forge test \
+         --match-contract GenerateVectors"
+    );
+
     eprintln!("differential: {checked} vectors matched ({revert_cases} revert cases)");
 }

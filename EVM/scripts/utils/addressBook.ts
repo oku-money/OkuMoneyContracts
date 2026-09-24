@@ -17,17 +17,15 @@
  *   addresses.local.json   GITIGNORED — local forks ("fork:base", ...)
  *
  * Every fork run (dryRunForks.sh, `npm run deploy --network localhost`, the
- * hardhat drills) redeploys to a throwaway chain and writes fresh addresses.
- * When both shapes shared one tracked file, those ephemeral addresses showed
- * up as a dirty working tree and were easy to commit by accident — the fork
- * they refer to is discarded seconds later, so the diff is pure noise.
+ * hardhat drills) redeploys to a throwaway chain and writes fresh addresses,
+ * which would otherwise show up as a dirty working tree and get committed by
+ * accident.
  *
  * The split is handled entirely here: `loadAddressBook()` returns a MERGED
  * view of both files, and `saveAddressBook()` partitions by prefix and writes
- * each file separately. Callers are unaffected and need no knowledge of it —
- * `saveAddress`, `loadAddress`, `hasAddress`, `loadNetworkAddresses`, and
- * `appendUpgradeRecord` all route through those two functions, so fork data
- * structurally cannot reach the tracked file.
+ * each file separately. `saveAddress`, `loadAddress`, `hasAddress`,
+ * `loadNetworkAddresses`, and `appendUpgradeRecord` all route through those
+ * two, so fork data structurally cannot reach the tracked file.
  */
 
 import fs from "fs";

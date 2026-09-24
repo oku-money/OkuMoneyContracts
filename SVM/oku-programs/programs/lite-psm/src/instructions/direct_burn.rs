@@ -52,10 +52,9 @@ pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, raw_amount: u64) -> Resul
     // Capture keys before borrow
     let direct_burner_key = ctx.accounts.direct_burner.key();
 
-    // Burn OkuM from the burner's ATA (Token-2022).
-    // The burner is the token account owner, so it signs the burn directly.
-    // No PDA signer needed -- unlike minting, burning only requires the
-    // token account owner's signature, not the mint authority.
+    // Burn from the burner's ATA (Token-2022). The burner owns the token
+    // account and signs directly: unlike minting, burning needs only the
+    // owner's signature, not the mint authority, so no PDA signer.
     token_interface::burn(
         CpiContext::new(
             ctx.accounts.token_2022_program.key(),
@@ -68,7 +67,7 @@ pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, raw_amount: u64) -> Resul
         raw_amount,
     )?;
 
-    // Read multiplier from mint to compute dollar value for event
+    // Canonical multiplier, for the event's dollar value only.
     let multiplier = multiplier::current(&ctx.accounts.config)?;
     let dollar_value = raw_to_dollars(raw_amount, multiplier)?;
 

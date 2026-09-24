@@ -20,25 +20,21 @@ import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol"
 /**
  * @title RedemptionQueue
  * @notice FIFO queue for OkuMoney redemptions when the PSM buffer is depleted.
- * @dev Stores OkuM token amounts (not shares — OkuMoney is non-rebasing).
- *      Queued OkuM tokens do not grow in balance, but appreciate via okuMMultiplier().
- *      When the queue processes, the user receives USDC based on
- *      okuMAmount * okuMMultiplier() at processing time. Users earn yield while queued
- *      via multiplier appreciation rather than balance growth.
+ * @dev Stores OkuM token amounts (not shares — OkuMoney is non-rebasing). Queued balances
+ *      do not grow; they appreciate via okuMMultiplier(), so the user receives
+ *      `okuMAmount * okuMMultiplier()` at processing time. Yield while queued comes from
+ *      multiplier appreciation, not balance growth.
  *
  *      Tokens are transferred into the queue by the PSM before `enqueue` is called;
  *      `enqueue` is record-only and does not pull tokens from the user.
  *
- *      If a queue entry becomes permanently unprocessable (e.g., USDC-blacklisted recipient),
- *      QUEUE_RESCUER can call `rescueQueueEntry` to return the OkuMoney to the original
- *      user or an alternate address and clear the slot. Operators should rescue any stuck
- *      entries before running `processQueue` over that range.
+ *      If an entry becomes permanently unprocessable (e.g. USDC-blacklisted recipient),
+ *      QUEUE_RESCUER calls `rescueQueueEntry` to return the OkuMoney and clear the slot.
+ *      Rescue stuck entries before running `processQueue` over that range.
  *
- *      Decimal flexibility: like LitePSM, the USDC-side decimal multiplier is computed at
- *      init from `IERC20Metadata(usdc).decimals()` and stored on the proxy.
- *
- *      USDC peg monitoring is handled off-chain; operators can pause the PSM (which
- *      gates `processQueue`) if a depeg is detected.
+ *      Like LitePSM, the USDC-side decimal multiplier is computed at init from
+ *      `IERC20Metadata(usdc).decimals()` and stored on the proxy. USDC peg monitoring is
+ *      off-chain; pausing the PSM gates `processQueue`.
  *
  *      See Constants.sol for terminology legend.
  *      See {OkuMoney.initialize} for the unified role-grant policy.
@@ -117,13 +113,11 @@ contract RedemptionQueue is
 
         uint8 usdcDecimals = IERC20Metadata(_usdc).decimals();
         if (usdcDecimals > Constants.MAX_USDC_DECIMALS) revert UsdcDecimalsTooLarge(usdcDecimals);
-        $.usdcDecimalMultiplier =
-            10 ** (uint256(Constants.MAX_USDC_DECIMALS) - uint256(usdcDecimals));
+        $.usdcDecimalMultiplier = 10 ** (uint256(Constants.OKU_M_DECIMALS) - uint256(usdcDecimals));
 
-        // QUEUE_PSM is intentionally NOT granted here — it must be granted post-deployment
-        // to the LitePSM proxy address to avoid a circular deployment dependency. Granting
-        // it to admin would let admin bypass the PSM and call enqueue/processQueue directly.
-        // See {OkuMoney.initialize} for the broader role-grant policy.
+        // QUEUE_PSM is deliberately NOT granted here: it is granted post-deployment to the
+        // LitePSM proxy (avoiding a circular deploy dependency), and granting it to admin
+        // would let admin bypass the PSM and call enqueue/processQueue directly.
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(Roles.QUEUE_UPGRADER, _admin);
         _grantRole(Roles.QUEUE_RESCUER, _admin);
@@ -167,16 +161,12 @@ contract RedemptionQueue is
     /// @dev Tokens must already be in this contract before calling (PSM transfers them first).
     ///      Record-only: stores the raw OkuM amount and pushes an entry.
     function enqueue(address user, uint256 okuMTokenAmount) external onlyRole(Roles.QUEUE_PSM) {
-        // `address(0)` is the sentinel for "slot cleared" (see `processQueue`'s
-        // AlreadyCleared branch, `rescueQueueEntry`, and `advanceHead`). A
-        // zero-user entry would therefore be permanently unprocessable AND
-        // unrescuable, while `totalQueuedOkuM` below is never decremented for
-        // it — permanently inflating `totalQueuedUsdc()` and so permanently
-        // blocking `LitePSM.withdrawUsdc` via WouldStrandQueue.
-        //
-        // Unreachable today (the sole caller passes `msg.sender`), but this is
-        // a role-gated external entry point and the sentinel collision is
-        // load-bearing, so the invariant is enforced here rather than assumed.
+        // `address(0)` is the "slot cleared" sentinel (see `processQueue`'s AlreadyCleared
+        // branch, `rescueQueueEntry`, and `advanceHead`), so a zero-user entry would be
+        // permanently unprocessable AND unrescuable while still counted in
+        // `totalQueuedOkuM` — permanently inflating `totalQueuedUsdc()` and blocking
+        // `LitePSM.withdrawUsdc` via WouldStrandQueue. Unreachable via the sole caller,
+        // but this is a role-gated external entry point and the sentinel is load-bearing.
         if (user == address(0)) revert Errors.ZeroAddress();
 
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
@@ -198,11 +188,10 @@ contract RedemptionQueue is
     ///      okuMMultiplier is cached once before the loop so all entries in a batch convert at
     ///      the same rate (consistent within a single block; saves gas).
     ///
-    ///      Pause semantics: this function is only callable by `QUEUE_PSM` (the LitePSM proxy).
-    ///      LitePSM.processQueue is already guarded by `whenNotPaused`, so pausing LitePSM
-    ///      effectively halts queue drain. RedemptionQueue deliberately does not inherit
-    ///      PausableUpgradeable to keep its storage layout minimal; the pause gate lives at
-    ///      the LitePSM layer.
+    ///      Pause semantics: callable only by `QUEUE_PSM` (the LitePSM proxy), and
+    ///      `LitePSM.processQueue` is `whenNotPaused`, so pausing LitePSM halts queue
+    ///      drain. This contract holds no pause state of its own — one gate, at the PSM
+    ///      layer. Consequence: `rescueQueueEntry` stays reachable while LitePSM is paused.
     ///
     ///      Stuck entries (USDC-blacklisted/frozen recipients) are soft-skipped with a
     ///      RedemptionSkipped(TransferFailed) event. Use `rescueQueueEntry` to clear them.
@@ -243,39 +232,25 @@ contract RedemptionQueue is
                 break;
             }
 
-            // Attempt the USDC transfer via SafeERC20's `trySafeTransferFrom`,
-            // which (a) swallows reverts (Circle USDC blacklist path), (b) decodes
-            // the boolean return value for tokens that signal failure by returning
-            // false instead of reverting, and (c) treats no-return-data + non-reverting
-            // call as success (matches OZ SafeERC20 semantics). All three failure
-            // shapes route into the soft-skip branch so a single uncooperative
-            // recipient cannot revert the whole batch — but the OkuM is NOT burned;
-            // it stays in escrow for `rescueQueueEntry` to recover later.
+            // `trySafeTransferFrom` (a) swallows reverts (Circle USDC blacklist path),
+            // (b) decodes the boolean for tokens that signal failure by returning false,
+            // and (c) treats non-reverting with no return data as success. All three
+            // failure shapes route into the soft-skip branch, so one uncooperative
+            // recipient cannot revert the batch; the OkuM is NOT burned and stays escrowed
+            // for `rescueQueueEntry`.
             //
-            // Historical note: an earlier implementation used a raw `address.call`
-            // and only checked `ok`. That accepted a `false` return as success,
-            // which would silently drain queue entries against any non-standard
-            // ERC-20 whose `transferFrom` returns `false` on failure rather than
-            // reverting. Hardened here via SafeERC20 to be uniform across both
-            // failure shapes.
-            // CHECKS-EFFECTS-INTERACTIONS: clear the slot BEFORE the external
-            // USDC transfer, and restore it if the transfer fails.
-            //
-            // Re-entry is closed today by several independent facts — this
-            // function is `nonReentrant`, `rescueQueueEntry` shares the same
-            // guard slot, `LitePSM.redeemOkuM` is blocked by LitePSM's own
-            // guard held by the enclosing `LitePSM.processQueue`, and Circle
-            // USDC has no transfer callback. But the last of those is a
-            // property of the *configured token*, not of this code, and
-            // `usdc` is set at init. Ordering state-before-interaction costs
-            // nothing and removes the dependency on that assumption.
+            // CHECKS-EFFECTS-INTERACTIONS: clear the slot BEFORE the external transfer and
+            // restore it on failure. Re-entry is already closed by this function's
+            // `nonReentrant` (shared with `rescueQueueEntry`), LitePSM's own guard held by
+            // the enclosing `LitePSM.processQueue`, and Circle USDC having no transfer
+            // callback — but that last one is a property of the token configured at init,
+            // not of this code, and ordering state-before-interaction costs nothing.
             delete $.queue[i];
 
             bool ok = usdcContract.trySafeTransferFrom(msg.sender, entry.user, usdcAmount);
             if (!ok) {
-                // Restore the entry: the OkuM stays escrowed and the slot
-                // remains claimable by `rescueQueueEntry`. `entry` is a memory
-                // copy taken before the delete, so this is a faithful restore.
+                // Restore from the memory copy taken before the delete: OkuM stays
+                // escrowed and the slot remains claimable by `rescueQueueEntry`.
                 $.queue[i] = entry;
                 emit RedemptionSkipped(i, RedemptionSkipReason.TransferFailed);
                 continue;
@@ -293,10 +268,9 @@ contract RedemptionQueue is
         }
 
         $.totalQueuedOkuM -= totalOkuMDecrement;
-        // queueHead is NOT auto-advanced here. Operators (or anyone) may call
-        // `advanceHead(maxSlots)` after a batch to amortize the head walk into a
-        // separate, gas-bounded call. `queueLength()` is an upper bound until
-        // `advanceHead` runs; redemption correctness is unaffected.
+        // queueHead is NOT auto-advanced: anyone may call `advanceHead(maxSlots)` after a
+        // batch to amortize the head walk into a separate, gas-bounded call.
+        // `queueLength()` is an upper bound until then; redemption correctness is not.
     }
 
     /// @notice Return OkuMoney for a stuck queue entry without burning it.
@@ -332,12 +306,11 @@ contract RedemptionQueue is
     }
 
     /// @notice Advance `queueHead` past contiguous cleared entries at the front.
-    /// @dev Gas-bounded maintenance function. `processQueue` and `rescueQueueEntry`
-    ///      no longer auto-advance the head, so a long run of cleared slots can
-    ///      leave `queueHead` behind the live front. Anyone may call this — it
-    ///      can only move `queueHead` forward, and only past slots that are
-    ///      already cleared (`user == address(0)`). The effect on `queueLength()`
-    ///      is cosmetic; redemption correctness is independent of `queueHead`.
+    /// @dev Gas-bounded maintenance. `processQueue` and `rescueQueueEntry` do not advance
+    ///      the head, so a long run of cleared slots can leave `queueHead` behind the live
+    ///      front. Permissionless: it can only move `queueHead` forward, and only past
+    ///      slots already cleared (`user == address(0)`). The effect on `queueLength()` is
+    ///      cosmetic; redemption correctness is independent of `queueHead`.
     /// @param maxSlots Maximum number of cleared slots to skip in this call.
     /// @return advanced Number of slots actually advanced.
     function advanceHead(uint256 maxSlots) external returns (uint256 advanced) {
@@ -359,12 +332,10 @@ contract RedemptionQueue is
     // ============ Views ============
 
     /// @notice Number of slots between `queueHead` and `queueTail`.
-    /// @dev Equal to `queueTail - queueHead`. Since `processQueue` and
-    ///      `rescueQueueEntry` no longer auto-advance the head, this is an
-    ///      UPPER BOUND on live entries — cleared slots at the front of the
-    ///      window are counted until {advanceHead} is called. To get an exact
-    ///      live count off-chain, call {advanceHead}(N) first or iterate
-    ///      `getQueueEntry` over the range and filter `user == address(0)`.
+    /// @dev Equal to `queueTail - queueHead`, an UPPER BOUND on live entries: cleared
+    ///      slots at the front are counted until {advanceHead} is called. For an exact
+    ///      live count, call {advanceHead}(N) first or iterate `getQueueEntry` over the
+    ///      range filtering `user == address(0)`.
     function queueLength() external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         return $.queueTail - $.queueHead;

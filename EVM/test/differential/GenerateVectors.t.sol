@@ -212,10 +212,16 @@ contract GenerateVectorsTest is Test {
 
         // Degenerate / defensive states that the writers never produce but the
         // implementations must still agree on.
-        _push(P, P, anchor, anchor + 7 days, _rateForApyBps(500), 0, anchor + 30 days); // branch-1 overhang
+        // Halted active rate with a window and an armed successor. The writers
+        // cannot produce this; branch 1 has no overhang leg, so all three stacks
+        // must return the flat base. Kept as a pin on that agreement.
+        _push(P, P, anchor, anchor + 7 days, _rateForApyBps(500), 0, anchor + 30 days);
         _push(
             P, P, anchor, anchor + 7 days, _rateForApyBps(500), anchor + 14 days, anchor + 30 days
         );
+        // Same, but with `anchor` past `rateEnd` — the input the deleted branch-1
+        // fallback double-counted by compounding from `rateEnd`, not `max(anchor, rateEnd)`.
+        _push(P, P, anchor + 50 days, anchor + 30 days, _rateForApyBps(500), 0, anchor + 90 days);
         _push(P, _rateForApyBps(500), anchor + 50 days, anchor + 30 days, P, 0, anchor + 90 days); // anchor > rateEnd
         _push(P, _rateForApyBps(500), anchor, anchor + 7 days, P, 0, anchor); // elapsed == 0
         _push(0, _rateForApyBps(500), anchor, anchor + 7 days, P, 0, anchor + 1 days); // zero base

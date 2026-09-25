@@ -100,10 +100,16 @@ library MathLib {
      *      chains given identical schedule state and timestamp. `pendingRate` activates
      *      with no transaction at the boundary, keeping multi-chain epoch handovers
      *      simultaneous. See the three branch comments in the body.
+     *
+     *      No leg ever compounds over an interval preceding `anchor`: `base` is by
+     *      definition the multiplier AS OF `anchor`, so time before it is already
+     *      settled and re-applying yield to it would double-count. Branch 2's
+     *      `max(anchor, rateEnd)` overhang start is that rule, not mere symmetry.
      * @param base Snapshot multiplier taken at `anchor`
      * @param rate Active per-second rate (PRECISION = no yield)
      * @param anchor Timestamp `base` was snapshotted at
-     * @param rateEnd Timestamp `rate` expires (0 only when `rate == PRECISION`)
+     * @param rateEnd Timestamp `rate` expires. 0 if and only if `rate == PRECISION` —
+     *        OkuMoney's writers enforce both directions, and branch 1 relies on it
      * @param pendingRate Successor rate, active after `rateEnd` (PRECISION = none)
      * @param pendingRateEnd Timestamp `pendingRate` itself expires (0 = none armed) —
      *        bounds the overhang so an unattended successor cannot compound forever
@@ -123,18 +129,25 @@ library MathLib {
         pure
         returns (uint256)
     {
-        // Branch 1: active rate is the no-yield placeholder. `rateEnd` is 0 here under
-        // the current writer set (OkuMoney never writes a window against a halted rate),
-        // so this is the flat base. The fallback defensively mirrors branch 2's overhang
-        // handling rather than silently dropping a pending rate that should be accruing.
+        // Branch 1: active rate is the no-yield placeholder, so nothing accrues and the
+        // multiplier is the flat base.
+        //
+        // `rateEnd` is necessarily 0 whenever this branch is taken, so a halted rate can
+        // never have a successor armed behind it. OkuMoney's writers are the complete
+        // write set for the schedule and each one maintains that: the initializer leaves
+        // `okuMRateEnd` at 0; {OkuMoney.setOkuMYieldRate} reverts on a non-zero
+        // `endTimestamp` for a halted rate, and on any rate below PRECISION;
+        // {OkuMoney.setOkuMMultiplier} clears rate and window together; and
+        // {OkuMoney.setNextOkuMYieldRate} can only arm a successor while `rateEnd != 0`.
+        //
+        // This branch therefore does NOT carry an overhang leg. An earlier version did,
+        // as a defensive fallback, but it compounded the successor from `rateEnd` rather
+        // than from `max(anchor, rateEnd)` as branch 2 does — so in the very state it
+        // claimed to protect against (`anchor > rateEnd`) it applied yield across
+        // `[rateEnd, anchor]`, a span that precedes the snapshot and is already baked
+        // into `base`. Deleting it removes that latent double-count rather than
+        // preserving an unreachable path that was wrong anyway.
         if (rate <= Constants.PRECISION) {
-            if (rateEnd != 0 && nowTs > rateEnd && pendingRate > Constants.PRECISION) {
-                uint256 overhangEnd =
-                    (pendingRateEnd != 0 && nowTs > pendingRateEnd) ? pendingRateEnd : nowTs;
-                if (overhangEnd > rateEnd) {
-                    return compoundFor(base, pendingRate, overhangEnd - rateEnd);
-                }
-            }
             return base;
         }
 
@@ -143,6 +156,9 @@ library MathLib {
             // Defensive: `anchor` is never past `rateEnd` under OkuMoney's writers (every
             // write moving `anchor` clears `rateEnd` or sets a fresh future one); guard
             // the subtraction anyway so a future writer bug cannot brick this view.
+            // Unlike branch 1's removed fallback, these guards earn their keep: without
+            // the ternary below the checked subtraction would revert, bricking a view
+            // that every balance read and every PSM mint/redeem depends on.
             uint256 elapsedInWindow = anchor < rateEnd ? rateEnd - anchor : 0;
             uint256 compounded = compoundFor(base, rate, elapsedInWindow);
             if (pendingRate > Constants.PRECISION) {

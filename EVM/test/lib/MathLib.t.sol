@@ -277,10 +277,10 @@ contract MathLibTest is Test {
     }
 
     // ============ compoundFor / computeMultiplier ============
-    // Direct branch coverage — previously exercised only transitively through
-    // OkuMoney's own tests, which never drove the defensive branches below
+    // Direct branch coverage — exercised only transitively through OkuMoney's
+    // own tests otherwise, which never drive the degenerate states below
     // (OkuMoney's writers never produce `rate <= PRECISION && rateEnd != 0`,
-    // nor `anchor > rateEnd`), leaving those paths untested despite being
+    // nor `anchor > rateEnd`), leaving those inputs untested despite being
     // reachable via the library's own public contract (any future caller).
 
     /// @notice compoundFor is the identity when elapsed == 0.
@@ -305,43 +305,43 @@ contract MathLibTest is Test {
         assertEq(result, 15e17);
     }
 
-    /// @notice Branch 1's DEFENSIVE overhang path: rate <= PRECISION but
-    ///         rateEnd != 0 with a pending rate armed — a state OkuMoney's own
-    ///         writers never produce (setOkuMMultiplier zeroes rateEnd when it
-    ///         halts; setOkuMYieldRate only sets rateEnd for a yielding rate),
-    ///         but reachable via MathLib's own public interface, so it must be
-    ///         verified directly rather than left implicitly "unreachable".
-    function test_ComputeMultiplier_Branch1_DefensiveOverhang_CompoundsPendingRate() public view {
-        uint256 base = 1e18;
-        uint256 rateEnd = 1000;
-        uint256 pendingRate = PRECISION + 1e11;
-        uint256 pendingRateEnd = 2000;
-        uint256 nowTs = 1500; // past rateEnd, before pendingRateEnd
-
-        uint256 result =
-            h.computeMultiplier(base, PRECISION, 500, rateEnd, pendingRate, pendingRateEnd, nowTs);
-        uint256 expected = h.compoundFor(base, pendingRate, nowTs - rateEnd);
-        assertEq(result, expected);
-    }
-
-    /// @notice Branch 1's defensive overhang bounds at pendingRateEnd, exactly
-    ///         mirroring branch 2's overhang bound.
-    function test_ComputeMultiplier_Branch1_DefensiveOverhang_BoundedByPendingRateEnd()
-        public
-        view
-    {
+    /// @notice Branch 1 carries NO overhang leg: a halted active rate returns the
+    ///         flat base even in the degenerate `rateEnd != 0` + successor-armed
+    ///         state, which OkuMoney's writers cannot produce (setOkuMMultiplier
+    ///         and the initializer zero rateEnd when halted; setOkuMYieldRate
+    ///         rejects a non-zero endTimestamp for a halted rate; and
+    ///         setNextOkuMYieldRate needs rateEnd != 0 to arm at all).
+    /// @dev Regression pin for a DELETED defensive fallback. It compounded the
+    ///      successor from `rateEnd`, not `max(anchor, rateEnd)` as branch 2 does,
+    ///      so on the very input it claimed to guard (`anchor > rateEnd`) it
+    ///      applied yield across `[rateEnd, anchor]` — a span preceding the
+    ///      snapshot and already baked into `base`. It was removed rather than
+    ///      made symmetric; this test exists so it cannot creep back.
+    function test_ComputeMultiplier_Branch1_HaltedWithArmedSuccessor_StillFlatBase() public view {
         uint256 base = 1e18;
         uint256 rateEnd = 1000;
         uint256 pendingRate = PRECISION + 1e11;
         uint256 pendingRateEnd = 2000;
 
-        uint256 atPendingEnd =
-            h.computeMultiplier(base, PRECISION, 500, rateEnd, pendingRate, pendingRateEnd, 2000);
-        uint256 wayPast = h.computeMultiplier(
-            base, PRECISION, 500, rateEnd, pendingRate, pendingRateEnd, 999_999
-        );
+        // anchor < rateEnd, past rateEnd but before pendingRateEnd.
         assertEq(
-            atPendingEnd, wayPast, "overhang must halt at pendingRateEnd, not keep compounding"
+            h.computeMultiplier(base, PRECISION, 500, rateEnd, pendingRate, pendingRateEnd, 1500),
+            base,
+            "halted rate must not accrue a successor"
+        );
+        // anchor > rateEnd — the input the deleted fallback double-counted.
+        assertEq(
+            h.computeMultiplier(base, PRECISION, 1500, rateEnd, pendingRate, pendingRateEnd, 1800),
+            base,
+            "no retroactive yield across [rateEnd, anchor]"
+        );
+        // Far past pendingRateEnd.
+        assertEq(
+            h.computeMultiplier(
+                base, PRECISION, 500, rateEnd, pendingRate, pendingRateEnd, 999_999
+            ),
+            base,
+            "still flat regardless of how far past the pending window"
         );
     }
 

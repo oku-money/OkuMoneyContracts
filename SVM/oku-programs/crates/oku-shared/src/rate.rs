@@ -214,7 +214,7 @@ pub const fn compound_for(base: u128, rate: u128, elapsed: u64) -> Option<u128> 
 ///   1. Active rate is the no-yield placeholder (`<= PRECISION`): return
 ///      `base`. (`rate_end` is always 0 in this state — the writers never
 ///      write a bounded window against a halted rate — so there is no
-///      overhang to compound here.)
+///      successor armed and no overhang to compound here.)
 ///   2. Active rate is yielding and the window has closed: compound to
 ///      `rate_end`, then compound the pending rate over the overhang, itself
 ///      bounded by `pending_rate_end`.
@@ -224,6 +224,11 @@ pub const fn compound_for(base: u128, rate: u128, elapsed: u64) -> Option<u128> 
 ///
 /// A `pending_rate` activates with no transaction at the boundary, which is
 /// what keeps multi-chain epoch handovers simultaneous.
+///
+/// No leg ever compounds over an interval preceding `anchor`: `base` is by
+/// definition the multiplier as of `anchor`, so time before it is already
+/// settled and re-applying yield to it would double-count. Branch 2's
+/// `max(anchor, rate_end)` overhang start is that rule, not mere symmetry.
 ///
 /// Mirrors EVM `MathLib.computeMultiplier`.
 ///
@@ -262,23 +267,23 @@ pub const fn compute_multiplier(
         return None;
     }
 
-    // Branch 1: active rate is the no-yield placeholder. `rate_end` is always
-    // 0 here by construction — the writers never write a bounded window
-    // against a halted rate — so under the current writer set this is just
-    // the flat base. Defensive fallback below mirrors branch 2's overhang
-    // handling in case that invariant is ever violated by a future writer,
-    // rather than silently dropping a pending rate that should be accruing.
+    // Branch 1: active rate is the no-yield placeholder, so nothing accrues
+    // and the multiplier is the flat base.
+    //
+    // `rate_end` is necessarily 0 whenever this branch is taken, so a halted
+    // rate can never have a successor armed behind it: the writers are the
+    // complete write set for the schedule and each one maintains that (see
+    // the EVM comment in `MathLib.computeMultiplier` for the enumeration).
+    //
+    // This branch therefore carries no overhang leg. An earlier version did,
+    // as a defensive fallback, but it compounded the successor from
+    // `rate_end` rather than from `max(anchor, rate_end)` as branch 2 does —
+    // so in the very state it claimed to protect against (`anchor >
+    // rate_end`) it applied yield across `[rate_end, anchor]`, a span that
+    // precedes the snapshot and is already baked into `base`. Deleting it
+    // removes that latent double-count rather than preserving an unreachable
+    // path that was wrong anyway.
     if rate <= PRECISION {
-        if rate_end != 0 && now_ts > rate_end && pending_rate > PRECISION {
-            let overhang_end = if pending_rate_end != 0 && now_ts > pending_rate_end {
-                pending_rate_end
-            } else {
-                now_ts
-            };
-            if overhang_end > rate_end {
-                return compound_for(base, pending_rate, (overhang_end - rate_end) as u64);
-            }
-        }
         return Some(base);
     }
 
@@ -288,7 +293,9 @@ pub const fn compute_multiplier(
         // writers (every write that moves `anchor` either clears `rate_end`
         // or sets a fresh one strictly in the future), but guard the
         // subtraction anyway rather than let a future writer bug underflow
-        // this view forever.
+        // this view forever. Unlike branch 1's removed fallback these guards
+        // earn their keep: without them this view would panic/return `None`
+        // on every balance read and every PSM mint/redeem.
         let elapsed_in_window = if anchor < rate_end {
             (rate_end - anchor) as u64
         } else {
@@ -426,14 +433,25 @@ mod tests {
     }
 
     #[test]
-    fn branch1_defensive_overhang_fires() {
+    fn branch1_halted_with_armed_successor_is_still_flat() {
         // Halted rate WITH a rate_end and an armed successor — a state the
-        // writers never produce, but the defensive fallback must accrue it
-        // rather than silently drop it. Mirrors `MathLib.t.sol`.
+        // writers cannot produce. Branch 1 carries no overhang leg, so this is
+        // the flat base. Regression pin for a deleted defensive fallback that
+        // compounded from `rate_end` instead of `max(anchor, rate_end)` and so
+        // applied retroactive yield across `[rate_end, anchor]`. Mirrors
+        // `MathLib.t.sol`.
         let r = rate_for_apy(0.05);
-        let got =
-            compute_multiplier(PRECISION, PRECISION, 0, 1_000, r, 0, 1_000 + 30 * DAY).unwrap();
-        assert!(got > PRECISION, "defensive overhang did not accrue");
+        assert_eq!(
+            compute_multiplier(PRECISION, PRECISION, 0, 1_000, r, 0, 1_000 + 30 * DAY),
+            Some(PRECISION),
+            "halted rate must not accrue a successor"
+        );
+        // anchor > rate_end — the input the deleted fallback double-counted.
+        assert_eq!(
+            compute_multiplier(PRECISION, PRECISION, 5_000, 1_000, r, 0, 1_000 + 30 * DAY),
+            Some(PRECISION),
+            "no retroactive yield across [rate_end, anchor]"
+        );
     }
 
     // -- compute_multiplier: branch 3 (running) ---------------------------
@@ -677,15 +695,31 @@ mod proofs {
         }
     }
 
-    /// A halted schedule (`rate == PRECISION`, `rate_end == 0`) is flat for
-    /// every timestamp — accrual genuinely stops.
+    /// A halted schedule is flat for every timestamp — accrual genuinely
+    /// stops. Stated over ANY `rate_end` / `pending_rate` / `pending_rate_end`,
+    /// not just the reachable `rate_end == 0` shape, which is exactly the
+    /// property the deleted branch-1 overhang fallback violated: reintroduce
+    /// one and this proof fails.
+    ///
+    /// The `>= 0` assumptions restore the unsigned-timestamp domain the
+    /// function enforces up front; without them `kani::any()` admits negative
+    /// timestamps, for which the correct answer is `None` rather than
+    /// `Some(base)`.
     #[kani::proof]
     fn proof_halted_schedule_is_flat() {
         let base: u128 = kani::any();
+        let rate: u128 = kani::any();
         let anchor: i64 = kani::any();
-        let now: i64 = kani::any();
+        let rate_end: i64 = kani::any();
         let pending: u128 = kani::any();
-        assert!(compute_multiplier(base, PRECISION, anchor, 0, pending, 0, now) == Some(base));
+        let pending_rate_end: i64 = kani::any();
+        let now: i64 = kani::any();
+        kani::assume(rate <= PRECISION);
+        kani::assume(anchor >= 0 && rate_end >= 0 && pending_rate_end >= 0 && now >= 0);
+        assert!(
+            compute_multiplier(base, rate, anchor, rate_end, pending, pending_rate_end, now)
+                == Some(base)
+        );
     }
 
     /// A yielding rate can never shrink the base — monotonicity in value.

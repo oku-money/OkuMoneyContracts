@@ -99,9 +99,14 @@ export function compoundFor(base: bigint, rate: bigint, elapsed: bigint): bigint
 /**
  * The canonical multiplier at `nowTs`.
  *
- * Port of `MathLib.sol:135-190`, branch-for-branch. See the Solidity or the
- * Rust for the rationale behind each branch — this is a transcription, and
+ * Port of `MathLib.computeMultiplier`, branch-for-branch. See the Solidity or
+ * the Rust for the rationale behind each branch — this is a transcription, and
  * should be read alongside one of them rather than on its own.
+ *
+ * No leg ever compounds over an interval preceding `anchor`: `base` is by
+ * definition the multiplier as of `anchor`, so time before it is already
+ * settled and re-applying yield to it would double-count. Branch 2's
+ * `max(anchor, rateEnd)` overhang start is that rule, not mere symmetry.
  *
  * Throws where the other two implementations would revert / return `None`:
  * a negative timestamp, or `nowTs` before `lastAccrualTime` in branch 3.
@@ -117,14 +122,11 @@ export function computeMultiplier(s: Schedule, nowTs: bigint): bigint {
     );
   }
 
-  // Branch 1: halted.
+  // Branch 1: halted. `rateEnd` is necessarily 0 here (the writers never arm a
+  // window or a successor against a halted rate), so there is no overhang leg —
+  // see the Solidity for why the former defensive fallback was deleted rather
+  // than made symmetric with branch 2.
   if (rate <= PRECISION) {
-    if (rateEnd !== 0n && nowTs > rateEnd && pendingRate > PRECISION) {
-      const overhangEnd = pendingRateEnd !== 0n && nowTs > pendingRateEnd ? pendingRateEnd : nowTs;
-      if (overhangEnd > rateEnd) {
-        return compoundFor(base, pendingRate, overhangEnd - rateEnd);
-      }
-    }
     return base;
   }
 

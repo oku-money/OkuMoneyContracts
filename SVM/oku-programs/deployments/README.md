@@ -7,9 +7,11 @@
 - `pdas.psmConfig` points at a 562-byte account under the OLD PsmConfig layout
   (`PsmConfig::LEN` is **754** now — 626 before the `reserved: [u8; 128]` tail
   padding was added). The current program cannot deserialize it — it is an
-  orphaned account, not a usable config, and `migrate_config_space` does not
-  apply: that instruction grows a *current-layout* config, it does not
-  translate a pre-single-token one.
+  orphaned account, not a usable config. No migration path to the current
+  layout exists or is planned: a resize could only grow a *current-layout*
+  config, never translate a pre-single-token one. (A `migrate_config_space`
+  instruction briefly existed for the former case and was removed as
+  unreachable — see `DECISIONS.md` D-07.)
 - `tokens.okuMoney` / `tokens.usdOku`, `pdas.redemptionQueue`,
   `pdas.vaultConfig`, `pdas.vaultOkuMoney` are two-token-model keys from before
   the single-token collapse. Dead.

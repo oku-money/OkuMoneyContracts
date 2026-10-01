@@ -858,6 +858,7 @@ See `SVM/oku-programs/scripts/admin/set-upgrade-authority.ts`.
 2. **Never commit `.env` files** or private keys to git.
 3. **RPC reliability** — Alchemy preferred for live runs; public RPCs can lag on nonce / mempool state.
 4. **No on-chain bridge in v1.** Cross-chain replay/refund protection is the orchestrator's responsibility — the protocol surface is just PSM mint/burn.
+5. **EVM collateral token (USDC) must not carry a transfer callback.** `RedemptionQueue`'s and `LitePSM`'s `nonReentrant` guards assume the configured collateral has no transfer hook; `initialize` validates only `decimals() <= 18` and cannot verify this on-chain. A callback-bearing token could reenter `advanceHead` during `processQueue`'s transient slot-clear window, permanently stranding an entry — see `EVM/README.md` Accepted Risk #6. Circle USDC and its canonical bridged variants have no such callback; confirm this holds for whatever token is configured on any new chain before deploying, particularly a non-Circle or custom-bridged USDC variant.
 
 ### Chain ID reference
 

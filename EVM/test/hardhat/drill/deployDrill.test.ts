@@ -217,11 +217,27 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         expect(await result.okuDollar.okuMoney()).to.equal(okuMAddr);
 
         // PSM and queue must agree on USDC — a mismatch here is the exact
-        // condition configureRoles() aborts on before granting anything.
+        // condition configureRoles() aborts on before granting anything, and
+        // (for a fresh pair) LitePSM.initialize itself reverts on
+        // (QueueUsdcMismatch).
         const psmUsdc = await result.litePSM.usdc();
         const queueUsdc = await result.redemptionQueue.usdc();
         expect(psmUsdc.toLowerCase()).to.equal(queueUsdc.toLowerCase());
         expect(psmUsdc.toLowerCase()).to.equal(result.usdcAddress.toLowerCase());
+
+        // PSM and queue must also agree on OkuMoney — same class of check,
+        // guarding LitePSM.initialize's QueueOkuMoneyMismatch revert.
+        const psmOkuMoney = await result.litePSM.okuMoney();
+        const queueOkuMoney = await result.redemptionQueue.okuMoney();
+        expect(psmOkuMoney.toLowerCase()).to.equal(queueOkuMoney.toLowerCase());
+        expect(psmOkuMoney.toLowerCase()).to.equal(okuMAddr.toLowerCase());
+
+        // The PSM's own view of its queue must match the queue instance this
+        // drill actually deployed (guards the verifyDeployment post-hoc check
+        // added for the stale-address-book-reuse case).
+        expect(await result.litePSM.redemptionQueue()).to.equal(
+            await result.redemptionQueue.getAddress()
+        );
     });
 
     it("produces a chain where a real mint actually works end-to-end", async () => {

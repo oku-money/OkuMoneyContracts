@@ -575,11 +575,19 @@ async function configureRoles(
   const litePSMAddress = await litePSM.getAddress();
   const redemptionQueueAddress = await redemptionQueue.getAddress();
 
-  // EVM-J3: Fail-fast check that queue and PSM share the same USDC before
-  // we start granting roles. A mismatch here would leave the chain with a
-  // partially-roled deployment that the operator would have to manually
-  // un-grant from. Doing this first means a mismatch reverts with no state
-  // change on the proxies.
+  // EVM-J3: Fail-fast check that queue and PSM share the same USDC AND the
+  // same OkuMoney before we start granting roles. A mismatch here would leave
+  // the chain with a partially-roled deployment that the operator would have
+  // to manually un-grant from. Doing this first means a mismatch reverts with
+  // no state change on the proxies.
+  //
+  // Note: on a FRESH initialize, `LitePSM.initialize` itself now reverts
+  // (`QueueUsdcMismatch` / `QueueOkuMoneyMismatch`) before either of these
+  // checks would even run — these two proxies couldn't exist in a mismatched
+  // state as a brand-new pair. This block exists for the case that check
+  // can't cover: `litePSM` or `redemptionQueue` being REUSED (via
+  // `tryAttach`/the address book) from an already-initialized prior
+  // deployment, where no `initialize` call runs on this invocation at all.
   const psmUsdc = (await litePSM.usdc()).toString();
   const queueUsdc = (await redemptionQueue.usdc()).toString();
   if (psmUsdc.toLowerCase() !== queueUsdc.toLowerCase()) {
@@ -588,6 +596,15 @@ async function configureRoles(
     );
   }
   logger.info(`  USDC match verified: ${psmUsdc}`);
+
+  const psmOkuMoney = (await litePSM.okuMoney()).toString();
+  const queueOkuMoney = (await redemptionQueue.okuMoney()).toString();
+  if (psmOkuMoney.toLowerCase() !== queueOkuMoney.toLowerCase()) {
+    throw new Error(
+      `OkuMoney mismatch: PSM=${psmOkuMoney} queue=${queueOkuMoney}. Aborting before role grants.`
+    );
+  }
+  logger.info(`  OkuMoney match verified: ${psmOkuMoney}`);
 
   // OkuMoney minter roles. LitePSM is the ONLY OKUM_MINTER; off-chain
   // cross-chain mint/burn flows route through it via the orchestrator's USDC
@@ -716,6 +733,42 @@ async function verifyDeployment(
 
   const litePSMAddress = await litePSM.getAddress();
   const queueAddress = await redemptionQueue.getAddress();
+
+  // Re-assert queue<->PSM wiring post-hoc, not just the pre-grant check in
+  // `configureRoles`. That check runs every time `configureRoles` executes,
+  // but `configureRoles` and this function both operate on whatever `litePSM`/
+  // `redemptionQueue` handles this run resolved to — if either was REUSED
+  // (via `tryAttach`) from an already-initialized prior deployment while the
+  // other was freshly initialized against a different counterpart, the two
+  // live addresses captured in the address book under this `bookKey` could
+  // diverge from what's actually wired on-chain. This catches that case by
+  // reading the wiring directly off `litePSM`, independent of how the two
+  // handles were resolved.
+  const wiredQueueAddr = (await litePSM.redemptionQueue()).toString();
+  if (wiredQueueAddr.toLowerCase() !== queueAddress.toLowerCase()) {
+    throw new Error(
+      `Deployment verification FAILED — LitePSM.redemptionQueue() is ${wiredQueueAddr}, ` +
+      `but this run resolved RedemptionQueue to ${queueAddress}. The address book and ` +
+      `on-chain wiring have diverged; do not proceed without investigating.`
+    );
+  }
+  const psmUsdcFinal = (await litePSM.usdc()).toString();
+  const queueUsdcFinal = (await redemptionQueue.usdc()).toString();
+  if (psmUsdcFinal.toLowerCase() !== queueUsdcFinal.toLowerCase()) {
+    throw new Error(
+      `Deployment verification FAILED — USDC mismatch survived role grants: ` +
+      `PSM=${psmUsdcFinal} queue=${queueUsdcFinal}.`
+    );
+  }
+  const psmOkuMoneyFinal = (await litePSM.okuMoney()).toString();
+  const queueOkuMoneyFinal = (await redemptionQueue.okuMoney()).toString();
+  if (psmOkuMoneyFinal.toLowerCase() !== queueOkuMoneyFinal.toLowerCase()) {
+    throw new Error(
+      `Deployment verification FAILED — OkuMoney mismatch survived role grants: ` +
+      `PSM=${psmOkuMoneyFinal} queue=${queueOkuMoneyFinal}.`
+    );
+  }
+  logger.info(`  Queue<->PSM wiring re-verified: usdc, okuMoney, and address consistent`);
 
   const contracts: Record<string, Contract> = {
     okuMoney,

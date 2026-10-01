@@ -7,6 +7,8 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {RedemptionQueueEvents} from "../../src/lib/events/RedemptionQueueEvents.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {OkuMoney} from "../../src/token/OkuMoney.sol";
 
 /**
  * @title RedemptionQueueTest
@@ -200,6 +202,85 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
 
         assertEq(okuMoney.balanceOf(address(redemptionQueue)), queueBalanceBefore - amount);
+    }
+
+    /// @notice Documents the ACTUAL consequence of a RedemptionQueue wired to the wrong
+    ///         OkuMoney instance (the gap closed by `LitePSM.initialize`'s
+    ///         `QueueOkuMoneyMismatch` check) — correcting an incorrect assumption that
+    ///         such a mismatch "silently burns the wrong token after paying real USDC".
+    ///         It does not: `processQueue` burns via `$.okuMoney` (the queue's OWN wired
+    ///         reference), so a queue pointed at an unrelated OkuMoney calls `burn` on
+    ///         THAT token as itself — a call it holds neither balance nor `OKUM_BURNER`
+    ///         on. That revert is unguarded by design (see the DELIBERATELY UNGUARDED
+    ///         comment in `RedemptionQueue.processQueue`), so it unwinds the ENTIRE
+    ///         transaction, including the USDC already paid to the user earlier in the
+    ///         same call — the batch is fail-closed, not silently corrupting state. The
+    ///         real escrowed OkuMoney (sent here by whatever actually funded the queue)
+    ///         is untouched and recoverable; it just can never be processed through this
+    ///         misconfigured queue. This is exactly why `LitePSM.initialize` now rejects
+    ///         the mismatch up front rather than relying on this revert as a safety net.
+    function test_ProcessQueue_MismatchedOkuMoney_RevertsEntireBatch_NoSilentCorruption() public {
+        // A second, unrelated OkuMoney instance — NOT the one actually escrowed in the
+        // queue below.
+        OkuMoney otherOkuMoneyImpl = new OkuMoney();
+        bytes memory otherInit =
+            abi.encodeCall(OkuMoney.initialize, ("Other", "OTH", admin, MAX_SUPPLY));
+        OkuMoney otherOkuMoney =
+            OkuMoney(address(new ERC1967Proxy(address(otherOkuMoneyImpl), otherInit)));
+
+        // A queue wired to `otherOkuMoney` instead of the suite's `okuMoney`, with
+        // `QUEUE_PSM` granted directly to this test contract (bypassing LitePSM
+        // entirely — mirroring how every other test in this file exercises the queue in
+        // isolation, and standing in for what `LitePSM.initialize`'s new check now
+        // prevents from ever being reachable via the real deploy path).
+        RedemptionQueue mismatchedQueueImpl = new RedemptionQueue();
+        bytes memory queueInit = abi.encodeCall(
+            RedemptionQueue.initialize, (address(otherOkuMoney), address(usdc), admin)
+        );
+        RedemptionQueue mismatchedQueue =
+            RedemptionQueue(address(new ERC1967Proxy(address(mismatchedQueueImpl), queueInit)));
+        vm.prank(admin);
+        mismatchedQueue.grantRole(QUEUE_PSM, address(this));
+
+        // The REAL okuMoney is what actually gets escrowed (exactly as LitePSM would
+        // transfer it in before calling enqueue) — the mismatch is already damage-done
+        // by this point, regardless of what happens next.
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(mismatchedQueue), amount);
+        mismatchedQueue.enqueue(user1, amount);
+
+        uint256 usdcAmount = Math.mulDiv(
+            amount, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Floor
+        ) / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(mismatchedQueue), usdcAmount);
+
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
+        uint256 realOkuMoneyEscrowBefore = okuMoney.balanceOf(address(mismatchedQueue));
+
+        // Precompute args BEFORE expectRevert: `queueHead()`/`queueTail()` are external
+        // staticcalls through the proxy, and `vm.expectRevert` latches onto the very next
+        // external call — evaluating them inline as `processQueue` arguments would
+        // consume the cheatcode on the view call instead of on `processQueue` itself.
+        uint256 head = mismatchedQueue.queueHead();
+        uint256 tail = mismatchedQueue.queueTail();
+
+        // Reverts inside the unguarded `otherOkuMoney.burn(...)` call (the queue holds
+        // neither OKUM_BURNER nor any balance on `otherOkuMoney`) — unwinding the whole
+        // batch, including the USDC transfer to user1 that executed earlier in this same
+        // call.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(mismatchedQueue),
+                OKUM_BURNER
+            )
+        );
+        mismatchedQueue.processQueue(head, tail);
+
+        // Nothing moved: no USDC paid, no real OkuMoney escrow touched.
+        assertEq(usdc.balanceOf(user1), user1UsdcBefore);
+        assertEq(okuMoney.balanceOf(address(mismatchedQueue)), realOkuMoneyEscrowBefore);
     }
 
     function test_ProcessQueue_TransfersUSDC() public {
@@ -1527,6 +1608,109 @@ contract RedemptionQueueTest is BaseTest {
         // queueHead advanced past user1 (cleared), stopped at user2 (live).
         assertEq(redemptionQueue.queueHead(), 1);
         assertEq(redemptionQueue.queueLength(), 1);
+    }
+
+    /// @notice An ALLOWANCE-bound batch must halt with `InsufficientFunds`, exactly like
+    ///         a balance-bound one — not misreport as `TransferFailed`.
+    /// @dev Regression for the gap between the loop's funding check and how payouts
+    ///      actually move. Payouts use `transferFrom`, so the real ceiling is
+    ///      `min(balance, allowance)`; the check formerly read balance alone. Here the
+    ///      caller holds plenty of USDC but has approved only enough for one entry —
+    ///      the shape `LitePSM.processQueue` produces whenever its operator-supplied
+    ///      `approveAmount` under-covers the batch.
+    ///
+    ///      Before the fix the balance check passed, `trySafeTransferFrom` then failed on
+    ///      allowance, and the entry surfaced as `TransferFailed` — whose documented
+    ///      remedy is `rescueQueueEntry` (see {RedemptionQueueEvents}). An operator
+    ///      following that would have returned OkuM to a perfectly healthy user over an
+    ///      approval-sizing mistake, and paid full loop-body gas for every remaining
+    ///      entry in a batch that could no longer settle.
+    function test_ProcessQueue_AllowanceBound_BreaksWithInsufficientFunds() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 2);
+        vm.prank(admin);
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+
+        uint256 perEntryUsdc = Math.mulDiv(
+            amount, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Floor
+        ) / DECIMAL_MULTIPLIER;
+
+        // BALANCE covers both entries; ALLOWANCE covers only the first. This is the
+        // distinction the old balance-only check could not see.
+        _mintUsdc(address(this), perEntryUsdc * 2);
+        _approveUsdc(address(this), address(redemptionQueue), perEntryUsdc);
+
+        vm.expectEmit(true, false, false, true);
+        emit RedemptionQueueEvents.RedemptionSkipped(
+            1, RedemptionQueueEvents.RedemptionSkipReason.InsufficientFunds
+        );
+        redemptionQueue.processQueue(0, 2);
+
+        // First entry settled, second untouched and still claimable.
+        assertEq(usdc.balanceOf(user1), perEntryUsdc, "first entry should settle");
+        assertEq(usdc.balanceOf(user2), 0, "second entry must not settle");
+        RedemptionQueue.QueueEntry memory stillQueued = redemptionQueue.getQueueEntry(1);
+        assertEq(stillQueued.user, user2, "second entry must remain live, not cleared");
+        assertEq(stillQueued.okuMAmount, amount);
+        // Only the settled entry's OkuM left escrow.
+        assertEq(redemptionQueue.totalQueuedOkuM(), amount, "only entry 0 should decrement");
+    }
+
+    /// @notice `burn()` failing must revert the WHOLE batch — no USDC moved, no state
+    ///         changed. Pins the fail-closed guarantee the loop depends on.
+    /// @dev This is the one call in `processQueue` allowed to revert the batch, and the
+    ///      only one running AFTER value has moved. `trySafeTransferFrom` fails BEFORE any
+    ///      USDC moves, so soft-skipping it unwinds cleanly; by the time `burn` runs the
+    ///      USDC has already reached the user, and the only way to undo that is to revert.
+    ///
+    ///      Swallowing it would pay the user and leave the OkuM un-burned — unbacked
+    ///      supply, created silently. And it would buy nothing: every way `burn` can
+    ///      revert (role revoked, this contract blacklisted, balance shortfall) is
+    ///      batch-invariant, so a failure for one entry is a failure for all. There are no
+    ///      "other users" a soft-skip could rescue.
+    ///
+    ///      Asserted on a TWO-entry batch whose first entry would otherwise have settled,
+    ///      so the test would fail if the revert were ever softened into a skip.
+    function test_ProcessQueue_BurnerRoleRevoked_RevertsWholeBatch() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 2);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+
+        uint256 perEntryUsdc = Math.mulDiv(
+            amount, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Floor
+        ) / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), perEntryUsdc * 2);
+        _approveUsdc(address(this), address(redemptionQueue), perEntryUsdc * 2);
+
+        // Revoke OKUM_BURNER (granted to the queue in BaseTest.setUp) so `burn` reverts on
+        // the first entry — after that entry's USDC transfer has already succeeded.
+        vm.prank(admin);
+        okuMoney.revokeRole(OKUM_BURNER, address(redemptionQueue));
+
+        uint256 queuedBefore = redemptionQueue.totalQueuedOkuM();
+        uint256 escrowBefore = okuMoney.balanceOf(address(redemptionQueue));
+
+        vm.expectRevert();
+        redemptionQueue.processQueue(0, 2);
+
+        // Nothing moved: the revert unwound the in-flight transfer.
+        assertEq(usdc.balanceOf(user1), 0, "no USDC may move when the batch reverts");
+        assertEq(usdc.balanceOf(user2), 0);
+        assertEq(redemptionQueue.totalQueuedOkuM(), queuedBefore, "accounting must be intact");
+        assertEq(okuMoney.balanceOf(address(redemptionQueue)), escrowBefore, "escrow intact");
+        assertEq(redemptionQueue.getQueueEntry(0).user, user1, "entry 0 must survive");
+        assertEq(redemptionQueue.getQueueEntry(1).user, user2, "entry 1 must survive");
+
+        // Recoverable: grant the role and the same batch settles normally.
+        vm.prank(admin);
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
+        redemptionQueue.processQueue(0, 2);
+        assertEq(usdc.balanceOf(user1), perEntryUsdc, "settles after the role is restored");
+        assertEq(usdc.balanceOf(user2), perEntryUsdc);
+        assertEq(redemptionQueue.totalQueuedOkuM(), 0);
     }
 
     // ============ View Getter Tests ============

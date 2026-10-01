@@ -203,7 +203,6 @@ programs/
         direct_mint.rs             # mint_oku_m_direct (bridge/fiat on-ramp)
         direct_burn.rs             # burn_oku_m_direct (bridge off-ramp)
         yield_ops.rs               # rate-schedule writers + emergency override + display crank
-        migrate.rs                 # migrate_config_space (one-shot, idempotent account resize)
       contexts/                    # Per-instruction account contexts
 
 tests/
@@ -213,7 +212,7 @@ tests/
     direct-mint.ts
     direct-burn.ts
     init-invariants.ts
-    config-layout.ts             # PsmConfig size/discriminator pin + migrate_config_space
+    config-layout.ts             # PsmConfig size/offset pin (contract with EVM svmValue.ts)
     token-metadata.ts
     streaming-accrual.ts         # the rate-schedule model
     display-mirror.ts            # the write-only ScaledUiAmount mirror
@@ -258,7 +257,7 @@ and no on-chain escrow-vault field — the PSM is buffer-only (see "Why no
 redemption queue" below), and the OkuM escrow ATA is derived client-side,
 not stored on `PsmConfig`.
 
-### `reserved: [u8; 128]` and `migrate_config_space`
+### `reserved: [u8; 128]`
 
 The config is a singleton PDA, so without tail padding any new field would
 require closing and re-initialising it — losing every role assignment and the
@@ -266,12 +265,13 @@ accrual anchor. `reserved` is 128 bytes of slack (≈4 more pubkeys or 16 more
 `u64`s, ~0.0009 SOL of rent). **Consume from the FRONT when adding a field and
 shrink the array to match, keeping `LEN` constant.**
 
-Already-deployed configs predating the padding are smaller than `LEN`. The
-`migrate_config_space` instruction grows an existing account to the current
-struct size in place, preserving all state; it is **one-shot and idempotent**
-(a config already at `target_len` is a logged no-op). Driven by
-`scripts/admin/migrate-config-space.ts`, which honours `--dry-run` like every
-other admin script.
+Holding `LEN` constant is what makes this work without any resize machinery:
+a field added this way changes no existing byte offset and leaves every
+deployed account already the right size. There is deliberately **no resize /
+migration instruction** — one existed and was removed (see `DECISIONS.md`
+D-07), because it had no reachable target and no test coverage. Should
+`reserved` ever be exhausted on a live deployment, a resize path would have to
+be reintroduced against the struct shape of that day rather than a guessed one.
 
 The PsmConfig PDA is the **mint authority**, **freeze authority**, and
 **ScaledUiAmount authority** for the `OkuM` mint. All mint/freeze/
@@ -358,6 +358,28 @@ pub fn withdraw_buffer(amount: u64)                  // drain USDC vault
 All protected by yield-lock. `min_usdc_out` is slippage protection —
 pass `0` to disable the check.
 
+**Why this exists when the multiplier is monotonic.** Slippage is not
+structurally reachable here any more than on EVM — the rate floor
+(`rate >= PRECISION`, `instructions/yield_ops.rs`) and the emergency
+override's strictly-increasing check (`MultiplierCannotDecrease`) mean the
+multiplier never moves against a redeemer between quote and execution.
+`min_usdc_out` is kept as defense-in-depth (see the NatSpec on
+`redeem_oku_m` in `instructions/psm.rs`), not because a real price-movement
+risk exists. EVM's `LitePSM.redeemOkuM` has no equivalent parameter for
+exactly that reason — see `EVM/README.md § LitePSM.sol` for the full
+argument, including the one precondition (no PSM fee) it depends on.
+
+The one genuine platform difference: Solana has no view functions, so
+there is no `okuMMultiplier()`-style call a client can make to observe
+on-chain pricing directly the way it can on EVM. `min_usdc_out` gets
+reused for exactly that gap — `scripts/test/test-devnet.ts`'s redeem step
+derives its floor from an independent TypeScript mirror of the multiplier
+math and passes it in, turning every redeem into a live Rust-vs-TS
+differential check: if the on-chain accrual path disagrees with the TS
+reference beyond a small tolerance, the transaction reverts on-chain
+instead of silently succeeding at the wrong price. Every other caller
+(`scripts/admin/redeem-oku-m.ts`, the bankrun suite) passes `0`.
+
 ### Direct mint / burn (bridging + fiat on-ramp)
 
 ```rust
@@ -440,7 +462,7 @@ handover.
 **Agreement with the other two implementations is enforced, not assumed.**
 `compute_multiplier` exists in Solidity, Rust and TypeScript, and nothing
 on-chain on either stack can detect a divergence. A committed corpus of
-3,290 vectors is generated from the Solidity reference and replayed
+3,867 vectors is generated from the Solidity reference and replayed
 against the other two, reverts included:
 
 ```bash
@@ -711,7 +733,7 @@ the streaming-accrual and display-mirror tests will fail with an
 
 The bankrun suite is **124 tests** (`npm run test:bankrun`); the pure-Rust
 suite is **58** (`npm run test:rust`). `npm test` runs both. The cross-language
-agreement of `compute_multiplier` is enforced separately by the 3,290-vector
+agreement of `compute_multiplier` is enforced separately by the 3,867-vector
 differential corpus (`npm run test:differential` from the repo root).
 
 `tests/bankrun/streaming-accrual.ts` covers the model:
@@ -735,8 +757,10 @@ differential corpus (`npm run test:differential` from the repo root).
 - The sync NOT stamping the sandwich lock
 - The emergency override force-syncing the display
 
-`tests/bankrun/config-layout.ts` pins `PsmConfig`'s size and discriminator
-and exercises `migrate_config_space` (including the idempotent no-op path).
+`tests/bankrun/config-layout.ts` pins `PsmConfig`'s total size and the byte
+offsets of the accrual block, decoding a real account with the exact offsets
+`EVM/scripts/utils/svmValue.ts` uses and comparing against Anchor's own
+decoding — so a field reorder cannot silently mis-size the global V(t).
 
 The `readMultiplierFromMint()` helper in the test shared code reads
 the `ScaledUiAmountConfig` extension directly from a mint account's
@@ -781,10 +805,8 @@ explicitly.
 > [`../README.md` § Deployment runbook`](../README.md#deployment-runbook).**
 
 SVM-specific gotchas not covered there are the two binding authority
-constraints at init (below), the `Anchor.toml [programs.<network>]` /
-`deployments/<network>.json` mismatch warning, and — for an already-deployed
-config predating the tail padding — `scripts/admin/migrate-config-space.ts`
-before any instruction that reads a new field.
+constraints at init (below) and the `Anchor.toml [programs.<network>]` /
+`deployments/<network>.json` mismatch warning.
 
 ---
 
@@ -897,7 +919,6 @@ All admin scripts live under `scripts/admin/`. Each:
 | `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |
 | `admin:deposit-buffer` / `admin:withdraw-buffer` | `deposit_buffer` / `withdraw_buffer` | `buffer_depositor` / `buffer_withdrawer` |
 | `admin:close-programs` | `solana program close` (BPF loader) — recover rent from stale program deployments. | BPF upgrade authority (deployer wallet) |
-| `scripts/admin/migrate-config-space.ts` | `migrate_config_space` — grow an already-deployed `PsmConfig` to the current `LEN` in place. One-shot and idempotent; no npm alias, run via `tsx`. | `role_admin` |
 
 ---
 

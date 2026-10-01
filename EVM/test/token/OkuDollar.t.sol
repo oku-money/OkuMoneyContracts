@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
+import {Constants} from "../../src/lib/Constants.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
@@ -37,8 +38,14 @@ contract OkuDollarTest is BaseTest {
         assertEq(okuDollar.symbol(), "usdOku");
     }
 
+    /// @dev Asserts against `Constants.OKU_M_DECIMALS` (see the OkuMoney twin) and pins
+    ///      the two tokens to each other: the vault quotes dollars in the same scale as
+    ///      `Constants.PRECISION`, and unlike OZ's ERC4626 there is no decimals offset
+    ///      against the underlying to absorb a mismatch.
     function test_Initialize_SetsCorrectDecimals() public view {
+        assertEq(okuDollar.decimals(), Constants.OKU_M_DECIMALS);
         assertEq(okuDollar.decimals(), 18);
+        assertEq(okuDollar.decimals(), okuMoney.decimals());
     }
 
     function test_Initialize_SetsOkuMoneyReference() public view {
@@ -1533,6 +1540,60 @@ contract OkuDollarTest is BaseTest {
         );
     }
 
+    /// @notice ERC-8056's `toUIAmount` and ERC-4626's `convertToShares` are the SAME
+    ///         function under two standards' names, not merely two functions that happen
+    ///         to agree today. Both reduce to `MathLib.okuMToDollars(x, okuMMultiplier())`
+    ///         — `OkuMoney.toUIAmount` calls it directly (`okuMMultiplier()` is `public`),
+    ///         `OkuDollar.convertToShares` calls it via `usdMultiplier()`, which is a
+    ///         direct one-line delegation to `okuMoney.okuMMultiplier()`
+    ///         (`test_UsdMultiplier_AlwaysEqualsOkuMMultiplier` above pins that
+    ///         delegation). There is exactly one multiplier read from exactly one place;
+    ///         this test pins the two public entry points a caller would actually use
+    ///         (the ERC-8056 display surface and the ERC-4626 share/asset surface)
+    ///         against each other directly, across both a discrete override and a
+    ///         streaming rate, so a future change that reads the multiplier through a
+    ///         different path on one side (e.g. a caching optimisation) cannot
+    ///         silently diverge the two without a test failing here.
+    function test_ToUIAmount_EqualsConvertToShares_AcrossMultiplierChanges() public {
+        uint256 rawAmount = 12_345e18;
+
+        // At initial multiplier (PRECISION, no yield yet).
+        assertEq(
+            okuMoney.toUIAmount(rawAmount),
+            okuDollar.convertToShares(rawAmount),
+            "must agree at PRECISION"
+        );
+
+        // After a discrete override.
+        vm.prank(rebaser);
+        okuMoney.setOkuMMultiplier(PRECISION * 1045 / 1000);
+        assertEq(
+            okuMoney.toUIAmount(rawAmount),
+            okuDollar.convertToShares(rawAmount),
+            "must agree after setOkuMMultiplier"
+        );
+
+        // After streaming accrual.
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 634e6, block.timestamp + MAX_RATE_WINDOW);
+        _accrueAtCurrentRate(365 days);
+        assertGt(okuMoney.okuMMultiplier(), PRECISION * 1045 / 1000, "sanity: multiplier advanced");
+        assertEq(
+            okuMoney.toUIAmount(rawAmount),
+            okuDollar.convertToShares(rawAmount),
+            "must agree after streaming accrual"
+        );
+
+        // The inverse direction too: ERC-8056 has no fromUIAmount-equivalent on the
+        // 4626 side other than convertToAssets, but fromUIAmount IS convertToAssets
+        // under the same construction — pin that too.
+        assertEq(
+            okuMoney.fromUIAmount(rawAmount),
+            okuDollar.convertToAssets(rawAmount),
+            "fromUIAmount must equal convertToAssets after streaming accrual"
+        );
+    }
+
     // ============ Continuous Yield + Balance/Supply Tests ============
 
     function test_ContinuousYield_BalanceGrowsOverTime() public {
@@ -2070,6 +2131,124 @@ contract OkuDollarTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
         okuDollar.approve(user2, 50e18);
+    }
+
+    /// @notice `approve` also blocks a blacklisted OWNER, matching Circle FiatToken's
+    ///         `notBlacklisted(msg.sender)` on `approve`.
+    function test_Approve_RevertsOnBlacklistedOwner() public {
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        okuDollar.approve(user2, 50e18);
+    }
+
+    /// @notice OkuMoney already pinned this (test_Approve_DoesNotRevokeExistingAllowanceOnBlacklist);
+    ///         OkuDollar had no counterpart despite the identical behavior/comment.
+    function test_Approve_DoesNotRevokeExistingAllowanceOnBlacklist() public {
+        vm.prank(user1);
+        okuDollar.approve(user2, 50e18);
+
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        assertEq(okuDollar.allowance(user1, user2), 50e18, "pre-existing allowance untouched");
+    }
+
+    // ============ Circle Parity: blacklisted spender cannot exercise a prior allowance ============
+
+    /// @notice THE gap this parity pass closes, on OkuDollar's `transferFrom`. A
+    ///         blacklisted spender holding a pre-existing allowance must not be able
+    ///         to move clean funds between clean addresses. Before this fix,
+    ///         `transferFrom` only checked `from`/`to` via `_transferUsdShares`,
+    ///         never the third-party spender itself.
+    function test_TransferFrom_RevertsOnBlacklistedSpender_EvenWithPriorAllowance() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(user1);
+        okuDollar.approve(user2, 50e18);
+
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        assertEq(
+            okuDollar.allowance(user1, user2),
+            50e18,
+            "precondition: allowance survives blacklisting"
+        );
+
+        vm.prank(user2);
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        okuDollar.transferFrom(user1, user3, 50e18);
+    }
+
+    /// @notice Sanity check: a clean allowance-holder is unaffected by the new check.
+    function test_TransferFrom_SucceedsForCleanSpender() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(user1);
+        okuDollar.approve(user2, 50e18);
+
+        vm.prank(user2);
+        okuDollar.transferFrom(user1, user3, 50e18);
+
+        assertEq(okuDollar.balanceOf(user3), 50e18);
+    }
+
+    /// @notice Same gap, on the ERC-4626 surface: `redeem()` called by a blacklisted
+    ///         THIRD-PARTY spender (not the owner) against a pre-existing allowance.
+    ///         `_redeemShares` only checked `owner`/`receiver` via `_unwrap`; the
+    ///         caller exercising someone else's allowance was invisible to it.
+    /// @dev Receiver is deliberately user3, NOT the spender (user2) — isolates the
+    ///      spender-blacklist mechanism from `_unwrap`'s pre-existing receiver-check.
+    ///      Caught in verification: an earlier version of this test used the spender
+    ///      as its own receiver, so reverting the fix locally still passed (for the
+    ///      wrong reason — RecipientBlacklisted via `_unwrap`, not the intended
+    ///      SenderBlacklisted from the new spender-check) and the regression this
+    ///      test exists to catch would have gone undetected.
+    function test_Redeem_RevertsOnBlacklistedSpender_EvenWithPriorAllowance() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(user1);
+        okuDollar.approve(user2, 50e18);
+
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        vm.prank(user2);
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        okuDollar.redeem(50e18, user3, user1);
+    }
+
+    /// @notice Sanity check: the owner redeeming their OWN shares is unaffected —
+    ///         the new third-party-spender check only fires in the allowance branch.
+    function test_Redeem_SucceedsForOwnerActingAsOwnSpender() public {
+        _mintUsdOku(user1, 100e18);
+
+        vm.prank(user1);
+        okuDollar.redeem(50e18, user1, user1);
+
+        assertGt(okuMoney.balanceOf(user1), 0, "owner-initiated redeem must still work");
+    }
+
+    /// @notice `maxWithdraw`/`maxRedeem` must report `0` for a blacklisted owner —
+    ///         mirrors `maxDeposit`'s existing pause/blacklist gating. Before this
+    ///         fix they reported the full balance for an owner whose `withdraw`/
+    ///         `redeem` call would unconditionally revert in `_unwrap`.
+    function test_MaxWithdrawRedeem_ZeroForBlacklistedOwner() public {
+        _mintUsdOku(user1, 100e18);
+
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        assertEq(okuDollar.maxWithdraw(user1), 0, "maxWithdraw must be 0 for blacklisted owner");
+        assertEq(okuDollar.maxRedeem(user1), 0, "maxRedeem must be 0 for blacklisted owner");
+    }
+
+    /// @notice Sanity check: a clean owner's max views are unaffected by the fix.
+    function test_MaxWithdrawRedeem_NonZeroForCleanOwner() public {
+        _mintUsdOku(user1, 100e18);
+
+        assertGt(okuDollar.maxWithdraw(user1), 0);
+        assertGt(okuDollar.maxRedeem(user1), 0);
     }
 
     // ============ Permit Positive-Path Tests ============

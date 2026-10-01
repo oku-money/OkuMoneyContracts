@@ -210,19 +210,49 @@ pub const fn mul_div_wad_half_up(a: u128, b: u128) -> Option<u128> {
     }
 }
 
-/// `floor(a * b / divisor)` for the case where `a * b` is known to fit in
-/// `u128`.
+/// `floor(a * b / divisor)` — **narrow**: requires the raw product to fit.
 ///
-/// This is the narrow counterpart to [`mul_div_wad_floor`], used where the
-/// *divisor* is not `PRECISION` (and so may exceed `u64`, ruling out the
-/// small-divisor division) but the *product* is bounded.
+/// # Precondition (hard contract, not an observation about today's callers)
 ///
-/// The only in-protocol caller is `dollars_to_raw`, whose product is
-/// `u64 × PRECISION ≤ 1.8e37 < u128::MAX`. Returns `None` on product
-/// overflow rather than silently truncating, so a future caller that
-/// violates the bound fails loudly.
+/// **`a * b` must fit in `u128`, independent of `divisor`.** Not "the result
+/// must fit" — the *intermediate product* must fit, before any division
+/// happens. Violate it and you get `None`, even when the true mathematical
+/// quotient `(a*b)/divisor` is small enough to represent perfectly.
+///
+/// # This is NOT the guarantee its siblings make
+///
+/// [`mul_div_wad_floor`] and [`mul_div_wad_half_up`] open with a visually
+/// identical `checked_mul` fast path, but fall through to
+/// [`widening_mul`] + [`div_wad`] on overflow, so they are exact over the
+/// **entire** `u128 × u128` domain and their fast path is a pure
+/// optimization, invisible to correctness. This function has no such
+/// fallback: the fast path *is* the whole implementation. Do not reason
+/// about it by analogy with the two functions directly above it.
+///
+/// It cannot simply reuse [`div_wad`]: that division is a *small-divisor*
+/// algorithm requiring `divisor < 2^64`, and the divisor here is the
+/// multiplier, which reaches `MAX_MULTIPLIER = 1e24` (~80 bits). Closing the
+/// gap properly would mean general 128-bit-divisor long division — the
+/// Knuth-algorithm-D class of work this module deliberately avoids (see the
+/// module header). Hence the narrow contract, stated rather than removed.
+///
+/// # Why it is safe where it is used
+///
+/// The sole in-protocol caller is [`crate::math::dollars_to_raw`], whose
+/// product is `u64 × PRECISION ≤ 1.8e37 < u128::MAX` — proven, not assumed,
+/// by `proofs::proof_narrow_path_safe_for_u64_times_precision` and pinned by
+/// `tests::dollars_to_raw_product_bound_holds`.
+///
+/// Deliberately NOT re-exported at the crate root (unlike its full-domain
+/// siblings) so it cannot be reached as `oku_shared::mul_div_floor_u128_narrow`
+/// and mistaken for a general-purpose primitive. The `_narrow` suffix is load
+/// bearing; keep it on any future rename.
+///
+/// Fails closed: returns `None` on product overflow rather than silently
+/// truncating, so a caller that violates the precondition gets a visible
+/// `None` rather than a wrong number.
 #[inline]
-pub const fn mul_div_floor_u128(a: u128, b: u128, divisor: u128) -> Option<u128> {
+pub const fn mul_div_floor_u128_narrow(a: u128, b: u128, divisor: u128) -> Option<u128> {
     if divisor == 0 {
         return None;
     }
@@ -418,9 +448,40 @@ mod tests {
 
     #[test]
     fn narrow_mul_div_rejects_zero_divisor_and_overflow() {
-        assert_eq!(mul_div_floor_u128(1, 1, 0), None);
-        assert_eq!(mul_div_floor_u128(u128::MAX, 2, 1), None);
-        assert_eq!(mul_div_floor_u128(100, PRECISION, PRECISION), Some(100));
+        assert_eq!(mul_div_floor_u128_narrow(1, 1, 0), None);
+        assert_eq!(mul_div_floor_u128_narrow(u128::MAX, 2, 1), None);
+        assert_eq!(
+            mul_div_floor_u128_narrow(100, PRECISION, PRECISION),
+            Some(100)
+        );
+    }
+
+    /// Pins the precondition itself: a product that overflows `u128` returns
+    /// `None` EVEN WHEN the true quotient would fit comfortably. This is the
+    /// documented narrowing, not a bug — and it is exactly what distinguishes
+    /// this function from `mul_div_wad_floor`, which handles the same shape
+    /// exactly via its 256-bit fallback.
+    #[test]
+    fn narrow_mul_div_returns_none_when_product_overflows_despite_small_quotient() {
+        // a * b = 2^128, overflows u128 by one. Divisor is huge, so the true
+        // quotient is 4 — trivially representable.
+        let a = 1u128 << 127;
+        let b = 2u128;
+        let divisor = 1u128 << 126;
+        assert_eq!(mul_div_floor_u128_narrow(a, b, divisor), None);
+
+        // The full-domain sibling handles the very same overflowing product
+        // exactly, via its 256-bit fallback — the contrast the doc-comment
+        // warns about. Checked against the independent oracle.
+        assert!(
+            a.checked_mul(b).is_none(),
+            "test premise: product must overflow"
+        );
+        assert_eq!(mul_div_wad_floor(a, b), oracle_mul_div(a, b, false));
+        assert!(
+            mul_div_wad_floor(a, b).is_some(),
+            "full-domain sibling must answer where the narrow one returns None"
+        );
     }
 
     /// The bound `dollars_to_raw` relies on: `u64::MAX * PRECISION` must fit

@@ -11,8 +11,11 @@
  *
  * QUEUE_PSM, OKUM_MINTER and OKUM_BURNER are intentionally NOT in this list —
  * they must remain on the LitePSM / RedemptionQueue proxy addresses, granted
- * at deploy time via configureRoles. This script verifies those grants exist
- * before proceeding; missing grants are fatal.
+ * at deploy time via configureRoles. This script verifies OKUM_MINTER/OKUM_BURNER
+ * on LitePSM, OKUM_BURNER on RedemptionQueue, and QUEUE_PSM on RedemptionQueue
+ * before proceeding; missing grants are fatal. (RedemptionQueue deliberately
+ * does NOT hold OKUM_MINTER — it only burns — so that is not checked here; see
+ * deploy/index.ts's verifyDeployment, which asserts the negative.)
  *
  * Final step: revokes DEFAULT_ADMIN_ROLE from the deployer key, making the
  * Cold Multisig the sole meta-role holder.
@@ -292,22 +295,30 @@ async function main() {
   }
 
   // -------- Sanity check: deploy-time proxy grants must already exist --------
-  // EVM-A1: OKUM_MINTER and OKUM_BURNER live on the LitePSM/RedemptionQueue
-  // proxies, not on EOAs. They are granted in scripts/deploy/index.ts and must
-  // be present before this script runs. Missing grants here mean a fresh
+  // EVM-A1: OKUM_MINTER and OKUM_BURNER live on the LitePSM proxy (not EOAs),
+  // OKUM_BURNER also on RedemptionQueue, and QUEUE_PSM on RedemptionQueue is
+  // held by the LitePSM proxy. All are granted in scripts/deploy/index.ts and
+  // must be present before this script runs. Missing grants here mean a fresh
   // deploy is broken — fail loudly before we touch any role state.
+  //
+  // RedemptionQueue deliberately does NOT hold OKUM_MINTER (it only burns —
+  // see deploy/index.ts's OKUM_MINTER comment and verifyDeployment's negative
+  // assertion), so that combination is correctly absent from this list. An
+  // earlier version of this check required it, which meant this script threw
+  // on every correctly-deployed chain.
   if (contracts.OkuMoney && contracts.LitePSM && contracts.RedemptionQueue) {
     const okuMoney = contracts.OkuMoney;
+    const queue = contracts.RedemptionQueue;
     const psmAddr = await contracts.LitePSM.getAddress();
     const queueAddr = await contracts.RedemptionQueue.getAddress();
-    const checks: Array<[string, string, string]> = [
-      ["OKUM_MINTER on LitePSM", ROLES.OKUM_MINTER, psmAddr],
-      ["OKUM_MINTER on RedemptionQueue", ROLES.OKUM_MINTER, queueAddr],
-      ["OKUM_BURNER on LitePSM", ROLES.OKUM_BURNER, psmAddr],
-      ["OKUM_BURNER on RedemptionQueue", ROLES.OKUM_BURNER, queueAddr],
+    const checks: Array<[string, Contract, string, string]> = [
+      ["OKUM_MINTER on LitePSM", okuMoney, ROLES.OKUM_MINTER, psmAddr],
+      ["OKUM_BURNER on LitePSM", okuMoney, ROLES.OKUM_BURNER, psmAddr],
+      ["OKUM_BURNER on RedemptionQueue", okuMoney, ROLES.OKUM_BURNER, queueAddr],
+      ["QUEUE_PSM on RedemptionQueue -> LitePSM", queue, ROLES.QUEUE_PSM, psmAddr],
     ];
-    for (const [label, role, account] of checks) {
-      const has = await okuMoney.hasRole(role, account);
+    for (const [label, contract, role, account] of checks) {
+      const has = await contract.hasRole(role, account);
       if (!has) {
         throw new Error(
           `Deploy-time proxy grant missing: ${label}. ` +

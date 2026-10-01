@@ -35,5 +35,11 @@ pub mod yield_lock;
 pub use constants::*;
 pub use math::*;
 pub use rate::{compound_for, compute_multiplier, rpow, Schedule};
-pub use wad::{mul_div_floor_u128, mul_div_wad_floor, mul_div_wad_half_up};
+// Only the FULL-DOMAIN primitives are re-exported flat. `wad`'s narrow
+// variant (`mul_div_floor_u128_narrow`) is deliberately excluded: it carries a
+// precondition its siblings do not, and surfacing it here alongside them is
+// exactly how a future caller would inherit that precondition silently. It
+// remains reachable as `oku_shared::wad::mul_div_floor_u128_narrow` for the
+// fuzz harness, where the longer path is a feature.
+pub use wad::{mul_div_wad_floor, mul_div_wad_half_up};
 pub use yield_lock::yield_lock_engaged;

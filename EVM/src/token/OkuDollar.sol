@@ -17,6 +17,7 @@ import {
     ERC20PermitUpgradeable
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
@@ -149,6 +150,24 @@ contract OkuDollar is
         _grantRole(Roles.OKUM_UNBLACKLISTER, _admin);
     }
 
+    // ============ ERC-20 Metadata ============
+
+    /// @notice Token decimals — fixed at {Constants.OKU_M_DECIMALS} (18).
+    /// @dev Overridden rather than inherited from OZ's default deliberately, and matches
+    ///      {OkuMoney.decimals} by construction: UsdOku is quoted in the same 18-decimal
+    ///      dollar scale as `Constants.PRECISION`, and the PSM's USDC conversion exponent
+    ///      (`10 ** (OKU_M_DECIMALS - usdcDecimals)`) is derived from the same constant.
+    ///      Returning the constant binds the reported value to that source of truth
+    ///      instead of coincidentally agreeing with it.
+    ///
+    ///      NOTE: unlike OZ's {ERC4626Upgradeable}, this vault does NOT offset decimals
+    ///      against the underlying asset — `asset()` (OkuM) and this share token are both
+    ///      fixed at 18, so there is no offset to apply. See the ERC-4626 Surface section
+    ///      for why `ERC4626Upgradeable` is not inherited.
+    function decimals() public pure override(ERC20Upgradeable, IERC20Metadata) returns (uint8) {
+        return Constants.OKU_M_DECIMALS;
+    }
+
     // ============ Storage Accessor Views ============
 
     function okuMoney() external view returns (IOkuMoney) {
@@ -226,8 +245,35 @@ contract OkuDollar is
         uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
         _transferUsdShares(msg.sender, to, shares, multiplier);
         // Emit `Transfer` with the effective post-rounding dollar amount
-        // (`shares * multiplier / 1e18`) rather than the caller-specified `amount`, so the
-        // ERC-20 invariant `sum(Transfer.value) == Δ balanceOf` holds for indexers.
+        // (`shares * multiplier / 1e18`) rather than the caller-specified `amount`: it is
+        // the closest single number to the value that actually moved, and it is never
+        // ABOVE it.
+        //
+        // IT DOES NOT MAKE `sum(Transfer.value) == Δ balanceOf` HOLD. An earlier version
+        // of this comment claimed it did; that claim was false and has been removed
+        // rather than weakened, because an indexer built on it would silently drift.
+        //
+        // Why no emitted value can make it hold: `balanceOf` floors PER ACCOUNT
+        // (`floor(sharesOf(a) * m / 1e18)`), so the sender's decrease and the receiver's
+        // increase are each independently `floor(shares*m/1e18)` or that plus one,
+        // depending on each party's own fractional residue. The two sides need not even
+        // agree with each other. Worked example at `m = 1.5e18`, amounts in wei-shares:
+        // Alice holds 3 (balanceOf 4), Bob holds 1 (balanceOf 1); `transfer(bob, 2)`
+        // moves 1 share; Alice -> 2 shares (balanceOf 3, delta -1) while Bob -> 2 shares
+        // (balanceOf 3, delta +2). One event cannot report both -1 and +2.
+        //
+        // This is inherent to share-based rebasing and stETH has the same property. The
+        // correct guidance, and the only one that is actually true: INTEGRATORS MUST READ
+        // BALANCES FROM `balanceOf()`. `Transfer.value` is advisory and may differ from
+        // the realised per-account delta by +/-1 wei per transfer, without bound in
+        // aggregate. The same applies to `wrap`'s and `_unwrap`'s mint/burn `Transfer`s.
+        //
+        // Related and also worth stating: `totalSupply()` floors the AGGREGATE share
+        // count, while `sum(balanceOf)` floors each holder separately, so
+        // `totalSupply() >= sum(balanceOf)` with a gap of up to `holders - 1` wei. The
+        // direction is safe (supply over-reports, never under-reports, so the vault never
+        // looks under-collateralised) but conservation-style invariant checks must use
+        // `>=`, not `==`.
         uint256 effective =
             Math.mulDiv(shares, multiplier, Constants.PRECISION, Math.Rounding.Floor);
         emit Transfer(msg.sender, to, effective);
@@ -240,6 +286,14 @@ contract OkuDollar is
     ///      is consumed from the allowance rather than the holder's balance — in the
     ///      protocol's favor, the same flooring direction as `wrap` / `unwrap`. Indexers
     ///      should read the moved value from the `Transfer` event, not the allowance delta.
+    ///
+    ///      Checks the SPENDER's blacklist status, matching Circle FiatToken's
+    ///      `transferFrom` (`notBlacklisted(msg.sender)` alongside `from`/`to`).
+    ///      `_transferUsdShares` below already blocks a blacklisted `from`/`to`; it
+    ///      has no spender parameter to also check the third party in this call —
+    ///      the approved caller moving someone else's clean funds between clean
+    ///      addresses. A pre-existing allowance survives blacklisting unrevoked (see
+    ///      `approve`'s NatSpec), so without this check it stayed fully exercisable.
     function transferFrom(
         address from,
         address to,
@@ -250,6 +304,7 @@ contract OkuDollar is
         whenNotPaused
         returns (bool)
     {
+        if (_getOkuDollarStorage().isBlacklisted[_msgSender()]) revert SenderBlacklisted();
         _spendAllowance(from, msg.sender, amount);
         uint256 multiplier = usdMultiplier();
         uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
@@ -291,6 +346,24 @@ contract OkuDollar is
         emit TransferValue(from, to, shares, dollarValue);
     }
 
+    // ============ Allowances, Permit and Nonces ============
+    //
+    // DELIBERATELY NOT reimplemented against `usdShares`. Balances are overridden because
+    // they are share-denominated and must rebase; allowances are not. An allowance is
+    // already quoted in the same dollar unit as `transfer`/`transferFrom`'s `amount`
+    // parameter, so the inherited `_allowances` mapping (and `_approve` /
+    // `_spendAllowance` / `ERC20PermitUpgradeable`'s `_nonces`) is the correct store and
+    // is read/written by OZ's own code paths unchanged.
+    //
+    // Consequence worth stating explicitly: unlike `_balances` above — which is dead
+    // storage the `_update` guard keeps unreachable — this inherited OZ storage IS live
+    // and load-bearing. `allowance()`, `nonces()` and `DOMAIN_SEPARATOR()` are inherited
+    // verbatim and intentionally un-overridden. Only the two entry points needing a
+    // blacklist gate are overridden below.
+    //
+    // Aave's aToken makes the same split (custom packed balances, plain allowance
+    // mapping); the dollar-vs-share rounding consequence of it is documented on `permit`.
+
     // ============ ERC20Permit Override (Blacklist Check) ============
 
     /// @notice EIP-2612 permit with blacklist enforcement.
@@ -321,9 +394,10 @@ contract OkuDollar is
         super.permit(owner, spender, value, deadline, v, r, s);
     }
 
-    /// @dev Blocks approving a blacklisted spender, mirroring {permit}'s posture.
-    ///      Does NOT retroactively revoke an allowance already granted before the
-    ///      spender was blacklisted — only new/updated approvals are blocked.
+    /// @dev Blocks a blacklisted owner OR spender from creating a new allowance,
+    ///      matching Circle FiatToken's `approve`. Does NOT retroactively revoke an
+    ///      allowance already granted before either side was blacklisted — see
+    ///      `transferFrom`'s NatSpec for why that residual is safe.
     function approve(
         address spender,
         uint256 value
@@ -332,7 +406,9 @@ contract OkuDollar is
         override(ERC20Upgradeable, IERC20)
         returns (bool)
     {
-        if (_getOkuDollarStorage().isBlacklisted[spender]) revert RecipientBlacklisted();
+        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        if ($.isBlacklisted[_msgSender()]) revert SenderBlacklisted();
+        if ($.isBlacklisted[spender]) revert RecipientBlacklisted();
         return super.approve(spender, value);
     }
 
@@ -343,8 +419,19 @@ contract OkuDollar is
     ///      `transfer`/`transferFrom`, so the inherited ERC-20 `_update` hook must never
     ///      execute. The unconditional revert (with diagnostic sub-errors for mint/burn)
     ///      ensures no future change can accidentally write to the inherited `_balances`
-    ///      mapping, which `balanceOf()` never reads. Same hard-revert pattern as stETH
-    ///      and Aave aToken.
+    ///      mapping, which `balanceOf()` never reads. Dead code today by construction —
+    ///      nothing in this contract calls `_mint`/`_burn`/`_transfer` — and kept as a
+    ///      tripwire rather than because any live path reaches it.
+    ///
+    ///      NOT the pattern stETH or Aave's aToken use, despite the superficial
+    ///      similarity: neither inherits a stock ERC-20 at all (stETH implements IERC20
+    ///      from scratch over its own `shares` mapping; Aave's `IncentivizedERC20` uses a
+    ///      packed `_userState` struct), so neither has an inherited balance mapping or
+    ///      `_update` hook to defend in the first place. This contract DOES inherit
+    ///      `ERC20Upgradeable` — for `ERC20PermitUpgradeable`'s sake — and therefore
+    ///      carries an inherited `_balances`/`_totalSupply` that must be kept
+    ///      unreachable. That is the hazard this guard exists for, and it is specific to
+    ///      this inheritance choice, not borrowed practice.
     function _update(address from, address to, uint256) internal pure override {
         if (from == address(0)) revert UseWrapInstead();
         if (to == address(0)) revert UseUnwrapInstead();
@@ -529,11 +616,31 @@ contract OkuDollar is
 
     /// @dev Spec requires the ASSET (OkuM) equivalent, not the raw share/dollar
     ///      balance — `balanceOf(owner)` is dollars, not OkuM.
+    ///
+    ///      Zero while paused or when `owner` is blacklisted, mirroring
+    ///      {maxDeposit}'s pattern — `withdraw`/`redeem` carry `whenNotPaused` and
+    ///      `_unwrap` reverts on a blacklisted `owner`, so without this the view
+    ///      claimed a non-zero max for a call that would revert, same spec gap
+    ///      {maxDeposit} already closes on the deposit side. (The 4626 signature has
+    ///      no `receiver` parameter to also check; `owner`'s own status is what the
+    ///      spec means by "cannot be redeemed".)
+    ///
+    ///      DELIBERATELY NOT MODELLED: `whenYieldNotDistributing`. `withdraw`/`redeem`
+    ///      also revert for the remainder of the block in which
+    ///      {OkuMoney.setOkuMMultiplier} executes, so strictly this view over-reports
+    ///      during that window. Omitted because the condition is transient by one block
+    ///      and fires only on the emergency override — returning 0 would make every
+    ///      integrator's sizing logic briefly see an empty position, which is a worse
+    ///      failure than a call that reverts and can be retried. {maxDeposit} omits it
+    ///      on the same grounds, so the two sides stay symmetric.
     function maxWithdraw(address owner) public view returns (uint256) {
+        if (paused() || _getOkuDollarStorage().isBlacklisted[owner]) return 0;
         return convertToAssets(balanceOf(owner));
     }
 
+    /// @dev See {maxWithdraw} — same pause/blacklist gating, share units.
     function maxRedeem(address owner) public view returns (uint256) {
+        if (paused() || _getOkuDollarStorage().isBlacklisted[owner]) return 0;
         return balanceOf(owner);
     }
 
@@ -614,6 +721,14 @@ contract OkuDollar is
     /// @dev Shared 4626 withdraw/redeem path, guarded by the caller ({withdraw} /
     ///      {redeem}). Spends `owner`'s allowance when acting on their behalf, then burns
     ///      directly from `owner` via {_unwrap}.
+    ///
+    ///      Checks the CALLER's blacklist status when acting as a third-party spender
+    ///      — matching the same `transferFrom` parity rationale above. `_unwrap`
+    ///      already blocks a blacklisted `owner`/`receiver`; neither it nor
+    ///      `_spendAllowance` has visibility into `_msgSender()` as a distinct third
+    ///      party. When `owner == _msgSender()` this is redundant with `_unwrap`'s own
+    ///      owner-check (skipped, not an extra SLOAD); it only has teeth in the
+    ///      allowance-spending branch, which is exactly where the gap was.
     function _redeemShares(
         uint256 shares,
         address receiver,
@@ -623,6 +738,7 @@ contract OkuDollar is
         returns (uint256 assets)
     {
         if (owner != _msgSender()) {
+            if (_getOkuDollarStorage().isBlacklisted[_msgSender()]) revert SenderBlacklisted();
             _spendAllowance(owner, _msgSender(), shares);
         }
         return _unwrap(owner, shares, receiver);

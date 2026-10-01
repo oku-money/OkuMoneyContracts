@@ -100,6 +100,378 @@ NatSpec / doc-comments substantially, and (b) rewrites what remains to be
 
 See the CREATE2 caveats in `EVM/README.md` § Deterministic addresses.
 
+### RESOLVED: PSM "slippage protection" was dead at 6 decimals and a liveness DoS at 18 `[EVM]`
+
+**Two errors removed from `LitePSM`:** `OutputBelowMinimum(uint256,uint256)`
+and `RoundTripDriftTooLarge(uint256,uint256)`. Neither was slippage
+protection. ABI diff verified to be exactly those two entries removed, nothing
+added.
+
+**`OutputBelowMinimum` was unreachable at every decimal count.** It compared
+`usdcAmount` against a floor recomputed from `okuMAmount` truncated to
+`decimalMultiplier`; both conversions are monotone non-decreasing and the
+truncated input is `<=` the real one, so the floor was always `<=` the value
+it gated.
+
+**`RoundTripDriftTooLarge` was worse than inert.** It tolerated one
+*collateral unit* of round-trip drift. At 6 decimals that tolerance
+($0.000001) sits far above the sub-unit truncation it measured, so it never
+fired. At 18 decimals `decimalMultiplier == 1`, the tolerance becomes one wei
+— **below** the truncation — and the check rejects a fixed fraction of
+ordinary mints:
+
+```
+USDC 6dp         m = 1.00 / 1.05 / 3.00   ->  fires on   0/3000 mint amounts
+collateral 18dp  m = 1.05                 ->  fires on   0/3000
+collateral 18dp  m = 3.00                 ->  fires on 999/3000   (exactly V mod 3 == 2)
+```
+
+**Not hypothetical:** BSC is a configured target and its canonical
+Binance-Peg USDC carries 18 decimals (`scripts/config/chains.ts`). Deploys
+there default to `MockUSDC` (6dp), which is the only reason it never fired.
+The gap that hid it: the suite's only non-6-decimal coverage asserted
+`initialize` succeeded and stopped — **no test had ever pushed a mint or a
+redeem through the `decimalMultiplier == 1` path.**
+
+**Why removal rather than a wider tolerance:** there is nothing to protect
+against. `okuMMultiplier` is monotonically non-decreasing (`_setOkuMYieldRate`
+rejects `newRate < PRECISION`; `setOkuMMultiplier` requires strict increase),
+so redeem output can only rise with delay and mint preserves dollar value
+regardless of when it lands. A `minOut` parameter would have no adverse
+movement to catch. SVM keeps `min_usdc_out` as client-side
+defence-in-depth; that divergence is now documented from both sides.
+
+**Rationale rewritten, not deleted:** the `okuMAmount < decimalMultiplier`
+guard in `_redeemOkuMShared` justified itself *by reference to* the removed
+slippage floor. It stays — it is the queue's dust floor — but on new,
+independent footing. A mechanical deletion would have taken it out with the
+rest.
+
+New tests (`LitePSM.t.sol`), the first two verified to fail against the
+pre-removal contract with the exact predicted revert args:
+`test_MultiDecimal_18Dec_MintSucceedsOnTruncatingAmount`,
+`test_MultiDecimal_18Dec_MintSucceedsAcrossAllResidues`,
+`test_MultiDecimal_8Dec_MintSucceedsAcrossAllResidues` (pins the boundary so
+the 18dp result reads as "the tolerance ran out", not "non-6dp is broken"),
+`test_MultiDecimal_18Dec_RedeemReturnsExactFlooredConversion`,
+`test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier` (pins the
+monotonicity property that makes the whole removal safe). Full suite:
+608 → 613.
+
+**Residual accepted:** a caller on 18-decimal collateral now silently
+forfeits up to `ceil(m / PRECISION)` wei of truncation instead of reverting.
+Strictly better than reverting and it rounds to the protocol, but it is a
+behavioural change rather than a pure deletion.
+
+See `EVM/README.md` Accepted Risk #15.
+
+### OPEN: queue dust floor collapses to 1 wei on 18-decimal collateral `[EVM]`
+
+`_redeemOkuMShared` gates minimum redemption at `okuMAmount <
+decimalMultiplier` — the queue's dust floor. `decimalMultiplier` is
+`10**(18-d)`, so the floor is `1e12` OkuM wei (~$0.000001) at 6 decimals and
+**`1`, i.e. nothing,** at 18. Combined with there being no fee anywhere
+(round-tripping the PSM is free, so the buffer can be drained to force
+redemptions into the queue), queue-stuffing is cheap on an 18-decimal chain.
+
+**Deliberately not fixed in this pass.** The fix is an absolute
+minimum-redemption parameter independent of `decimalMultiplier` — new storage,
+new admin lever, SVM parity obligation — which is disproportionate to bundle
+into a dead-code removal and *overlaps directly with the open fee decision*
+(a fee prices queue entry creation in dollar terms, which is the better fix).
+Gated on `SVM/DECISIONS.md` **D-29**.
+
+**Operational:** only materialises on a chain deployed against genuinely
+18-decimal collateral. Treat `SKIP_MOCK_USDC=true` on BSC as requiring D-29
+to be resolved first. See `EVM/README.md` Accepted Risk #16.
+
+### OPEN: no PSM swap fee — gates three separate findings `[EVM][SVM]`
+
+There is no `tin`/`tout` anywhere in either stack. `Constants.BASIS_POINTS`
+exists and is read by nothing, which suggests a fee was once intended.
+Recorded as **D-29** in `SVM/DECISIONS.md` with the full analysis: what it
+closes (the forward-only sandwich guard's residual, free buffer drain, queue
+stuffing), what it costs (peg band widens by the fee, ERC-4626
+`preview*`-vs-`convert*` divergence, rounding-order parity obligation), where
+it would live, and four open sub-questions.
+
+The point of recording it: Accepted Risks #12 and #16 should be read as
+*consequences of one open decision*, not as independently accepted
+residuals. No code written against it.
+
+### RESOLVED: four comments whose stated reasoning was wrong `[EVM]`
+
+Doc-only, no behaviour change — but each would have misled a future change.
+
+1. **`OkuDollar.transfer`/`transferFrom` claimed emitting the post-rounding
+   `effective` value makes `sum(Transfer.value) == Δ balanceOf` hold for
+   indexers. It does not, and no emitted value could.** `balanceOf` floors
+   *per account*, so the sender's decrease and the receiver's increase are
+   each independently `floor(shares*m/1e18)` or that `+1`, depending on each
+   party's own residue — and need not agree with each other. Worked
+   counterexample now in the comment (`m = 1.5`: one event cannot report both
+   `-1` and `+2`). Replaced with the only true guidance — read balances from
+   `balanceOf()`; `Transfer.value` is advisory, ±1 wei per transfer, unbounded
+   in aggregate. Also documented the related
+   `totalSupply() >= sum(balanceOf)` gap (up to `holders - 1` wei, safe
+   direction) so conservation-style invariants use `>=`, not `==`.
+
+2. **`MathLib`'s rounding policy asserted "the only Ceil site in the protocol
+   is `OkuDollar.unwrap`'s `sharesToBurn`". There are three** — also
+   `previewMint` and `previewWithdraw`. The two extra are 4626-correct and
+   view-only so there is no rounding bug, but `MathLib` is the file a
+   reviewer consults to reason about protocol-wide rounding direction, and an
+   incomplete list is how a future Ceil site gets added unnoticed. Now lists
+   all three with their direction, plus a pointer that SVM has no equivalent
+   primitive (`mul_div_ceil` takes `u64` and cannot hold a WAD-scale divisor —
+   reaching for `dollars_to_raw` instead would invert the rounding direction
+   on a user withdrawal).
+
+3. **`OkuMoney.transferFrom`'s new spender blacklist check carried no
+   self-brick note**, though `mint`'s equivalent did. `LitePSM` is a spender
+   here (it pulls OkuM from the redeemer), so blacklisting the PSM proxy halts
+   redemptions as well as minting. Same accepted tradeoff, now stated in both
+   places rather than one.
+
+4. **`maxWithdraw`/`maxRedeem` model pause and blacklist but not
+   `whenYieldNotDistributing`**, so they technically over-report for the
+   remainder of a block containing an emergency override. Documented as
+   deliberate: the condition is transient by one block, and returning 0 would
+   make integrators briefly see an empty position — a worse failure than a
+   revert that can be retried. `maxDeposit` omits it on the same grounds, so
+   the two sides stay symmetric.
+
+### RESOLVED: display mirror's safety margin was overstated by ~5x, and its test could not detect the difference `[SVM]`
+
+`multiplier_to_f64_floor`'s NatSpec claimed two `next_down` steps gave
+`~4.4e-16` of margin, "dominating" the f64 error budget "by ~2.5x". That
+figure was computed at `m ~ 1e18`, where the quotient lands exactly on `2^0`
+— the point of **maximum** relative ULP in the domain, i.e. the best case.
+Across the real domain `[1e18, 1e24]` the quotient ranges over `[1, 1e6]`,
+and just below a power of two the relative ULP halves. Measured over 400k
+samples:
+
+```
+min relative downward bias: 1.050e-16  (at m = 1.306e23)
+true budget 2 * 2^-53     = 2.220e-16
+ratio                     = 0.47x      (doc claimed 2.5x)
+```
+
+**The implementation is correct and unchanged.** The invariant
+`display <= canonical` does hold everywhere, but by a *second-order* argument
+the old comment did not state: `q <= (m/P)(1+u)^2` and
+`nextDown^2(q) <= q(1-2^-52)` multiply to `(m/P)(1-2^-104) < m/P`. The two
+steps exactly cancel the two roundings. That is a razor, not a cushion, and
+the NatSpec now says so — specifically that adding any third rounding
+operation breaks it.
+
+**The test was the real defect.** It asserted `rel_bias > 1e-16` — a float
+comparison, against a threshold **below** the true `2.22e-16` budget, with
+eight hand-picked cases none of which sat in the weak region. It therefore
+passed on inputs that violated the property it claimed to check. It tested
+what the code did, not what the code needs to be true.
+
+Replaced with `f64_conversion_never_exceeds_canonical_exactly`, which checks
+the invariant **exactly in integer arithmetic**: a positive normal `f64` is
+exactly `mantissa * 2^exp`, so `f * 1e18 <= m` becomes
+`mantissa * 1e18 <= m * 2^-exp` with no rounding anywhere (RHS reaches
+`2^132`, held in two `u128` limbs). Cases now include all 20 "just below a
+power of two" quotients, the empirical worst case, and a 20k deterministic
+sweep. The float upper-bound check is retained separately — legitimate there,
+since `1e-14` is nine orders above the measured quantity.
+
+**Regression-proved:** reverting to a single `next_down` makes the new test
+fail at `m = 130576977149543642620974` — precisely the case the old `1e-16`
+threshold would have passed. SVM Rust: 60 → 61 (one test split into two).
+
+### RESOLVED: no cross-contract wiring validation between LitePSM and RedemptionQueue `[EVM]`
+
+**Real gap, fixed.** `LitePSM.initialize` validated exactly one cross-contract
+edge (`okuDollar.asset() == _okuMoney`, `AssetMismatch`). It never checked
+that `_redemptionQueue` was configured with the same `usdc()` or `okuMoney()`
+as this PSM — `RedemptionQueue.sol:100`'s requirement was prose only.
+
+**Fix:** `LitePSM.initialize` now reverts `QueueUsdcMismatch` /
+`QueueOkuMoneyMismatch` on either edge, checked after the PSM's own
+zero-address/`AssetMismatch`/decimals validation so a malformed `_usdc`/
+`_okuMoney` reports its own defect first. Safe given deploy ordering: the
+queue is always initialized before the PSM. `scripts/deploy/index.ts`
+additionally re-asserts both edges (plus `litePSM.redemptionQueue()` ==
+the resolved queue address) inside `verifyDeployment`, covering the one case
+the init-time check structurally cannot: a PSM or queue *reused* from the
+address book (`tryAttach`) without re-running `initialize` this invocation.
+
+**Claim correction, found by verifying rather than assuming:** the original
+hypothesis for the okuMoney-mismatch consequence was that
+`RedemptionQueue.processQueue` would silently burn "the wrong token" after
+already paying out real USDC. Traced the actual call: `processQueue` burns
+via the queue's own wired `$.okuMoney`, not whatever token was actually
+escrowed, so a misconfigured queue calls `burn` on a token it holds no
+balance of and no `OKUM_BURNER` role on. That revert is deliberately
+unguarded (see `RedemptionQueue.processQueue`'s "DELIBERATELY UNGUARDED"
+comment), so it unwinds the **entire transaction**, including the USDC
+transfer that already executed earlier in the same call — fail-closed, not
+silent corruption. Pinned by
+`test_ProcessQueue_MismatchedOkuMoney_RevertsEntireBatch_NoSilentCorruption`
+(documents existing protocol behavior rather than a code fix, so there is no
+corresponding "reverted locally" regression-proof for that one test — the
+other three below do have one). The USDC-mismatch consequence as originally
+described (`usdcAvailable` reads the wrong balance/allowance, collapses to
+zero, batch soft-skips via `RedemptionSkipped(InsufficientFunds)`) was
+accurate, though "permanently undrainable" overstated it —
+`rescueQueueEntry` still recovers the escrowed OkuM.
+
+Also corrected: the claim's cited line numbers didn't match current source
+(`:257`/`:309` → actual branches are at `:279-280`/`:334` after since-added
+reentrancy and callback-top-up changes), and "nothing verifies the PSM
+received `QUEUE_PSM`" is false — it's verified and fatal in
+`deploy/index.ts`'s `verifyDeployment` (`expectedRoleGrants()` +
+`deployDrill.test.ts`).
+
+New tests, each confirmed to catch its regression by temporarily disabling
+the corresponding check and observing the predicted failure before
+restoring: `test_LitePSMInitialize_RevertQueueUsdcMismatch`,
+`test_LitePSMInitialize_RevertQueueOkuMoneyMismatch` (`CoverageGaps.t.sol`).
+Existing tests `test_MultiDecimal_8DecimalUsdcPsmInit` /
+`_18DecimalUsdcPsmInit` (`LitePSM.t.sol`) updated — both previously paired a
+non-6-decimal PSM with the suite's shared 6-decimal queue, which the new
+check now correctly rejects; each gets its own matching queue.
+`deployDrill.test.ts`'s wiring test extended to assert `okuMoney` equality
+and the `redemptionQueue()` address match, alongside the pre-existing USDC
+assertion. Full suite: 605 → 608.
+
+**Unrelated defect found and fixed while verifying this claim:**
+`scripts/operator/grantRolesMainnet.ts` required `OKUM_MINTER` on
+`RedemptionQueue` before proceeding — a grant `deploy/index.ts` deliberately
+never makes and `verifyDeployment` asserts the *absence* of
+(`RedemptionQueue` only burns). The mainnet RBAC ceremony script would
+therefore throw on every correctly-deployed chain. Fixed: removed that
+check, added the `QUEUE_PSM`-on-`RedemptionQueue` check its header already
+claimed to perform but didn't, corrected the header prose. Verified by
+inspection against `deployDrill.test.ts`'s proven post-deploy role state
+(the script has no exported testable unit — `main()` runs at module load,
+designed for `npx hardhat run`, not import — so this was not verified via a
+dedicated execution test; the corrected check list is a strict subset of
+the role matrix `deployDrill.test.ts` already proves holds after every
+correct deploy).
+
+See `EVM/README.md` Accepted Risk #14 for the full writeup.
+
+### RESOLVED: blacklisted spenders could still move value via a pre-existing allowance `[EVM]`
+
+**Real gap, fixed, on both tokens.** `OkuMoney._update` / `OkuDollar._transferUsdShares`
+checked `from`/`to` on every transfer path, and `approve`/`permit` blocked a blacklisted
+spender from receiving a NEW allowance — but nothing checked the spender's blacklist
+status at the moment an EXISTING allowance was exercised. Combined with `blacklist()`
+deliberately not revoking pre-existing allowances (intentional and correct — matches
+Circle, see below), a spender blacklisted after being approved kept full ability to move
+the grantor's clean funds to a clean third party via `transferFrom`, and via OkuDollar's
+ERC-4626 `withdraw`/`redeem` (`_redeemShares`'s allowance-spending branch).
+
+**Verified against Circle's actual source** (`FiatTokenV1.sol`/`FiatTokenV2.sol`,
+fetched and read, not recalled from memory) before fixing, since the explicit goal is
+Circle parity: Circle's `transferFrom` carries `notBlacklisted(msg.sender)` alongside
+`from`/`to`; `approve` carries it for the owner too; `mint` carries it for the minter.
+All three were gaps here; fixed to match exactly.
+
+**One deliberate near-miss, kept anyway:** the `mint` minter-check is a sharper
+divergence in practice than in Circle, because Circle's minters are third-party
+partners while `OKUM_MINTER` here is protocol infrastructure (`LitePSM`) — so it's a
+new way to brick all minting by blacklisting the PSM proxy, a vector that didn't exist
+before this fix. Kept for literal parity with the cited reference; the brick requires
+actively blacklisting the protocol's own PSM, which should never happen by accident.
+
+**What's NOT a gap, confirmed against Circle's source:** no retroactive allowance
+revocation on blacklist (Circle has none either — unbounded iteration over all
+grantors is infeasible on-chain for either project) and no seizure/clawback function
+(Circle has none; USDT/Paxos diverge from Circle by adding one — we deliberately
+follow Circle, not them, here).
+
+**Fix:** new `transferFrom` override on `OkuMoney` (previously inherited OZ's
+unmodified — no override existed at all); spender check added to `OkuDollar`'s
+existing `transferFrom` override and to `_redeemShares`'s allowance-spending branch;
+owner check added to both tokens' `approve`. Plus a spec-conformance fix in the same
+pass: `OkuDollar.maxWithdraw`/`maxRedeem` unconditionally reported non-zero for a
+blacklisted/paused owner whose call would unconditionally revert — asymmetric with
+`maxDeposit`, which already handled this correctly on the deposit side.
+
+**Regression coverage, verified to actually catch the regression** (not just pass
+against the fixed code — each fix was reverted locally, re-run, and the predicted
+failure observed, before restoring): `test_TransferFrom_RevertsOnBlacklistedSpender_EvenWithPriorAllowance`
+(both tokens), `test_Redeem_RevertsOnBlacklistedSpender_EvenWithPriorAllowance`,
+`test_Approve_RevertsOnBlacklistedOwner` (both tokens), `test_Mint_RevertsOnBlacklistedMinter`,
+`test_MaxWithdrawRedeem_ZeroForBlacklistedOwner`, plus "clean spender/owner unaffected"
+sanity checks for each. One test bug caught during verification and fixed: an earlier
+version of the OkuDollar redeem test used the blacklisted spender as its own receiver,
+so disabling the fix still made the call revert — for the wrong reason
+(`RecipientBlacklisted` via the pre-existing receiver-check, not the intended
+`SenderBlacklisted` from the new spender-check) — masking exactly the regression the
+test was meant to catch. Fixed by using a distinct, clean receiver.
+
+Full suite: 605/605 passing (was 593; +12 new tests, 0 regressions in the pre-existing
+set — confirming nothing previously relied on a blacklisted spender being able to move
+value). New invariant, true for the first time across both tokens: a blacklisted
+address cannot successfully call any state-changing function as sender, recipient, or
+approved spender. See `EVM/README.md` Accepted Risk #13 for the full parity table.
+
+### RESOLVED: `RedemptionQueue.advanceHead` reentrancy could permanently strand a live entry `[EVM]`
+
+**Real bug, fixed.** `processQueue` clears a queue slot (`delete $.queue[i]`) BEFORE its
+external `trySafeTransferFrom` call and restores it from memory only if that call
+reports failure (`RedemptionQueue.sol`). For the duration of that external call, a live
+entry transiently reads `user == address(0)` — the exact sentinel `advanceHead` treats
+as "safe to skip past." `advanceHead` carried no `nonReentrant` (unlike `processQueue`
+and `rescueQueueEntry`, which share one), so a reentrant `advanceHead(1)` fired from
+inside that external call could move `queueHead` past the transiently-cleared slot
+permanently: `processQueue`'s own restore runs immediately after, but the slot is now
+below `queueHead` and unreachable by every bound check in the contract
+(`processQueue`'s `StartBelowHead`, `rescueQueueEntry`'s and `getQueueEntry`'s
+`InvalidIndex`) — stranding the user's OkuM and permanently inflating
+`totalQueuedUsdc()` against `withdrawUsdc`'s `WouldStrandQueue` check.
+
+Requires a collateral token that (a) calls back into the recipient during
+`transferFrom` and (b) signals failure by returning `false` rather than reverting —
+confirmed against OpenZeppelin's `SafeERC20._safeTransferFrom` assembly that only the
+`false`-return path leaves the inner call's side effects un-unwound; an actual revert
+would unwind the attacker's own reentrant call too. Not reachable with Circle USDC (no
+transfer callback) or any ERC-20 without one — but the collateral token is a
+deploy-time parameter (`RedemptionQueue.initialize` validates only `decimals() <=
+18`), not a property either contract can itself enforce.
+
+**Fix:** added `nonReentrant` to `advanceHead`, shared with `processQueue` and
+`rescueQueueEntry`. One word; no storage layout change, no reinit needed (the guard's
+`__ReentrancyGuard_init()` already runs in every live deployment's `initialize`).
+
+**Residual, also fixed (lower severity, different mechanism):** `processQueue` caches
+its `usdcAvailable` bound once before the loop and decrements it locally (gas) rather
+than re-reading on-chain every iteration — correct only if nothing external changes the
+caller's real balance/allowance mid-batch. A callback token's recipient topping up the
+caller's real funds mid-batch could make that cached bound stale-LOW, causing a
+premature `break`: liveness-only (the skipped entry stays live, reprocessable next
+batch), never a fund-loss or a strand — the real `trySafeTransferFrom` call still
+enforces actual on-chain balance/allowance regardless of what the cache says. Closed
+with a lazy re-check: when the cache predicts insufficiency, re-read live exactly once
+before trusting it to halt the batch. Zero extra cost on the common path (sufficient
+funds throughout, or a non-callback token — i.e. every live deployment today).
+
+**Regression coverage, both verified to actually catch the regression** (not just to
+pass against the fixed code — confirmed by reverting each fix locally, re-running, and
+observing the predicted failure before restoring):
+- `test/psm/Reentrancy.t.sol::AdvanceHeadReentrancyTest` — `MockCallbackUSDC` (fires a
+  callback on `transferFrom`, optionally returns `false` without reverting) +
+  `QueueReentrancyAttacker` (a queue entry's `user`, whose callback reenters
+  `advanceHead`). Asserts the reentrant call is rejected AND, more importantly, that
+  the targeted entry remains reachable afterward (not just "something reverted
+  somewhere"). With the modifier manually removed: `queueHead` advances to 1,
+  stranding index 0, exactly as predicted.
+- `test/psm/ProcessQueueCallbackTopUp.t.sol` — `QueueFundsTopper` tops up the caller's
+  real balance via its callback mid-batch; asserts a second entry the live funds now
+  cover settles instead of staying queued. With the lazy re-check manually removed:
+  the second entry is skipped as `InsufficientFunds` instead of settling, exactly as
+  predicted.
+
+Full suite: 591/591 passing (was 586; +5 new tests, 0 regressions).
+
 ### RESOLVED: every operator script's documented CLI invocation was impossible `[EVM]`
 
 `npx hardhat run <script>` parses argv **itself** and rejects any parameter it
@@ -429,6 +801,55 @@ as the simulation-suite audit below:
   `balanceOfUI`, `totalSupplyUI`) had zero test references — only
   `supportsInterface` was covered. Added round-trip, zero-amount, and
   balance/supply-consistency tests for all four.
+
+### RESOLVED: ERC-8056 interface IDs unpinned against literal doc values; single-multiplier guarantee unpinned across the ERC-8056/ERC-4626 boundary `[EVM]`
+
+Follow-up review pass on the ERC-8056 integration above found two remaining
+gaps, both closed with new tests (no contract changes):
+
+- **`supportsInterface` was only self-consistent, not doc-pinned.**
+  `test_SupportsInterface_ERC8056` asserts `supportsInterface(type(I).interfaceId)`
+  for each of the four ERC-8056 interfaces — which passes trivially even if a
+  signature change silently moves the computed ID, since it's checked against
+  itself. It could never catch the three prose sites (`IScaledUIAmount.sol`'s
+  NatSpec, the README table, Accepted Risk #9) drifting from what the
+  contract actually computes — a real risk given ERC-8056 is an explicitly
+  Draft standard that may itself change reference signatures before Final.
+  Added `test_InterfaceIds_MatchDocumentedHexValues`, asserting each
+  `type(I).interfaceId` against its literal documented hex value
+  (`0xa60bf13d` / `0x4bd27648` / `0x57854fc3` / `0xd890fd71`) directly.
+- **The single-multiplier guarantee was pinned per-contract, not across the
+  boundary that matters.** `okuDollar.usdMultiplier() == okuMoney.okuMMultiplier()`
+  and `okuMoney.uiMultiplier() == okuMoney.okuMMultiplier()` were each tested
+  independently, which only proves each side individually reads the same
+  underlying value — not that the two PUBLIC ENTRY POINTS a caller would
+  actually use (ERC-8056's `toUIAmount`/`fromUIAmount` vs. ERC-4626's
+  `convertToShares`/`convertToAssets`) agree with each other directly. This
+  was the driving design requirement behind adopting ERC-8056 at all: OkuM is
+  meant to read as a 4626-style appreciating derivative with an ERC-8056 USD
+  display layer, priced by construction off the identical multiplier used for
+  OkuM↔UsdOku conversion — not two paths that happen to agree today. Added
+  `test_ToUIAmount_EqualsConvertToShares_AcrossMultiplierChanges`
+  (`OkuDollar.t.sol`), asserting `OkuMoney.toUIAmount(x) ==
+  OkuDollar.convertToShares(x)` (and the inverse) directly against each
+  other, across a discrete override and a year of streaming accrual — so a
+  future change that reads the multiplier through a different path on one
+  side (e.g. a caching optimisation) fails a test instead of silently
+  diverging.
+- Documented, not changed: `UIMultiplierUpdated` firing with `old == new`
+  is confirmed intentional (continuous accrual has no per-second event to
+  emit against; the *value* has no discontinuity at a rate-schedule change,
+  only the forward rate does) — added an "Integrator contract" note to
+  § ERC-8056 spelling out what a standards-only consumer should actually do
+  (poll `uiMultiplier()`/`balanceOfUI()`/`totalSupplyUI()`; treat
+  `UIMultiplierUpdated` as a schedule-invalidation hint, not a value diff;
+  the real trajectory lives on the non-standard `OkuMYieldRateUpdated`).
+  Also documented why OkuDollar/UsdOku deliberately does NOT implement
+  ERC-8056 (its shares are already dollar-denominated by construction; a
+  `uiMultiplier()` there would be a constant `1e18` forever) and the
+  forward-looking rationale for adopting a Draft standard at all (SVM's
+  Token-2022 `ScaledUiAmount` already fills this role there; expecting other
+  EVM yield-bearing stablecoins to converge on ERC-8056 the same way).
 
 ### RESOLVED: simulation-suite integrity audit found a real ~3.5% mechanism bug masked by a cancelling buffer `[EVM]`
 
@@ -834,7 +1255,7 @@ have exercised; the deploy itself is a separate step.
 **SVM: clean-slate redeploy, not an in-place upgrade.** Decided (not just
 because the config layout grew 562→626 bytes, which alone would have been a
 clean init at an already-empty PDA — and which is no longer the class of
-problem it was, see the `reserved`/`migrate_config_space` note below): close
+problem it was, see the `reserved` note below): close
 the existing program
 (`close-programs --allow-anchor-toml-ids`, recovering ~4.35 SOL of stranded
 ProgramData rent), rotate `target/deploy/lite_psm-keypair.json`, run
@@ -876,11 +1297,19 @@ account size against `PSM_CONFIG_LEN`, and the `PsmConfig` discriminator.
 
 **RESOLVED — config-layout growth no longer forces a redeploy.** `PsmConfig`
 now carries a `reserved: [u8; 128]` tail (`PsmConfig::LEN` = **754**, pinned by
-a compile-time `assert!`) and the program ships `migrate_config_space`, a
-one-shot idempotent in-place resize driven by
-`scripts/admin/migrate-config-space.ts`. Future fields are consumed from the
-front of `reserved` with `LEN` held constant. Pinned by
-`tests/bankrun/config-layout.ts`. See `SVM/DECISIONS.md` D-07.
+a compile-time `assert!`). Future fields are consumed from the front of
+`reserved` with `LEN` held constant, so they change no existing byte offset and
+leave every deployed account already the right size — no resize instruction
+needed. Size and accrual-block offsets pinned by
+`tests/bankrun/config-layout.ts`.
+
+A `migrate_config_space` instruction shipped alongside this and was later
+**removed**: the only pre-padding account ever deployed is the 562-byte
+pre-single-token orphan, which it explicitly could not translate, and the
+626-byte current-layout state it did target never existed on any network. It
+also had zero test coverage, while three doc sites (including a claim that
+`config-layout.ts` exercised it) asserted otherwise. See `SVM/DECISIONS.md`
+D-07.
 
 **`initialize.ts` wired `direct_minter` post-init but never `direct_burner`**
 — the SVM→EVM bridge burn path was silently dead until a separate
@@ -1135,9 +1564,9 @@ Ordered. Each step's verification is the gate for the next.
 four testnet RPCs, explorer keys). Confirm `DEPLOYMENT_VERSION === "v0.3"`
 and that `scripts/config/addresses.json` holds `MockUSDC`-only entries for
 `sepolia`/`baseSepolia`/`arbSepolia`/`bscTestnet`. Full suite green:
-`forge test` (582), `npx hardhat test` (248, of which `npm run test:unit` is
-221), SVM `npm test` (58 Rust + 124 bankrun), `packages/yield-tooling`
-`npm test` (3290 differential vectors).
+`forge test` (613), `npx hardhat test` (248, of which `npm run test:unit` is
+221), SVM `npm test` (61 Rust + 124 bankrun), `packages/yield-tooling`
+`npm test` (3867 differential vectors).
 
 **1. EVM deploy, one chain at a time.** `npm run deploy:sepolia`, then
 `baseSepolia`, `arbSepolia`, `bscTestnet`. Each run reuses the existing
@@ -1288,6 +1717,24 @@ will concentrate:
   token-pull and the event emission. Logic is correct and commented;
   flagged as where auditor review time will concentrate, not as a
   defect.
+- **EVM PSM has no user-supplied slippage/min-out parameter on any of
+  its 4 entry points, unlike SVM's `redeem_oku_m(..., min_usdc_out)`.**
+  Reviewed and left as-is — the guarantee (redeem can only return ≥
+  quoted USDC; mint preserves dollar value exactly) rests on two
+  properties that both hold today: the multiplier is monotonic
+  (rate floored at `PRECISION`, override strictly-increasing), and
+  **`LitePSM` has no fee mechanism anywhere in it.** See
+  `EVM/README.md § LitePSM.sol` for the full argument and
+  `SVM/README.md § PSM` for why SVM keeps the parameter regardless
+  (defense-in-depth + reused as a live Rust-vs-TS differential probe,
+  since Solana has no view functions to observe pricing directly).
+  **Flagging the precondition explicitly: if a PSM fee is ever
+  introduced on any of the four paths, this entire analysis stops
+  holding** — output becomes a function of a mutable admin parameter,
+  and a user-supplied min-out becomes necessary rather than
+  structurally unreachable. Re-open this item the moment a fee is on
+  the roadmap; add min-out parameters *before* the fee lands, not
+  after.
 
 ### Operator CLI gaps `[both]`
 

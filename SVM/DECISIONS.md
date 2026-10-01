@@ -355,6 +355,71 @@ bounds stay on-chain; business policy moves to the backend.
 
 # Part 4 — Open: needs a decision
 
+## D-29 · PSM swap fee (`tin`/`tout`) — `OPEN`, blocks three other items
+
+**There is no fee anywhere in the protocol.** Not on `mintOkuM`, `redeemOkuM`,
+`mintUsdOku`, `redeemUsdOku`, nor on their SVM counterparts. `Constants.BASIS_POINTS`
+(`EVM/src/lib/Constants.sol`) exists and is read by nothing — its own doc comment says
+so — which suggests a fee was intended at some point and never landed.
+
+This is the single largest open economic question in the stack, and it is a gate on
+three findings that are otherwise individually hard to close.
+
+### What a fee would close
+
+| Item | Today | With a fee |
+|---|---|---|
+| **Emergency-override sandwich** (`EVM/README.md` Accepted Risk #12) | `YieldSandwichGuard` is forward-only: it blocks the same-block backrun but *not* a mint one block before the override paired with a redeem one block after. That captures the whole discrete step on **one block** of capital exposure, for gas. | A round-trip must clear `tin + tout`. Even 1–5 bps makes the one-block hold unprofitable for any realistic step size, without touching the guard. |
+| **Free buffer drain** | `mintOkuM -> redeemOkuM` costs only gas and at most one collateral unit of dust, so anyone with transient capital can drain the buffer to par and force all redemptions into the queue. | Round-tripping becomes strictly loss-making; the drain has to be paid for. |
+| **Queue stuffing** (Accepted Risk #16) | Once the buffer is empty, entries can be created at the `decimalMultiplier` dust floor — which **collapses to 1 wei on 18-decimal collateral** (BSC). The processor pays full loop-body gas plus an external `burn` per entry. | A fee prices entry creation directly, and does so in dollar terms rather than in units that scale with the collateral's decimals — which is what makes it a better fix than a separate minimum-redemption parameter. |
+
+That last row is the important one: a fee and an absolute minimum-redemption floor are
+**alternative** fixes for Accepted Risk #16, so #16 should not be closed independently
+until this is decided.
+
+### What it would cost
+
+- **Peg band widens by the fee.** A PSM with `tin`/`tout` holds the peg to
+  `[1 - tout, 1 + tin]` rather than exactly 1. This is the real trade and it is a
+  product decision, not an engineering one.
+- **ERC-4626 surface.** `mintUsdOku` / `redeemUsdOku` route through `OkuDollar`, so a
+  fee has to be reflected in `previewDeposit` / `previewMint` / `previewWithdraw` /
+  `previewRedeem` or the vault stops being spec-conformant. Note `convertTo*` must
+  **not** include it (the spec requires those to be fee-free), so the two families
+  diverge — a classic source of integrator bugs.
+- **Rounding interaction.** The fee has to be applied on a defined side of the existing
+  floor conversions. Applying it after `dollarsToOkuM` compounds two truncations;
+  applying it before changes the dollar basis. Whichever is chosen must be identical on
+  both stacks or it becomes a new differential-parity obligation.
+- **Test surface.** Every PSM test asserts exact conversion outputs; a fee touches all
+  of them.
+
+### Where it would live
+
+`LitePSM` storage + an admin lever (`PSM_FEE_MANAGER`?), mirrored by a `PsmConfig` field
+and a `set_fee` instruction on SVM. Both need a hard upper bound in constants — an
+unbounded fee setter is a rug vector, and the role would sit alongside `PSM_BUFFER_*`
+in the authority matrix.
+
+### Open sub-questions
+
+1. Symmetric (`tin == tout`) or asymmetric? Asymmetric lets the protocol lean against
+   whichever direction is draining the buffer.
+2. Does the fee accrue to the buffer (strengthening backing) or to a treasury address?
+   Buffer accrual is simpler and avoids a new withdrawal path.
+3. Is a fee of zero a valid configured state? If yes, the code ships fee-capable and
+   launches at zero, which decouples this decision from the deploy. **This is probably
+   the answer** — it lets the mechanism be built, tested and audited now and the number
+   be chosen later, rather than blocking a deploy on an economics call.
+
+### Status
+
+**Not decided. Not implemented.** Recorded here so that Accepted Risks #12 and #16 are
+read as *consequences of an open decision* rather than as independently accepted
+residuals. No code has been written against this.
+
+---
+
 ## D-23 · Epoch length and anchor — `DECIDED`
 
 **24 hours (86,400 s), anchored 2026-01-01T00:00:00Z.** Committed in
@@ -825,13 +890,37 @@ Already tracked in `TRACKER.md`.
 "no", there is no EVM upgrade to sequence behind.
 
 **Follow-on: the class of problem is now closed.** `PsmConfig` carries a
-`reserved: [u8; 128]` tail (current `PsmConfig::LEN` = **754**) and the program
-ships a `migrate_config_space` instruction — a one-shot, idempotent in-place
-resize driven by `scripts/admin/migrate-config-space.ts`. A future field
-addition consumes from the front of `reserved`, keeps `LEN` constant, and needs
-no redeploy at all. That does not retroactively rescue the pre-single-token
-562-byte accounts, which are orphans of a different layout, not undersized
-accounts of the current one.
+`reserved: [u8; 128]` tail (current `PsmConfig::LEN` = **754**). A future field
+addition consumes from the front of `reserved`, keeps `LEN` constant, changes
+no existing byte offset, and needs no resize and no redeploy at all. That does
+not retroactively rescue the pre-single-token 562-byte accounts, which are
+orphans of a different layout, not undersized accounts of the current one.
+
+**A `migrate_config_space` instruction also shipped, and has since been
+removed.** It grew an existing *current-layout* config to `LEN` in place,
+reconstructing `role_admin` from a hardcoded byte offset on an
+`UncheckedAccount` (the typed form cannot deserialize an account still at the
+old, smaller size). The offset arithmetic was correct and the append-only-at-tail
+rule made it stable. It was removed anyway, because an audit established that
+its target set was empty and always had been:
+
+- The only pre-`reserved` config ever deployed is the archived **562-byte**
+  account, which is a *different layout* from before the single-token collapse —
+  the instruction explicitly did not apply to it (`deployments/README.md`).
+- The live devnet config was a clean-slate redeploy, initialised directly at
+  754 bytes. It was never migrated.
+- The intermediate state the instruction existed for — a live 626-byte,
+  current-layout, pre-padding account — was skipped entirely and never existed
+  on any network.
+- It had **zero test coverage**. `README.md` claimed
+  `tests/bankrun/config-layout.ts` exercised it "including the idempotent no-op
+  path"; that file never called it. Two further README sites presented it as
+  live operational guidance. All three were corrected with the removal.
+
+Keeping correctness-critical raw-offset code that no reachable state could
+exercise, and that no test covered, was a worse trade than deleting it. If
+`reserved` is ever exhausted on a live deployment, a resize path should be
+reintroduced against the struct shape of that day rather than a guessed one.
 
 ## D-08 · Pre-existing SVM defects — all resolved
 

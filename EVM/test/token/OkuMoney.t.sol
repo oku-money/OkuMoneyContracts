@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {Constants} from "../../src/lib/Constants.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {
@@ -58,7 +59,12 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.symbol(), "OkuM");
     }
 
+    /// @dev Asserts against `Constants.OKU_M_DECIMALS`, not a bare 18: that constant is
+    ///      the exponent the PSM/queue USDC conversion is built on, so pinning the
+    ///      literal here would let `decimals()` and the conversion math drift apart
+    ///      while both tests still passed.
     function test_Initialize_SetsCorrectDecimals() public view {
+        assertEq(okuMoney.decimals(), Constants.OKU_M_DECIMALS);
         assertEq(okuMoney.decimals(), 18);
     }
 
@@ -807,6 +813,36 @@ contract OkuMoneyTest is BaseTest {
         assertTrue(okuMoney.supportsInterface(type(IScaledUIAmountNewUIMultiplier).interfaceId));
         assertTrue(okuMoney.supportsInterface(type(IScaledUIAmountConversion).interfaceId));
         assertTrue(okuMoney.supportsInterface(type(IScaledUIAmountBalances).interfaceId));
+    }
+
+    /// @notice Pins the LITERAL hex values documented in IScaledUIAmount.sol's NatSpec
+    ///         and EVM/README.md's ERC-8056 table against the compiler-computed IDs.
+    /// @dev The test above only proves internal self-consistency: `supportsInterface`
+    ///      is checked against `type(I).interfaceId`, so it passes trivially even if a
+    ///      signature change silently moves the computed ID — it can never observe
+    ///      doc drift. ERC-8056 is an explicitly-Draft standard (Accepted Risk #9) that
+    ///      may itself change the reference signatures before Final; the moment either
+    ///      that or a local edit shifts any of the four IDs, this test fails and names
+    ///      exactly which of the three doc sites (this file's NatSpec, the README
+    ///      table, Accepted Risk #9) needs updating — instead of three sites silently
+    ///      going stale with every other test still green.
+    function test_InterfaceIds_MatchDocumentedHexValues() public pure {
+        assertEq(type(IScaledUIAmount).interfaceId, bytes4(0xa60bf13d), "IScaledUIAmount (core)");
+        assertEq(
+            type(IScaledUIAmountNewUIMultiplier).interfaceId,
+            bytes4(0x4bd27648),
+            "IScaledUIAmountNewUIMultiplier (required ext)"
+        );
+        assertEq(
+            type(IScaledUIAmountConversion).interfaceId,
+            bytes4(0x57854fc3),
+            "IScaledUIAmountConversion (optional ext)"
+        );
+        assertEq(
+            type(IScaledUIAmountBalances).interfaceId,
+            bytes4(0xd890fd71),
+            "IScaledUIAmountBalances (optional ext)"
+        );
     }
 
     function test_UiMultiplier_MatchesOkuMMultiplier() public {
@@ -1949,6 +1985,73 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user2);
 
         assertEq(okuMoney.allowance(user1, user2), 50e18, "pre-existing allowance untouched");
+    }
+
+    /// @notice `approve` also blocks a blacklisted OWNER from creating a new
+    ///         allowance, matching Circle FiatToken's `notBlacklisted(msg.sender)`.
+    function test_Approve_RevertsOnBlacklistedOwner() public {
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1);
+
+        vm.prank(user1);
+        vm.expectRevert(OkuMoney.SenderBlacklisted.selector);
+        okuMoney.approve(user2, 50e18);
+    }
+
+    // ============ Circle Parity: blacklisted spender cannot exercise a prior allowance ============
+
+    /// @notice THE gap this parity pass closes. A blacklisted spender holding a
+    ///         pre-existing allowance (deliberately not revoked by `blacklist()` —
+    ///         see {test_Approve_DoesNotRevokeExistingAllowanceOnBlacklist}) must not
+    ///         be able to move CLEAN funds between CLEAN addresses via
+    ///         `transferFrom`. Before this fix, OkuMoney inherited OZ's
+    ///         `transferFrom` unmodified — it only checked `from`/`to` (via
+    ///         `_update`), never the third party in the call, the spender itself.
+    function test_TransferFrom_RevertsOnBlacklistedSpender_EvenWithPriorAllowance() public {
+        _mintOkuMoney(user1, 100e18);
+        vm.prank(user1);
+        okuMoney.approve(user2, 50e18);
+
+        vm.prank(blacklister);
+        okuMoney.blacklist(user2);
+
+        // Allowance is still there -- this assertion documents the precondition the
+        // revert below depends on, not a redundant re-check of the test above.
+        assertEq(
+            okuMoney.allowance(user1, user2), 50e18, "precondition: allowance survives blacklisting"
+        );
+
+        vm.prank(user2);
+        vm.expectRevert(OkuMoney.SenderBlacklisted.selector);
+        okuMoney.transferFrom(user1, user3, 50e18);
+    }
+
+    /// @notice Sanity check in the other direction: an allowance-holder who is NOT
+    ///         blacklisted can still exercise it normally. Isolates "the new check
+    ///         blocks blacklisted spenders" from "the new check blocks all spenders."
+    function test_TransferFrom_SucceedsForCleanSpender() public {
+        _mintOkuMoney(user1, 100e18);
+        vm.prank(user1);
+        okuMoney.approve(user2, 50e18);
+
+        vm.prank(user2);
+        okuMoney.transferFrom(user1, user3, 50e18);
+
+        assertEq(okuMoney.balanceOf(user3), 50e18);
+    }
+
+    /// @notice Circle parity: the MINTER (not just the recipient) must not be
+    ///         blacklisted. `OKUM_MINTER` is infra (`LitePSM`), not a partner EOA
+    ///         the way Circle's minters are, so this is a self-brick vector that
+    ///         should never fire in practice -- but it's what the cited reference
+    ///         (FiatTokenV2.sol) actually does, and the check is one SLOAD.
+    function test_Mint_RevertsOnBlacklistedMinter() public {
+        vm.prank(blacklister);
+        okuMoney.blacklist(minter);
+
+        vm.prank(minter);
+        vm.expectRevert(OkuMoney.SenderBlacklisted.selector);
+        okuMoney.mint(user1, 100e18);
     }
 
     // ============ AlreadyBlacklisted Guard ============

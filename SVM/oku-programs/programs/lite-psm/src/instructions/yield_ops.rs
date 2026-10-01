@@ -377,7 +377,6 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
     // proceed, or the mirror would be left reading against a halted schedule.
     write_display_multiplier(
         new_multiplier,
-        now_ts,
         &ctx.accounts.config,
         &ctx.accounts.oku_m_mint.to_account_info(),
         &ctx.accounts.token_2022_program.to_account_info(),
@@ -435,7 +434,6 @@ pub fn sync_display_multiplier(ctx: Context<SyncDisplayMultiplier>) -> Result<()
 
     write_display_multiplier(
         current,
-        now_ts,
         &ctx.accounts.config,
         &ctx.accounts.oku_m_mint.to_account_info(),
         &ctx.accounts.token_2022_program.to_account_info(),

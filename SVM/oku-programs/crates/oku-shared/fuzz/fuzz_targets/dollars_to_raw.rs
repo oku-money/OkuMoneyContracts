@@ -12,7 +12,12 @@
 //!    loss is at most ceil(multiplier / PRECISION). This means at $1 multiplier
 //!    the loss is at most 1 lamport, but at $17 multiplier the loss can be up
 //!    to 17 lamports -- which is correct behavior for floor-rounded integer math.
-//! 6. Consistency with the narrow `mul_div_floor_u128` reference.
+//! 6. Consistency with the narrow `wad::mul_div_floor_u128_narrow` reference.
+//!    Reached via its module path, not the crate root: it is deliberately not
+//!    re-exported flat, because its precondition (the raw product `a*b` must
+//!    fit `u128`) is stricter than its full-domain siblings'. This target is
+//!    safe to use it as an oracle precisely because `dollar_value as u128 *
+//!    PRECISION` is bounded by `u64::MAX * 1e18 ≈ 1.8e37`.
 //!
 //! The multiplier is `u128` (WAD-scaled) since the 1e18 migration. Unlike
 //! `raw_to_dollars`, this direction divides BY the multiplier, so it does not
@@ -23,7 +28,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use oku_shared::{dollars_to_raw, mul_div_floor_u128, raw_to_dollars, PRECISION};
+use oku_shared::wad::mul_div_floor_u128_narrow;
+use oku_shared::{dollars_to_raw, raw_to_dollars, PRECISION};
 
 fuzz_target!(|data: (u64, u128)| {
     let (dollar_value, multiplier) = data;
@@ -40,11 +46,11 @@ fuzz_target!(|data: (u64, u128)| {
     }
 
     // Property 6: consistency with reference
-    let reference = mul_div_floor_u128(dollar_value as u128, PRECISION, multiplier)
+    let reference = mul_div_floor_u128_narrow(dollar_value as u128, PRECISION, multiplier)
         .and_then(|v| u64::try_from(v).ok());
     assert_eq!(
         result, reference,
-        "dollars_to_raw inconsistent with mul_div_floor_u128"
+        "dollars_to_raw inconsistent with mul_div_floor_u128_narrow"
     );
 
     // Property 3: identity at PRECISION

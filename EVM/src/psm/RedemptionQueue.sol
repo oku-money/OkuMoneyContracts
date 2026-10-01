@@ -95,9 +95,15 @@ contract RedemptionQueue is
     }
 
     /// @notice Initialize the queue proxy.
-    /// @param _okuMoney OkuMoney token address
+    /// @param _okuMoney OkuMoney token address. Must match the OkuMoney configured on the
+    ///        LitePSM that will operate this queue — enforced by
+    ///        `LitePSM.initialize`'s `QueueOkuMoneyMismatch` check (this contract is
+    ///        always deployed and initialized first, so it cannot enforce the reverse
+    ///        direction itself).
     /// @param _usdc USDC token address (must implement IERC20Metadata.decimals()).
-    ///        Must match the USDC configured on the LitePSM that will operate this queue.
+    ///        Must match the USDC configured on the LitePSM that will operate this
+    ///        queue — enforced the same way, via `LitePSM.initialize`'s
+    ///        `QueueUsdcMismatch` check.
     /// @param _admin Admin address (receives upgrader/rescuer roles; NOT QUEUE_PSM)
     function initialize(address _okuMoney, address _usdc, address _admin) public initializer {
         if (_okuMoney == address(0)) revert Errors.ZeroAddress();
@@ -195,6 +201,13 @@ contract RedemptionQueue is
     ///
     ///      Stuck entries (USDC-blacklisted/frozen recipients) are soft-skipped with a
     ///      RedemptionSkipped(TransferFailed) event. Use `rescueQueueEntry` to clear them.
+    ///
+    ///      Funding is bounded by `min(balanceOf(caller), allowance(caller, this))` —
+    ///      payouts move via `transferFrom`, so an under-sized approval halts the batch
+    ///      with `InsufficientFunds` exactly like an under-sized balance does, rather
+    ///      than misreporting as `TransferFailed`. Callers that approve per-batch
+    ///      (as `LitePSM.processQueue` does) should size the approval against the
+    ///      multiplier at execution time, not at computation time.
     function processQueue(
         uint256 startIndex,
         uint256 endIndex
@@ -208,7 +221,34 @@ contract RedemptionQueue is
         if (endIndex > $.queueTail) revert EndAboveTail();
 
         IERC20 usdcContract = $.usdc;
-        uint256 usdcBalance = usdcContract.balanceOf(msg.sender);
+        // Payouts move via `transferFrom`, so the real ceiling is the LOWER of the
+        // caller's balance and the allowance it granted this contract — not the balance
+        // alone. `LitePSM.processQueue` approves an operator-supplied `approveAmount`
+        // (sized off-chain against a multiplier snapshot) that is routinely far below its
+        // buffer balance, so an allowance-bound batch is ordinary, not an edge case.
+        //
+        // Gating on the balance alone let those batches pass this check and then fail in
+        // `trySafeTransferFrom`, surfacing as `TransferFailed` — the recipient-side signal
+        // whose documented remedy is `rescueQueueEntry` (see {RedemptionQueueEvents}).
+        // An operator following that guidance would have returned OkuM to perfectly
+        // healthy users over what is really an approval-sizing mistake, and paid full
+        // loop-body gas for every remaining entry in a batch that could no longer settle.
+        //
+        // Both bounds are expected to shrink monotonically during the loop under a
+        // well-behaved (non-callback) collateral token. If the configured token DOES carry
+        // a transfer callback, a recipient could use it to top up the caller's balance or
+        // allowance mid-batch, making this cached bound stale-LOW relative to the live
+        // value. That can only cause a premature `break` below (liveness: a fundable entry
+        // gets skipped and must wait for the next batch) — it can never cause an
+        // over-payment, since the real `trySafeTransferFrom` call still enforces the ACTUAL
+        // on-chain balance/allowance at transfer time regardless of what this cache says.
+        // The `break` branch re-validates live before trusting this cache to halt the
+        // batch; see the comment there.
+        uint256 usdcAvailable = usdcContract.balanceOf(msg.sender);
+        uint256 usdcApproved = usdcContract.allowance(msg.sender, address(this));
+        if (usdcApproved < usdcAvailable) {
+            usdcAvailable = usdcApproved;
+        }
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
         uint256 cachedMult = $.okuMoney.okuMMultiplier();
         // Accumulate decrements in memory; write once after the loop (saves ~2100 gas per
@@ -227,9 +267,27 @@ contract RedemptionQueue is
             uint256 dollarValue18 = MathLib.okuMToDollars(entry.okuMAmount, cachedMult);
             uint256 usdcAmount = MathLib.dollarsToUsdc(dollarValue18, decimalMultiplier);
 
-            if (usdcBalance < usdcAmount) {
-                emit RedemptionSkipped(i, RedemptionSkipReason.InsufficientFunds);
-                break;
+            if (usdcAvailable < usdcAmount) {
+                // Lazy re-validation: the cached `usdcAvailable` is decremented locally
+                // and never re-read from chain mid-loop (gas). A transfer-callback token
+                // could have topped up the caller's real balance/allowance via an earlier
+                // iteration's `entry.user` callback, which this cache cannot see — re-check
+                // live, exactly once, only on the path that would otherwise halt the whole
+                // batch. Costs 2 extra external calls only when the cache already predicts
+                // insufficiency; the common case (sufficient funds throughout, or a
+                // non-callback token) pays nothing extra.
+                uint256 liveAvailable = usdcContract.balanceOf(msg.sender);
+                uint256 liveApproved = usdcContract.allowance(msg.sender, address(this));
+                if (liveApproved < liveAvailable) {
+                    liveAvailable = liveApproved;
+                }
+                if (liveAvailable < usdcAmount) {
+                    emit RedemptionSkipped(i, RedemptionSkipReason.InsufficientFunds);
+                    break;
+                }
+                // Resync the running bound to the live value before continuing — a
+                // callback-driven top-up is reflected from here on, not just this entry.
+                usdcAvailable = liveAvailable;
             }
 
             // `trySafeTransferFrom` (a) swallows reverts (Circle USDC blacklist path),
@@ -256,6 +314,29 @@ contract RedemptionQueue is
                 continue;
             }
 
+            // DELIBERATELY UNGUARDED — the one call in this loop allowed to revert the
+            // whole batch, and the only one that runs AFTER value has moved.
+            //
+            // That ordering is the whole reason. `trySafeTransferFrom` above fails BEFORE
+            // any USDC moves, so soft-skipping it unwinds cleanly (restore the slot, move
+            // on). Here the USDC has already reached `entry.user`; the only way to undo it
+            // is to revert the transaction. Swallowing this failure would pay the user and
+            // leave their OkuM un-burned — unbacked supply, i.e. a solvency hole, created
+            // silently and signalled only by an event.
+            //
+            // Nor would swallowing it buy anything. Every way `burn` can revert is
+            // batch-invariant, not per-entry: `OKUM_BURNER` revoked from this contract,
+            // this contract blacklisted on OkuMoney, or a balance shortfall that would
+            // itself indicate an accounting bug. None vary between entries, so if it fails
+            // for one it fails for all — there are no "other users" a soft-skip could
+            // rescue. It would convert an all-or-nothing halt into an all-or-nothing
+            // payout with nothing burned.
+            //
+            // Reverting is therefore fail-closed and fully recoverable: no USDC moves, no
+            // state changes, the operator restores the role and re-runs. Meanwhile
+            // `rescueQueueEntry` stays available as an escape hatch for users either way,
+            // since it returns OkuM rather than burning it. Pinned by
+            // `test_ProcessQueue_BurnerRoleRevoked_RevertsWholeBatch`.
             $.okuMoney.burn(entry.okuMAmount);
             totalOkuMDecrement += entry.okuMAmount;
 
@@ -264,7 +345,7 @@ contract RedemptionQueue is
                 entry.user, entry.okuMAmount, dollarValue18, usdcAmount, waitTime
             );
 
-            usdcBalance -= usdcAmount;
+            usdcAvailable -= usdcAmount;
         }
 
         $.totalQueuedOkuM -= totalOkuMDecrement;
@@ -274,8 +355,28 @@ contract RedemptionQueue is
     }
 
     /// @notice Return OkuMoney for a stuck queue entry without burning it.
-    /// @dev Used when an entry is permanently unprocessable (e.g., recipient is USDC-blacklisted).
+    /// @dev Used when an entry is permanently unprocessable because `entry.user` is
+    ///      OkuM-blacklisted — NOT USDC-blacklisted. A USDC-blacklisted user can still
+    ///      receive OkuM back via `alternateRecipient == entry.user`; it's only when
+    ///      `OkuMoney._update` would itself revert `RecipientBlacklisted` on a
+    ///      self-return that a genuinely different recipient is required. An earlier
+    ///      version of this doc (and the README) named the wrong blacklist.
     ///      Operator flow: identify stuck entry -> rescueQueueEntry(index, recipient) -> processQueue.
+    ///
+    ///      `alternateRecipient` is intentionally NOT required to equal `entry.user` —
+    ///      this is what makes the OkuM-blacklist case rescuable at all. That same
+    ///      freedom means `QUEUE_RESCUER` can redirect any queued user's escrowed OkuM
+    ///      to an arbitrary address (single signature, irreversible — see
+    ///      `AUTHORITY-MATRIX.md` finding E24). Accepted rather than fixed in code
+    ///      because `QUEUE_RESCUER` is granted alongside `QUEUE_UPGRADER` on the
+    ///      mainnet Cold Multisig (`grantRolesMainnet.ts`), which can replace this
+    ///      contract's entire logic outright — a redirect-recipient check would add no
+    ///      real constraint against the only key holding the role in that topology.
+    ///      That domination argument is NOT self-enforcing: it only holds where the two
+    ///      roles are actually co-located. Verify before granting `QUEUE_RESCUER`
+    ///      standalone (e.g. to a testnet operator key without `QUEUE_UPGRADER`) that
+    ///      you're deliberately accepting bare redirect power, not assuming the
+    ///      mainnet pairing follows it there for free.
     /// @param index Queue index to rescue
     /// @param alternateRecipient Address to receive the OkuMoney (original user or other)
     function rescueQueueEntry(
@@ -309,11 +410,32 @@ contract RedemptionQueue is
     /// @dev Gas-bounded maintenance. `processQueue` and `rescueQueueEntry` do not advance
     ///      the head, so a long run of cleared slots can leave `queueHead` behind the live
     ///      front. Permissionless: it can only move `queueHead` forward, and only past
-    ///      slots already cleared (`user == address(0)`). The effect on `queueLength()` is
-    ///      cosmetic; redemption correctness is independent of `queueHead`.
+    ///      slots already cleared (`user == address(0)`) — BETWEEN transactions. The
+    ///      effect on `queueLength()` is cosmetic; redemption correctness is independent
+    ///      of `queueHead`.
+    ///
+    ///      `nonReentrant`, shared with `processQueue` and `rescueQueueEntry`, is required
+    ///      — not merely defensive. `processQueue` clears a slot (`delete $.queue[i]`)
+    ///      BEFORE its external `trySafeTransferFrom` call and restores it from memory on
+    ///      failure, so for the duration of that external call a live entry transiently
+    ///      reads `user == address(0)`. Against a collateral token with a transfer
+    ///      callback that returns `false` rather than reverting (state changes from a
+    ///      `false` return are NOT unwound, unlike a revert), a reentrant `advanceHead`
+    ///      during that window would move `queueHead` past the transiently-cleared slot
+    ///      permanently — `processQueue`'s own restore runs after, but the slot is now
+    ///      below `queueHead` and therefore unreachable by every bound check in this
+    ///      contract (`processQueue`'s `StartBelowHead`, `rescueQueueEntry`'s and
+    ///      `getQueueEntry`'s `InvalidIndex`), stranding the user's OkuM and permanently
+    ///      inflating `totalQueuedUsdc()` against `LitePSM.withdrawUsdc`'s
+    ///      `WouldStrandQueue` check. Not reachable with Circle USDC (no transfer
+    ///      callback) or any ERC-20 without one — but the collateral token is a deploy
+    ///      parameter (`initialize` validates only `decimals() <= 18`), not a property
+    ///      this contract can itself enforce, so the guard is required regardless of
+    ///      which token is configured today. See `test_AdvanceHead_ReentrancyGuard_*` in
+    ///      `test/psm/Reentrancy.t.sol`.
     /// @param maxSlots Maximum number of cleared slots to skip in this call.
     /// @return advanced Number of slots actually advanced.
-    function advanceHead(uint256 maxSlots) external returns (uint256 advanced) {
+    function advanceHead(uint256 maxSlots) external nonReentrant returns (uint256 advanced) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         uint256 head = $.queueHead;
         uint256 tail = $.queueTail;

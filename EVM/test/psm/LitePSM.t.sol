@@ -13,6 +13,7 @@ import {
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
+import {RedemptionQueueEvents} from "../../src/lib/events/RedemptionQueueEvents.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {Deploy} from "../shared/Deploy.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
@@ -794,6 +795,72 @@ contract LitePSMTest is BaseTest {
         assertEq(redemptionQueue.queueLength(), 1);
     }
 
+    /// @notice An under-sized `approveAmount` halts the batch with `InsufficientFunds`,
+    ///         not `TransferFailed` — end-to-end through the real approve/use/revoke path.
+    /// @dev The companion to `RedemptionQueue`'s unit test, exercised through the actual
+    ///      `forceApprove(approveAmount)` wrapper rather than a hand-set allowance.
+    ///
+    ///      Models the realistic way this arises: `approveAmount` is computed off-chain
+    ///      against a multiplier snapshot, and the multiplier — which streams
+    ///      continuously — is higher by the time the transaction lands, so the approval
+    ///      no longer covers what the entry is now worth. The PSM buffer is deliberately
+    ///      ample here, so ONLY the approval binds; a balance-gated loop would sail past
+    ///      this check and fail inside `trySafeTransferFrom`, reporting the
+    ///      blacklist-shaped `TransferFailed` and inviting an unnecessary
+    ///      `rescueQueueEntry` against a perfectly healthy user.
+    function test_ProcessQueue_StaleApproveAmount_ReportsInsufficientFundsNotTransferFailed()
+        public
+    {
+        uint256 okuMAmount = 6000e18;
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
+
+        vm.prank(user1);
+        litePsm.redeemOkuM(okuMAmount); // queued: buffer holds only 5000 USDC
+        assertEq(redemptionQueue.queueLength(), 1);
+
+        // What the backend would have computed at the multiplier it observed.
+        uint256 staleApproveAmount = _expectedUsdcFromNotes(okuMAmount);
+
+        // The multiplier appreciates between computation and execution.
+        _setNotePrice(1.05e18);
+        uint256 trueRequirement = _expectedUsdcFromNotes(okuMAmount);
+        assertGt(trueRequirement, staleApproveAmount, "entry must now exceed the approval");
+
+        // Buffer is ample — the approval is the ONLY binding constraint.
+        _mintUsdc(address(litePsm), 50_000e6);
+        assertGt(
+            usdc.balanceOf(address(litePsm)),
+            trueRequirement,
+            "balance must not be the binding constraint"
+        );
+
+        uint256 head = redemptionQueue.queueHead();
+        uint256 tail = redemptionQueue.queueTail();
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
+
+        vm.expectEmit(true, false, false, true);
+        emit RedemptionQueueEvents.RedemptionSkipped(
+            head, RedemptionQueueEvents.RedemptionSkipReason.InsufficientFunds
+        );
+        vm.prank(queueProcessor);
+        litePsm.processQueue(head, tail, staleApproveAmount);
+
+        // Nothing paid, entry still live and claimable on a correctly-sized re-run.
+        assertEq(usdc.balanceOf(user1), user1UsdcBefore, "no partial payout");
+        assertEq(redemptionQueue.queueLength(), 1, "entry must remain queued");
+        assertEq(redemptionQueue.getQueueEntry(head).user, user1, "entry must stay live");
+        // Allowance still revoked on the way out.
+        assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
+
+        // Re-running with a correctly-sized approval settles it.
+        vm.prank(queueProcessor);
+        litePsm.processQueue(head, tail, trueRequirement);
+        redemptionQueue.advanceHead(tail - head);
+        assertEq(usdc.balanceOf(user1), user1UsdcBefore + trueRequirement);
+        assertEq(redemptionQueue.queueLength(), 0);
+    }
+
     // ============ Price-Aware Queue Tests ============
 
     function test_ProcessQueue_PriceAware_YieldAccruesWhileQueued() public {
@@ -1361,6 +1428,119 @@ contract LitePSMTest is BaseTest {
         assertGt(okuMoney.balanceOf(user1), 0);
     }
 
+    /// @notice PINS THE DOCUMENTED LIMITATION, end to end: `YieldSandwichGuard` is
+    ///         forward-only. A mint ordered BEFORE `setOkuMMultiplier` in the same
+    ///         block is not blocked — it reads `lastYieldDistributionBlock` before
+    ///         the override writes it — and a redeem one block later is not blocked
+    ///         either (the guard has already released). Together they capture the
+    ///         entire discrete jump for one block of capital exposure.
+    /// @dev This is NOT a reentrancy or ordering trick — forge executes top-level
+    ///      calls in the order written, so simply not `vm.roll`-ing between the mint
+    ///      and the override IS "same block, mint ordered first." See
+    ///      `YieldSandwichGuard.sol`'s NatSpec and `EVM/README.md` Accepted Risk #12.
+    ///      If this test ever starts reverting on the mint or the redeem, the
+    ///      guard's scope changed and Accepted Risk #12 needs re-examination, not
+    ///      this test weakened to match.
+    function test_FrontRunOverride_MintBeforeThenRedeemAfter_CapturesDiscreteStep() public {
+        uint256 mintUsdc = 100e6;
+
+        // 1. Front-run: mint BEFORE the override, same block. Guard not yet armed.
+        _approveUsdc(user1, address(litePsm), mintUsdc);
+        vm.prank(user1);
+        litePsm.mintOkuM(mintUsdc);
+        uint256 okuMReceived = okuMoney.balanceOf(user1);
+        assertGt(okuMReceived, 0, "front-run mint must succeed -- this is the documented gap");
+
+        // 2. The discrete jump itself, same block as the front-run mint.
+        uint256 preMultiplier = okuMoney.okuMMultiplier();
+        vm.prank(rebaser);
+        okuMoney.setOkuMMultiplier(preMultiplier * 2);
+
+        // Confirm the guard IS armed for the rest of this block (the part that
+        // already works) -- a same-block back-run attempt still correctly reverts.
+        vm.prank(user1);
+        okuMoney.approve(address(litePsm), okuMReceived);
+        vm.prank(user1);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        litePsm.redeemOkuM(okuMReceived);
+
+        // 3. Back-run: roll one block, THEN redeem -- the guard has released.
+        vm.roll(block.number + 1);
+        uint256 usdcBefore = usdc.balanceOf(user1);
+        vm.prank(user1);
+        litePsm.redeemOkuM(okuMReceived);
+        uint256 usdcReceived = usdc.balanceOf(user1) - usdcBefore;
+
+        // 4. The attack's actual payoff: redeemed strictly more USDC than was put
+        //    in, for one block of exposure -- the entire discrete step, captured.
+        assertGt(
+            usdcReceived,
+            mintUsdc,
+            "front-run+delayed-redeem must capture the discrete jump -- this is Accepted Risk #12's unmitigated residual"
+        );
+    }
+
+    /// @notice The operational mitigation Accepted Risk #12 recommends: pause the
+    ///         PSM and vault around `setOkuMMultiplier`, independent of OkuMoney's
+    ///         own pause state. Proves the ceremony actually closes BOTH legs the
+    ///         on-chain guard alone does not -- the front-run mint before the
+    ///         override, and the back-run redeem a block after it -- not just the
+    ///         same-block round-trip `YieldSandwichGuard` already blocks.
+    function test_SetOkuMMultiplier_PauseCeremony_ClosesFrontRunWindow() public {
+        // Seed user1 with OkuM from BEFORE the ceremony starts, so "the PSM is
+        // paused" is the only thing stopping the attack on the mint side -- not
+        // merely an empty wallet.
+        _mintOkuMoney(user1, 1000e18);
+
+        // 1. Pause both surfaces OkuMoney's own pause state does not cover.
+        vm.prank(pauser);
+        litePsm.pause();
+        vm.prank(vaultPauser);
+        okuDollar.pause();
+
+        // 2. Attempted front-run mint now reverts on LitePSM's OWN pause, before it
+        //    would even reach the yield-sandwich guard.
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        litePsm.mintOkuM(100e6);
+
+        // 3. The override itself is UNAFFECTED -- OkuMoney has its own pause state
+        //    and is not paused here. This is the property that makes the ceremony
+        //    workable at all: the emergency lever stays live while user-facing
+        //    surfaces are frozen around it.
+        uint256 preMultiplier = okuMoney.okuMMultiplier();
+        vm.prank(rebaser);
+        okuMoney.setOkuMMultiplier(preMultiplier * 2);
+        assertEq(
+            okuMoney.okuMMultiplier(),
+            preMultiplier * 2,
+            "override must succeed while only PSM/vault are paused"
+        );
+
+        // 4. Attempted back-run redeem, next block, STILL reverts -- PSM remains
+        //    paused until the operator explicitly unpauses, closing the window
+        //    the on-chain guard alone would have already released by now.
+        vm.roll(block.number + 1);
+        vm.prank(user1);
+        okuMoney.approve(address(litePsm), 1000e18);
+        vm.prank(user1);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        litePsm.redeemOkuM(500e18);
+
+        // 5. Unpause: normal operation resumes, at the NEW multiplier, with no
+        //    front-run or back-run window having existed at any point.
+        vm.prank(unpauser);
+        litePsm.unpause();
+        vm.prank(vaultUnpauser);
+        okuDollar.unpause();
+
+        uint256 usdcBefore = usdc.balanceOf(user1);
+        vm.prank(user1);
+        litePsm.redeemOkuM(500e18);
+        assertGt(usdc.balanceOf(user1), usdcBefore, "redemption succeeds normally once unpaused");
+    }
+
     function test_WithdrawUSDC_RevertsInYieldDistributionBlock() public {
         _mintOkuMoney(user2, 10_000e18);
 
@@ -1498,9 +1678,16 @@ contract LitePSMTest is BaseTest {
         // Deploy an 8-decimal "USDC" mock
         MockUSDC8Dec usdc8 = new MockUSDC8Dec();
 
+        // This PSM needs its own queue wired to the same 8-decimal USDC —
+        // `LitePSM.initialize` now enforces `queue.usdc() == _usdc`
+        // (`QueueUsdcMismatch`), so it can no longer share `redemptionQueue`
+        // (which is wired to the suite's 6-decimal USDC).
+        (RedemptionQueue queue8,) =
+            Deploy.deployRedemptionQueue(address(okuMoney), address(usdc8), admin);
+
         // Deploy a fresh PSM against it
         (LitePSM psm8,) = Deploy.deployLitePSM(
-            address(okuMoney), address(okuDollar), address(usdc8), address(redemptionQueue), admin
+            address(okuMoney), address(okuDollar), address(usdc8), address(queue8), admin
         );
 
         // decimalMultiplier should be 10^(18-8) = 1e10
@@ -1519,7 +1706,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(allowanceManager);
         okuMoney.configureMinterAllowance(address(psm8), MAX_SUPPLY);
         vm.prank(admin);
-        redemptionQueue.grantRole(QUEUE_PSM, address(psm8));
+        queue8.grantRole(QUEUE_PSM, address(psm8));
 
         vm.prank(user1);
         usdc8.approve(address(psm8), usdcAmount);
@@ -1533,13 +1720,213 @@ contract LitePSMTest is BaseTest {
         // Deploy an 18-decimal stable mock
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
 
+        // Same reasoning as test_MultiDecimal_8DecimalUsdcPsmInit: this PSM
+        // needs a queue wired to the matching 18-decimal USDC now that
+        // `LitePSM.initialize` enforces `QueueUsdcMismatch`.
+        (RedemptionQueue queue18,) =
+            Deploy.deployRedemptionQueue(address(okuMoney), address(usdc18), admin);
+
         // Deploy a fresh PSM against it
         (LitePSM psm18,) = Deploy.deployLitePSM(
-            address(okuMoney), address(okuDollar), address(usdc18), address(redemptionQueue), admin
+            address(okuMoney), address(okuDollar), address(usdc18), address(queue18), admin
         );
 
         // decimalMultiplier should be 10^(18-18) = 1
         assertEq(psm18.usdcDecimalMultiplier(), 1);
+    }
+
+    // ---- 18-decimal collateral: mint/redeem MATH (not just init) ----
+    //
+    // BSC's canonical Binance-Peg USDC carries 18 decimals, not 6
+    // (`scripts/config/chains.ts`). Until these tests existed, the only
+    // non-6-decimal coverage in the suite asserted `initialize` succeeded and
+    // stopped there — no test ever pushed a mint or a redeem through the
+    // `decimalMultiplier == 1` path. That is exactly where the collateral unit
+    // stops absorbing sub-unit truncation, so it is the one configuration where
+    // the conversion rounding is observable at all.
+
+    /// @dev Wire a fresh PSM + queue pair against an arbitrary-decimal collateral,
+    ///      granting every role the mint/redeem paths need. Each pair needs its OWN
+    ///      queue: `LitePSM.initialize` enforces `queue.usdc() == _usdc`
+    ///      (`QueueUsdcMismatch`), so the suite's shared 6-decimal `redemptionQueue`
+    ///      cannot be reused here.
+    function _deployPsmForCollateral(address collateral)
+        internal
+        returns (LitePSM psmX, RedemptionQueue queueX)
+    {
+        (queueX,) = Deploy.deployRedemptionQueue(address(okuMoney), collateral, admin);
+        (psmX,) = Deploy.deployLitePSM(
+            address(okuMoney), address(okuDollar), collateral, address(queueX), admin
+        );
+        vm.startPrank(admin);
+        okuMoney.grantRole(OKUM_MINTER, address(psmX));
+        okuMoney.grantRole(OKUM_BURNER, address(psmX));
+        queueX.grantRole(QUEUE_PSM, address(psmX));
+        vm.stopPrank();
+        vm.prank(allowanceManager);
+        okuMoney.configureMinterAllowance(address(psmX), MAX_SUPPLY);
+    }
+
+    /// @notice A mint whose dollar value does not divide evenly by the multiplier
+    ///         must still succeed at 18-decimal collateral.
+    /// @dev REGRESSION: this reverted before `RoundTripDriftTooLarge` was removed.
+    ///
+    ///      At 18 decimals `decimalMultiplier == 1`, so the collateral unit IS the
+    ///      dollar wei and `dollarsToOkuM`'s truncation has nowhere to hide. The old
+    ///      check compared `roundTripUsdc + 1 < usdcAmount` — a tolerance of one
+    ///      collateral unit, which at 6 decimals is $0.000001 (comfortably above any
+    ///      truncation) but at 18 decimals is one wei (below it).
+    ///
+    ///      At `m = 3.0`, `okuM = floor(V/3)` and the round trip returns
+    ///      `3 * floor(V/3)`, so the drift is exactly `V mod 3`. For `V mod 3 == 2`
+    ///      the drift is 2 units, the tolerance is 1, and a perfectly ordinary mint
+    ///      reverted. `100e18 + 1` is such a value (`100e18 mod 3 == 1`).
+    function test_MultiDecimal_18Dec_MintSucceedsOnTruncatingAmount() public {
+        MockUSDC18Dec usdc18 = new MockUSDC18Dec();
+        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+
+        _setOkuMMultiplierAndRoll(3e18);
+
+        uint256 amount = 100e18 + 1;
+        assertEq(amount % 3, 2, "fixture must hit the worst-case residue");
+
+        usdc18.mint(user1, amount);
+        vm.prank(user1);
+        usdc18.approve(address(psm18), amount);
+
+        uint256 balanceBefore = okuMoney.balanceOf(user1);
+        vm.prank(user1);
+        psm18.mintOkuM(amount);
+
+        // floor((100e18 + 1) * 1e18 / 3e18)
+        assertEq(okuMoney.balanceOf(user1) - balanceBefore, 33_333_333_333_333_333_333);
+    }
+
+    /// @notice Every residue class mints successfully — not just two in three.
+    /// @dev REGRESSION: before the removal this reverted on exactly the iterations
+    ///      where `amount % 3 == 2`, i.e. a third of all legitimate mints on an
+    ///      18-decimal chain once the multiplier reached 3.0. Walking consecutive
+    ///      amounts is the point: the defect was invisible to any test that happened
+    ///      to pick a round number.
+    function test_MultiDecimal_18Dec_MintSucceedsAcrossAllResidues() public {
+        MockUSDC18Dec usdc18 = new MockUSDC18Dec();
+        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+
+        _setOkuMMultiplierAndRoll(3e18);
+
+        for (uint256 i = 0; i < 30; i++) {
+            address u = address(uint160(uint256(0xBEEF0000) + i));
+            uint256 amount = 1e18 + i;
+
+            usdc18.mint(u, amount);
+            vm.prank(u);
+            usdc18.approve(address(psm18), amount);
+            vm.prank(u);
+            psm18.mintOkuM(amount);
+
+            assertEq(
+                okuMoney.balanceOf(u),
+                (amount * Constants.PRECISION) / 3e18,
+                "minted OkuM must equal the floored conversion"
+            );
+        }
+    }
+
+    /// @notice The same property at 8 decimals, where the tolerance is 100 units of
+    ///         truncation headroom rather than 1.
+    /// @dev Passes both before and after the removal — included so the 18-decimal
+    ///      tests above are read as "the tolerance ran out", not "8 decimals is also
+    ///      broken". This pins the boundary rather than leaving it implied.
+    function test_MultiDecimal_8Dec_MintSucceedsAcrossAllResidues() public {
+        MockUSDC8Dec usdc8 = new MockUSDC8Dec();
+        (LitePSM psm8,) = _deployPsmForCollateral(address(usdc8));
+
+        _setOkuMMultiplierAndRoll(3e18);
+
+        for (uint256 i = 0; i < 10; i++) {
+            address u = address(uint160(uint256(0xCAFE0000) + i));
+            uint256 amount = 100e8 + i;
+
+            usdc8.mint(u, amount);
+            vm.prank(u);
+            usdc8.approve(address(psm8), amount);
+            vm.prank(u);
+            psm8.mintOkuM(amount);
+
+            assertEq(okuMoney.balanceOf(u), (amount * 1e10 * Constants.PRECISION) / 3e18);
+        }
+    }
+
+    /// @notice Redeeming at 18-decimal collateral returns exactly the floored
+    ///         conversion, with no minimum-output gate rejecting it.
+    /// @dev The redeem path's old `OutputBelowMinimum` check compared `usdcAmount`
+    ///      against a floor derived from `okuMAmount` truncated to
+    ///      `decimalMultiplier`. At 18 decimals that truncation is the identity
+    ///      (`decimalMultiplier == 1`), so the two sides were the same expression and
+    ///      the branch was unreachable — as it was at every other decimal count, for
+    ///      the separate reason that both conversions are monotone. This test pins
+    ///      the OUTPUT, which is the behaviour the check was nominally protecting.
+    function test_MultiDecimal_18Dec_RedeemReturnsExactFlooredConversion() public {
+        MockUSDC18Dec usdc18 = new MockUSDC18Dec();
+        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+
+        _setOkuMMultiplierAndRoll(3e18);
+
+        uint256 okuMAmount = 33_333_333_333_333_333_333;
+        _mintOkuMoney(user1, okuMAmount);
+
+        // Fund the buffer so the redemption settles instantly rather than queueing.
+        usdc18.mint(address(psm18), 1000e18);
+
+        vm.prank(user1);
+        okuMoney.approve(address(psm18), okuMAmount);
+
+        uint256 before = usdc18.balanceOf(user1);
+        vm.prank(user1);
+        psm18.redeemOkuM(okuMAmount);
+
+        uint256 expected = (okuMAmount * 3e18) / Constants.PRECISION; // D == 1
+        assertEq(usdc18.balanceOf(user1) - before, expected);
+    }
+
+    /// @notice Redemption output is non-decreasing in the multiplier — the property
+    ///         that makes a user-supplied slippage bound unnecessary on EVM.
+    /// @dev This is the load-bearing justification for `mintOkuM`/`redeemOkuM` taking
+    ///      no `minOut` parameter, so it is pinned rather than left as prose. The
+    ///      multiplier cannot decrease: `_setOkuMYieldRate` rejects `newRate <
+    ///      PRECISION` and `setOkuMMultiplier` requires a strict increase. A delayed
+    ///      or reordered redemption therefore pays the user MORE, never less, and
+    ///      there is no adverse price movement for a bound to protect against.
+    ///
+    ///      SVM keeps `min_usdc_out` anyway as client-side defence-in-depth; see
+    ///      `instructions/psm.rs`'s `redeem_oku_m` NatSpec, which documents the
+    ///      divergence from this side.
+    function test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier() public {
+        uint256 okuMAmount = 100e18;
+        _mintOkuMoney(user1, okuMAmount);
+        _mintOkuMoney(user2, okuMAmount);
+
+        vm.prank(user1);
+        okuMoney.approve(address(litePsm), okuMAmount);
+        uint256 user1Before = usdc.balanceOf(user1);
+        vm.prank(user1);
+        litePsm.redeemOkuM(okuMAmount);
+        uint256 payoutAtLowMultiplier = usdc.balanceOf(user1) - user1Before;
+
+        _setOkuMMultiplierAndRoll(okuMoney.okuMMultiplier() * 2);
+
+        vm.prank(user2);
+        okuMoney.approve(address(litePsm), okuMAmount);
+        uint256 user2Before = usdc.balanceOf(user2);
+        vm.prank(user2);
+        litePsm.redeemOkuM(okuMAmount);
+        uint256 payoutAtHighMultiplier = usdc.balanceOf(user2) - user2Before;
+
+        assertGt(
+            payoutAtHighMultiplier,
+            payoutAtLowMultiplier,
+            "a rising multiplier must pay the redeemer more, never less"
+        );
     }
 
     // ---- WS3.1.i: setMaxSupply edge case ----

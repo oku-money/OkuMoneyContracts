@@ -81,7 +81,7 @@ pub fn raw_to_dollars(raw_amount: u64, multiplier: u128) -> Option<u64> {
 /// `multiplier == 0` (caller should reject before calling this).
 #[inline]
 pub fn dollars_to_raw(dollar_value: u64, multiplier: u128) -> Option<u64> {
-    let raw = crate::wad::mul_div_floor_u128(dollar_value as u128, PRECISION, multiplier)?;
+    let raw = crate::wad::mul_div_floor_u128_narrow(dollar_value as u128, PRECISION, multiplier)?;
     u64::try_from(raw).ok()
 }
 

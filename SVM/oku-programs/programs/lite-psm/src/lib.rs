@@ -242,14 +242,6 @@ pub mod lite_psm {
     /// Refresh the wallet-facing ScaledUiAmount display mirror.
     /// **Permissionless** — the written value is fully determined by on-chain
     /// state, so the caller has no discretion. No EVM counterpart.
-    /// Grow `psm_config` to the current struct size, preserving all state.
-    ///
-    /// One-shot migration for a deployment predating `PsmConfig::reserved`.
-    /// No-op once the account is already at `LEN`.
-    pub fn migrate_config_space(ctx: Context<MigrateConfigSpace>) -> Result<()> {
-        instructions::migrate::migrate_config_space(ctx)
-    }
-
     pub fn sync_display_multiplier(ctx: Context<SyncDisplayMultiplier>) -> Result<()> {
         instructions::yield_ops::sync_display_multiplier(ctx)
     }

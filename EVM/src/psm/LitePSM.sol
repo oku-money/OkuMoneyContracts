@@ -83,11 +83,25 @@ contract LitePSM is
     // Common errors (ZeroAddress, ZeroAmount) live in lib/Errors.sol.
     // YieldDistributionInProgress is inherited from YieldSandwichGuard.
     error AmountTooSmall();
-    /// @dev Round-trip USDC -> OkuM -> USDC differs by more than 1 USDC unit. Truncation
-    ///      always favors the protocol; the 1-unit tolerance prevents reverts at non-even
-    ///      multipliers. Mirrors MakerDAO LitePSM's tin/tout dust handling.
-    error RoundTripDriftTooLarge(uint256 actual, uint256 expected);
-    error OutputBelowMinimum(uint256 actual, uint256 minimum);
+    // REMOVED: `RoundTripDriftTooLarge(uint256,uint256)` and
+    // `OutputBelowMinimum(uint256,uint256)`.
+    //
+    // Both read as slippage protection and neither was. `OutputBelowMinimum` compared a
+    // value against a provably-smaller function of itself and could never fire at any
+    // decimal count. `RoundTripDriftTooLarge` tolerated one COLLATERAL unit of
+    // conversion drift — ample at 6 decimals ($0.000001, far above the sub-unit
+    // truncation it was measuring) but at 18-decimal collateral that tolerance is one
+    // wei, BELOW the truncation, so it rejected roughly a third of ordinary mints once
+    // the multiplier passed ~3.0. It was dead where deployed and a liveness hazard where
+    // it wasn't: BSC's canonical Binance-Peg USDC carries 18 decimals
+    // (`scripts/config/chains.ts`).
+    //
+    // There is nothing to replace them with, because there is nothing to protect
+    // against: the multiplier is monotonically non-decreasing, so neither direction can
+    // move against the caller. See {redeemOkuM}'s NatSpec for the argument and
+    // `EVM/README.md`'s PSM section for the decision record. Note {OkuDollar} keeps its
+    // OWN `OutputBelowMinimum` for `wrap`'s `minAmountOut` — that one is reachable and
+    // unrelated.
     error InsufficientBuffer(uint256 available, uint256 required);
     error WouldStrandQueue(uint256 remainingBalance, uint256 queueObligation);
     /// @dev Reverted when the configured USDC reports more decimals than supported (>18).
@@ -95,6 +109,15 @@ contract LitePSM is
     /// @dev `_okuDollar` must wrap the same OkuMoney instance passed as `_okuMoney` —
     ///      every PSM/vault price computation assumes a single shared multiplier.
     error AssetMismatch();
+    /// @dev `_redemptionQueue` must be configured with the same USDC as this PSM —
+    ///      otherwise this PSM approves spending of its own USDC while the queue reads
+    ///      balance/allowance on a different token, silently zeroing `usdcAvailable` in
+    ///      every batch (see `RedemptionQueue.processQueue`).
+    error QueueUsdcMismatch(address queueUsdc, address psmUsdc);
+    /// @dev `_redemptionQueue` must be configured with the same OkuMoney as `_okuMoney` —
+    ///      otherwise `RedemptionQueue.processQueue` burns the wrong token's escrow against
+    ///      entries denominated in this one.
+    error QueueOkuMoneyMismatch(address queueOkuMoney, address psmOkuMoney);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -139,6 +162,25 @@ contract LitePSM is
         uint8 usdcDecimals = IERC20Metadata(_usdc).decimals();
         if (usdcDecimals > Constants.MAX_USDC_DECIMALS) revert UsdcDecimalsTooLarge(usdcDecimals);
         $.usdcDecimalMultiplier = 10 ** (uint256(Constants.OKU_M_DECIMALS) - uint256(usdcDecimals));
+
+        // Wiring validation: the queue is always deployed and initialized BEFORE this PSM
+        // (deploy/index.ts and every test fixture), so its `usdc()`/`okuMoney()` are
+        // already set and safe to read here. This is a read, not the QUEUE_PSM role grant
+        // — no circularity with the deliberate omission at
+        // `RedemptionQueue.sol` initialize (that one is about the grant, not reads).
+        // Placed after this PSM's own config is validated (zero-address, asset mismatch,
+        // decimals) so a malformed `_usdc`/`_okuMoney` reports its OWN defect rather than
+        // being masked by a wiring error against an otherwise-unrelated queue.
+        // Deploy-time only: does not protect against an already-deployed queue being
+        // repointed post-upgrade, or against a manual (non-script) deployment that skips
+        // this constructor path entirely for an already-initialized queue proxy reused
+        // via a stale address book — see `scripts/deploy/index.ts`'s `verifyDeployment`
+        // for the check that covers that path.
+        RedemptionQueue queueRef = RedemptionQueue(_redemptionQueue);
+        address queueUsdc = address(queueRef.usdc());
+        if (queueUsdc != _usdc) revert QueueUsdcMismatch(queueUsdc, _usdc);
+        address queueOkuMoney = address(queueRef.okuMoney());
+        if (queueOkuMoney != _okuMoney) revert QueueOkuMoneyMismatch(queueOkuMoney, _okuMoney);
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(Roles.PSM_UPGRADER, _admin);
@@ -185,6 +227,17 @@ contract LitePSM is
     /// @notice Mint OkuMoney by depositing USDC.
     /// @dev okuMAmount = usdcValue18 * PRECISION / okuMMultiplier.
     ///      At okuMMultiplier=$1.05, depositing 100 USDC mints ~95.24 OkuM.
+    ///
+    ///      NO SLIPPAGE PARAMETER, BY DESIGN — see {redeemOkuM} for the full argument.
+    ///      The short version for this direction: the caller fixes `usdcAmount`, and
+    ///      `okuMAmount` scales inversely with the multiplier while each unit is worth
+    ///      proportionally more, so the DOLLAR value received is invariant to when the
+    ///      transaction lands. There is no adverse price movement for a bound to catch.
+    ///
+    ///      `dollarsToOkuM` floors, so the caller forfeits up to one raw OkuM unit —
+    ///      worth `okuMMultiplier / PRECISION` collateral units — to the protocol on
+    ///      every mint. That is dust at 6-decimal collateral and still sub-cent at 18,
+    ///      and it is the only value difference between minting now and minting later.
     /// @param usdcAmount Amount of USDC to deposit (USDC native decimals)
     function mintOkuM(uint256 usdcAmount)
         external
@@ -202,15 +255,6 @@ contract LitePSM is
         uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, okuMMult);
         if (okuMAmount == 0) revert AmountTooSmall();
 
-        // Round-trip drift check: usdcAmount -> okuMAmount -> usdcAmount must be within 1
-        // USDC unit. `dollarsToOkuM` truncation drops sub-USDC dust in the protocol's
-        // favor; the tolerance prevents reverts at non-even multipliers (e.g. $1.05).
-        uint256 roundTripUsdc =
-            MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMAmount, okuMMult), decimalMultiplier);
-        if (roundTripUsdc + 1 < usdcAmount) {
-            revert RoundTripDriftTooLarge(roundTripUsdc, usdcAmount);
-        }
-
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         $.okuMoney.mint(msg.sender, okuMAmount);
 
@@ -219,6 +263,29 @@ contract LitePSM is
 
     /// @notice Redeem OkuMoney for USDC.
     /// @dev usdcAmount = okuMAmount * okuMMultiplier / PRECISION (scaled to USDC decimals).
+    ///
+    ///      NO SLIPPAGE PARAMETER, BY DESIGN. A `minUsdcOut` would protect against the
+    ///      multiplier moving adversely between signing and execution — but it cannot
+    ///      move adversely. `okuMMultiplier` is monotonically non-decreasing: streaming
+    ///      accrual compounds a rate that {OkuMoney._setOkuMYieldRate} rejects below
+    ///      `PRECISION`, and the discrete override {OkuMoney.setOkuMMultiplier} requires
+    ///      a strict increase. Redemption output is linear and increasing in it, so a
+    ///      delayed, reordered or front-run redemption pays the caller MORE, never less.
+    ///      There is no downside to bound. Pinned by
+    ///      `test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier`.
+    ///
+    ///      SVM DIVERGES DELIBERATELY: `lite-psm`'s `redeem_oku_m` does take a
+    ///      `min_usdc_out`. Same monotonicity holds there, so it is client-side
+    ///      defence-in-depth rather than a structural need — see that instruction's
+    ///      doc comment, which documents the divergence from the other side.
+    ///
+    ///      HISTORICAL: this function previously carried an `OutputBelowMinimum` check
+    ///      comparing `usdcAmount` against a floor recomputed from `okuMAmount`
+    ///      truncated to `decimalMultiplier`. It was unreachable — both conversions are
+    ///      monotone non-decreasing and the truncated input is `<=` the real one, so the
+    ///      floor was always `<=` the value it gated. Removed rather than left in place:
+    ///      code that reads as slippage protection but can never fire is worse than no
+    ///      check, because it stops reviewers asking whether real protection is needed.
     /// @param okuMAmount Amount of OkuMoney to redeem (18 decimals)
     function redeemOkuM(uint256 okuMAmount)
         external
@@ -246,25 +313,29 @@ contract LitePSM is
         LitePSMStorage storage $ = _getLitePSMStorage();
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
-        // Minimum redemption granularity = 1 USDC-unit worth of OkuM. Below that, a
-        // non-zero `usdcAmount` could pair with a slippage floor (`okuMFloor`) that
-        // collapses to zero and trivially passes the check below.
+        // Minimum redemption granularity: one collateral unit's worth of OkuM.
+        //
+        // RATIONALE REWRITTEN — this guard previously justified itself by reference to
+        // the `okuMFloor` slippage check below it ("a non-zero `usdcAmount` could pair
+        // with a slippage floor that collapses to zero and trivially passes"). That
+        // check has been removed as unreachable (see {redeemOkuM}), so the old reasoning
+        // no longer describes anything. The guard stays, on its own independent footing:
+        // it is the queue's dust floor. Every redemption the buffer cannot cover becomes
+        // a `QueueEntry` costing two SSTOREs to create and full loop-body gas plus an
+        // external `burn` to process, so without a floor an attacker could stuff the
+        // queue with economically meaningless entries at the processor's expense.
+        //
+        // NOTE the floor is denominated in `decimalMultiplier`, which is `10**(18-d)`.
+        // At 6-decimal collateral that is 1e12 OkuM wei (~$0.000001) — a real floor. At
+        // 18-decimal collateral it is 1, i.e. no floor at all beyond the `usdcAmount == 0`
+        // check below. See `EVM/README.md` Accepted Risk #15: the dust floor collapses on
+        // 18-decimal chains and a separate absolute minimum would be needed to close it.
         if (okuMAmount < decimalMultiplier) revert AmountTooSmall();
 
         uint256 okuMMult = $.okuMoney.okuMMultiplier();
         uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, okuMMult);
         usdcAmount = MathLib.dollarsToUsdc(dollarValue18, decimalMultiplier);
         if (usdcAmount == 0) revert AmountTooSmall();
-
-        // Slippage protection: truncate input to the USDC-representable floor and require
-        // the converted USDC to match it; sub-USDC dust is dropped favorably. The
-        // divide-before-multiply is intentional flooring (Slither flags it), not a bug.
-        uint256 okuMFloor = (okuMAmount / decimalMultiplier) * decimalMultiplier;
-        uint256 minUsdcExpected =
-            MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMFloor, okuMMult), decimalMultiplier);
-        if (usdcAmount < minUsdcExpected) {
-            revert OutputBelowMinimum(usdcAmount, minUsdcExpected);
-        }
 
         // If buffer covers the redemption: burn OkuM (pulled or held), pay USDC.
         // Otherwise: route OkuM to the queue. Pull OkuM from user only when not held.
@@ -297,8 +368,13 @@ contract LitePSM is
     /// @dev Multiplier-aware. SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` IS
     ///      `okuMoney.okuMMultiplier()` (enforced by `initialize`'s wiring check), so
     ///      `wrap`'s share formula is the identity and its dollar output is exactly
-    ///      {MathLib.okuMToDollars}. A 1-USDC-unit round-trip drift check mirrors
-    ///      {mintOkuM}.
+    ///      {MathLib.okuMToDollars}.
+    ///
+    ///      No slippage parameter, for the same reason as {mintOkuM} — see that
+    ///      function's NatSpec. Note this is distinct from the `minAmountOut` passed
+    ///      DOWN to {OkuDollar.wrap} below: that one is a real, reachable check
+    ///      guarding the OkuM -> UsdOku leg against the vault minting less than the
+    ///      exact share-formula identity predicts, and it stays.
     function mintUsdOku(uint256 usdcAmount)
         external
         nonReentrant
@@ -321,14 +397,6 @@ contract LitePSM is
         // yield-distribution guards) or if OkuM becomes fee-on-transfer (covered by
         // `wrap`'s own balance-delta check).
         uint256 expectedUsdMinted = MathLib.okuMToDollars(okuMAmount, okuMMult);
-
-        // Round-trip drift check: usdcAmount -> usdMinted -> usdcAmount must be within
-        // 1 USDC unit. Mirrors the pattern in {mintOkuM}; truncation favors the
-        // protocol but the 1-unit tolerance prevents reverts at non-even multipliers.
-        uint256 roundTripUsdc = MathLib.dollarsToUsdc(expectedUsdMinted, decimalMultiplier);
-        if (roundTripUsdc + 1 < usdcAmount) {
-            revert RoundTripDriftTooLarge(roundTripUsdc, usdcAmount);
-        }
 
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         $.okuMoney.mint(address(this), okuMAmount);

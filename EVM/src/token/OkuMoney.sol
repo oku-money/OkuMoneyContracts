@@ -197,6 +197,20 @@ contract OkuMoney is
         _grantRole(Roles.OKUM_ALLOWANCE_MANAGER, _admin);
     }
 
+    // ============ ERC-20 Metadata ============
+
+    /// @notice Token decimals — fixed at {Constants.OKU_M_DECIMALS} (18).
+    /// @dev Overridden rather than inherited from OZ's default deliberately. 18 decimals
+    ///      is not cosmetic here: it is the exponent the collateral conversion is built
+    ///      on (`10 ** (OKU_M_DECIMALS - usdcDecimals)` in {LitePSM.initialize} and
+    ///      {RedemptionQueue.initialize}), and the scale `Constants.PRECISION` shares
+    ///      with the multiplier. Returning the constant rather than a bare literal binds
+    ///      the value this token reports to integrators to the same source of truth that
+    ///      math depends on, so the two cannot drift apart silently.
+    function decimals() public pure override returns (uint8) {
+        return Constants.OKU_M_DECIMALS;
+    }
+
     // ============ Storage Accessor Views ============
 
     /// @notice Remaining minter allowance for `minter_`, in raw token units.
@@ -641,9 +655,12 @@ contract OkuMoney is
         super.permit(owner, spender, value, deadline, v, r, s);
     }
 
-    /// @dev Blocks approving a blacklisted spender, mirroring {permit}'s posture.
-    ///      Does NOT retroactively revoke an allowance already granted before the
-    ///      spender was blacklisted — only new/updated approvals are blocked.
+    /// @dev Blocks a blacklisted owner OR spender from creating a new allowance,
+    ///      matching Circle FiatToken's `approve` (`notBlacklisted(msg.sender)` +
+    ///      `notBlacklisted(spender)`). Does NOT retroactively revoke an allowance
+    ///      already granted before either side was blacklisted — only new/updated
+    ///      approvals are blocked. See `transferFrom` for why that residual is safe:
+    ///      a blacklisted spender cannot exercise a pre-existing allowance either.
     function approve(
         address spender,
         uint256 value
@@ -652,8 +669,41 @@ contract OkuMoney is
         override(ERC20Upgradeable, IERC20)
         returns (bool)
     {
-        if (_getOkuMoneyStorage().isBlacklisted[spender]) revert RecipientBlacklisted();
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        if ($.isBlacklisted[_msgSender()]) revert SenderBlacklisted();
+        if ($.isBlacklisted[spender]) revert RecipientBlacklisted();
         return super.approve(spender, value);
+    }
+
+    /// @notice Spend an allowance to move tokens from `from` to `to`.
+    /// @dev OZ's base `transferFrom` only spends the allowance and calls `_update`,
+    ///      which already blocks a blacklisted `from`/`to` (see below) but has no
+    ///      visibility into the THIRD party in this call — the spender,
+    ///      `_msgSender()`. Circle FiatToken's `transferFrom` carries
+    ///      `notBlacklisted(msg.sender)` alongside the `from`/`to` checks for exactly
+    ///      this reason: blacklisting is meant to freeze an address's ability to
+    ///      move value in EVERY capacity, including as an approved spender moving
+    ///      OTHER people's clean funds between OTHER clean addresses — a pre-existing
+    ///      allowance survives blacklisting unrevoked (see `approve`'s NatSpec) and
+    ///      without this check remained fully exercisable regardless. Checked here
+    ///      rather than in `_update` because `_update` has no spender parameter to see.
+    ///
+    ///      Same self-brick caveat as {mint}: `LitePSM` is a spender here (it pulls OkuM
+    ///      from the redeemer in `_redeemOkuMShared`), so blacklisting the PSM proxy
+    ///      would halt redemptions as well as minting. Accepted on the same grounds —
+    ///      nobody blacklists their own PSM, and the alternative is leaving sanctioned
+    ///      spenders able to move clean funds.
+    function transferFrom(
+        address from,
+        address to,
+        uint256 value
+    )
+        public
+        override(ERC20Upgradeable, IERC20)
+        returns (bool)
+    {
+        if (_getOkuMoneyStorage().isBlacklisted[_msgSender()]) revert SenderBlacklisted();
+        return super.transferFrom(from, to, value);
     }
 
     // ============ ERC20 Transfer Hook (Blacklist + Pause) ============
@@ -683,9 +733,20 @@ contract OkuMoney is
     /// @param amount Number of raw tokens to mint.
     /// @dev Creates raw tokens; minting 100 at okuMMultiplier=$1.05 creates $105 of value.
     ///      The PSM handles USDC <-> OkuM conversion using okuMMultiplier().
+    ///
+    ///      Checks the MINTER's blacklist status too, matching Circle FiatToken's
+    ///      `mint` (`notBlacklisted(msg.sender)` alongside `notBlacklisted(_to)`).
+    ///      `OKUM_MINTER` is granted to `LitePSM`, not partner EOAs, so this is a
+    ///      self-brick vector in a way it isn't for Circle (whose minters ARE
+    ///      third-party partners) — blacklisting the PSM proxy would halt all
+    ///      minting. Kept for literal parity with the cited reference anyway: the
+    ///      role being infra today doesn't guarantee it stays that way, and the
+    ///      check costs one SLOAD against a vector that should never fire in
+    ///      practice (nobody blacklists their own PSM proxy).
     function mint(address to, uint256 amount) external onlyRole(Roles.OKUM_MINTER) whenNotPaused {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
 
+        if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();
         if ($.isBlacklisted[to]) revert RecipientBlacklisted();
         if (totalSupply() + amount > $.maxSupply) revert ExceedsSupplyCap();
         if ($.minterAllowance[msg.sender] < amount) revert ExceedsAllowance();

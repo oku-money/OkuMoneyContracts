@@ -172,6 +172,79 @@ contract CoverageGapsTest is BaseTest {
         new ERC1967Proxy(address(impl), initData);
     }
 
+    /// @notice Regression: LitePSM must reject a RedemptionQueue configured with a
+    ///         DIFFERENT USDC than the one passed as `_usdc`. Without this check, the PSM
+    ///         approves spending of its own USDC (`processQueue`'s `forceApprove`) while
+    ///         the queue reads balance/allowance on the other token, silently zeroing
+    ///         `usdcAvailable` in every batch — the queue becomes undrainable via normal
+    ///         processing, surfaced only as a stream of `RedemptionSkipped(InsufficientFunds)`
+    ///         events (see `RedemptionQueue.processQueue`).
+    function test_LitePSMInitialize_RevertQueueUsdcMismatch() public {
+        MockUSDC otherUsdc = new MockUSDC();
+
+        RedemptionQueue otherQueueImpl = new RedemptionQueue();
+        bytes memory otherQueueInit = abi.encodeCall(
+            RedemptionQueue.initialize, (address(okuMoney), address(otherUsdc), admin)
+        );
+        RedemptionQueue otherQueue =
+            RedemptionQueue(address(new ERC1967Proxy(address(otherQueueImpl), otherQueueInit)));
+
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (
+                address(okuMoney),
+                address(okuDollar),
+                address(usdc), // PSM's USDC
+                address(otherQueue), // queue wired to a DIFFERENT USDC
+                admin
+            )
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                LitePSM.QueueUsdcMismatch.selector, address(otherUsdc), address(usdc)
+            )
+        );
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    /// @notice Regression: LitePSM must reject a RedemptionQueue configured with a
+    ///         DIFFERENT OkuMoney than the one passed as `_okuMoney`. Without this check,
+    ///         `RedemptionQueue.processQueue` burns the wrong token's escrow against
+    ///         entries that were recorded (and priced) against this PSM's OkuMoney.
+    function test_LitePSMInitialize_RevertQueueOkuMoneyMismatch() public {
+        OkuMoney otherOkuMoneyImpl = new OkuMoney();
+        bytes memory otherOkuMoneyInit =
+            abi.encodeCall(OkuMoney.initialize, ("Other", "OTH", admin, MAX_SUPPLY));
+        OkuMoney otherOkuMoney =
+            OkuMoney(address(new ERC1967Proxy(address(otherOkuMoneyImpl), otherOkuMoneyInit)));
+
+        RedemptionQueue otherQueueImpl = new RedemptionQueue();
+        bytes memory otherQueueInit = abi.encodeCall(
+            RedemptionQueue.initialize, (address(otherOkuMoney), address(usdc), admin)
+        );
+        RedemptionQueue otherQueue =
+            RedemptionQueue(address(new ERC1967Proxy(address(otherQueueImpl), otherQueueInit)));
+
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (
+                address(okuMoney), // PSM's OkuMoney
+                address(okuDollar),
+                address(usdc),
+                address(otherQueue), // queue wired to a DIFFERENT OkuMoney
+                admin
+            )
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                LitePSM.QueueOkuMoneyMismatch.selector, address(otherOkuMoney), address(okuMoney)
+            )
+        );
+        new ERC1967Proxy(address(impl), initData);
+    }
+
     // ============ UsdcDecimalsTooLarge ============
 
     function test_LitePSMInitialize_RevertUsdcDecimalsTooLarge() public {

@@ -11,10 +11,26 @@ import {Constants} from "./Constants.sol";
  * @dev See Constants.sol for terminology legend.
  *
  *      ROUNDING POLICY: conversions use OpenZeppelin `Math.mulDiv` for 512-bit
- *      intermediates and explicit `Math.Rounding`. Floor is the default; the only
- *      Ceil site in the protocol is `OkuDollar.unwrap`'s `sharesToBurn`, which
- *      favors the vault on user withdrawals (ERC-4626 convention). `rpow` keeps
+ *      intermediates and explicit `Math.Rounding`. Floor is the default. `rpow` keeps
  *      MakerDAO's half-up assembly rounding — it has no direct `mulDiv` equivalent.
+ *
+ *      There are exactly THREE `Math.Rounding.Ceil` sites in the protocol, all in
+ *      `OkuDollar` and all rounding against the caller (ERC-4626 convention — round up
+ *      whatever the caller must supply):
+ *        - `_unwrap`'s `sharesToBurn`   — burns at least as many shares as the dollars
+ *                                         withdrawn are worth; favors the vault.
+ *        - `previewMint`                — assets the caller must deposit for N shares.
+ *        - `previewWithdraw`            — shares the caller must burn for N assets.
+ *      The latter two are view-only, so they move no value; they are listed because this
+ *      is the file a reviewer consults to reason about protocol-wide rounding direction,
+ *      and an incomplete list here is how a future Ceil site gets added unnoticed. (An
+ *      earlier version of this comment asserted `sharesToBurn` was the only one.)
+ *
+ *      NOTE the SVM side has NO equivalent of these: `oku-shared`'s only ceil primitive
+ *      is `mul_div_ceil`, which takes `u64` arguments and therefore cannot represent a
+ *      WAD-scale multiplier as its divisor. If any of the above is ever ported, it needs
+ *      a new primitive — reaching for `dollars_to_raw` (floor) would invert the rounding
+ *      direction on a user withdrawal. See `SVM/DECISIONS.md` D-06.
  */
 library MathLib {
     /**

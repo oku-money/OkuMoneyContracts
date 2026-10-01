@@ -25,12 +25,12 @@ Constants: `PRECISION = 1e18` · `MAX_MULTIPLIER = 1e24` (1,000,000× ceiling) �
 | E6 | `burn` | `OkuMoney:702` | `OKUM_BURNER` | Burn caller's own balance only | sender blacklist; **no pause gate — works while paused, deliberately** (`test_Burn_WorksWhenPaused`) | No |
 | E7 | `configureMinterAllowance` | `OkuMoney:713` | `OKUM_ALLOWANCE_MANAGER` | Set **any** minter's allowance, incl. its own, to `type(uint256).max` | none beyond the role | Yes |
 | E8 | `setMaxSupply` | `OkuMoney:731` | `OKUM_CAP_MANAGER` | Raise/lower the global cap | `≥ totalSupply` | Yes |
-| E9 | `blacklist` | `OkuMoney:743` | `OKUM_BLACKLISTER` | Freeze an address (send **and** receive, incl. `approve`/`permit`) | works while paused | Yes (E10) |
+| E9 | `blacklist` | `OkuMoney:798` | `OKUM_BLACKLISTER` | Freeze an address as sender, recipient, **or approved spender** (incl. `approve`/`permit`/`transferFrom`/`mint`-as-minter — matched to Circle FiatToken's scope, see `EVM/README.md` Accepted Risk #13) | works while paused; does NOT retroactively revoke allowances already granted | Yes (E10) |
 | E10 | `unblacklist` | `OkuMoney:752` | `OKUM_UNBLACKLISTER` | Unfreeze | — | — |
 | E11 | `pause` / `unpause` | `OkuMoney:762/767` | `OKUM_PAUSER` / `OKUM_UNPAUSER` | Halt mint + transfers | — | Yes |
 | E12 | `_authorizeUpgrade` | `OkuMoney:773` | `OKUM_UPGRADER` | **Replace all token logic** | **none — no timelock, no two-step** | **No** |
 | E13 | `rescueDonation` | `OkuDollar:659` | `VAULT_RESCUER` | Withdraw OkuM held above `totalUsdShares` | `nonReentrant`, `held > totalUsdShares`; **≈1 wei/unwrap is permanently classifiable as donation** | **No** |
-| E14 | `blacklist` / `unblacklist` | `OkuDollar:694/702` | `OKUM_(UN)BLACKLISTER` | Freeze on the vault — **same role hash as E9/E10, but a separate grant per contract** | works while paused | Yes |
+| E14 | `blacklist` / `unblacklist` | `OkuDollar:774/782` | `OKUM_(UN)BLACKLISTER` | Freeze on the vault — **same role hash as E9/E10, but a separate grant per contract**; same sender/recipient/spender scope as E9 (incl. `transferFrom` and the ERC-4626 `redeem`/`withdraw` spender path) | works while paused; does NOT retroactively revoke allowances | Yes |
 | E15 | `pause` / `unpause` | `OkuDollar:712/717` | `VAULT_PAUSER` / `VAULT_UNPAUSER` | Halt wrap/unwrap/4626 | — | Yes |
 | E16 | `_authorizeUpgrade` | `OkuDollar:723` | `VAULT_UPGRADER` | **Replace all vault logic** | **none** | **No** |
 | E17 | `processQueue` | `LitePSM:392` | `PSM_QUEUE_PROCESSOR` | Spend up to caller-chosen `approveAmount` of buffer USDC | `nonReentrant`, `whenNotPaused`, yield-lock; **`approveAmount` itself unvalidated** | **No** |
@@ -38,10 +38,10 @@ Constants: `PRECISION = 1e18` · `MAX_MULTIPLIER = 1e24` (1,000,000× ceiling) �
 | E19 | `withdrawUsdc` | `LitePSM:435` | `PSM_BUFFER_WITHDRAWER` | **Drain the buffer down to the *queued* obligation — circulating OkuM/UsdOku is not counted** | yield-lock + `WouldStrandQueue`; **deliberately NOT pause-gated** | **No** |
 | E20 | `depositBuffer` | `LitePSM:458` | `PSM_BUFFER_DEPOSITOR` | Add USDC (pull from caller) | **none of the three modifiers** | No |
 | E21 | `_authorizeUpgrade` | `LitePSM:467` | `PSM_UPGRADER` | **Replace all PSM logic** | **none** | **No** |
-| E22 | `enqueue` | `RedemptionQueue:164` | `QUEUE_PSM` | Add an obligation; inflates `totalQueuedOkuM` | zero-user guard | **No** |
-| E23 | `processQueue` | `RedemptionQueue:199` | `QUEUE_PSM` | Pay + burn queued entries | `nonReentrant` | **No** |
-| E24 | `rescueQueueEntry` | `RedemptionQueue:282` | `QUEUE_RESCUER` | **Send any queued user's escrowed OkuM to an arbitrary address** | `nonReentrant`, index range, `!= address(0)` — **recipient NOT checked against `entry.user`** | **No** |
-| E25 | `_authorizeUpgrade` | `RedemptionQueue:374` | `QUEUE_UPGRADER` | **Replace all queue logic** | **none** | **No** |
+| E22 | `enqueue` | `RedemptionQueue:163` | `QUEUE_PSM` | Add an obligation; inflates `totalQueuedOkuM` | zero-user guard | **No** |
+| E23 | `processQueue` | `RedemptionQueue:205` | `QUEUE_PSM` | Pay + burn queued entries | `nonReentrant` | **No** |
+| E24 | `rescueQueueEntry` | `RedemptionQueue:376` | `QUEUE_RESCUER` | **Send any queued user's escrowed OkuM to an arbitrary address** | `nonReentrant`, index range, `!= address(0)` — **recipient NOT checked against `entry.user`** | **No** |
+| E25 | `_authorizeUpgrade` | `RedemptionQueue:489` | `QUEUE_UPGRADER` | **Replace all queue logic** | **none** | **No** |
 | E26 | `grantRole` / `revokeRole` ×4 | OZ `AccessControl` | `DEFAULT_ADMIN_ROLE` | **Grant or revoke every role above, on that contract** | none — immediate, no two-step | Yes |
 | E27 | `initialize` ×4 | each contract | deployer | Grants **every** role to one `_admin`; protocol is single-key until scripts redistribute | `initializer` | — |
 
@@ -49,8 +49,14 @@ Constants: `PRECISION = 1e18` · `MAX_MULTIPLIER = 1e24` (1,000,000× ceiling) �
 (`:190/224/303/351`) and `OkuDollar.wrap/unwrap/redeem/withdraw` (`:371/423/600/583`) — all
 carry `nonReentrant + whenNotPaused + whenYieldNotDistributing`. `OkuDollar.deposit/mint`
 (`:565/571`) appear unguarded but delegate to `wrap`, inheriting its guards.
-`RedemptionQueue.advanceHead` (`:317`) is permissionless and safe — monotone, and only
-advances past already-cleared slots.
+`RedemptionQueue.advanceHead` (`:432`) is permissionless and safe — monotone, and only
+advances past already-cleared slots — but **only because it now carries `nonReentrant`**.
+`processQueue` transiently clears a live slot across its external transfer call (delete,
+then restore-on-failure); a reentrant `advanceHead` fired from a transfer-callback
+collateral token during that window could previously have stranded the entry permanently
+below `queueHead`. Not reachable with the Circle USDC configured today (no transfer
+callback), but the collateral token is a deploy parameter this contract cannot itself
+enforce. See `EVM/README.md` Accepted Risk #6 and `test/psm/Reentrancy.t.sol`.
 
 ---
 
@@ -79,9 +85,14 @@ Roles are **pubkeys stored on `PsmConfig`**, enforced by Anchor `has_one`, not a
 | S17 | `accept_role_admin` | `pending_role_admin` | Complete the two-step handover | Ownable2Step-equivalent | — |
 | S18 | `cancel_role_admin_transfer` | `role_admin` | Abort a pending handover | — | — |
 | S19 | `update_token_metadata` | `role_admin` | Rename the live token (two raw `invoke_signed`) | — | Yes |
-| S20 | `migrate_config_space` | `role_admin`, **verified from raw bytes at offset 9** | Resize the singleton config PDA | discriminator + offset auth; `UncheckedAccount`; **zero tests** | — |
 | S21 | `initialize` | `role_admin` = **BPF upgrade authority** | Creates config, mints, vault | ties `role_admin` to `ProgramData` upgrade authority — **good, non-obvious anti-land-grab control** | — |
 | S22 | Program upgrade | BPF upgrade authority | **Replace all program logic** | none | **No** |
+
+**S20 is intentionally vacant.** It was `migrate_config_space` — a `role_admin`-gated
+resize of the config PDA that authenticated by reading `role_admin` from a hardcoded
+byte offset on an `UncheckedAccount`. Removed: its target set was empty (no account of
+the layout it resized has ever been deployed) and it had zero tests. Numbering is left
+unshifted so existing citations of S21/S22 stay valid. See `SVM/DECISIONS.md` D-07.
 
 **SVM permissionless:** `mint_oku_m`, `redeem_oku_m` (pause + yield-lock + slippage
 `min_usdc_out`), and `sync_display_multiplier` — correctly permissionless, since its
@@ -105,7 +116,17 @@ Neither is pause-gated.
 
 **C. `rescueQueueEntry` can redirect user funds to an arbitrary address (E24).**
 `alternateRecipient` is checked only for `address(0)` — **never against `entry.user`**.
-Single signature, irreversible.
+Single signature, irreversible. Deliberate, not an oversight: the escape hatch it exists
+for (an OkuM-**blacklisted** `entry.user`, whose self-return would revert
+`RecipientBlacklisted`) requires exactly this freedom. Docs previously misattributed the
+trigger to USDC-blacklisting — wrong: OkuM's blacklist is independent, so a
+USDC-blacklisted user can still self-receive via `alternateRecipient == entry.user`.
+**Mitigation is conditional, not structural:** on the mainnet topology
+(`grantRolesMainnet.ts`) `QUEUE_RESCUER` is co-held with `QUEUE_UPGRADER` (E25, no
+guards) by the Cold Multisig, so the redirect adds no marginal power over a key that can
+already replace the contract outright — but that argument evaporates the moment
+`QUEUE_RESCUER` is granted to any key that does *not* also hold `QUEUE_UPGRADER` (e.g. a
+testnet operator key). Verify co-location before relying on this row as "covered."
 
 **D. `direct_minter` / `direct_burner` can never be disabled (S5, S16).**
 `set_authority` rejects `Pubkey::default()` unconditionally, but that value *is* the
@@ -150,7 +171,7 @@ rule is not stated in one place.
 | Role rotation | OZ `AccessControl`, immediate | 11 immediate + `role_admin` two-step |
 | Upgrade | UUPS ×4, per-contract role | BPF loader, single authority |
 | Minter allowance | per-address mapping | single global value |
-| Redeem slippage | none (protocol-side floor only) | user-supplied `min_usdc_out` |
+| Redeem slippage | none (protocol-side floor only) — monotonic multiplier + zero PSM fee make it structurally unreachable; see `EVM/README.md § LitePSM.sol` | user-supplied `min_usdc_out`, defense-in-depth (same monotonicity holds); doubles as a live Rust-vs-TS differential probe in `test-devnet.ts` since Solana has no view functions — see `SVM/README.md § PSM` |
 | Buffer withdraw | partial solvency check | none |
 
 ---

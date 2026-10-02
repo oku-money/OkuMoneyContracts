@@ -17,6 +17,10 @@ import { getTokenAddress, getWhaleAddress } from "../../../scripts/config/chains
 const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
 const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
 
+const WAD_1E18 = 10n ** 18n
+/** USDC is 6-decimal; OkuM is 18. */
+const DECIMAL_MULT_6_TO_18 = 10n ** 12n
+
 describe("OkuMoney Scenarios", () => {
     let Frank: Signer
     let Bob: Signer
@@ -56,29 +60,20 @@ describe("OkuMoney Scenarios", () => {
         })
     }
 
+    /**
+     * Mint OkuM for `user` by depositing exactly `usdcAmount`.
+     *
+     * The previous version rounded the input up to a multiple of the multiplier
+     * to dodge "the PSM slippage check". No such check exists -- `LitePSM` has
+     * no slippage parameter by design, and the two checks that once looked like
+     * one were removed as unreachable. The rounding only served to make the
+     * resulting OkuM amount divide evenly, which is what let several assertions
+     * downstream look exact while actually re-deriving the contract's formula.
+     */
     async function getOkuMoney(user: Signer, usdcAmount: bigint) {
-        // The PSM slippage check can fail due to integer division rounding.
-        // At elevated prices, we need to round up the USDC input to the nearest
-        // amount that divides evenly by the price to avoid 1 wei rounding loss.
-        // 
-        // For price P (18 decimals), we need: (U * 1e18) % P == 0
-        // This means: U must be a multiple of P / gcd(1e18, P)
-        // 
-        // Simpler approach: add enough buffer that even with 1 wei loss, check passes.
-        // Since check is output >= input, and loss is at most (price-1) wei at 18 decimals,
-        // we need input to be a multiple of price/1e18 (rounded up).
-        const currentPrice = await okuMoney.okuMMultiplier()
-        const DECIMAL_MULT = 10n ** 12n // 6 to 18 decimal conversion
-        
-        // Calculate the minimum unit that divides evenly
-        // At price 1.1e18, minimum unit is 1.1 USDC = 1100000 (6 decimals)
-        // Round up usdcAmount to next multiple of this unit
-        const unitSize = currentPrice / DECIMAL_MULT // In 6 decimal units
-        const roundedAmount = ((usdcAmount + unitSize - 1n) / unitSize) * unitSize
-        
-        await fundWithUSDC(user, roundedAmount)
-        await usdc.connect(user).approve(await psm.getAddress(), roundedAmount)
-        await psm.connect(user).mintOkuM(roundedAmount)
+        await fundWithUSDC(user, usdcAmount)
+        await usdc.connect(user).approve(await psm.getAddress(), usdcAmount)
+        await psm.connect(user).mintOkuM(usdcAmount)
     }
 
     before(async () => {
@@ -255,10 +250,6 @@ describe("OkuMoney Scenarios", () => {
         it("PSM cannot mint beyond allowance, admin can reset", async () => {
             const aliceAddr = await Alice.getAddress()
             const psmAddr = await psm.getAddress()
-            const PRECISION = parseEther("1")
-
-            // Get current notePrice (may be elevated from earlier tests)
-            const currentPrice = await okuMoney.okuMMultiplier()
 
             // Set PSM minter allowance to limited amount (50,000 OkuMoney in 18 decimals)
             const limitedAllowance = parseEther("50000")
@@ -267,27 +258,28 @@ describe("OkuMoney Scenarios", () => {
             // Verify allowance was set
             expect(await okuMoney.minterAllowance(psmAddr)).to.equal(limitedAllowance)
 
-            // Alice swaps 40,000 USDC — price-aware: noteAmount = usdcValue18 × PRECISION / notePrice
-            // Round up to nearest multiple of price to avoid slippage check failure
-            const DECIMAL_MULT = 10n ** 12n
-            const unitSize = currentPrice / DECIMAL_MULT
-            const firstSwapBase = parseUnits("40000", 6) // USDC amount
-            const firstSwap = ((firstSwapBase + unitSize - 1n) / unitSize) * unitSize
-            const firstSwap18 = firstSwap * DECIMAL_MULT
-            const expectedFirstMint = (firstSwap18 * PRECISION) / currentPrice
+            // Alice swaps 40,000 USDC. No rounding games: `LitePSM` has no
+            // slippage check to dodge, and rounding the input to a multiple of
+            // the multiplier only served to make the expectation below look
+            // exact while re-deriving the contract's own formula.
+            //
+            // The allowance decrement is measured directly rather than predicted,
+            // and then checked against the MINT that actually landed -- so the
+            // assertion is "the allowance fell by exactly what was minted", a
+            // conservation property, not a restatement of `dollarsToOkuM`.
+            const firstSwap = parseUnits("40000", 6)
             await fundWithUSDC(Alice, firstSwap)
             await usdc.connect(Alice).approve(psmAddr, firstSwap)
+            const aliceBeforeFirst = await okuMoney.balanceOf(aliceAddr)
             await psm.connect(Alice).mintOkuM(firstSwap)
+            const expectedFirstMint = (await okuMoney.balanceOf(aliceAddr)) - aliceBeforeFirst
 
-            // Verify allowance decreased by price-adjusted OkuMoney amount minted
             const remainingAllowance = await okuMoney.minterAllowance(psmAddr)
-            const expectedRemaining = limitedAllowance - expectedFirstMint
-            expect(remainingAllowance).to.be.closeTo(expectedRemaining, parseEther("1"))
+            expect(remainingAllowance, "allowance falls by exactly the amount minted")
+                .to.equal(limitedAllowance - expectedFirstMint)
 
             // Alice tries to swap 20,000 more USDC (should fail - exceeds remaining allowance)
-            // Round up to nearest multiple of price to avoid slippage check failure
-            const secondSwapBase = parseUnits("20000", 6) // USDC amount
-            const secondSwap = ((secondSwapBase + unitSize - 1n) / unitSize) * unitSize
+            const secondSwap = parseUnits("20000", 6)
             await fundWithUSDC(Alice, secondSwap)
             await usdc.connect(Alice).approve(psmAddr, secondSwap)
             await expect(psm.connect(Alice).mintOkuM(secondSwap)).to.be.revertedWithCustomError(okuMoney, "ExceedsAllowance")
@@ -297,14 +289,17 @@ describe("OkuMoney Scenarios", () => {
             await okuMoney.connect(Frank).configureMinterAllowance(psmAddr, newAllowance)
 
             // Now swap should succeed
+            const aliceAfterFirst = await okuMoney.balanceOf(aliceAddr)
             await psm.connect(Alice).mintOkuM(secondSwap)
 
-            // Verify Alice received OkuMoney from both swaps
-            const aliceBalance = await okuMoney.balanceOf(aliceAddr)
-            const secondSwap18 = secondSwap * 10n ** 12n
-            const expectedSecondMint = (secondSwap18 * PRECISION) / currentPrice
-            // Alice may have balance from earlier tests, just verify she got at least both mints
-            expect(aliceBalance).to.be.gte(expectedFirstMint + expectedSecondMint)
+            // Alice received OkuMoney from both swaps. Measured as a DELTA from
+            // before the second mint, so the assertion is exact rather than a
+            // `gte` hedged against balance carried in from earlier tests.
+            const expectedSecondMint = (await okuMoney.balanceOf(aliceAddr)) - aliceAfterFirst
+            expect(expectedSecondMint, "second mint is 20k/40k the size of the first")
+                .to.be.closeTo(expectedFirstMint / 2n, 1n)
+            expect(await okuMoney.minterAllowance(psmAddr), "allowance falls by the second mint")
+                .to.equal(newAllowance - expectedSecondMint)
         })
     })
 
@@ -406,9 +401,14 @@ describe("OkuMoney Scenarios", () => {
             const depositAmount = parseUnits("10000", 6)
 
             // Alice gets OkuMoney via PSM
+            const aliceBeforeMint = await okuMoney.balanceOf(aliceAddr)
             await getOkuMoney(Alice, depositAmount)
             const aliceBalance = await okuMoney.balanceOf(aliceAddr)
-            expect(aliceBalance).to.be.gt(0)
+            // 10,000 USDC at the current multiplier, measured as a delta so the
+            // state carried in from earlier `it()` blocks cannot hide a bad mint.
+            const mult = await okuMoney.okuMMultiplier()
+            expect(aliceBalance - aliceBeforeMint, "mint credits the exact converted amount")
+                .to.equal((depositAmount * DECIMAL_MULT_6_TO_18 * WAD_1E18) / mult)
 
             // Transfer works before pause.
             //
@@ -442,24 +442,24 @@ describe("OkuMoney Scenarios", () => {
                 okuMoney.connect(Bob).transferFrom(aliceAddr, bobAddr, transferAmount)
             ).to.be.revertedWithCustomError(okuMoney, "EnforcedPause")
 
-            // Minting via PSM should fail when paused
-            // Use price-aligned amount to pass slippage check, so we hit the pause check
-            const currentPrice = await okuMoney.okuMMultiplier()
-            const DECIMAL_MULT = 10n ** 12n
-            const unitSize = currentPrice / DECIMAL_MULT
-            const alignedDeposit = ((depositAmount + unitSize - 1n) / unitSize) * unitSize
-            await fundWithUSDC(Alice, alignedDeposit)
-            await usdc.connect(Alice).approve(await psm.getAddress(), alignedDeposit)
+            // Minting via PSM must fail when paused. No input alignment needed --
+            // there is no slippage check to get past, only the pause gate.
+            await fundWithUSDC(Alice, depositAmount)
+            await usdc.connect(Alice).approve(await psm.getAddress(), depositAmount)
             await expect(
-                psm.connect(Alice).mintOkuM(alignedDeposit)
+                psm.connect(Alice).mintOkuM(depositAmount)
             ).to.be.revertedWithCustomError(okuMoney, "EnforcedPause")
 
             // Frank unpause
             await okuMoney.connect(Frank).unpause()
 
-            // Transfer works again after unpause
+            // Transfer works again after unpause. Asserted as a delta for the
+            // same ordering reason documented above -- `transferAmount * 2n` was
+            // an absolute that happened to hold only because Bob started this
+            // test near zero, contradicting the comment 30 lines up.
             await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
-            expect(await okuMoney.balanceOf(bobAddr)).to.be.closeTo(transferAmount * 2n, parseEther("1"))
+            expect(await okuMoney.balanceOf(bobAddr), "second transfer lands in full")
+                .to.equal(bobBeforeTransfer + transferAmount * 2n)
         })
 
         it("Blacklisted addresses cannot send or receive", async () => {
@@ -502,11 +502,21 @@ describe("OkuMoney Scenarios", () => {
             await okuMoney.connect(Frank).unblacklist(bobAddr)
             expect(await okuMoney.isBlacklisted(bobAddr)).to.equal(false)
 
-            // Bob can send again
+            // Bob can send again. The previous version made both calls with NO
+            // assertions, so it only proved "does not throw" -- it would have
+            // passed even if the transfers moved nothing.
+            const bobBeforeResume = await okuMoney.balanceOf(bobAddr)
+            const charlieBeforeResume = await okuMoney.balanceOf(charlieAddr)
             await okuMoney.connect(Bob).transfer(charlieAddr, transferAmount)
+            expect(await okuMoney.balanceOf(bobAddr), "un-blacklisted Bob can send")
+                .to.equal(bobBeforeResume - transferAmount)
+            expect(await okuMoney.balanceOf(charlieAddr), "Charlie receives it")
+                .to.equal(charlieBeforeResume + transferAmount)
 
             // Bob can receive again
             await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
+            expect(await okuMoney.balanceOf(bobAddr), "un-blacklisted Bob can receive")
+                .to.equal(bobBeforeResume)
         })
 
         it("Blacklist works while paused (pause-to-blacklist protocol)", async () => {

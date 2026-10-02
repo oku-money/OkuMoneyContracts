@@ -206,8 +206,13 @@ describe("LitePSM Scenarios", () => {
             await okuMoney.connect(Alice).approve(psmAddr, aliceRedeemAmount)
             await psm.connect(Alice).redeemOkuM(aliceRedeemAmount)
 
+            // The /1e12 below is only the 18->6 decimal scaling, which is valid
+            // ONLY while the multiplier is 1.0. Pin that, or a silently-rebased
+            // deployment would make this look exact while measuring nothing.
+            expect(await okuMoney.okuMMultiplier(), "fixture: unrebased").to.equal(10n ** 18n)
             const expectedAliceUsdc = aliceRedeemAmount / BigInt(1e12)
-            expect((await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore).to.be.closeTo(expectedAliceUsdc, parseUnits("1", 6))
+            expect((await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore, "instant redeem pays exactly")
+                .to.equal(expectedAliceUsdc)
             expect(await queue.queueLength()).to.equal(0)
 
             // Bob redeems half - should also be instant
@@ -219,7 +224,8 @@ describe("LitePSM Scenarios", () => {
             await psm.connect(Bob).redeemOkuM(bobRedeemAmount)
 
             const expectedBobUsdc = bobRedeemAmount / BigInt(1e12)
-            expect((await usdc.balanceOf(bobAddr)) - bobUsdcBefore).to.be.closeTo(expectedBobUsdc, parseUnits("1", 6))
+            expect((await usdc.balanceOf(bobAddr)) - bobUsdcBefore, "instant redeem pays exactly")
+                .to.equal(expectedBobUsdc)
             expect(await queue.queueLength()).to.equal(0)
         })
     })
@@ -372,14 +378,19 @@ describe("LitePSM Scenarios", () => {
             await psm.connect(Alice).redeemOkuM(redeemOkuM)
 
             expect(await queue.queueLength()).to.equal(0)
-            expect(await usdc.balanceOf(aliceAddr)).to.be.gt(aliceUsdcBefore)
+            // 5,000 OkuM at m = 1.0 is exactly 5,000 USDC. `gt(before)` would
+            // have passed on a single wei.
+            expect(await okuMoney.okuMMultiplier(), "fixture: unrebased").to.equal(10n ** 18n)
+            expect(await usdc.balanceOf(aliceAddr), "Alice paid instantly, in full")
+                .to.equal(aliceUsdcBefore + parseUnits("5000", 6))
 
             // Bob redeems 5,000 OkuMoney - INSTANT (buffer: 5,000 -> 0)
             await okuMoney.connect(Bob).approve(psmAddr, redeemOkuM)
             await psm.connect(Bob).redeemOkuM(redeemOkuM)
 
             expect(await queue.queueLength()).to.equal(0)
-            expect(await usdc.balanceOf(bobAddr)).to.be.gt(bobUsdcBefore)
+            expect(await usdc.balanceOf(bobAddr), "Bob paid instantly, in full")
+                .to.equal(bobUsdcBefore + parseUnits("5000", 6))
 
             // Charlie redeems 5,000 OkuMoney - QUEUED (buffer: 0)
             await okuMoney.connect(Charlie).approve(psmAddr, redeemOkuM)

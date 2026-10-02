@@ -17,6 +17,11 @@ import { getTokenAddress, getWhaleAddress } from "../../../scripts/config/chains
 const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
 const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
 
+const WAD = 10n ** 18n
+/** USDC is 6-decimal; OkuM is 18. */
+const DECIMAL_MULTIPLIER = 10n ** 12n
+
+
 describe("OkuDollar Vault Scenarios", () => {
     let Frank: Signer
     let Bob: Signer
@@ -56,22 +61,20 @@ describe("OkuDollar Vault Scenarios", () => {
         })
     }
 
+    /**
+     * Mint OkuM for `user` by depositing exactly `usdcAmount`.
+     *
+     * The previous version rounded the input up to a multiple of the multiplier
+     * to dodge "the PSM slippage check". No such check exists -- `LitePSM` has
+     * no slippage parameter by design, and the two checks that once looked like
+     * one were removed as unreachable. The rounding only served to make the
+     * resulting OkuM amount divide evenly, which is what let several assertions
+     * downstream look exact while actually re-deriving the contract's formula.
+     */
     async function getOkuMoney(user: Signer, usdcAmount: bigint) {
-        // The PSM slippage check can fail due to integer division rounding.
-        // At elevated prices, we need to round up the USDC input to the nearest
-        // amount that divides evenly by the price to avoid 1 wei rounding loss.
-        const currentPrice = await okuMoney.okuMMultiplier()
-        const DECIMAL_MULT = 10n ** 12n // 6 to 18 decimal conversion
-        
-        // Calculate the minimum unit that divides evenly
-        // At price 1.1e18, minimum unit is 1.1 USDC = 1100000 (6 decimals)
-        // Round up usdcAmount to next multiple of this unit
-        const unitSize = currentPrice / DECIMAL_MULT // In 6 decimal units
-        const roundedAmount = ((usdcAmount + unitSize - 1n) / unitSize) * unitSize
-        
-        await fundWithUSDC(user, roundedAmount)
-        await usdc.connect(user).approve(await psm.getAddress(), roundedAmount)
-        await psm.connect(user).mintOkuM(roundedAmount)
+        await fundWithUSDC(user, usdcAmount)
+        await usdc.connect(user).approve(await psm.getAddress(), usdcAmount)
+        await psm.connect(user).mintOkuM(usdcAmount)
     }
 
     before(async () => {
@@ -174,31 +177,42 @@ describe("OkuDollar Vault Scenarios", () => {
             // Get OkuMoney via PSM
             await getOkuMoney(Alice, depositAmount)
 
+            // Multiplier is 1.0 on a fresh deployment, so 10,000 USDC buys
+            // exactly 10,000e18 OkuM (6 -> 18 decimal scaling, no rebasing yet).
+            const mult = await okuMoney.okuMMultiplier()
+            expect(mult, "fixture: deployment must be unrebased").to.equal(WAD)
             const noteBalance = await okuMoney.balanceOf(aliceAddr)
-            expect(noteBalance).to.be.gt(0)
+            expect(noteBalance, "10,000 USDC mints 10,000 OkuM at m = 1.0")
+                .to.equal(depositAmount * DECIMAL_MULTIPLIER)
 
             // Wrap OkuMoney into OkuDollar vault
             await okuMoney.connect(Alice).approve(okuUsdAddr, noteBalance)
             const okuUsdBefore = await okuUsd.balanceOf(aliceAddr)
             await okuUsd.connect(Alice).wrap(noteBalance, aliceAddr, 0)
 
-            const okuUsdReceived = await okuUsd.balanceOf(aliceAddr)
-            expect(okuUsdReceived).to.be.gt(okuUsdBefore)
+            // At m == PRECISION a wrapped OkuM is worth exactly one dollar.
+            const okuUsdReceived = (await okuUsd.balanceOf(aliceAddr)) - okuUsdBefore
+            expect(okuUsdReceived, "wrap mints dollar-for-dollar at m = 1.0").to.equal(noteBalance)
 
-            // Verify vault holds the notes
-            const vaultNotes = await okuMoney.balanceOf(okuUsdAddr)
-            const totalReserves = await okuUsd.totalOkuMReserves()
-            expect(vaultNotes).to.equal(totalReserves)
+            // The vault must actually have ESCROWED what Alice sent. Comparing
+            // `totalOkuMReserves()` against `okuMoney.balanceOf(vault)` would be
+            // comparing a value to itself -- the getter is literally that call
+            // (`OkuDollar.sol:741`) -- so it is checked against the deposit instead.
+            expect(await okuMoney.balanceOf(okuUsdAddr), "vault escrowed Alice's notes")
+                .to.equal(noteBalance)
+            expect(await okuUsd.totalOkuMReserves(), "reserves view agrees with the escrow")
+                .to.equal(noteBalance)
 
             // Unwrap all OkuDollar immediately
             const notesBefore = await okuMoney.balanceOf(aliceAddr)
             await okuUsd.connect(Alice).unwrap(okuUsdReceived, aliceAddr)
 
-            const notesAfter = await okuMoney.balanceOf(aliceAddr)
-            const notesReturned = notesAfter - notesBefore
+            const notesReturned = (await okuMoney.balanceOf(aliceAddr)) - notesBefore
 
-            // Should get back original note amount (± 1 wei rounding)
-            expect(notesReturned).to.be.closeTo(noteBalance, 1n)
+            // Full exit at an unchanged multiplier returns the original notes
+            // exactly -- `unwrap` ceils the share burn, but with m == PRECISION
+            // there is no fractional part to round.
+            expect(notesReturned, "round-trip at m = 1.0 is lossless").to.equal(noteBalance)
 
             // Vault should be empty
             expect(await okuUsd.totalOkuMReserves()).to.equal(0)
@@ -245,37 +259,34 @@ describe("OkuDollar Vault Scenarios", () => {
             const notesAfter = await okuMoney.balanceOf(aliceAddr)
             const notesReturned = notesAfter - notesBefore
 
-            // Expected: okuUsdBalance / 1.1 (the multiplier), which is what
-            // OkuDollar._unwrap computes as
-            // `mulDiv(usdAmount, PRECISION, mult, Floor)` — dollar-conserving.
+            // Expected value derived from the SCENARIO, not from `_unwrap`.
             //
-            // This previously read `(okuUsdBalance * usdMult) / newPrice`, a
-            // leftover from the DUAL-multiplier era when `usdMultiplier` and
-            // the note price were independent values. Under the
-            // single-multiplier design `usdMultiplier()` just returns
-            // `okuMoney.okuMMultiplier()` (OkuDollar.sol:191-193), so both
-            // terms are now the SAME number and the formula degenerated to
-            // `okuUsdBalance` — i.e. it asserted that unwrapping returns
-            // dollar-for-dollar in RAW notes, which would inflate value by
-            // the multiplier. The contract is correct here; the expectation
-            // was stale.
-            const PRECISION = parseEther("1")
-            const expectedNotes = (okuUsdBalance * PRECISION) / newPrice
-            expect(notesReturned).to.be.closeTo(expectedNotes, 1n)
+            // Alice wrapped `noteBalance` raw notes at m = 1.0, so she holds
+            // exactly that many shares. The multiplier then rose 10%. Unwrapping
+            // the PRE-bump dollar figure `okuUsdBalance` (== noteBalance) buys
+            // back only 1/1.1 of those notes, because each note is now worth 1.1
+            // dollars. So: noteBalance × 100 / 110.
+            //
+            // The previous version asserted `(okuUsdBalance * PRECISION) / newPrice`,
+            // which is a transcription of `_unwrap`'s own
+            // `mulDiv(usdAmount, PRECISION, mult, Floor)` -- it would have passed
+            // for any self-consistent unwrap formula, including a wrong one.
+            const expectedNotes = (noteBalance * 100n) / 110n
+            expect(notesReturned, "partial exit returns notes/1.1 after a 10% bump")
+                .to.be.closeTo(expectedNotes, 1n)
 
-            // The unwrap above used `okuUsdBalance`, which was captured BEFORE
-            // the multiplier bump. A share balance is denominated in raw OkuM,
-            // so a UsdOku *balance* grows with the multiplier: after the 10%
-            // bump Alice's balance is `okuUsdBalance × 1.1`, and unwrapping
-            // only the pre-bump figure is therefore a PARTIAL exit that leaves
-            // ~9% of her shares in the vault. The previous assertion checked
-            // for a drained vault at this point and only ever passed because
-            // the stale formula above made the two errors cancel.
-            //
-            // Exit the remaining balance to make this a genuine full exit,
-            // which is what the test name describes.
+            // The unwrap above used `okuUsdBalance`, captured BEFORE the bump. A
+            // UsdOku balance is denominated in raw OkuM, so it grows with the
+            // multiplier: Alice's balance is now `okuUsdBalance × 1.1`, and
+            // unwrapping only the pre-bump figure is a PARTIAL exit leaving ~9%
+            // of her shares behind. An earlier version asserted a drained vault
+            // here and passed only because two errors cancelled.
             const remainingUsdOku = await okuUsd.balanceOf(aliceAddr)
-            expect(remainingUsdOku).to.be.gt(0n)
+            // Derived: she entered with `noteBalance` shares and has burned
+            // `expectedNotes` of them; the remainder is priced at the new multiplier.
+            const expectedRemaining = ((noteBalance - expectedNotes) * newPrice) / WAD
+            expect(remainingUsdOku, "partial exit leaves the un-burned shares")
+                .to.be.closeTo(expectedRemaining, 2n)
             await okuUsd.connect(Alice).unwrap(remainingUsdOku, aliceAddr)
 
             // Now the vault is genuinely empty. Tolerance is a few wei, not
@@ -332,9 +343,17 @@ describe("OkuDollar Vault Scenarios", () => {
             const bobUsdGained = (await okuUsd.balanceOf(bobAddr)) - bobUsdBefore
             const charlieUsdGained = (await okuUsd.balanceOf(charlieAddr)) - charlieUsdBefore
 
-            // Verify proportional OkuDollar received (1:2:3 ratio approximately)
-            expect(bobUsdGained).to.be.closeTo(aliceUsdGained * 2n, aliceUsdGained / 10n)
-            expect(charlieUsdGained).to.be.closeTo(aliceUsdGained * 3n, aliceUsdGained / 10n)
+            // The deposits are exact 1:2:3 multiples, so the shares are too --
+            // up to the floor in `dollarsToOkuM`. Each mint floors independently,
+            // and `floor(k·x/m)` can exceed `k·floor(x/m)` by at most `k-1` wei,
+            // so the tolerances below are k-1, not a round number.
+            //
+            // The previous version allowed ±10% OF ALICE'S POSITION, which would
+            // have accepted a vault mispricing Bob by 9%. These bounds are ~21
+            // orders of magnitude tighter and are derived, not observed.
+            expect(bobUsdGained, "Bob deposited 2x Alice").to.be.closeTo(aliceUsdGained * 2n, 1n)
+            expect(charlieUsdGained, "Charlie deposited 3x Alice")
+                .to.be.closeTo(aliceUsdGained * 3n, 2n)
 
             // Admin increases notePrice by 10%. Collateralization stays exactly 1.0
             // under the single-multiplier design (no surplus() to check).
@@ -342,11 +361,17 @@ describe("OkuDollar Vault Scenarios", () => {
             const newPrice = priceBefore * 110n / 100n
             await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
 
-            // Users unwrap their gained OkuDollar in reverse order.
-            // Unwrap is multiplier-aware: okuMReturned = usdAmount × PRECISION / multiplier
-            // After the multiplier increase, each user gets FEWER raw notes
-            // back (each note is worth more).
-            const currentPrice = await okuMoney.okuMMultiplier()
+            // Users unwrap their gained OkuDollar in reverse order. After a 10%
+            // multiplier increase each user gets FEWER raw notes back, because
+            // each note is now worth more.
+            //
+            // `newPrice` is the test's OWN number, not a value read back from the
+            // contract. The previous version re-read `okuMMultiplier()` here, so
+            // a silently no-op `setOkuMMultiplier` would still have satisfied all
+            // three assertions below -- in a test whose whole purpose is to verify
+            // multiplier-aware unwrap.
+            expect(await okuMoney.okuMMultiplier(), "the bump must have landed")
+                .to.equal(newPrice)
 
             const charlieNotesBefore = await okuMoney.balanceOf(charlieAddr)
             await okuUsd.connect(Charlie).unwrap(charlieUsdGained, charlieAddr)
@@ -360,16 +385,13 @@ describe("OkuDollar Vault Scenarios", () => {
             await okuUsd.connect(Alice).unwrap(aliceUsdGained, aliceAddr)
             const aliceReceived = (await okuMoney.balanceOf(aliceAddr)) - aliceNotesBefore
 
-            // Each user receives notes = usdGained × PRECISION / multiplier —
-            // dollar-conserving, matching OkuDollar._unwrap's
-            // `mulDiv(usdAmount, PRECISION, mult, Floor)`. See the detailed
-            // note in the "NotePrice increase" test above for why the old
-            // `× usdMultiplier / notePrice` form was a stale dual-multiplier
-            // leftover that degenerated to an identity.
-            const PRECISION = parseEther("1")
-            const expectedAlice = (aliceUsdGained * PRECISION) / currentPrice
-            const expectedBob = (bobUsdGained * PRECISION) / currentPrice
-            const expectedCharlie = (charlieUsdGained * PRECISION) / currentPrice
+            // Each user wrapped at m = 1.0 and exits a PRE-bump dollar figure
+            // after a +10% bump, so each buys back 1/1.1 of the notes they put
+            // in: notes × 100 / 110. Derived from the scenario's own 10% step,
+            // not transcribed from `_unwrap`.
+            const expectedAlice = (aliceNotes * 100n) / 110n
+            const expectedBob = (bobNotes * 100n) / 110n
+            const expectedCharlie = (charlieNotes * 100n) / 110n
             expect(aliceReceived).to.be.closeTo(expectedAlice, 1n)
             expect(bobReceived).to.be.closeTo(expectedBob, 1n)
             expect(charlieReceived).to.be.closeTo(expectedCharlie, 1n)

@@ -33,6 +33,7 @@ import {
   fundKeypairs,
   createMintViaBankrun,
   warpBy,
+  warpSlots,
   getClock,
   readDisplayMultiplier,
   computeCanonicalMultiplier,
@@ -106,9 +107,39 @@ describe("display mirror (ScaledUiAmount)", () => {
       .signers([signer])
       .rpc();
 
-  /** `display <= canonical`, expressed in WAD integers for exactness. */
-  const displayWad = (displayRatio: number): bigint =>
-    BigInt(Math.floor(displayRatio * 1e18));
+  /**
+   * Does the f64 display multiplier exceed the canonical WAD integer?
+   *
+   * EXACT. A positive normal f64 is exactly `mantissa * 2^exp`, so
+   * `display * 1e18 > canonical` becomes the integer comparison
+   * `mantissa * 1e18 > canonical * 2^-exp` with no rounding anywhere.
+   *
+   * The previous helper was `BigInt(Math.floor(ratio * 1e18))`, doc-commented
+   * "for exactness". It is not exact: at a ratio near 1, `ratio * 1e18` lands on
+   * a double whose ULP is 256, and `Math.floor` then truncates DOWNWARD -- i.e.
+   * it carried a hidden ~256-wei tolerance biased in the direction that makes
+   * the assertion pass. An overshoot below ~2.6e-16 relative was undetectable,
+   * which is the same order as the margin the mirror actually runs on.
+   */
+  const displayExceedsCanonical = (displayRatio: number, canonicalWad: bigint): boolean => {
+    if (!Number.isFinite(displayRatio) || displayRatio <= 0) {
+      throw new Error(`display multiplier not a positive normal: ${displayRatio}`);
+    }
+    const buf = Buffer.alloc(8);
+    buf.writeDoubleLE(displayRatio, 0);
+    const bits = buf.readBigUInt64LE(0);
+    const rawExp = Number((bits >> 52n) & 0x7ffn);
+    const frac = bits & 0xf_ffff_ffff_ffffn;
+    // Normal: mantissa = 2^52 + frac, exponent = rawExp - 1075.
+    if (rawExp === 0) throw new Error(`subnormal display multiplier: ${displayRatio}`);
+    const mantissa = (1n << 52n) | frac;
+    const exp = rawExp - 1075;
+    if (exp >= 0) {
+      // display >= 2^52; far outside the domain, but handle it without shifting right.
+      return mantissa * (1n << BigInt(exp)) * 10n ** 18n > canonicalWad;
+    }
+    return mantissa * 10n ** 18n > canonicalWad * (1n << BigInt(-exp));
+  };
 
   // -------------------------------------------------------------------
   // The safety invariant
@@ -119,26 +150,66 @@ describe("display mirror (ScaledUiAmount)", () => {
     await setRate(ratePerSecondForApy(0.2), start + 30 * DAY);
     await sync();
 
-    // Walk across the whole interval in small steps; display must stay <=
-    // canonical at every point, including right at the pre-armed boundary.
+    // The multiplier at the moment of that sync. Everything below is bounded
+    // against it, which is what stops a FROZEN mirror from passing.
+    const atSync = await canonical();
+
+    // Walk across the whole interval in small steps.
     for (let dt = 0; dt <= CRANK_SECS + 5; dt += 7) {
       const d = await readDisplayMultiplier(h, okuMMint);
       const c = await canonical();
+
+      // Upper bound (the safety direction): never above canonical.
       expect(
-        displayWad(d.effective) <= c,
+        !displayExceedsCanonical(d.effective, c),
         `display ${d.effective} exceeded canonical ${c} at +${dt}s`,
       ).to.be.true;
+
+      // LOWER bound. Without this the whole file is one-sided: a mirror that
+      // wrote 1.0 once and never advanced satisfies "never above canonical"
+      // forever. The mirror must be CORRECT AS OF ITS LAST CRANK -- it may lag,
+      // but must not sit materially below the value at that crank.
+      //
+      // The slack is 1e-12 relative. That is ~4500x the deliberate f64
+      // conversion bias (two `next_down` steps, ~2.2e-16 -- which this
+      // assertion caught on its first run) and still ~4 orders of magnitude
+      // tighter than one crank interval of accrual at 20% APY, so a frozen or
+      // regressing mirror fails.
+      const syncFloor = atSync - atSync / 1_000_000_000_000n;
+      expect(
+        displayExceedsCanonical(d.effective, syncFloor),
+        `display ${d.effective} fell below its value at last sync ${atSync} at +${dt}s`,
+      ).to.be.true;
+
       await warpBy(h, 7);
     }
   });
 
-  it("is permissionless — any keypair can crank it", async () => {
+  it("is permissionless — any keypair can crank it, and the crank advances the mirror", async () => {
     const start = await nowTs();
     await setRate(ratePerSecondForApy(0.05), start + 30 * DAY);
+    await sync();
+
+    // Let the mirror go stale, so a no-op crank is distinguishable from a real one.
+    await warpBy(h, 7 * DAY);
+    await warpSlots(h, 1);
+    const stale = await readDisplayMultiplier(h, okuMMint);
+
     // `stranger` holds no role whatsoever.
     await sync(stranger);
-    const d = await readDisplayMultiplier(h, okuMMint);
-    expect(d.effective).to.be.greaterThan(0);
+    const fresh = await readDisplayMultiplier(h, okuMMint);
+
+    // `> 0` was vacuous: the extension is initialised to 1.0 at `initialize`, so
+    // it held whether or not the crank wrote anything. What matters is that the
+    // unprivileged crank ADVANCED the mirror, and that it landed at the
+    // canonical value rather than merely somewhere higher.
+    expect(fresh.effective).to.be.greaterThan(stale.effective);
+    const c = await canonical();
+    expect(!displayExceedsCanonical(fresh.effective, c), "crank must not overshoot").to.be.true;
+    expect(
+      displayExceedsCanonical(fresh.effective, c - c / 1_000_000n),
+      `crank must land within 1e-6 of canonical (${c}), not merely below it; got ${fresh.effective}`,
+    ).to.be.true;
   });
 
   // -------------------------------------------------------------------
@@ -165,7 +236,7 @@ describe("display mirror (ScaledUiAmount)", () => {
       const d = await readDisplayMultiplier(h, okuMMint);
       const c = await canonical();
       expect(
-        displayWad(d.effective) <= c,
+        !displayExceedsCanonical(d.effective, c),
         `display ${d.effective} exceeded canonical ${c} at +${dt}s after a rate decrease`,
       ).to.be.true;
       await warpBy(h, 10);
@@ -184,7 +255,7 @@ describe("display mirror (ScaledUiAmount)", () => {
       const d = await readDisplayMultiplier(h, okuMMint);
       const c = await canonical();
       expect(
-        displayWad(d.effective) <= c,
+        !displayExceedsCanonical(d.effective, c),
         `display ${d.effective} exceeded canonical ${c} at +${dt}s after a halt`,
       ).to.be.true;
       await warpBy(h, 10);
@@ -208,13 +279,13 @@ describe("display mirror (ScaledUiAmount)", () => {
     );
 
     // Canonical has moved on, so the gap is pure (safe) lag.
-    expect(displayWad(uncranked.effective) <= (await canonical())).to.be.true;
+    expect(!displayExceedsCanonical(uncranked.effective, await canonical())).to.be.true;
 
     // Crank -> display catches up.
     await sync();
     const cranked = await readDisplayMultiplier(h, okuMMint);
     expect(cranked.effective).to.be.greaterThan(uncranked.effective);
-    expect(displayWad(cranked.effective) <= (await canonical())).to.be.true;
+    expect(!displayExceedsCanonical(cranked.effective, await canonical())).to.be.true;
   });
 
   // -------------------------------------------------------------------
@@ -283,7 +354,7 @@ describe("display mirror (ScaledUiAmount)", () => {
       const d = await readDisplayMultiplier(h, okuMMint);
       const c = await canonical();
       expect(
-        displayWad(d.effective) <= c,
+        !displayExceedsCanonical(d.effective, c),
         `display ${d.effective} > canonical ${c} at +${dt}s after override`,
       ).to.be.true;
     }

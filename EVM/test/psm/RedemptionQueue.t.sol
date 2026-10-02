@@ -454,6 +454,17 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.getQueueEntry(0);
     }
 
+    /// @notice `getQueueEntryValue` bounds-checks independently of `getQueueEntry`.
+    /// @dev Both read the same `[queueHead, queueTail)` window but neither delegates
+    ///      to the other, so the rail has to be asserted on each. Unguarded, this one
+    ///      would read a zeroed slot and quote a $0 valuation for a non-existent
+    ///      entry — a plausible-looking number rather than a failure, which is the
+    ///      worse outcome for an operator script sizing a batch.
+    function test_GetQueueEntryValue_RevertsInvalidIndex() public {
+        vm.expectRevert(RedemptionQueue.InvalidIndex.selector);
+        redemptionQueue.getQueueEntryValue(0);
+    }
+
     // ============ Price Appreciation Tests ============
 
     /**

@@ -171,9 +171,6 @@ The epoch math (`epochSchedule`/`epochDistribution`/`yieldRate`) is unit-tested
 where it lives in `packages/yield-tooling`. The orchestration layer on top of
 it is not:
 
-- **No test coverage for `deriveEpochSchedule.ts` or
-  `applyScheduleSingleChain.ts`.** (`broadcastSchedule.ts` *is* covered — see
-  the env-boundary note below.)
 - **`deriveRollEpoch`'s ex-post reconciliation is an approximation.** It infers
   the global actual-paid delta from the prior ledger entry's
   `measuredAvgValueUsd` times the reference chain's multiplier ratio, rather
@@ -211,14 +208,6 @@ Do **not** reach for it on an SVM layout change until these are fixed:
 Not fixed because the clean-slate deploy path avoids all three. Revisit before
 any genuine in-place upgrade.
 
-### OPEN: CI gates went false-red for reasons unrelated to the code `[EVM]`
-
-`forge fmt --check` and the 95%-per-file `forge coverage` gate in
-`.github/workflows/test.yml` both failed during a recent cycle on files the
-change did not touch. Decide whether they earn their strictness — loosen the
-per-file coverage threshold, or move `fmt` to a pre-commit hook — before
-audit, rather than training the team to ignore red CI.
-
 ### OPEN: deferred audit items `[both]`
 
 Reviewed, understood, deliberately not fixed:
@@ -236,33 +225,45 @@ Reviewed, understood, deliberately not fixed:
 
 ## Deploy-day runbook — internal-testing MVP
 
-Ordered. Each step's verification is the gate for the next. **None of this has
-been executed yet** — the EVM v0.3 and SVM clean-slate deploys are both
-outstanding.
+**Steps 0-2 are DONE.** Steps 3-7 remain. Each step's verification gates the
+next.
 
-**0. Pre-flight.** `EVM/.env` populated from `.env.example` (deployer key,
-four testnet RPCs, explorer keys). Confirm `DEPLOYMENT_VERSION === "v0.3"`
-and that `scripts/config/addresses.json` holds `MockUSDC`-only entries for
-`sepolia`/`baseSepolia`/`arbSepolia`/`bscTestnet`. Full suite green:
-`forge test` (613), `npx hardhat test` (248, of which `npm run test:unit` is
-221), SVM `npm test` (61 Rust + 124 bankrun), `packages/yield-tooling`
-`npm test` (3867 differential vectors).
+### Already executed
 
-**1. EVM deploy, one chain at a time.** `npm run deploy:sepolia`, then
-`baseSepolia`, `arbSepolia`, `bscTestnet`. Each run reuses the existing
-MockUSDC (address-book entry retained deliberately for this) and deploys the
-other four contracts at fresh v0.3 CREATE2 addresses. Verify: the deploy
-script's own 21-role-grant check passes, and `addresses.json` now carries all
-five contracts per chain.
+- **EVM v0.3 is live on all four testnets** (`sepolia`, `baseSepolia`,
+  `arbSepolia`, `bscTestnet`), five contracts each at CREATE2-deterministic
+  addresses, recorded in `scripts/config/addresses.json`. Deployed in commits
+  `79c2d27` and `d5fef79`. The v0.2 set — including the `base`/`bsc` *mainnet*
+  deployments — is archived in `addresses.pre-streaming.json` and is stale by
+  design.
+- **SVM clean-slate is live on devnet**, `2026-09-19`, program ID
+  `4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN`, consistent across
+  `deployments/devnet.json`, `declare_id!` and `Anchor.toml`. The old program
+  ID was rotated out and closed for rent recovery.
 
-**2. SVM clean-slate deploy.** `admin:close-programs
---allow-anchor-toml-ids` (recovers ~4.35 SOL of stranded ProgramData rent),
-rotate `target/deploy/lite_psm-keypair.json`, `anchor keys sync` — **NOT on
-the standard build path; must be run explicitly** — update `Anchor.toml` and
-`declare_id!`, then `npm run deploy:programs` → `deploy:init` →
-`admin:grant-roles:devnet`. Verify with `scripts/deploy/verify.ts` (checks
-owner, size against `PSM_CONFIG_LEN`, and the `PsmConfig` discriminator — not
-just existence).
+> **Note on CREATE2 addresses after the `bytecodeHash = "none"` change.**
+> Implementation addresses moved when the metadata hash left the initCode, and
+> since the proxy initCode embeds the impl address as a constructor arg, the
+> *predicted* proxy addresses moved with them.
+>
+> **This does not affect the live fleet.** Upgrade-in-place resolves the proxy
+> from the address book (`scripts/upgrade/index.ts`), the `.openzeppelin/`
+> manifests are tracked for all six networks, and there is a `forceImport`
+> recovery path if an entry is missing. The deployed proxies keep their
+> addresses permanently; only the implementation behind them changes, which is
+> the point of a proxy.
+>
+> What *does* change: a from-scratch deploy, or a deploy to a new chain, now
+> lands at different addresses than the current book records, and
+> block-explorer verification of the existing contracts is stale against
+> current source until they are next upgraded. Both are testnet-only — mainnet
+> `base`/`bsc` are v0.2 on a different salt and untouched. Accepted; no
+> migration needed.
+
+### Remaining
+
+**Status of steps 3-7 cannot be determined from the repo** — they depend on
+operator `.env` state and on-chain calls. Confirm each before relying on it.
 
 **3. Wire the bridge env. THE EASIEST STEP TO SKIP AND THE MOST COSTLY.**
 Set `SVM_RPC_URL`, `SVM_LITE_PSM_PROGRAM_ID`, `SVM_OKU_M_MINT`, and
@@ -373,25 +374,6 @@ in a v2 upgrade with a careful migration. Defer to v2.
 
 Deferred post-audit. Major-version bump scope unclear; revisit once
 audit feedback narrows the surface.
-
-### Branch coverage is the weak spot in an otherwise strong forge suite `[EVM]`
-
-CI gates on **line** coverage (95% per `src/` file) and the suite clears it
-comfortably — 99.19% lines, 99.31% functions, 613 tests passing. **Branch**
-coverage is materially weaker and ungated:
-
-| File | Branches |
-|---|---|
-| `src/lib/MathLib.sol` | 70.00% (7/10) |
-| `src/token/OkuDollar.sol` | 83.78% (31/37) |
-| `src/psm/LitePSM.sol` | 84.62% (22/26) |
-| `src/psm/RedemptionQueue.sol` | 94.74% (18/19) |
-| `src/token/OkuMoney.sol` | 97.56% (40/41) |
-| **Total** | **88.89% (120/135)** |
-
-Not urgent — the uncovered branches are mostly defensive or
-unreachable-by-construction — but it is where an auditor looks first, and
-worth closing before external review rather than during it.
 
 ### Two-chain Foundry invariant harness `[EVM]`
 

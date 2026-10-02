@@ -58,7 +58,7 @@ bounds stay on-chain; business policy moves to the backend.
 | E14 | `blacklist` / `unblacklist` | `OkuDollar:774/782` | `OKUM_(UN)BLACKLISTER` | Freeze on the vault — **same role hash as E9/E10, but a separate grant per contract**; same sender/recipient/spender scope as E9 (incl. `transferFrom` and the ERC-4626 `redeem`/`withdraw` spender path) | works while paused; does NOT retroactively revoke allowances | Yes |
 | E15 | `pause` / `unpause` | `OkuDollar:712/717` | `VAULT_PAUSER` / `VAULT_UNPAUSER` | Halt wrap/unwrap/4626 | — | Yes |
 | E16 | `_authorizeUpgrade` | `OkuDollar:723` | `VAULT_UPGRADER` | **Replace all vault logic** | **none** | **No** |
-| E17 | `processQueue` | `LitePSM:392` | `PSM_QUEUE_PROCESSOR` | Spend up to caller-chosen `approveAmount` of buffer USDC | `nonReentrant`, `whenNotPaused`, yield-lock; **`approveAmount` itself unvalidated** | **No** |
+| E17 | `processQueue` | `LitePSM:392` | `PSM_QUEUE_PROCESSOR` | Spend up to caller-chosen `approveAmount` of buffer USDC | `nonReentrant`, `whenNotPaused`, yield-lock; `approveAmount` unvalidated but metered against `min(balance, allowance)` by the queue, and revoked in-tx | **No** |
 | E18 | `pause` / `unpause` | `LitePSM:415/420` | `PSM_PAUSER` / `PSM_UNPAUSER` | Halt all PSM user paths | — | Yes |
 | E19 | `withdrawUsdc` | `LitePSM:435` | `PSM_BUFFER_WITHDRAWER` | **Drain the buffer down to the *queued* obligation — circulating OkuM/UsdOku is not counted** | yield-lock + `WouldStrandQueue`; **deliberately NOT pause-gated** | **No** |
 | E20 | `depositBuffer` | `LitePSM:458` | `PSM_BUFFER_DEPOSITOR` | Add USDC (pull from caller) | **none of the three modifiers** | No |
@@ -170,12 +170,21 @@ several granular roles onto one key.
 Note SVM is *stronger* here: it has two-step `role_admin` rotation and binds `role_admin`
 to the BPF upgrade authority at init.
 
-**G. `approveAmount` is unvalidated and its semantics are contested (E17).**
-`LitePSM.processQueue` forwards a caller-chosen allowance, but `RedemptionQueue` meters the
-loop against the PSM's **balance**. If `approveAmount` is smaller than the batch needs,
-healthy entries fail on allowance and are reported as `TransferFailed` — the skip reason
-reserved for blacklisted recipients — so the operator gets the wrong diagnostic. Masked
-today only because the sole caller passes the full balance, contradicting the NatSpec.
+**G. `approveAmount` is unvalidated — but the misdiagnosis it used to cause is fixed (E17).**
+`LitePSM.processQueue` still forwards a caller-chosen allowance with no validation
+(`LitePSM.sol:455` force-approves any value, revoking to 0 at `:457`). What changed:
+`RedemptionQueue` now meters the loop against `min(balance, allowance)`
+(`RedemptionQueue.sol:247-251`) and re-validates live before halting, so an undersized
+`approveAmount` surfaces as `InsufficientFunds` rather than `TransferFailed` — the skip
+reason reserved for blacklisted recipients. Pinned by
+`test_ProcessQueue_StaleApproveAmount_ReportsInsufficientFundsNotTransferFailed`.
+
+Residual is liveness-only and role-gated: too small burns gas and halts the batch early;
+too large is harmless because the approval is revoked in the same transaction. No
+over-payment or fund-loss path. One doc/code divergence remains — `LitePSM.sol:437`
+NatSpec describes `approveAmount` as the "sum of entries by backend", but the only
+in-repo caller (`scripts/operator/processQueue.ts:86`) passes the entire PSM USDC
+balance, so the documented semantics are unexercised.
 
 **H. Pause enforcement on `OkuMoney` is split across three places, by design.**
 `_update` (`:663`) calls `_requireNotPaused()` **only when both `from` and `to` are

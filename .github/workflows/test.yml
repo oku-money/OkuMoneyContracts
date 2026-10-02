@@ -37,6 +37,12 @@ jobs:
       - name: Run Forge fmt
         run: forge fmt --check
 
+      # Scoped to src/ deliberately. test/ carries ~32 erc20-unchecked-transfer
+      # warnings on intentional setup calls where the return value is genuinely
+      # uninteresting; gating those would mean annotating noise, not finding bugs.
+      - name: Run Forge lint (src/ only, warnings are errors)
+        run: forge lint src/ --deny warnings
+
       - name: Run Forge build
         run: forge build --sizes
 
@@ -72,6 +78,27 @@ jobs:
             END { exit failed }
           ' coverage.txt
 
+          # Gate 2: overall BRANCH coverage. Per-file would be the stronger
+          # shape, but five branches in src/ are provably unreachable (see
+          # README "Uncovered branches (intentional)"), which pins OkuDollar at
+          # 89% through no fault of the suite. A total-line gate catches the
+          # regression that matters -- someone adding an untested conditional --
+          # without encoding that permanent floor as a per-file exception.
+          awk -F'|' '
+            /^\| Total/ {
+              for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
+              branches = $5
+              if (match(branches, /[0-9]+\.[0-9]+/)) {
+                pct = substr(branches, RSTART, RLENGTH) + 0
+                printf "  %-50s %s\n", "TOTAL branches", branches
+                if (pct < 95.0) {
+                  printf "::error::total branch coverage %s is below 95%% threshold\n", branches
+                  exit 1
+                }
+              }
+            }
+          ' coverage.txt
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -83,8 +110,15 @@ jobs:
       - name: Compile with Hardhat
         run: npx hardhat compile
 
-      - name: Run TypeScript type-check
+      - name: Run TypeScript type-check (EVM)
         run: npm run typecheck
+
+      # packages/yield-tooling holds the shared multiplier math that the
+      # differential corpus is generated against. It was previously only
+      # exercised transitively by importers, never type-checked on its own.
+      - name: Run TypeScript type-check (yield-tooling)
+        working-directory: ${{ github.workspace }}
+        run: npm run build --workspace @okumoney/yield-tooling
 
       - name: Run Hardhat tests
         run: npx hardhat test
@@ -243,6 +277,9 @@ jobs:
 
       - name: Run cargo fmt --check
         run: cargo fmt --all -- --check
+
+      - name: Run cargo clippy (warnings are errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run cargo unit tests
         run: cargo test --workspace --lib --quiet

@@ -15,8 +15,8 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 ## Quick Start
 
 ```bash
-forge install && forge build && forge test    # 613 unit + invariant tests
-npx hardhat compile && npx hardhat test       # 248 fork/integration/simulation/drill tests
+forge install && forge build && forge test    # 622 unit + invariant tests
+npx hardhat compile && npx hardhat test       # 259 fork/integration/simulation/drill tests
 ```
 
 Targeted invocations and what each suite covers: § Testing.
@@ -205,8 +205,8 @@ shipped deployments.
 |---|---|
 | `npm run compile` | `hardhat compile` (regenerates typechain) |
 | `npm run typechain` | Typechain bindings only |
-| `npm run test:forge` | Foundry unit + invariant suite (613 tests) |
-| `npm run test` | Full Hardhat suite (248 tests, incl. fork + drills) |
+| `npm run test:forge` | Foundry unit + invariant suite (622 tests) |
+| `npm run test` | Full Hardhat suite (259 tests, incl. fork + drills) |
 | `npm run test:unit` | Off-chain math + simulation + deploy/operator drills (221). Needs fork RPC |
 | `npm run test:all` | Both |
 | `npm run node` | Start `hardhat node` (default forks Sepolia; override via `FORK_NETWORK`) |
@@ -1801,8 +1801,8 @@ first.
 
 ## Testing
 
-**Counts (measured):** `forge test` **613**, `npx hardhat test` **248**
-(of which `npm run test:unit` is **221**). Cross-stack:
+**Counts (measured):** `forge test` **622**, `npx hardhat test` **259**
+(of which `npm run test:unit` is **232**). Cross-stack:
 `packages/yield-tooling` 3,867 differential vectors; SVM 61 Rust + 124 bankrun.
 
 ```bash
@@ -1886,6 +1886,24 @@ judged not worth the maintenance cost.
 > distinction is that `_update` guards against a *future refactor* routing
 > through an inherited hook, which is a real and recurring hazard, whereas
 > the removed three guarded against arithmetic that cannot happen.
+
+### Uncovered branches (intentional)
+
+Branch coverage is **96.30% (130/135)** and gated at 95% in CI. The five
+uncovered branches are all `revert` arms that cannot be driven from any call
+path, each for a stated structural reason — not for want of a test.
+
+| Location | Guard | Why the revert arm is unreachable |
+|---|---|---|
+| `LitePSM.sol:321` | `usdcAmount == 0` in `_redeemOkuMShared` | The dust floor on the line above already requires `okuMAmount >= decimalMultiplier`. Since `m >= PRECISION`, `dollarValue18 >= okuMAmount >= decimalMultiplier`, so `usdcAmount = dollarValue18 / decimalMultiplier >= 1`. Defence-in-depth against a future change to either the floor or the monotonicity guarantee. |
+| `OkuDollar.sol:322` | `from == address(0)` in `_transferUsdShares` | `transferFrom` spends the allowance first, and `address(0)` can never have granted one, so the allowance check always fires earlier. The `to` half of the same pair **is** reachable and is tested. |
+| `OkuDollar.sol:425`, `:426` | `UseWrapInstead` / `UseUnwrapInstead` in `_update` | Nothing in the contract invokes the inherited `_mint`/`_burn`; all supply changes go through `wrap`/`unwrap`, which manage `usdShares` directly. A tripwire for a future refactor that routes through the inherited ERC-20 hook — the one hazard in this table that is realistic, which is why it stays. |
+| `OkuDollar.sol:475` | `sharesToMint == 0` in `wrap` | `wrap` rejects `okuMAmount == 0` at entry, and `sharesToMint == actualReceived`, so reaching zero requires an asset that takes a 100% transfer fee. The asset is the typed `IOkuMoney` wired at init, which is not fee-on-transfer. Kept because the balance-delta pattern exists precisely to tolerate a fee-on-transfer asset. |
+
+The distinction worth preserving: these are guards against an **assumption about
+a collaborator that a future change could break**. That is different from the
+three checks deleted above, which guarded against arithmetic that cannot happen
+by construction. The first kind earns its keep; the second was noise.
 
 ### Auditor checklist — sensitive functions
 

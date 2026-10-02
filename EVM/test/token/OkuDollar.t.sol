@@ -89,6 +89,53 @@ contract OkuDollarTest is BaseTest {
         assertEq(okuDollar.usdSharesOf(user1), okuMAmount);
     }
 
+    /// @notice `wrap`'s `minAmountOut` is the vault's ONE reachable slippage rail.
+    /// @dev Worth pinning precisely because the PSM's two look-alike checks were
+    ///      removed as unreachable — this one is not. It guards the OkuM -> usdOku
+    ///      leg, where the caller supplies the bound, so unlike the PSM there IS a
+    ///      user-specified expectation that can be missed. Do not delete it by
+    ///      analogy with the PSM removals.
+    function test_Wrap_RevertsWhenOutputBelowMinimum() public {
+        uint256 okuMAmount = 100e18;
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(okuDollar), okuMAmount);
+
+        // At m == 1e18, 100 OkuM wraps to exactly 100 usdOku. Demand one wei more.
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OkuDollar.OutputBelowMinimum.selector, okuMAmount, okuMAmount + 1
+            )
+        );
+        okuDollar.wrap(okuMAmount, user1, okuMAmount + 1);
+    }
+
+    /// @notice Zero-address rails on the share-transfer path.
+    /// @dev `_transferUsdShares` is reached by `transfer`, `transferFrom` and both
+    ///      4626 entry points, and it is the only place the pair is checked —
+    ///      OkuDollar overrides every public mover rather than delegating to
+    ///      `ERC20Upgradeable`, so none of OZ's own zero-address guards are in the
+    ///      path. Burning via `transfer(0, x)` would otherwise silently destroy
+    ///      shares while leaving `totalUsdShares` untouched, breaking the
+    ///      supply-vs-shares identity the vault's collateralisation rests on.
+    ///
+    ///      Only the `to` half is asserted because only the `to` half is
+    ///      reachable: `transferFrom(address(0), ...)` is stopped earlier by the
+    ///      allowance check, and address(0) can never have granted an allowance.
+    ///      The `from` guard is defence-in-depth against a future caller that
+    ///      reaches `_transferUsdShares` without spending one.
+    function test_Transfer_RevertsOnZeroRecipient() public {
+        uint256 okuMAmount = 100e18;
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(okuDollar), okuMAmount);
+        vm.prank(user1);
+        okuDollar.wrap(okuMAmount, user1, 0);
+
+        vm.prank(user1);
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        okuDollar.transfer(address(0), 1e18);
+    }
+
     function test_Wrap_TransfersNotesToVault() public {
         uint256 okuMAmount = 100e18;
         _mintOkuMoney(user1, okuMAmount);

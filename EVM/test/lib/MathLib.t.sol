@@ -112,6 +112,43 @@ contract MathLibTest is Test {
         h.rpow(2 ** 200, 4, 1);
     }
 
+    /// @notice Drives the `add(xx, half)` rounding-overflow guard — the one
+    ///         case where the squaring itself is fine but adding the rounding
+    ///         term crosses 2**256.
+    /// @dev Reaching it needs `x*x` to land just under 2**256 while `half`
+    ///      (= b/2) is large enough to push it over, so the two inputs pull in
+    ///      opposite directions: x must be < 2**128 or the SQUARING guard fires
+    ///      first and this one is never reached. `x = 2**128 - 1` gives
+    ///      `xx = 2**256 - 2**129 + 1`, the largest non-overflowing square, and
+    ///      `b = 2**255` gives `half = 2**254`, comfortably more than the
+    ///      `2**129 - 1` of headroom left.
+    ///
+    ///      Unreachable in production: `b` is always `PRECISION` (1e18), making
+    ///      `half` 5e17 — around 2**59 — so `xx` would have to fall inside a
+    ///      2**59-wide window immediately below 2**256, which the `x < 2**128`
+    ///      precondition already excludes.
+    function test_Rpow_RoundingTermOverflowReverts() public {
+        vm.expectRevert();
+        h.rpow(2 ** 128 - 1, 2, 2 ** 255);
+    }
+
+    /// @notice Drives the `add(zx, half)` rounding-overflow guard on the
+    ///         accumulator leg — the last of the four `rpow` overflow rails.
+    /// @dev The tightest of the four to reach. It needs `z*x` to sit inside
+    ///      `[2**256 - half, 2**256)`: any lower and the add does not wrap, any
+    ///      higher and the ACCUMULATOR guard on the line above fires instead.
+    ///      Both `half` and the window are set by the same `b`, so widening the
+    ///      target also shrinks the product that has to land in it. The values
+    ///      below were found by search, not derivation — `n = 3` so the loop
+    ///      runs exactly one iteration with `z` still equal to the original `x`.
+    ///
+    ///      Unreachable in production for the same reason as the test above:
+    ///      `b == PRECISION` makes the target window ~2**59 wide out of 2**256.
+    function test_Rpow_AccumulatorRoundingTermOverflowReverts() public {
+        vm.expectRevert();
+        h.rpow(2 ** 128 - 1, 3, 2 ** 128 - 3);
+    }
+
     // ============ Unit-conversion helpers ============
 
     function test_OkuMToDollars_EvenMultiplier() public view {

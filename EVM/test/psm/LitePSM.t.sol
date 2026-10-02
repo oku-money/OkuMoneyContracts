@@ -1767,6 +1767,43 @@ contract LitePSMTest is BaseTest {
         okuMoney.configureMinterAllowance(address(psmX), MAX_SUPPLY);
     }
 
+    /// @notice Minting an amount too small to buy one OkuM wei reverts rather
+    ///         than minting zero.
+    /// @dev Only reachable at 18-decimal collateral. `okuMAmount = dollars * 1e18 / m`,
+    ///      and at 6 decimals one collateral unit is already 1e12 dollar-wei, so the
+    ///      quotient cannot floor to zero for any `m <= MAX_MULTIPLIER`. At 18 decimals
+    ///      the collateral unit IS the dollar wei, so any `m > 1e18` makes a 1-wei
+    ///      deposit round to nothing. Without the guard the caller would pay collateral
+    ///      and receive zero tokens, with the deposit kept by the PSM.
+    function test_MultiDecimal_18Dec_MintRevertsWhenAmountRoundsToZeroOkuM() public {
+        MockUSDC18Dec usdc18 = new MockUSDC18Dec();
+        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+
+        _setOkuMMultiplierAndRoll(3e18);
+
+        usdc18.mint(user1, 1);
+        vm.startPrank(user1);
+        usdc18.approve(address(psm18), 1);
+        vm.expectRevert(LitePSM.AmountTooSmall.selector);
+        psm18.mintOkuM(1);
+        vm.stopPrank();
+    }
+
+    /// @notice The same rail on the vault-wrapping mint path, which has its own copy.
+    function test_MultiDecimal_18Dec_MintUsdOkuRevertsWhenAmountRoundsToZeroOkuM() public {
+        MockUSDC18Dec usdc18 = new MockUSDC18Dec();
+        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+
+        _setOkuMMultiplierAndRoll(3e18);
+
+        usdc18.mint(user1, 1);
+        vm.startPrank(user1);
+        usdc18.approve(address(psm18), 1);
+        vm.expectRevert(LitePSM.AmountTooSmall.selector);
+        psm18.mintUsdOku(1);
+        vm.stopPrank();
+    }
+
     /// @notice A mint whose dollar value does not divide evenly by the multiplier
     ///         must still succeed at 18-decimal collateral.
     /// @dev REGRESSION: this reverted before `RoundTripDriftTooLarge` was removed.
@@ -2041,6 +2078,28 @@ contract LitePSMTest is BaseTest {
     /// @notice okuMAtPsm=true instant path: redeemUsdOku with sufficient buffer
     ///         must NOT emit OkuMRedeemed (only UsdOkuRedeemed). Asserted by
     ///         using `recordLogs` and walking the log array.
+    /// @notice A usdOku redemption too small to move one share reverts rather
+    ///         than unwinding a zero-value redemption.
+    /// @dev `_redeemUsdOku` works from the post-transfer BALANCE DELTA, not the
+    ///      requested `usdAmount`, because `OkuDollar.transferFrom` floors the share
+    ///      conversion while `unwrap` ceils the share burn. At `m > 1e18` a 1-wei
+    ///      request floors to zero shares, so the transfer succeeds while moving
+    ///      nothing. Without this guard the zero would flow into `unwrap` and then
+    ///      `_redeemOkuMShared`, which would revert further in on a less obvious
+    ///      error — or, if those rails ever loosened, emit a redemption event for a
+    ///      transfer that never happened.
+    function test_RedeemUsdOku_RevertsWhenTransferRoundsToZeroShares() public {
+        _mintUsdOku(user1, 100e18);
+        _approveOkuDollar(user1, address(litePsm), 100e18);
+
+        // m > 1e18 makes floor(1 * 1e18 / m) == 0 shares.
+        _setOkuMMultiplierAndRoll(3e18);
+
+        vm.prank(user1);
+        vm.expectRevert(LitePSM.AmountTooSmall.selector);
+        litePsm.redeemUsdOku(1);
+    }
+
     function test_RedeemUsdOku_OkuMAtPsmInstant_NoOkuMRedeemedEvent() public {
         // Setup: user1 holds UsdOku; PSM buffer covers the redemption.
         _mintUsdOku(user1, 100e18);

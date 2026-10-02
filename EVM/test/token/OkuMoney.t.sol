@@ -589,6 +589,23 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setOkuMYieldRate(PRECISION - 1, 0);
     }
 
+    /// @notice The successor setter carries its OWN sub-precision rail.
+    /// @dev Not redundant with the active setter's. `_setNextOkuMYieldRate` is a
+    ///      separate private body reached by both `setNextOkuMYieldRate` and
+    ///      `setOkuMYieldRateWithSuccessor`, so a rate that would shrink the
+    ///      multiplier has to be rejected there too. Without it an operator could
+    ///      arm a sub-unity successor that activates at `okuMRateEnd` with no
+    ///      transaction at the boundary — a monotonicity break that lands
+    ///      unattended, which is strictly worse than one that reverts in-call.
+    function test_SetNextOkuMYieldRate_RevertsOnRateBelowPrecision() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e9, block.timestamp + 30 days);
+
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.InvalidRate.selector);
+        okuMoney.setNextOkuMYieldRate(PRECISION - 1, block.timestamp + 60 days);
+    }
+
     function test_SetOkuMYieldRate_RevertsOnRateTooHigh() public {
         vm.prank(rebaser);
         vm.expectRevert(OkuMoney.RateTooHigh.selector);

@@ -83,25 +83,12 @@ contract LitePSM is
     // Common errors (ZeroAddress, ZeroAmount) live in lib/Errors.sol.
     // YieldDistributionInProgress is inherited from YieldSandwichGuard.
     error AmountTooSmall();
-    // REMOVED: `RoundTripDriftTooLarge(uint256,uint256)` and
-    // `OutputBelowMinimum(uint256,uint256)`.
-    //
-    // Both read as slippage protection and neither was. `OutputBelowMinimum` compared a
-    // value against a provably-smaller function of itself and could never fire at any
-    // decimal count. `RoundTripDriftTooLarge` tolerated one COLLATERAL unit of
-    // conversion drift — ample at 6 decimals ($0.000001, far above the sub-unit
-    // truncation it was measuring) but at 18-decimal collateral that tolerance is one
-    // wei, BELOW the truncation, so it rejected roughly a third of ordinary mints once
-    // the multiplier passed ~3.0. It was dead where deployed and a liveness hazard where
-    // it wasn't: BSC's canonical Binance-Peg USDC carries 18 decimals
-    // (`scripts/config/chains.ts`).
-    //
-    // There is nothing to replace them with, because there is nothing to protect
-    // against: the multiplier is monotonically non-decreasing, so neither direction can
-    // move against the caller. See {redeemOkuM}'s NatSpec for the argument and
-    // `EVM/README.md`'s PSM section for the decision record. Note {OkuDollar} keeps its
-    // OWN `OutputBelowMinimum` for `wrap`'s `minAmountOut` — that one is reachable and
-    // unrelated.
+    // There is deliberately no slippage/drift error here. Two once existed
+    // (`RoundTripDriftTooLarge`, `OutputBelowMinimum`); both read as slippage protection,
+    // neither could protect anything, and one bricked mints at 18-decimal collateral.
+    // Do not reintroduce them — see {redeemOkuM} for why a min-out has nothing to bound.
+    // {OkuDollar} keeps its own `OutputBelowMinimum` for `wrap`; that one is reachable
+    // and unrelated.
     error InsufficientBuffer(uint256 available, uint256 required);
     error WouldStrandQueue(uint256 remainingBalance, uint256 queueObligation);
     /// @dev Reverted when the configured USDC reports more decimals than supported (>18).
@@ -274,18 +261,14 @@ contract LitePSM is
     ///      There is no downside to bound. Pinned by
     ///      `test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier`.
     ///
+    ///      This argument has one load-bearing precondition: THE PSM CHARGES NO FEE. A
+    ///      `tin`/`tout` would make output non-monotone in time and the reasoning above
+    ///      collapses — add min-out parameters before any fee lands, not after.
+    ///
     ///      SVM DIVERGES DELIBERATELY: `lite-psm`'s `redeem_oku_m` does take a
     ///      `min_usdc_out`. Same monotonicity holds there, so it is client-side
     ///      defence-in-depth rather than a structural need — see that instruction's
     ///      doc comment, which documents the divergence from the other side.
-    ///
-    ///      HISTORICAL: this function previously carried an `OutputBelowMinimum` check
-    ///      comparing `usdcAmount` against a floor recomputed from `okuMAmount`
-    ///      truncated to `decimalMultiplier`. It was unreachable — both conversions are
-    ///      monotone non-decreasing and the truncated input is `<=` the real one, so the
-    ///      floor was always `<=` the value it gated. Removed rather than left in place:
-    ///      code that reads as slippage protection but can never fire is worse than no
-    ///      check, because it stops reviewers asking whether real protection is needed.
     /// @param okuMAmount Amount of OkuMoney to redeem (18 decimals)
     function redeemOkuM(uint256 okuMAmount)
         external
@@ -328,8 +311,8 @@ contract LitePSM is
         // NOTE the floor is denominated in `decimalMultiplier`, which is `10**(18-d)`.
         // At 6-decimal collateral that is 1e12 OkuM wei (~$0.000001) — a real floor. At
         // 18-decimal collateral it is 1, i.e. no floor at all beyond the `usdcAmount == 0`
-        // check below. See `EVM/README.md` Accepted Risk #15: the dust floor collapses on
-        // 18-decimal chains and a separate absolute minimum would be needed to close it.
+        // check below. Closing that gap needs an absolute minimum independent of
+        // `decimalMultiplier`; see `EVM/README.md` § Accepted Risks, "queue dust floor".
         if (okuMAmount < decimalMultiplier) revert AmountTooSmall();
 
         uint256 okuMMult = $.okuMoney.okuMMultiplier();

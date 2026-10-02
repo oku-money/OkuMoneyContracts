@@ -1,6 +1,6 @@
 /**
  * Base + settlement epoch distribution math (design "B3" in EVM/README.md
- * § Rear-Facing Epoch Accounting).
+ * EVM/docs/epoch-accounting.md).
  *
  * A rate committed at epoch start cannot hit a nominal target `Y*` exactly,
  * because dollars distributed depend on the actual (unknowable in advance)

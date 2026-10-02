@@ -122,6 +122,15 @@ const fn add_u128(hi: u128, lo: u128, v: u128) -> Option<(u128, u128)> {
 /// first. The invariant `rem < PRECISION < 2^60` makes each step's dividend
 /// `cur = (rem << 64) | limb` at most `2^124`, so `cur` always fits `u128`
 /// and each partial quotient always fits `u64`.
+///
+/// **Further optimisation exists and was deliberately not taken.** The
+/// dominant remaining cost is the `u128` division itself: SBF has no 128-bit
+/// divide, so each one lowers to the `__udivti3` software routine. Either
+/// Granlund–Montgomery division-by-a-constant (`PRECISION` is a constant) or
+/// 128÷64 via three native `u64` divisions would cut it further. Both are new,
+/// subtle, security-critical code on the hottest path in the protocol, bought
+/// for headroom nothing needs — the measured budget is ~80k CU against a
+/// 200k limit. Revisit only if that margin actually closes.
 #[inline]
 const fn div_wad(hi: u128, lo: u128) -> Option<u128> {
     let limbs = [

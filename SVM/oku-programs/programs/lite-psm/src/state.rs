@@ -193,5 +193,6 @@ impl PsmConfig {
 
 // Layout pin: any change to a field's width or count fails this at compile
 // time. Changing it is an account-size change, so already-deployed configs
-// cannot be reallocated in place (SVM/DECISIONS.md D-07).
+// cannot be reallocated in place. New fields are consumed from the FRONT of
+// `reserved`, holding LEN constant — never by growing the account.
 const _: () = assert!(PsmConfig::LEN == 754);

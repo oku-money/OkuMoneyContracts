@@ -40,7 +40,7 @@ import {Constants} from "../../src/lib/Constants.sol";
 ///      `base <= MAX_MULTIPLIER`, `PRECISION <= rate <= MAX_RATE`, non-negative
 ///      timestamps, and windows bounded by `MAX_WINDOW`. This is deliberate.
 ///      Outside it there is a documented, accepted divergence in the far tail
-///      (`SVM/DECISIONS.md` D-04): Solidity reverts when an intermediate
+///      (see `oku-shared/src/rate.rs` § reachability): Solidity reverts when an intermediate
 ///      *product* exceeds `uint256`, whereas the Rust port returns `None` when a
 ///      *quotient* exceeds `u128`, and the Rust bound binds first. Both sit far
 ///      beyond any reachable schedule, but generating vectors out there would

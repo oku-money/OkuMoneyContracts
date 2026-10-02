@@ -26,9 +26,9 @@ import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
  *      capital exposure, with no fee anywhere in the PSM to price it. See
  *      `OkuMoney.sol`'s NatSpec on `setOkuMMultiplier` (states the limitation
  *      correctly: "reverts for the rest of the block") and `EVM/README.md`
- *      Accepted Risk #12 for the full analysis and the recommended operational
- *      mitigation (pause the PSM/vault around the override) that closes it
- *      without a code change.
+ *      § Accepted Risks, "discrete-tick MEV", for the full analysis and the
+ *      recommended operational mitigation (pause the PSM/vault around the
+ *      override) that closes it without a code change.
  *
  *      Stateless — relies entirely on `IOkuMoney.lastYieldDistributionBlock()`.
  *      Inheriting contracts should expose `IOkuMoney` to `_yieldSandwichOkuMoney()`.

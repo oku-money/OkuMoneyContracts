@@ -13,6 +13,31 @@ Constants: `PRECISION = 1e18` · `MAX_MULTIPLIER = 1e24` (1,000,000× ceiling) �
 
 ---
 
+## 0. Why these levers are on-chain at all
+
+The protocol's default is that business policy lives in the backend. A control
+is kept on-chain only if it satisfies one of three rules: **(a)** it bounds the
+blast radius of a key compromise, **(b)** it enforces a maths invariant the
+model rests on, or **(c)** it must execute atomically inside a user's own
+transaction. Listed explicitly so each is read as a decision rather than an
+omission — none of them is there for decentralisation.
+
+| Control | Rule | Why it survives |
+|---|---|---|
+| Rate rails (`rate >= PRECISION`, `<= MAX_RATE`) | (b) | Monotonicity is the invariant the entire multiplier model rests on. A backend bug writing a sub-unity rate would corrupt accounting, not merely misbehave. Cost ≈ 0 |
+| Bounded-window requirement on yielding rates | (b) | An open-ended rate ends at a transaction-dependent, per-chain moment — reintroducing the cross-chain divergence the design eliminates |
+| Pause gate on rate *increases*, against the **effective** rate | (b) | Prevents inflating the multiplier while users cannot exit. Subtle and load-bearing — a divergence was found here during audit |
+| `max_supply` / `minter_allowance` caps | (a) | Bound the blast radius of a compromised minter key |
+| Role separation on `PsmConfig` / EVM `AccessControl` | (a) | Cold / warm / orchestrator separation is key-compromise defence |
+| `set_okum_multiplier` emergency override | (c) | The backend needs an atomic re-anchor lever |
+| Sandwich lock on the override | (c) | The override is the one remaining discrete jump |
+| Computed multiplier (`rpow` on the hot path) | (c) | The PSM must price atomically inside the user's transaction; a Solana instruction cannot call out mid-execution. See `SVM/README.md` § Compute budget |
+
+**The distinction to apply generally:** maths invariants and key-compromise
+bounds stay on-chain; business policy moves to the backend.
+
+---
+
 ## 1. EVM — role-gated paths (29)
 
 | # | Path | File:line | Role | Blast radius | Guards | Rev? |
@@ -92,7 +117,7 @@ Roles are **pubkeys stored on `PsmConfig`**, enforced by Anchor `has_one`, not a
 resize of the config PDA that authenticated by reading `role_admin` from a hardcoded
 byte offset on an `UncheckedAccount`. Removed: its target set was empty (no account of
 the layout it resized has ever been deployed) and it had zero tests. Numbering is left
-unshifted so existing citations of S21/S22 stay valid. See `SVM/DECISIONS.md` D-07.
+unshifted so existing citations of S21/S22 stay valid.
 
 **SVM permissionless:** `mint_oku_m`, `redeem_oku_m` (pause + yield-lock + slippage
 `min_usdc_out`), and `sync_display_multiplier` — correctly permissionless, since its

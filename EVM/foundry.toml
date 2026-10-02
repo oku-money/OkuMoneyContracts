@@ -9,6 +9,20 @@ libs = ["lib"]
 solc = "0.8.28"
 evm_version = "cancun"
 
+# Do NOT embed the source-text metadata hash in creation bytecode.
+#
+# Left at solc's default (`ipfs`), the compiler derives a metadata hash from the
+# SOURCE TEXT — comments included — and appends it to every contract's initCode.
+# Under CREATE2 the address is a function of initCode, so editing a single
+# NatSpec line moves every deployed address and invalidates block-explorer
+# verification. That made documentation changes a redeploy-gated operation.
+#
+# With "none" the address depends only on code semantics and the pinned solc
+# version. Must stay in sync with `settings.metadata.bytecodeHash` in
+# `hardhat.config.ts` — if the two toolchains disagree, they compile the same
+# source to different addresses.
+bytecode_hash = "none"
+
 # Optimizer settings
 optimizer = true
 optimizer_runs = 200

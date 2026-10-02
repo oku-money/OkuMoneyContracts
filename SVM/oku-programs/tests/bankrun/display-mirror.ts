@@ -14,7 +14,7 @@
  * A user then redeems for at least what their wallet showed. The opposite
  * direction — display reading high — would promise value the PSM will not pay.
  *
- * These tests also settle `SVM/DECISIONS.md` D-02 empirically: what
+ * These tests also settle empirically: what
  * Token-2022's processor actually does to the standing `multiplier` field when
  * a future `effective_timestamp` is supplied. That behaviour lives in the
  * processor, not in `spl-token-2022-interface`, so it can only be observed by
@@ -245,7 +245,7 @@ describe("display mirror (ScaledUiAmount)", () => {
   });
 
   // -------------------------------------------------------------------
-  // Emergency override must correct the mirror synchronously (D-10)
+  // Emergency override must correct the mirror synchronously
   // -------------------------------------------------------------------
 
   it("emergency override force-syncs the mirror immediately", async () => {

@@ -226,7 +226,7 @@ async function main() {
   // without checking it". A CHAINS filter that omits SVM would skip
   // `readSvm()` entirely and silently bypass that guard, reporting false
   // confidence. CHAINS is a scope knob, not an override for a declared
-  // invariant, so this is a hard error rather than a warning (D-27).
+  // invariant, so this is a hard error rather than a warning.
   if (!includeSvm && process.env.SVM_EXPECTED === "true") {
     throw new Error(
       `SVM_EXPECTED=true but CHAINS=${process.env.CHAINS} excludes ` +

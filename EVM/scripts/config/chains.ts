@@ -128,11 +128,12 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   //    Accepted Risk #15).
   //  - STILL OPEN: the queue's dust floor is `decimalMultiplier`, which at 18
   //    decimals collapses to 1 wei — i.e. no floor. Queue-stuffing is therefore
-  //    cheap here in a way it is not on 6-decimal chains. See Accepted Risk #16
-  //    and SVM/DECISIONS.md D-29 (the fee decision, which is the preferred fix).
+  //    cheap here in a way it is not on 6-decimal chains. See `EVM/README.md`
+  //    § Accepted Risks, "queue dust floor", and the open PSM-fee decision in
+  //    `TRACKER.md` — a fee is the preferred fix.
   //
-  // Flipping SKIP_MOCK_USDC=true on BSC means accepting Risk #16 or resolving
-  // D-29 first. It is no longer a blanket "must be re-verified".
+  // Flipping SKIP_MOCK_USDC=true on BSC means accepting that risk or resolving
+  // the fee question first. It is no longer a blanket "must be re-verified".
   bsc: {
     tokens: {
       usdc: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", // Binance-Peg USDC (18 decimals)

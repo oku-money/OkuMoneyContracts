@@ -62,10 +62,11 @@ and § Orchestrator runbook.
 
 ## Why a single token on SVM
 
-**Platform constraint.** Solana's SPL Token program stores balances as a
-literal `u64` in each token account — there is no `balanceOf()` override, so
-**true on-chain rebasing (the EVM stETH/USDM/rUSDY pattern) is impossible on
-SVM**. Every yield-bearing Solana token (JitoSOL, mSOL, Sanctum LSTs, Ondo
+**Platform constraint.** SPL token balances are a literal `u64` with no
+`balanceOf()` hook, so true on-chain rebasing — the EVM stETH/USDM/rUSDY
+pattern — is impossible on SVM.
+
+Every yield-bearing Solana token (JitoSOL, mSOL, Sanctum LSTs, Ondo
 USDY) uses a value-appreciating model instead: static raw balances,
 value-per-token rises over time. None of them use Token-2022 extensions for
 display.
@@ -206,24 +207,8 @@ programs/
       contexts/                    # Per-instruction account contexts
 
 tests/
-  bankrun/                  # Default in-process suite (124 tests)
-    smoke.ts
-    lite-psm.ts
-    direct-mint.ts
-    direct-burn.ts
-    init-invariants.ts
-    config-layout.ts             # PsmConfig size/offset pin (contract with EVM svmValue.ts)
-    token-metadata.ts
-    streaming-accrual.ts         # the rate-schedule model
-    display-mirror.ts            # the write-only ScaledUiAmount mirror
-    compute-budget.ts            # CU ceilings, pinned
-    crossChainBridging.ts
-    coverage-additions.ts
-    scenarios/
-      realWorldUsage.ts
-  shared/
-    setup.ts                     # Shared authority keypairs + initializePsm
-    bankrun.ts                   # Harness, helpers, autoBumpSlot wrapper
+  bankrun/                  # Default in-process suite — see § Testing
+  integration/              # Opt-in, against a live validator
 ```
 
 ---
@@ -268,16 +253,14 @@ shrink the array to match, keeping `LEN` constant.**
 Holding `LEN` constant is what makes this work without any resize machinery:
 a field added this way changes no existing byte offset and leaves every
 deployed account already the right size. There is deliberately **no resize /
-migration instruction** — one existed and was removed (see `DECISIONS.md`
-D-07), because it had no reachable target and no test coverage. Should
+migration instruction** — one existed and was removed, because it had no
+reachable target and no test coverage. Should
 `reserved` ever be exhausted on a live deployment, a resize path would have to
 be reintroduced against the struct shape of that day rather than a guessed one.
 
-The PsmConfig PDA is the **mint authority**, **freeze authority**, and
-**ScaledUiAmount authority** for the `OkuM` mint. All mint/freeze/
-multiplier-update CPIs are signed by the PDA's seeds. The seed string is
-defined once as `PsmConfig::SEED` in `programs/lite-psm/src/state.rs` and
-mirrored for clients in `scripts/utils/pdaHelpers.ts`.
+The `PsmConfig` PDA holds mint, freeze and ScaledUiAmount authority; its seed
+string is defined once as `PsmConfig::SEED` and mirrored for clients in
+`scripts/utils/pdaHelpers.ts`.
 
 ### Why no redemption queue
 
@@ -491,7 +474,7 @@ so after a rate *decrease* (routine at an epoch roll) the armed value lands
 **above** the new canonical. Small ($0.25 per $1M on a 20%→5% roll) and
 self-correcting, but the wrong direction. Writing one point keeps the
 invariant unconditional, halves the crank cost, and avoids depending on
-Token-2022's future-timestamp resolve semantics. See `DECISIONS.md` D-16.
+Token-2022's future-timestamp resolve semantics.
 
 The crank cadence is **not a protocol constant** — nothing on-chain
 enforces or assumes one. 60s is the operational recommendation.
@@ -537,6 +520,17 @@ always pays at least what the wallet showed — but it is an operational
 responsibility rather than a self-maintaining property. The crank needs no key
 material, so it can run anywhere the deployment is already monitored.
 
+**Why the program computes `rpow` at all, rather than verifying a
+backend-signed `(multiplier, timestamp)` quote** — which would cut the hot path
+to ~5k CU. A quote valid for *N* seconds is a free option: hold it, submit when
+favourable, discard otherwise. That hands back exactly the MEV the streaming
+design removes, and adds replay/expiry/nonce handling that is subtler than the
+arithmetic it replaces. It would also make every mint and redeem depend on
+backend liveness, precisely on the day everything else is going wrong. The
+compute saving buys nothing: ~80k against a 200k limit. The multiplier is
+on-chain because the PSM must price **atomically inside the user's own
+transaction**, and a Solana instruction cannot call out mid-execution.
+
 ## Hardcoded constants
 
 Shared protocol constants live in
@@ -564,26 +558,16 @@ None can be changed without a program upgrade.
 
 ## Authority model
 
-For the full centralized trust model and what each key tier
-can / can't do see [`../README.md § Signer trust implications`](../README.md).
-SVM-specific table:
+**Canonical: [`../AUTHORITY-MATRIX.md`](../AUTHORITY-MATRIX.md)** — every
+role-gated instruction with its guard, blast radius and reversibility, plus the
+EVM↔SVM authority asymmetries a reviewer should not mistake for bugs.
 
-| Role | Held by | What it can do | On-chain prevention |
-|---|---|---|---|
-| `role_admin` | Cold Multisig (Squads) | Rotate any other role via `set_authority` (two-step `accept_role_admin` handshake for its own transfer) | Meta-role. Quorum breach = full system compromise. Two-step rotation catches typos. No-op rejection on self-assignment. |
-| `pauser` | Warm Multisig | Set `is_paused = true`, halting mint/redeem | Cannot unpause (requires `unpauser`). Cannot access funds. |
-| `unpauser` | Cold Multisig | Clear `is_paused` | — |
-| `freezer` | Warm Multisig | CPI-freeze any OkuM ATA via Token-2022 freeze authority | Cannot drain or redirect frozen tokens. |
-| `unfreezer` | Cold Multisig | CPI-thaw a frozen ATA | — |
-| `rebaser` | Orchestrator (KMS) | Publish the rate schedule; emergency multiplier override | Rates must be >= PRECISION (monotonic) and <= `MAX_RATE`; yielding rates must carry a bounded future window. Override is strict-increase, capped at `MAX_MULTIPLIER`, and self-fenced. |
-| `buffer_depositor` | Orchestrator | Transfer USDC from caller's ATA into the PSM vault | Caller must hold USDC; no damage possible. |
-| `buffer_withdrawer` | Cold Multisig | Drain USDC from the PSM vault | Cannot withdraw more than the vault's current USDC balance. |
-| `cap_manager` | Cold Multisig | Set `max_supply` | Cannot set below current circulating supply. |
-| `allowance_manager` | Cold Multisig | Set `minter_allowance`, `direct_minter_allowance`, and `direct_burner_allowance` | Bounded by `max_supply`; PSM PDA is the mint authority. |
-| `direct_minter` | Operator / Bridge Orchestrator | `mint_oku_m_direct` (raw OkuM without USDC) | Bounded by `direct_minter_allowance` + `max_supply`. No USDC collateral on-chain — fiat/bridge backing is off-chain. |
-| `direct_burner` | Operator / Bridge Orchestrator | `burn_oku_m_direct` (raw OkuM burn for bridge off-ramp) | Bounded by `direct_burner_allowance`. Burns from caller's ATA only. |
-
----
+The SVM-specific *mechanism*, which the matrix assumes rather than explains:
+roles are **pubkey fields on the `PsmConfig` PDA**, enforced by Anchor
+`has_one` constraints — not an `AccessControl` mapping. There is no role
+enumeration and no grant/revoke events; rotation is `set_authority` by
+`role_admin`, and `role_admin`'s own transfer is a two-step
+propose/`accept_role_admin` handshake so a typo cannot strand the meta-role.
 
 ## Initialization
 
@@ -695,17 +679,16 @@ rounding are **byte-identical** across the two stacks, which is what lets a
 single broadcast schedule produce the same multiplier everywhere with no
 messaging. There is no constant-scale divergence.
 
-What genuinely remains is narrower and documented in
-[`DECISIONS.md`](DECISIONS.md):
+What genuinely remains is narrower:
 
-- **D-04** `rpow`'s overflow threshold differs in the far tail (EVM
-  reverts when an intermediate *product* exceeds `uint256`; SVM returns
-  `None` when a *quotient* exceeds `u128`). Both sit far outside the
-  reachable domain.
-- **D-03** `Clock::unix_timestamp` can lag wall clock. Because the
-  multiplier is a pure function of it, this is a self-correcting lag,
-  not a drift — but drift monitoring must compare at equal *chain*
-  timestamps.
+- `rpow`'s overflow threshold differs in the far tail: EVM reverts when an
+  intermediate *product* exceeds `uint256`; SVM returns `None` when a
+  *quotient* exceeds `u128`, and the Rust bound binds first. Both sit ~17
+  orders of magnitude outside the reachable domain — proven by the
+  `reachability` test module in `oku-shared/src/rate.rs`.
+- `Clock::unix_timestamp` can lag wall clock. Because the multiplier is a pure
+  function of it, this is a self-correcting lag, not a drift — but drift
+  monitoring must compare at equal *chain* timestamps.
 - Wallet *display* still steps, because `ScaledUiAmount` cannot stream.
 
 ---
@@ -732,7 +715,7 @@ the streaming-accrual and display-mirror tests will fail with an
 ### Suites
 
 The bankrun suite is **124 tests** (`npm run test:bankrun`); the pure-Rust
-suite is **58** (`npm run test:rust`). `npm test` runs both. The cross-language
+suite is **61** (`npm run test:rust`). `npm test` runs both. The cross-language
 agreement of `compute_multiplier` is enforced separately by the 3,867-vector
 differential corpus (`npm run test:differential` from the repo root).
 
@@ -775,9 +758,9 @@ differential corpus).
 
 The entire unit suite runs on
 [`solana-bankrun`](https://github.com/kevinheavey/solana-bankrun)
-via the thin `anchor-bankrun` adapter. Bankrun executes BPF programs
-in-process on `litesvm`, eliminating the 30 s confirmation-polling
-window in `@solana/web3.js@1.x` and wall-clock waits for slot rollover.
+via the thin `anchor-bankrun` adapter — in-process BPF execution on
+`litesvm`, so there is no confirmation-polling window and no wall-clock wait
+for slot rollover.
 
 **`autoBumpSlot` (default on).** `startBankrun()` wraps
 `provider.sendAndConfirm` so every transaction advances the bankrun
@@ -990,19 +973,12 @@ The orchestrator handles this asymmetry transparently.
 
 ### DeFi compatibility
 
-| Aspect | EVM | SVM |
-|---|---|---|
-| AMM integration | rebasing tokens require wrapper or custom pool logic | raw amounts static — standard AMM pools work natively |
-| Raydium | n/a | CPMM/CLMM explicitly allow `ScaledUiAmount` tokens |
-| Jupiter | n/a | routes through `ScaledUiAmount` tokens natively |
-| Lending protocols | must account for rebasing | raw collateral amounts are stable; no rebasing risk |
-
-### Approval model
-
-EVM uses `IERC20.approve` + `transferFrom`. SVM uses SPL account
-ownership: each operation has a `Signer` field on the account
-context, and Anchor validates ownership at deserialization. No
-global approval table.
+The single-token SVM design is the one with better native composability:
+raw balances are static, so standard AMM pools work without a wrapper.
+Raydium's CPMM/CLMM explicitly allow `ScaledUiAmount` tokens and Jupiter
+routes through them natively. EVM's rebasing `usdOku` needs a wrapper or
+custom pool logic, which is why `OkuMoney` (non-rebasing) is the asset to
+integrate against there.
 
 ### Round-trip drift
 

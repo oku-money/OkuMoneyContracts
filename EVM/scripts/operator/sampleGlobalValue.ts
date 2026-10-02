@@ -4,8 +4,7 @@
  * `yieldRate.ts::timeWeightedAverage` need to compute a TIME-WEIGHTED average
  * dollar value for a given epoch, rather than a spot value at one instant.
  *
- * Recommended cadence: hourly. See EVM/README.md § Rear-Facing Epoch
- * Accounting for why the denominator must be time-weighted, and
+ * Recommended cadence: hourly. See EVM/docs/epoch-accounting.md for why the denominator must be time-weighted, and
  * TRACKER.md for the "reference implementation, not production design"
  * caveat on the on-disk sample store this appends to.
  *

@@ -3,8 +3,7 @@
  * call, needed to (a) thread `carryForwardUsd` into the next epoch's
  * `carryInUsd` and (b) report cumulative conservation: that cumulative
  * dollars expressed as rate equal cumulative realised yield, up to the
- * outstanding carry balance (see EVM/README.md § Rear-Facing Epoch
- * Accounting, "cumulative conservation").
+ * outstanding carry balance (see EVM/docs/epoch-accounting.md, "cumulative conservation").
  *
  * OPERATIONAL NOTE: like `scripts/utils/globalValue.ts`'s sample store, this
  * on-disk ledger is a REFERENCE implementation, not a production design. The

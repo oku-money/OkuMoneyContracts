@@ -11,7 +11,7 @@
   layout exists or is planned: a resize could only grow a *current-layout*
   config, never translate a pre-single-token one. (A `migrate_config_space`
   instruction briefly existed for the former case and was removed as
-  unreachable — see `DECISIONS.md` D-07.)
+  unreachable: its target set was empty and it had zero tests.)
 - `tokens.okuMoney` / `tokens.usdOku`, `pdas.redemptionQueue`,
   `pdas.vaultConfig`, `pdas.vaultOkuMoney` are two-token-model keys from before
   the single-token collapse. Dead.

@@ -4,7 +4,7 @@
  * settleEndSec)` from the identical inputs — same "single source of truth"
  * principle as `yieldRate.ts::apyToRatePerSecond` for the simple case.
  *
- * See EVM/README.md § Rear-Facing Epoch Accounting for the full design
+ * See EVM/docs/epoch-accounting.md for the full design
  * rationale (the impossibility of exact nominal distribution, why B3 shrinks
  * the uncorrectable window instead of eliminating it, and the accuracy table
  * this module's sibling simulation suite validates).
@@ -46,7 +46,7 @@ export function epochEndSec(grid: EpochGrid): number {
  *    use), what fraction the base window alone attempts, with the settlement
  *    window closing the remainder from FRESHLY MEASURED data. This is what
  *    shrinks the AUM-volatility-driven error — see the accuracy tables in
- *    EVM/README.md § Rear-Facing Epoch Accounting.
+ *    EVM/docs/epoch-accounting.md.
  *
  * `deriveBaseRate` / `deriveSettlementRateForEpoch` below take `targetUsd` as
  * an INPUT — the caller is responsible for having already applied (1) via

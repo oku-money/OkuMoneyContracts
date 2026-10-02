@@ -94,7 +94,7 @@ export interface RateWithCarry {
  * Derive the rate that expresses a known realised dollar yield as a per-second
  * rate — the REAR-FACING entry point: epoch N's confirmed proceeds are
  * converted to a rate that streams smoothly across a later window (see the
- * epoch pipeline in EVM/README.md § Rear-Facing Epoch Accounting).
+ * epoch pipeline in EVM/docs/epoch-accounting.md).
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * TWO V's — READ THIS BEFORE CHANGING THE DENOMINATOR
@@ -119,7 +119,7 @@ export interface RateWithCarry {
  * epoch" as a rate, decoupled from that epoch's own AUM path. It does NOT make
  * actual future dollars paid equal `realisedYieldUsd`: that gap is driven by
  * (2) — rate drift between the measurement and paying epochs, not AUM growth.
- * See EVM/README.md § Rear-Facing Epoch Accounting (`Y_dist = rate · V̄_paying · W`).
+ * See EVM/docs/epoch-accounting.md (`Y_dist = rate · V̄_paying · W`).
  *
  * `carryForwardUsd` reconciles against basis (1) only. For TRUE cumulative
  * conservation against what was actually paid on-chain, close the loop with

@@ -37,7 +37,8 @@
 //! bound binds first, at `x ≈ 1.84e28` versus EVM's `x < 2^128 ≈ 3.4e38`.
 //! Both are far outside the reachable domain — `MAX_MULTIPLIER` clamps
 //! output at `1e24` (1e6×), while the SVM bound only engages above ~1.8e10×
-//! *within a single squaring step*. Tracked in `SVM/DECISIONS.md` (D-04).
+//! *within a single squaring step*. Proven unreachable in the
+//! `reachability` test module below.
 
 use crate::constants::{MAX_MULTIPLIER, PRECISION};
 use crate::wad::{mul_div_wad_floor, mul_div_wad_half_up};
@@ -275,14 +276,12 @@ pub const fn compute_multiplier(
     // complete write set for the schedule and each one maintains that (see
     // the EVM comment in `MathLib.computeMultiplier` for the enumeration).
     //
-    // This branch therefore carries no overhang leg. An earlier version did,
-    // as a defensive fallback, but it compounded the successor from
-    // `rate_end` rather than from `max(anchor, rate_end)` as branch 2 does —
-    // so in the very state it claimed to protect against (`anchor >
-    // rate_end`) it applied yield across `[rate_end, anchor]`, a span that
-    // precedes the snapshot and is already baked into `base`. Deleting it
-    // removes that latent double-count rather than preserving an unreachable
-    // path that was wrong anyway.
+    // This branch therefore carries NO overhang leg, and must not acquire
+    // one. A defensive fallback here would have to compound from
+    // `max(anchor, rate_end)` as branch 2 does; compounding from `rate_end` —
+    // the obvious implementation — applies yield across `[rate_end, anchor]`,
+    // a span that precedes the snapshot and is already baked into `base`,
+    // double-counting it in exactly the state the fallback claims to protect.
     if rate <= PRECISION {
         return Some(base);
     }
@@ -741,12 +740,14 @@ mod proofs {
 }
 
 // ---------------------------------------------------------------------------
-// Reachability bound (SVM/DECISIONS.md D-04)
+// Reachability bound
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod reachability {
-    //! Proves the accepted EVM divergence (`SVM/DECISIONS.md` D-04) is
+    //! Proves the accepted EVM divergence (this port returns `None` on a
+    //! quotient exceeding `u128`; Solidity reverts on a product exceeding
+    //! `uint256`, and the Rust bound binds first) is
     //! unreachable, rather than merely arguing it.
     //!
     //! Solidity's `rpow` reverts when an intermediate **product** exceeds
@@ -822,7 +823,7 @@ mod reachability {
         // Failing side — both already ~17+ orders past MAX_MULTIPLIER.
         assert!(
             compound_for(PRECISION, rate_for_apy(5.00), 30 * YEAR).is_none(),
-            "boundary moved — D-04's reachability argument needs rechecking"
+            "boundary moved — the reachability argument needs rechecking"
         );
         assert!(compound_for(PRECISION, rate_for_apy(1.00), 100 * YEAR).is_none());
     }

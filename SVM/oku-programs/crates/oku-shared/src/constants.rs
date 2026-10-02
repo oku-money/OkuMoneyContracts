@@ -43,7 +43,8 @@ pub const MAX_RATE: u128 = PRECISION + 100_000_000_000;
 /// (~15 years). There is no recovery from that — every instruction that could
 /// rewrite the schedule re-anchors through `multiplier::at` and so fails too,
 /// including the `set_okum_multiplier` emergency override. 90 days keeps ~60x
-/// margin while spanning exactly 90 of the 86_400 s production epochs.
+/// margin against that bound while comfortably exceeding any plausible epoch
+/// length, so a schedule never needs to span more than one window.
 ///
 /// EVM mirror: `Constants.MAX_RATE_WINDOW`. These MUST agree or the two stacks
 /// accept different schedules.
@@ -120,11 +121,19 @@ mod tests {
             "window bound leaves only {}x margin below the rpow failure point",
             margin
         );
-        // And the bound must land on the 86_400 s production-epoch grid, so a
-        // whole number of epochs fits inside one window with no remainder.
-        const PRODUCTION_EPOCH_SECONDS: i64 = 24 * 60 * 60;
-        assert_eq!(MAX_RATE_WINDOW_SECONDS % PRODUCTION_EPOCH_SECONDS, 0);
-        assert_eq!(MAX_RATE_WINDOW_SECONDS / PRODUCTION_EPOCH_SECONDS, 90);
+        // The window must divide evenly by any epoch length the orchestrator is
+        // likely to run, so a whole number of epochs fits inside one window with
+        // no remainder. Asserted over a range rather than against the current
+        // epoch constant: pinning the exact quotient would couple this test to a
+        // backend tunable it has no business naming.
+        for epoch_secs in [60 * 60, 6 * 60 * 60, 12 * 60 * 60, 24 * 60 * 60] {
+            assert_eq!(
+                MAX_RATE_WINDOW_SECONDS % epoch_secs,
+                0,
+                "window does not divide evenly by a {}s epoch",
+                epoch_secs
+            );
+        }
     }
 
     /// At 1e9 the smallest expressible per-second rate is a >3% APY step;

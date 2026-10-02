@@ -11,7 +11,7 @@ import {
 } from "../../../scripts/utils/yieldRate";
 
 // Pure TS logic — no network/fork needed. Covers the rear-facing epoch
-// accounting model documented in EVM/README.md § Rear-Facing Epoch Accounting:
+// accounting model documented in EVM/docs/epoch-accounting.md:
 // converting realised yield into a rate against a TIME-WEIGHTED average value
 // (not a spot value), the internal-bookkeeping carry ledger, and the ex-post
 // `reconcileActualPayout` step that closes the gap internal bookkeeping can't

@@ -3,1562 +3,242 @@
 Open issues + follow-ups for the okuMoney on-chain stack (EVM + SVM).
 Scope is on-chain code; operational items (key custody, monitoring,
 incident response) are tracked separately by the operator team and
-intentionally excluded from this file. Resolved items are removed;
-full history lives in git and in each side's README (see "Accepted
-Risks" in `EVM/README.md` / `SVM/README.md`).
+intentionally excluded from this file.
+
+**Resolved items are deleted, not archived.** Git holds the history. An
+entry survives resolution only if it records something a contributor could
+*not* learn by reading the current code and tests — a load-bearing invariant,
+a trap that will be re-entered, or a decision whose alternative still looks
+attractive. "Fixed a bug, added a test" is not one of those.
 
 **Status legend:** 🔴 blocks external exposure · 🟡 should-fix before audit · ⚪ post-launch
 
 **Tag legend:** `[EVM]` `[SVM]` `[both]`
 
-The goal is to clear every item before audit. This file should be
-removable post-launch.
+---
+
+## Standing invariants — do not regress these
+
+Four properties that are load-bearing, non-obvious, and easy to break with a
+change that looks locally reasonable. Each is pinned by a test; each is listed
+here because the *reason* it matters is not visible from the code alone.
+
+1. **The multiplier is monotonically non-decreasing, and that is the only
+   reason the PSM needs no slippage parameter.** Rate writes are floored at
+   `PRECISION`; the emergency override requires a strict increase. Redeem
+   output is linear and increasing in the multiplier, so delay, reordering and
+   front-running can only pay the caller *more*. **This collapses the moment a
+   PSM fee exists** — see the fee entry below. Pinned by
+   `test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier`.
+
+2. **Rate windows are bounded at 90 days on both stacks, and the two constants
+   must agree.** Not a style rule: `rpow` overflows internally at ~15 years
+   (measured 472,763,099 s), and once `okuMMultiplier()` reverts, *every*
+   recovery path reverts with it — including the emergency override, which
+   re-anchors through the same read. The only exit is an upgrade. A divergence
+   between stacks means one chain accepts a schedule the other rejects.
+   Long-horizon fixtures must chain 90-day re-anchors, not open one long window.
+
+3. **`address(0)` is the "slot cleared" sentinel in `RedemptionQueue`.**
+   `enqueue` rejects it for that reason. A zero-user entry would be
+   unprocessable, unrescuable, and would permanently block `withdrawUsdc` via
+   `WouldStrandQueue`. Related: `advanceHead` must keep `nonReentrant`, and
+   `processQueue` must keep deleting before the external transfer.
+
+4. **`multiplier_to_f64_floor`'s `display <= canonical` holds by exact
+   cancellation, not by margin.** Two `next_down` steps cancel two f64
+   roundings with `2^-104` left over. Adding any third rounding operation
+   breaks it. The weak region is just *below* a power of two (measured minimum
+   bias 1.05e-16 at m≈1.306e23), not at m≈1e18 — any sampling that skips it
+   over-measures the margin several-fold. The invariant is checked in exact
+   integer arithmetic (`f64_conversion_never_exceeds_canonical_exactly`); do
+   not simplify it back to a float threshold.
 
 ---
 
 ## 🟡 Should-fix before external audit
 
-### OPEN: `RealWorldUsage` scenario sets a 5-year rate window against a 90-day cap `[EVM]`
-
-**Symptom:** `npx hardhat test` fails 1 of 216 —
-`RealWorldUsage — 365-day stochastic simulation`, in its `before all` hook:
-
-```
-Error: VM Exception ... reverted with custom error 'RateWindowTooLong()'
-  at OkuMoney._setOkuMYieldRate (src/token/OkuMoney.sol:419)
-```
-
-**Cause:** `test/hardhat/scenarios/RealWorldUsage.ts:283-284` arms the
-schedule with `now + 5 * 365 * DAY`, but `Constants.MAX_RATE_WINDOW` is
-`90 days`, so `setOkuMYieldRate` reverts. Pre-existing and unrelated to the
-role-audit work — confirmed by stashing that work and re-running the file
-(fails identically at HEAD). `forge test` is unaffected (588/588).
-
-**Why it is not a one-line fix:** the simulation runs 365 simulated days, so
-simply clamping the window to ≤90 days makes the rate expire roughly a
-quarter of the way in and accrual halt for the remainder — which changes what
-the invariants are asserting rather than restoring them. The scenario needs
-to re-anchor the rate periodically (as the real epoch cadence does) instead
-of arming one window for the whole run. That is a deliberate rewrite of the
-scenario's schedule handling, not a constant bump.
-
-**Related (do NOT fix in place):** `src/lib/Constants.sol:64` still justifies
-the 90-day bound as "comfortably exceeding the 30-day production epoch". The
-grid moved to 24h. The wording is stale but `EVM/src/**` comments are
-address-load-bearing under CREATE2 (see the NatSpec entry below), so this
-must be batched with a `DEPLOYMENT_VERSION` bump and redeploy.
-
-### OPEN: trim NatSpec / doc-comments before any redeploy or third-party audit `[EVM] [SVM]`
-
-**Action:** do a documentation pass over `EVM/src/**` and
-`SVM/oku-programs/programs/**` + `crates/**` that (a) cuts the overall volume of
-NatSpec / doc-comments substantially, and (b) rewrites what remains to be
-**broad enough that a small change doesn't immediately invalidate it**.
-
-**Why now / why it matters:**
-
-1. **Verbosity is already producing stale docs.** The 24h-epoch change left
-   several comments factually wrong the moment a backend constant moved, e.g.
-   `EVM/src/lib/Constants.sol:63-64` and
-   `SVM/.../crates/oku-shared/src/constants.rs:68-69` both still read *"90 days
-   keeps ~60x margin while comfortably exceeding the **30-day production
-   epoch**"*, and `constants.rs:150` asserts
-   `MAX_RATE_WINDOW_SECONDS >= 30 * 24 * 60 * 60` with the comment "must still
-   comfortably exceed a production epoch". None of these are *wrong* about the
-   90-day bound — they're wrong about a number they had no business naming. The
-   rule going forward: **document the invariant, not the current value of a
-   tunable.** "Comfortably exceeds any plausible epoch length" is correct
-   forever; "exceeds the 30-day production epoch" was correct for one quarter.
-
-2. **An auditor reads every line.** Verbose NatSpec that narrates history
-   ("this was a real bug, see TRACKER.md", "an earlier version of this used…")
-   inflates audit surface and cost, and invites findings against commentary
-   rather than code. Historical reasoning belongs in `TRACKER.md` /
-   `SVM/DECISIONS.md`, which is where it already lives — the contracts should
-   point at those rather than restate them.
-
-3. **⚠ Comments in `src/` are ADDRESS-LOAD-BEARING — this cannot be done
-   casually.** `bytecodeHash` is left at solc's default (`ipfs`), so the
-   compiler embeds a metadata hash derived from the *source text* into every
-   contract's creation bytecode (verified: the `a264697066735822` CBOR marker is
-   present in `OkuMoney`'s initCode). Editing a single comment therefore changes
-   the initCode → changes the CREATE2 address → forks the fleet away from the
-   deployed contracts and invalidates their block-explorer verification.
-
-**Therefore this work MUST be batched**, not landed opportunistically:
-   - Bundle the entire NatSpec trim into **one** change that coincides with a
-     `DEPLOYMENT_VERSION` bump and a full redeploy + re-verify.
-   - Strongly consider setting `settings.metadata.bytecodeHash = "none"` in both
-     `hardhat.config.ts` and `foundry.toml` **as part of that same batch**, which
-     decouples comments from addresses permanently and makes every future doc
-     pass free. (It is itself an address-changing change, so it must ride along
-     with the version bump, not follow it.)
-   - Files under `EVM/test/**` are exempt — test contracts are never deployed.
-   - On the SVM side the program ID is keypair-derived, not content-derived, so
-     comments don't move the address — but they do change the compiled `.so`,
-     so the trim should still land before a deploy rather than after.
-
-See the CREATE2 caveats in `EVM/README.md` § Deterministic addresses.
-
-### RESOLVED: PSM "slippage protection" was dead at 6 decimals and a liveness DoS at 18 `[EVM]`
-
-**Two errors removed from `LitePSM`:** `OutputBelowMinimum(uint256,uint256)`
-and `RoundTripDriftTooLarge(uint256,uint256)`. Neither was slippage
-protection. ABI diff verified to be exactly those two entries removed, nothing
-added.
-
-**`OutputBelowMinimum` was unreachable at every decimal count.** It compared
-`usdcAmount` against a floor recomputed from `okuMAmount` truncated to
-`decimalMultiplier`; both conversions are monotone non-decreasing and the
-truncated input is `<=` the real one, so the floor was always `<=` the value
-it gated.
-
-**`RoundTripDriftTooLarge` was worse than inert.** It tolerated one
-*collateral unit* of round-trip drift. At 6 decimals that tolerance
-($0.000001) sits far above the sub-unit truncation it measured, so it never
-fired. At 18 decimals `decimalMultiplier == 1`, the tolerance becomes one wei
-— **below** the truncation — and the check rejects a fixed fraction of
-ordinary mints:
-
-```
-USDC 6dp         m = 1.00 / 1.05 / 3.00   ->  fires on   0/3000 mint amounts
-collateral 18dp  m = 1.05                 ->  fires on   0/3000
-collateral 18dp  m = 3.00                 ->  fires on 999/3000   (exactly V mod 3 == 2)
-```
-
-**Not hypothetical:** BSC is a configured target and its canonical
-Binance-Peg USDC carries 18 decimals (`scripts/config/chains.ts`). Deploys
-there default to `MockUSDC` (6dp), which is the only reason it never fired.
-The gap that hid it: the suite's only non-6-decimal coverage asserted
-`initialize` succeeded and stopped — **no test had ever pushed a mint or a
-redeem through the `decimalMultiplier == 1` path.**
-
-**Why removal rather than a wider tolerance:** there is nothing to protect
-against. `okuMMultiplier` is monotonically non-decreasing (`_setOkuMYieldRate`
-rejects `newRate < PRECISION`; `setOkuMMultiplier` requires strict increase),
-so redeem output can only rise with delay and mint preserves dollar value
-regardless of when it lands. A `minOut` parameter would have no adverse
-movement to catch. SVM keeps `min_usdc_out` as client-side
-defence-in-depth; that divergence is now documented from both sides.
-
-**Rationale rewritten, not deleted:** the `okuMAmount < decimalMultiplier`
-guard in `_redeemOkuMShared` justified itself *by reference to* the removed
-slippage floor. It stays — it is the queue's dust floor — but on new,
-independent footing. A mechanical deletion would have taken it out with the
-rest.
-
-New tests (`LitePSM.t.sol`), the first two verified to fail against the
-pre-removal contract with the exact predicted revert args:
-`test_MultiDecimal_18Dec_MintSucceedsOnTruncatingAmount`,
-`test_MultiDecimal_18Dec_MintSucceedsAcrossAllResidues`,
-`test_MultiDecimal_8Dec_MintSucceedsAcrossAllResidues` (pins the boundary so
-the 18dp result reads as "the tolerance ran out", not "non-6dp is broken"),
-`test_MultiDecimal_18Dec_RedeemReturnsExactFlooredConversion`,
-`test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier` (pins the
-monotonicity property that makes the whole removal safe). Full suite:
-608 → 613.
-
-**Residual accepted:** a caller on 18-decimal collateral now silently
-forfeits up to `ceil(m / PRECISION)` wei of truncation instead of reverting.
-Strictly better than reverting and it rounds to the protocol, but it is a
-behavioural change rather than a pure deletion.
-
-See `EVM/README.md` Accepted Risk #15.
-
 ### OPEN: queue dust floor collapses to 1 wei on 18-decimal collateral `[EVM]`
 
 `_redeemOkuMShared` gates minimum redemption at `okuMAmount <
-decimalMultiplier` — the queue's dust floor. `decimalMultiplier` is
-`10**(18-d)`, so the floor is `1e12` OkuM wei (~$0.000001) at 6 decimals and
-**`1`, i.e. nothing,** at 18. Combined with there being no fee anywhere
-(round-tripping the PSM is free, so the buffer can be drained to force
-redemptions into the queue), queue-stuffing is cheap on an 18-decimal chain.
+decimalMultiplier`. `decimalMultiplier` is `10**(18-d)`, so the floor is
+`1e12` OkuM wei (~$0.000001) at 6 decimals and **`1`, i.e. nothing,** at 18.
+Combined with there being no fee (round-tripping the PSM is free, so the
+buffer can be drained to force redemptions into the queue), queue-stuffing is
+cheap on an 18-decimal chain.
 
-**Deliberately not fixed in this pass.** The fix is an absolute
-minimum-redemption parameter independent of `decimalMultiplier` — new storage,
-new admin lever, SVM parity obligation — which is disproportionate to bundle
-into a dead-code removal and *overlaps directly with the open fee decision*
-(a fee prices queue entry creation in dollar terms, which is the better fix).
-Gated on `SVM/DECISIONS.md` **D-29**.
+**Deliberately not fixed.** The fix is an absolute minimum-redemption
+parameter independent of `decimalMultiplier` — new storage, new admin lever,
+SVM parity obligation — and it *overlaps directly with the open fee decision*
+below, which prices queue entry in dollar terms rather than in units that
+scale with collateral decimals. Resolve the fee question first.
 
-**Operational:** only materialises on a chain deployed against genuinely
-18-decimal collateral. Treat `SKIP_MOCK_USDC=true` on BSC as requiring D-29
-to be resolved first. See `EVM/README.md` Accepted Risk #16.
+**Operational trigger:** only materialises on a chain deployed against
+genuinely 18-decimal collateral. Treat `SKIP_MOCK_USDC=true` on BSC as
+requiring the fee decision to be resolved first. See `EVM/README.md`
+§ Accepted Risks, "queue dust floor".
 
-### OPEN: no PSM swap fee — gates three separate findings `[EVM][SVM]`
+### OPEN: no PSM swap fee — the largest open economic question, gates three findings `[EVM][SVM]`
 
-There is no `tin`/`tout` anywhere in either stack. `Constants.BASIS_POINTS`
-exists and is read by nothing, which suggests a fee was once intended.
-Recorded as **D-29** in `SVM/DECISIONS.md` with the full analysis: what it
-closes (the forward-only sandwich guard's residual, free buffer drain, queue
-stuffing), what it costs (peg band widens by the fee, ERC-4626
-`preview*`-vs-`convert*` divergence, rounding-order parity obligation), where
-it would live, and four open sub-questions.
+**There is no fee anywhere in the protocol.** Not on `mintOkuM`, `redeemOkuM`,
+`mintUsdOku`, `redeemUsdOku`, nor their SVM counterparts.
+`Constants.BASIS_POINTS` exists and is read by nothing — its own doc comment
+says so — which suggests a fee was intended once and never landed.
 
-The point of recording it: Accepted Risks #12 and #16 should be read as
-*consequences of one open decision*, not as independently accepted
-residuals. No code written against it.
+The two Accepted Risks below should be read as **consequences of this one open
+decision**, not as independently accepted residuals.
 
-### RESOLVED: four comments whose stated reasoning was wrong `[EVM]`
+**What a fee would close**
 
-Doc-only, no behaviour change — but each would have misled a future change.
-
-1. **`OkuDollar.transfer`/`transferFrom` claimed emitting the post-rounding
-   `effective` value makes `sum(Transfer.value) == Δ balanceOf` hold for
-   indexers. It does not, and no emitted value could.** `balanceOf` floors
-   *per account*, so the sender's decrease and the receiver's increase are
-   each independently `floor(shares*m/1e18)` or that `+1`, depending on each
-   party's own residue — and need not agree with each other. Worked
-   counterexample now in the comment (`m = 1.5`: one event cannot report both
-   `-1` and `+2`). Replaced with the only true guidance — read balances from
-   `balanceOf()`; `Transfer.value` is advisory, ±1 wei per transfer, unbounded
-   in aggregate. Also documented the related
-   `totalSupply() >= sum(balanceOf)` gap (up to `holders - 1` wei, safe
-   direction) so conservation-style invariants use `>=`, not `==`.
-
-2. **`MathLib`'s rounding policy asserted "the only Ceil site in the protocol
-   is `OkuDollar.unwrap`'s `sharesToBurn`". There are three** — also
-   `previewMint` and `previewWithdraw`. The two extra are 4626-correct and
-   view-only so there is no rounding bug, but `MathLib` is the file a
-   reviewer consults to reason about protocol-wide rounding direction, and an
-   incomplete list is how a future Ceil site gets added unnoticed. Now lists
-   all three with their direction, plus a pointer that SVM has no equivalent
-   primitive (`mul_div_ceil` takes `u64` and cannot hold a WAD-scale divisor —
-   reaching for `dollars_to_raw` instead would invert the rounding direction
-   on a user withdrawal).
-
-3. **`OkuMoney.transferFrom`'s new spender blacklist check carried no
-   self-brick note**, though `mint`'s equivalent did. `LitePSM` is a spender
-   here (it pulls OkuM from the redeemer), so blacklisting the PSM proxy halts
-   redemptions as well as minting. Same accepted tradeoff, now stated in both
-   places rather than one.
-
-4. **`maxWithdraw`/`maxRedeem` model pause and blacklist but not
-   `whenYieldNotDistributing`**, so they technically over-report for the
-   remainder of a block containing an emergency override. Documented as
-   deliberate: the condition is transient by one block, and returning 0 would
-   make integrators briefly see an empty position — a worse failure than a
-   revert that can be retried. `maxDeposit` omits it on the same grounds, so
-   the two sides stay symmetric.
-
-### RESOLVED: display mirror's safety margin was overstated by ~5x, and its test could not detect the difference `[SVM]`
-
-`multiplier_to_f64_floor`'s NatSpec claimed two `next_down` steps gave
-`~4.4e-16` of margin, "dominating" the f64 error budget "by ~2.5x". That
-figure was computed at `m ~ 1e18`, where the quotient lands exactly on `2^0`
-— the point of **maximum** relative ULP in the domain, i.e. the best case.
-Across the real domain `[1e18, 1e24]` the quotient ranges over `[1, 1e6]`,
-and just below a power of two the relative ULP halves. Measured over 400k
-samples:
-
-```
-min relative downward bias: 1.050e-16  (at m = 1.306e23)
-true budget 2 * 2^-53     = 2.220e-16
-ratio                     = 0.47x      (doc claimed 2.5x)
-```
-
-**The implementation is correct and unchanged.** The invariant
-`display <= canonical` does hold everywhere, but by a *second-order* argument
-the old comment did not state: `q <= (m/P)(1+u)^2` and
-`nextDown^2(q) <= q(1-2^-52)` multiply to `(m/P)(1-2^-104) < m/P`. The two
-steps exactly cancel the two roundings. That is a razor, not a cushion, and
-the NatSpec now says so — specifically that adding any third rounding
-operation breaks it.
-
-**The test was the real defect.** It asserted `rel_bias > 1e-16` — a float
-comparison, against a threshold **below** the true `2.22e-16` budget, with
-eight hand-picked cases none of which sat in the weak region. It therefore
-passed on inputs that violated the property it claimed to check. It tested
-what the code did, not what the code needs to be true.
-
-Replaced with `f64_conversion_never_exceeds_canonical_exactly`, which checks
-the invariant **exactly in integer arithmetic**: a positive normal `f64` is
-exactly `mantissa * 2^exp`, so `f * 1e18 <= m` becomes
-`mantissa * 1e18 <= m * 2^-exp` with no rounding anywhere (RHS reaches
-`2^132`, held in two `u128` limbs). Cases now include all 20 "just below a
-power of two" quotients, the empirical worst case, and a 20k deterministic
-sweep. The float upper-bound check is retained separately — legitimate there,
-since `1e-14` is nine orders above the measured quantity.
-
-**Regression-proved:** reverting to a single `next_down` makes the new test
-fail at `m = 130576977149543642620974` — precisely the case the old `1e-16`
-threshold would have passed. SVM Rust: 60 → 61 (one test split into two).
-
-### RESOLVED: no cross-contract wiring validation between LitePSM and RedemptionQueue `[EVM]`
-
-**Real gap, fixed.** `LitePSM.initialize` validated exactly one cross-contract
-edge (`okuDollar.asset() == _okuMoney`, `AssetMismatch`). It never checked
-that `_redemptionQueue` was configured with the same `usdc()` or `okuMoney()`
-as this PSM — `RedemptionQueue.sol:100`'s requirement was prose only.
-
-**Fix:** `LitePSM.initialize` now reverts `QueueUsdcMismatch` /
-`QueueOkuMoneyMismatch` on either edge, checked after the PSM's own
-zero-address/`AssetMismatch`/decimals validation so a malformed `_usdc`/
-`_okuMoney` reports its own defect first. Safe given deploy ordering: the
-queue is always initialized before the PSM. `scripts/deploy/index.ts`
-additionally re-asserts both edges (plus `litePSM.redemptionQueue()` ==
-the resolved queue address) inside `verifyDeployment`, covering the one case
-the init-time check structurally cannot: a PSM or queue *reused* from the
-address book (`tryAttach`) without re-running `initialize` this invocation.
-
-**Claim correction, found by verifying rather than assuming:** the original
-hypothesis for the okuMoney-mismatch consequence was that
-`RedemptionQueue.processQueue` would silently burn "the wrong token" after
-already paying out real USDC. Traced the actual call: `processQueue` burns
-via the queue's own wired `$.okuMoney`, not whatever token was actually
-escrowed, so a misconfigured queue calls `burn` on a token it holds no
-balance of and no `OKUM_BURNER` role on. That revert is deliberately
-unguarded (see `RedemptionQueue.processQueue`'s "DELIBERATELY UNGUARDED"
-comment), so it unwinds the **entire transaction**, including the USDC
-transfer that already executed earlier in the same call — fail-closed, not
-silent corruption. Pinned by
-`test_ProcessQueue_MismatchedOkuMoney_RevertsEntireBatch_NoSilentCorruption`
-(documents existing protocol behavior rather than a code fix, so there is no
-corresponding "reverted locally" regression-proof for that one test — the
-other three below do have one). The USDC-mismatch consequence as originally
-described (`usdcAvailable` reads the wrong balance/allowance, collapses to
-zero, batch soft-skips via `RedemptionSkipped(InsufficientFunds)`) was
-accurate, though "permanently undrainable" overstated it —
-`rescueQueueEntry` still recovers the escrowed OkuM.
-
-Also corrected: the claim's cited line numbers didn't match current source
-(`:257`/`:309` → actual branches are at `:279-280`/`:334` after since-added
-reentrancy and callback-top-up changes), and "nothing verifies the PSM
-received `QUEUE_PSM`" is false — it's verified and fatal in
-`deploy/index.ts`'s `verifyDeployment` (`expectedRoleGrants()` +
-`deployDrill.test.ts`).
-
-New tests, each confirmed to catch its regression by temporarily disabling
-the corresponding check and observing the predicted failure before
-restoring: `test_LitePSMInitialize_RevertQueueUsdcMismatch`,
-`test_LitePSMInitialize_RevertQueueOkuMoneyMismatch` (`CoverageGaps.t.sol`).
-Existing tests `test_MultiDecimal_8DecimalUsdcPsmInit` /
-`_18DecimalUsdcPsmInit` (`LitePSM.t.sol`) updated — both previously paired a
-non-6-decimal PSM with the suite's shared 6-decimal queue, which the new
-check now correctly rejects; each gets its own matching queue.
-`deployDrill.test.ts`'s wiring test extended to assert `okuMoney` equality
-and the `redemptionQueue()` address match, alongside the pre-existing USDC
-assertion. Full suite: 605 → 608.
-
-**Unrelated defect found and fixed while verifying this claim:**
-`scripts/operator/grantRolesMainnet.ts` required `OKUM_MINTER` on
-`RedemptionQueue` before proceeding — a grant `deploy/index.ts` deliberately
-never makes and `verifyDeployment` asserts the *absence* of
-(`RedemptionQueue` only burns). The mainnet RBAC ceremony script would
-therefore throw on every correctly-deployed chain. Fixed: removed that
-check, added the `QUEUE_PSM`-on-`RedemptionQueue` check its header already
-claimed to perform but didn't, corrected the header prose. Verified by
-inspection against `deployDrill.test.ts`'s proven post-deploy role state
-(the script has no exported testable unit — `main()` runs at module load,
-designed for `npx hardhat run`, not import — so this was not verified via a
-dedicated execution test; the corrected check list is a strict subset of
-the role matrix `deployDrill.test.ts` already proves holds after every
-correct deploy).
-
-See `EVM/README.md` Accepted Risk #14 for the full writeup.
-
-### RESOLVED: blacklisted spenders could still move value via a pre-existing allowance `[EVM]`
-
-**Real gap, fixed, on both tokens.** `OkuMoney._update` / `OkuDollar._transferUsdShares`
-checked `from`/`to` on every transfer path, and `approve`/`permit` blocked a blacklisted
-spender from receiving a NEW allowance — but nothing checked the spender's blacklist
-status at the moment an EXISTING allowance was exercised. Combined with `blacklist()`
-deliberately not revoking pre-existing allowances (intentional and correct — matches
-Circle, see below), a spender blacklisted after being approved kept full ability to move
-the grantor's clean funds to a clean third party via `transferFrom`, and via OkuDollar's
-ERC-4626 `withdraw`/`redeem` (`_redeemShares`'s allowance-spending branch).
-
-**Verified against Circle's actual source** (`FiatTokenV1.sol`/`FiatTokenV2.sol`,
-fetched and read, not recalled from memory) before fixing, since the explicit goal is
-Circle parity: Circle's `transferFrom` carries `notBlacklisted(msg.sender)` alongside
-`from`/`to`; `approve` carries it for the owner too; `mint` carries it for the minter.
-All three were gaps here; fixed to match exactly.
-
-**One deliberate near-miss, kept anyway:** the `mint` minter-check is a sharper
-divergence in practice than in Circle, because Circle's minters are third-party
-partners while `OKUM_MINTER` here is protocol infrastructure (`LitePSM`) — so it's a
-new way to brick all minting by blacklisting the PSM proxy, a vector that didn't exist
-before this fix. Kept for literal parity with the cited reference; the brick requires
-actively blacklisting the protocol's own PSM, which should never happen by accident.
-
-**What's NOT a gap, confirmed against Circle's source:** no retroactive allowance
-revocation on blacklist (Circle has none either — unbounded iteration over all
-grantors is infeasible on-chain for either project) and no seizure/clawback function
-(Circle has none; USDT/Paxos diverge from Circle by adding one — we deliberately
-follow Circle, not them, here).
-
-**Fix:** new `transferFrom` override on `OkuMoney` (previously inherited OZ's
-unmodified — no override existed at all); spender check added to `OkuDollar`'s
-existing `transferFrom` override and to `_redeemShares`'s allowance-spending branch;
-owner check added to both tokens' `approve`. Plus a spec-conformance fix in the same
-pass: `OkuDollar.maxWithdraw`/`maxRedeem` unconditionally reported non-zero for a
-blacklisted/paused owner whose call would unconditionally revert — asymmetric with
-`maxDeposit`, which already handled this correctly on the deposit side.
-
-**Regression coverage, verified to actually catch the regression** (not just pass
-against the fixed code — each fix was reverted locally, re-run, and the predicted
-failure observed, before restoring): `test_TransferFrom_RevertsOnBlacklistedSpender_EvenWithPriorAllowance`
-(both tokens), `test_Redeem_RevertsOnBlacklistedSpender_EvenWithPriorAllowance`,
-`test_Approve_RevertsOnBlacklistedOwner` (both tokens), `test_Mint_RevertsOnBlacklistedMinter`,
-`test_MaxWithdrawRedeem_ZeroForBlacklistedOwner`, plus "clean spender/owner unaffected"
-sanity checks for each. One test bug caught during verification and fixed: an earlier
-version of the OkuDollar redeem test used the blacklisted spender as its own receiver,
-so disabling the fix still made the call revert — for the wrong reason
-(`RecipientBlacklisted` via the pre-existing receiver-check, not the intended
-`SenderBlacklisted` from the new spender-check) — masking exactly the regression the
-test was meant to catch. Fixed by using a distinct, clean receiver.
-
-Full suite: 605/605 passing (was 593; +12 new tests, 0 regressions in the pre-existing
-set — confirming nothing previously relied on a blacklisted spender being able to move
-value). New invariant, true for the first time across both tokens: a blacklisted
-address cannot successfully call any state-changing function as sender, recipient, or
-approved spender. See `EVM/README.md` Accepted Risk #13 for the full parity table.
-
-### RESOLVED: `RedemptionQueue.advanceHead` reentrancy could permanently strand a live entry `[EVM]`
-
-**Real bug, fixed.** `processQueue` clears a queue slot (`delete $.queue[i]`) BEFORE its
-external `trySafeTransferFrom` call and restores it from memory only if that call
-reports failure (`RedemptionQueue.sol`). For the duration of that external call, a live
-entry transiently reads `user == address(0)` — the exact sentinel `advanceHead` treats
-as "safe to skip past." `advanceHead` carried no `nonReentrant` (unlike `processQueue`
-and `rescueQueueEntry`, which share one), so a reentrant `advanceHead(1)` fired from
-inside that external call could move `queueHead` past the transiently-cleared slot
-permanently: `processQueue`'s own restore runs immediately after, but the slot is now
-below `queueHead` and unreachable by every bound check in the contract
-(`processQueue`'s `StartBelowHead`, `rescueQueueEntry`'s and `getQueueEntry`'s
-`InvalidIndex`) — stranding the user's OkuM and permanently inflating
-`totalQueuedUsdc()` against `withdrawUsdc`'s `WouldStrandQueue` check.
-
-Requires a collateral token that (a) calls back into the recipient during
-`transferFrom` and (b) signals failure by returning `false` rather than reverting —
-confirmed against OpenZeppelin's `SafeERC20._safeTransferFrom` assembly that only the
-`false`-return path leaves the inner call's side effects un-unwound; an actual revert
-would unwind the attacker's own reentrant call too. Not reachable with Circle USDC (no
-transfer callback) or any ERC-20 without one — but the collateral token is a
-deploy-time parameter (`RedemptionQueue.initialize` validates only `decimals() <=
-18`), not a property either contract can itself enforce.
-
-**Fix:** added `nonReentrant` to `advanceHead`, shared with `processQueue` and
-`rescueQueueEntry`. One word; no storage layout change, no reinit needed (the guard's
-`__ReentrancyGuard_init()` already runs in every live deployment's `initialize`).
-
-**Residual, also fixed (lower severity, different mechanism):** `processQueue` caches
-its `usdcAvailable` bound once before the loop and decrements it locally (gas) rather
-than re-reading on-chain every iteration — correct only if nothing external changes the
-caller's real balance/allowance mid-batch. A callback token's recipient topping up the
-caller's real funds mid-batch could make that cached bound stale-LOW, causing a
-premature `break`: liveness-only (the skipped entry stays live, reprocessable next
-batch), never a fund-loss or a strand — the real `trySafeTransferFrom` call still
-enforces actual on-chain balance/allowance regardless of what the cache says. Closed
-with a lazy re-check: when the cache predicts insufficiency, re-read live exactly once
-before trusting it to halt the batch. Zero extra cost on the common path (sufficient
-funds throughout, or a non-callback token — i.e. every live deployment today).
-
-**Regression coverage, both verified to actually catch the regression** (not just to
-pass against the fixed code — confirmed by reverting each fix locally, re-running, and
-observing the predicted failure before restoring):
-- `test/psm/Reentrancy.t.sol::AdvanceHeadReentrancyTest` — `MockCallbackUSDC` (fires a
-  callback on `transferFrom`, optionally returns `false` without reverting) +
-  `QueueReentrancyAttacker` (a queue entry's `user`, whose callback reenters
-  `advanceHead`). Asserts the reentrant call is rejected AND, more importantly, that
-  the targeted entry remains reachable afterward (not just "something reverted
-  somewhere"). With the modifier manually removed: `queueHead` advances to 1,
-  stranding index 0, exactly as predicted.
-- `test/psm/ProcessQueueCallbackTopUp.t.sol` — `QueueFundsTopper` tops up the caller's
-  real balance via its callback mid-batch; asserts a second entry the live funds now
-  cover settles instead of staying queued. With the lazy re-check manually removed:
-  the second entry is skipped as `InsufficientFunds` instead of settling, exactly as
-  predicted.
-
-Full suite: 591/591 passing (was 586; +5 new tests, 0 regressions).
-
-### RESOLVED: every operator script's documented CLI invocation was impossible `[EVM]`
-
-`npx hardhat run <script>` parses argv **itself** and rejects any parameter it
-doesn't recognise, before the script executes. Every operator script documented
-a `--flag=value` invocation, and none of them could ever have worked:
-
-```
-npx hardhat run scripts/operator/psmOps.ts --action=mintOkuM
-  -> Error HH310: Invalid param --action=mintOkuM. Command line params must be lowercase.
-npx hardhat run scripts/operator/psmOps.ts --action=foo
-  -> Error HH305: Unrecognized param --action=foo
-npx hardhat run scripts/operator/psmOps.ts --yes-mainnet
-  -> Error HH305: Unrecognized param --yes-mainnet
-```
-
-Position is irrelevant (before or after the script path). Verified against all
-three error paths.
-
-**Why nothing caught it:** the operator drill calls `runPsmOp()`,
-`runRescueQueueEntry()`, etc. **in-process**, which is the right call for
-testing script *logic* — but it bypasses the CLI entirely. The CLI surface had
-never been executed by anything.
-
-**Two real consequences, not just bad docs:**
-
-1. `parseArg` falls back to `process.env[NAME]`, so an env-var form always
-   worked — but it was undocumented, and the documented form was the broken one.
-2. `isYesMainnet()` was `process.argv.includes("--yes-mainnet")` with **no env
-   fallback**, so `mainnetGuard` could never be satisfied under `hardhat run`.
-   Mainnet broadcast was *impossible*, not merely guarded. (Fail-safe rather
-   than dangerous, but the mainnet runbook was non-functional.)
-
-Notably `grantRoles.ts` / `grantRolesMainnet.ts` had **already discovered this**
-and rolled their own `YES_MAINNET` env check with an accurate comment — that fix
-just never propagated to the shared `cli.ts` helper or the other 14 scripts.
-
-**Fixed:**
-- `isYesMainnet()` now accepts `YES_MAINNET=1` / `=true`, matching the
-  convention `grantRoles.ts` already established, so there is one convention.
-- `parseArg()` now resolves camelCase options to readable SNAKE_CASE env names
-  (`minAmountOut` -> `MIN_AMOUNT_OUT`, `pendingEndTimestamp` ->
-  `PENDING_END_TIMESTAMP`), falling back to the legacy literal-uppercase form
-  for back-compat. Needed because env vars are now the *primary* interface and
-  a bare `toUpperCase()` produced names like `MINAMOUNTOUT`.
-- All 14 operator script headers + README rewritten to the env-var form.
-- `mainnetGuard` and `scripts/upgrade/index.ts` error messages no longer tell
-  operators to pass a flag that cannot work.
-- `operator:mint` / `operator:redeem` npm aliases now bake in
-  `ACTION=mintOkuM` / `ACTION=redeemOkuM` — previously both were byte-identical
-  to `operator:psmOps` with no action, so both failed with
-  `Required: --action=...`. Added missing `operator:vaultOps` and
-  `operator:setOkuMMultiplier` aliases. (An `operator:runEpoch` alias was added
-  in the same pass and removed again when `runEpoch.ts` was superseded by the
-  `deriveEpochSchedule` / `broadcastSchedule` split.)
-
-**Verified end-to-end against a live Sepolia fork node**, not just unit-level:
-deployed via `hardhat run scripts/deploy/index.ts --network localhost`, then
-executed a real (non-DRY_RUN) `ACTION=mintOkuM AMOUNT=1000000000 npx hardhat run
-scripts/operator/psmOps.ts --network localhost` -> broadcast succeeded, and
-`npm run operator:mint` likewise. Mainnet guard confirmed to block by default
-and accept both `YES_MAINNET=1` and `=true`.
-
-**Remaining gap (not fixed):** operator CLI entry points are still only covered
-in-process by the drill. A thin CLI-level smoke test (spawn one script with env
-vars against a fork, assert exit code) would have caught this on day one and
-would prevent regression. Worth adding before the operator runbook is relied on.
-
-### RESOLVED: `forge fmt` drift in `test/invariants/VaultInvariants.t.sol` `[EVM]`
-
-Pre-existing formatting drift that kept CI's **first** gate (`forge fmt
---check`) red independently of any work in this tracker — confirmed via `git
-stash` against a clean checkout. Fixed by running `forge fmt` on the file; the
-resulting diff is a pure whitespace reflow of a single `assertGe(...)` call,
-no logic change. `forge fmt --check` now exits 0.
-
-**Still worth reconsidering while here:** `forge fmt --check` and the 95%
-per-file `forge coverage` gate in `.github/workflows/test.yml` are both fairly
-strict, and this session found both false-red at least once for reasons
-unrelated to the actual code changes under review (formatting nits after
-adding assertions; coverage dipping below threshold from adding a small amount
-of untested ERC-4626 surface). Worth deciding whether these gates are
-providing proportional value or mostly generating friction — could simplify
-CI (e.g. loosen the coverage threshold, or drop `forge fmt --check` in favor
-of a pre-commit hook / editor integration) if the team decides the strictness
-isn't earning its keep. Not changed unilaterally here — flagging for a
-decision.
-
-### RESOLVED: test failures across 5 hardhat fixtures, 12 tests total (stale `OkuDollar` deploy args, predated single-multiplier refactor) `[EVM]`
-
-Found while verifying the full `npx hardhat test` suite (the CI command,
-which sets `FORK_NETWORK=mainnet`) during an unrelated audit pass. Confirmed
-pre-existing via `git stash` against a clean checkout — not introduced by any
-work in this tracker. **Full scope, verified directly (an earlier version of
-this entry under-scoped this to 2 files — corrected here):**
-
-| File | Failing | Stale arg |
+| Item | Today | With a fee |
 |---|---|---|
-| `test/hardhat/scenarios/RealWorldUsage.ts` | 8 (7 edge cases + the 365-day sim) | `MIN_COLLATERAL_RATIO` constant, `deployChain()` |
-| `test/hardhat/fork/OkuMoney.ts` | 1 (whole file, fails at `before all`) | inline `parseEther("0.95")` |
-| `test/hardhat/fork/OkuDollar.ts` | 1 (whole file) | inline `parseEther("0.95")` |
-| `test/hardhat/fork/LitePSM.ts` | 1 (whole file) | inline `parseEther("0.95")` |
-| `test/hardhat/happyPath/HappyPath.ts` | 1 (whole file) | inline `parseEther("0.95")` |
-
-All five fail identically: `Error: too many arguments: types/values length
-mismatch (count=5, expectedCount=4)` at `deployProxy`/`getInitializerData`,
-because each still passes a 5th constructor arg to `OkuDollar.initialize`,
-which now takes only 4 (`_okuMoney, name_, symbol_, _admin`).
-`minCollateralRatio` (and the whole
-`depositReserves`/`withdrawSurplus`/`collateralizationRatio` surface it
-gated) was deleted along with the second rate — collateralization is exactly
-1.0 by construction under the single-multiplier design. None of these 5
-fixtures were updated for that refactor. Every test in each file fails at
-setup, before its own logic runs — so all ~28 `it()` blocks across these 5
-files are currently **zero-coverage presenting as pre-existing failures**,
-not a runtime regression. No other removed-API references (`okuMPrice`,
-`distributeYield`, etc.) were found anywhere else in `test/hardhat/` — the
-stale 5th arg is the only blocker in each file.
-
-**Status: RESOLVED — all 28 tests now pass.** Deleted the stale 5th arg in all
-5 files (5 call sites, including one at `fork/OkuMoney.ts:309` a first pass
-missed — a second nested `deployProxy` call later in the same file). No other
-removed-API references exist anywhere in `test/hardhat/`, confirmed by
-grepping for `depositReserves`, `withdrawSurplus`, `collateralizationRatio`,
-`minCollateralRatio`, `okuMPrice`, `distributeYield` — zero hits outside the
-5 sites fixed.
-
-That mechanical fix alone unblocked **24 of 28**, confirming most of these
-fixtures' logic held up fine across the refactor. The remaining 4 were
-genuine stale *content*, each diagnosed to a root cause before being changed.
-**In all four cases the contract was correct and the test was wrong** — no
-contract bug was found:
-
-1. **`fork/OkuMoney.ts` — `TransferValue` event.** Deliberately removed
-   (`OkuMoney.sol:758`: under streaming accrual the dollar field would cost an
-   rpow on every transfer, ~5-10k gas forever, and without it the event
-   duplicated ERC-20 `Transfer` exactly). Rewritten to assert the `Transfer`
-   event that replaced it, plus `balanceOfUI()` for the dollar-value half of
-   the original intent — rather than deleting the assertion outright.
-2. **`fork/OkuMoney.ts` — pause/unpause.** Test-isolation bleed: contracts are
-   deployed once in a top-level `before`, so Bob still held 5,000 OkuM from an
-   earlier `it()`; `5000 + 1000 = 6000` exactly matched the observed value.
-   Now asserts a delta against a pre-captured balance, removing the ordering
-   dependency.
-3. & 4. **`fork/OkuDollar.ts` — unwrap formula (2 tests).** Both used
-   `amount × usdMultiplier / notePrice`, a **dual-multiplier-era** formula.
-   Under the single-multiplier design `usdMultiplier()` literally returns
-   `okuMoney.okuMMultiplier()` (`OkuDollar.sol:191-193`), so both terms are
-   now the same value and the expression degenerated to `amount` — asserting
-   that unwrapping returns dollar-for-dollar in *raw* notes, which would
-   inflate value by the multiplier. The contract computes
-   `mulDiv(usdAmount, PRECISION, mult, Floor)` (`OkuDollar.sol:490`) —
-   dollar-conserving and correct, and directly covered by forge at a 3x
-   multiplier (`test_Unwrap_SharesBurnedRoundUp_FavorsVault`, 130/130
-   `OkuDollarTest` green). Expectations corrected to match.
-
-   Fixing the formula then exposed a **second** stale assertion in the same
-   test: it checked for a fully-drained vault after unwrapping a balance
-   captured *before* the multiplier bump. A share balance is denominated in
-   raw OkuM, so a UsdOku balance grows with the multiplier — unwrapping the
-   pre-bump figure is a partial exit leaving ~9% behind. The old assertion
-   only ever passed because the two errors cancelled. The test now exits the
-   remaining balance so "full exit" means what its name says.
-
-### RESOLVED: deploy script had zero automated coverage and reported success on a broken role matrix `[EVM]`
-
-`scripts/deploy/index.ts` (~900 lines: proxy deploys, retry, address-book
-persistence, 21 role grants, Etherscan verification) was **exercised by no
-test at all**. Every fixture in the suite — including the operator drill —
-built its own contracts with `upgrades.deployProxy`, so the one artifact
-actually run against a testnet was the one thing nothing verified.
-
-Worse, the script's own `verifyDeployment()` step was **warn-only**: it spot-
-checked 4 of 21 grants and, on a missing `OKUM_BURNER`, logged
-`"redeem paths will revert!"` and then **exited 0**. A deploy with a broken
-redeem path reported success. Role misconfiguration is the failure mode most
-likely to brick a fresh deploy or silently leave a privilege hole, and it was
-the least-protected part of the pipeline.
-
-**Fixed, in three parts:**
-
-- **`runDeploy()` extracted** (`scripts/deploy/index.ts`). The script had no
-  exports — `main()` ran unconditionally at import and called `process.exit`,
-  so it could not be imported by a test without killing the host process.
-  Now follows the same `export async function run*()` +
-  `if (require.main === module)` pattern the operator scripts already use.
-  Structural only; no deploy logic changed. Takes an optional `deployer`
-  override, needed because the CLI path impersonates `DEV_WALLET` on a fork,
-  which would otherwise leave a test's own signer holding none of the roles.
-- **`verifyDeployment()` now fails loudly**, asserting the *complete* 21-grant
-  matrix plus both minter allowances and address-book completeness, and
-  throwing with a precise list of what's missing. Minter allowances are
-  checked separately from roles on purpose: `OkuMoney.mint` gates on BOTH
-  `onlyRole(OKUM_MINTER)` and the `minterAllowance` mapping, so a role grant
-  without an allowance still reverts with `ExceedsAllowance`. The expected
-  matrix is exported as `expectedRoleGrants()` so the drill asserts against
-  the deploy's own source of truth rather than a hand-copied list that would
-  drift the moment a role is added.
-- **`test/hardhat/drill/deployDrill.test.ts` added** (7 tests): runs the real
-  `runDeploy()` against the local fork and asserts all five proxies have code,
-  the address book matches what was deployed, the full role matrix is present,
-  minter allowances are non-zero, privileged roles are **not** held by an
-  unrelated address or `address(0)` (a positive-only check can't catch an
-  over-broad grant), cross-contract wiring is consistent, and — as the
-  end-to-end proof — that a real PSM mint succeeds on the resulting chain.
-
-**Verified the hardening isn't vacuous:** temporarily removing the
-`OKUM_BURNER -> LitePSM` grant made the deploy abort with
-`Deployment verification FAILED — missing role grants`, where it previously
-printed a warning and exited 0. Grant restored immediately after.
-
-**Also confirmed against the real target chain:**
-`./scripts/deploy/dryRunForks.sh sepolia` completes post-refactor with
-`All 21 role grants verified` in the transcript.
-
-### RESOLVED: operator drill validated a role topology no deployed chain has `[EVM]`
-
-The operator drill stood up its own contracts and wired **5** role grants;
-`scripts/deploy/index.ts` grants **21**. Every operator lever was therefore
-being exercised against a permission set that exists on no real deployment —
-exactly the fidelity gap the drill was built to close for the CLI scripts
-themselves. Repointed the drill's fixture at `runDeploy()`, so a role the
-deploy forgets to grant now breaks the operator drill too, instead of passing
-locally and failing on a testnet. All 22 operator-lever tests still pass, now
-against the production topology, plus the 7 new deploy-drill tests.
-
-### RESOLVED: new operator drill (`test/hardhat/drill/operatorDrill.test.ts`) exercises every operator-script lever end-to-end `[EVM]`
-
-Added a hardhat test that imports and calls the same functions the operator
-CLI scripts call (not spawning processes) against a fresh local chain,
-covering mint/burn/redeem/unwrap, PSM ops, rescue paths, epoch settlement +
-roll, multiplier overrides, and the DRY_RUN guard for every lever type. The
-fidelity choice (calling the real script functions rather than the contracts
-directly) is deliberate: a bug in a script's argument handling, address-book
-lookup, or guard logic shows up here exactly as it would for an operator
-running the CLI. 22 tests, all passing; folded into `npm run test:unit`.
-
-**Two real bugs found and fixed while hardening it, both in the drill itself
-(not in production code):**
-
-- **Gitignored reference-implementation stores silently corrupt reruns.**
-  `scripts/config/carryLedger.json` and `scripts/config/globalValueSamples.json`
-  are gitignored, so a stale entry from a previous local run isn't cleared by
-  git and isn't visible as a diff — it just silently corrupts the current
-  run's carry/target math with no error and no stack trace, producing a
-  result that looks like a slightly-wrong number. Fixed by deleting both
-  files at the start of `before()`, before anything reads or writes them.
-- **Hardcoded `NETWORK=sepolia` broke under any other fork target.** The
-  drill originally forced `process.env.NETWORK = "sepolia"`, assuming the
-  local fork's pinned chainId always matches Sepolia. But the chainId is
-  actually determined by `FORK_NETWORK` at hardhat startup (e.g.
-  `FORK_NETWORK=mainnet` pins chainId 1), so the hardcode threw `Chain ID
-  mismatch: local node reports chainId 1, but NETWORK=sepolia expects chainId
-  11155111` whenever the process wasn't started against a Sepolia fork —
-  found by running the drill together with the fork suite under
-  `FORK_NETWORK=mainnet`. Fixed by leaving `NETWORK` unset and letting
-  `resolveNetworkContext()` auto-detect `networkName`/`bookKey` from the
-  chain's actual live chainId instead; verified passing both with the default
-  fork and with `FORK_NETWORK=mainnet`.
-
-Also replaced two hardcoded settlement/roll-epoch yield targets (magic
-numbers like `1050`) with values derived from the fixture's actual
-`totalSupply()` at runtime, so the test's math stays self-consistent instead
-of depending on a number that happened to work against one specific supply
-snapshot.
-
-**Self-review pass found 5 more issues in the drill itself, all fixed:**
-
-- `npm run typecheck` (a real CI step, run separately from `hardhat test`)
-  failed on 2 unused declarations (`sampleGlobalValueUsd` import, `user2`
-  binding) that the initial pass never caught because it only ran `hardhat
-  test` directly.
-- The network-name assertion added to fix the `NETWORK=sepolia` hardcode
-  (above) was tautological: it re-derived `fork:${ctx.networkName}` from
-  `ctx` itself and compared it to `ctx.bookKey`, which can never fail — the
-  same "checks nothing" class of bug the stage-settlement test's own comment
-  calls out. Fixed by independently resolving the expected name from the live
-  chainId via `getNetworkNameByChainId()`, the same lookup
-  `resolveNetworkContext()` uses internally, so the assertion can actually
-  fail if they disagree.
-- The gitignored-store fix (above) deleted `carryLedger.json` /
-  `globalValueSamples.json` with no backup, on the reasoning that "they're
-  gitignored, so there's nothing to restore." That reasoning was wrong — they
-  can hold real local operator state that's meaningful independent of git
-  tracking. Now backed up and restored exactly like the tracked address book.
-- Removing a conditional guard (`if (bal >= amount)` / `.catch(() => {})`)
-  around the `burn` test's `mint()` call surfaced a real gap in the drill's
-  own setup: `admin` holds `OKUM_MINTER` from `initialize()`, but `mint()` is
-  *also* gated on a separate per-minter `minterAllowance` mapping that
-  `initialize()` never populates for anyone, so the unconditional mint
-  reverted with `ExceedsAllowance()`. Fixed by granting admin a small minter
-  allowance in `before()` — this is a drill-fixture gap, not a contract bug
-  (the contract's split of role vs. allowance is intentional, per its own doc
-  comments).
-- Several other conditional guards (`rescueQueueEntry`, `vaultOps` unwrap)
-  were removed in favor of deterministically establishing the precondition
-  and asserting the operation's actual on-chain effect (e.g. queue slot
-  zeroed, recipient balance moved by exactly the entry amount) rather than
-  skipping the assertion when the precondition wasn't met.
-
-### RESOLVED: `effectiveAt()`/`newUIMultiplier()` signaled a scheduled change when none was armed; MathLib/ERC-8056 test gaps closed `[EVM]`
-
-Three previously-deferred coverage/correctness items, closed in the same pass
-as the simulation-suite audit below:
-
-- **Real bug, fixed:** `effectiveAt()` returned `okuMRateEnd` whenever a
-  bounded active window existed, even with **no successor rate armed** — a
-  bounded window with nothing staged is just the current rate continuing, not
-  a scheduled change. `newUIMultiplier()`'s own doc comment already claimed
-  "when no pending rate is armed, returns the current multiplier" but the code
-  never actually checked that condition — the doc described intent, not
-  behavior. Both functions now check `okuMPendingRatePerSecond <=
-  Constants.PRECISION` explicitly and return `0` / the current
-  `okuMMultiplier()` respectively when nothing is armed. Zero test coverage
-  existed for either function before this fix; 6 new tests added
-  (`test_EffectiveAt_*`, `test_NewUIMultiplier_*`) covering halted, armed,
-  post-activation, and the regression case directly.
-- `MathLib.computeMultiplier` / `compoundFor` had **zero direct test
-  coverage** — only exercised transitively through `OkuMoney`'s own tests,
-  which never drove the two defensive branches (branch 1's overhang path
-  requiring `rate <= PRECISION && rateEnd != 0`; branch 2's `anchor > rateEnd`
-  underflow guard) since `OkuMoney`'s writers never produce those states.
-  Exposed both functions on `MathLibHarness` and added 12 direct tests in
-  `test/lib/MathLib.t.sol` covering every branch, including both defensive
-  paths, so they're verified rather than "presumed unreachable and therefore
-  fine."
-- ERC-8056's remaining value surface (`toUIAmount`, `fromUIAmount`,
-  `balanceOfUI`, `totalSupplyUI`) had zero test references — only
-  `supportsInterface` was covered. Added round-trip, zero-amount, and
-  balance/supply-consistency tests for all four.
-
-### RESOLVED: ERC-8056 interface IDs unpinned against literal doc values; single-multiplier guarantee unpinned across the ERC-8056/ERC-4626 boundary `[EVM]`
-
-Follow-up review pass on the ERC-8056 integration above found two remaining
-gaps, both closed with new tests (no contract changes):
-
-- **`supportsInterface` was only self-consistent, not doc-pinned.**
-  `test_SupportsInterface_ERC8056` asserts `supportsInterface(type(I).interfaceId)`
-  for each of the four ERC-8056 interfaces — which passes trivially even if a
-  signature change silently moves the computed ID, since it's checked against
-  itself. It could never catch the three prose sites (`IScaledUIAmount.sol`'s
-  NatSpec, the README table, Accepted Risk #9) drifting from what the
-  contract actually computes — a real risk given ERC-8056 is an explicitly
-  Draft standard that may itself change reference signatures before Final.
-  Added `test_InterfaceIds_MatchDocumentedHexValues`, asserting each
-  `type(I).interfaceId` against its literal documented hex value
-  (`0xa60bf13d` / `0x4bd27648` / `0x57854fc3` / `0xd890fd71`) directly.
-- **The single-multiplier guarantee was pinned per-contract, not across the
-  boundary that matters.** `okuDollar.usdMultiplier() == okuMoney.okuMMultiplier()`
-  and `okuMoney.uiMultiplier() == okuMoney.okuMMultiplier()` were each tested
-  independently, which only proves each side individually reads the same
-  underlying value — not that the two PUBLIC ENTRY POINTS a caller would
-  actually use (ERC-8056's `toUIAmount`/`fromUIAmount` vs. ERC-4626's
-  `convertToShares`/`convertToAssets`) agree with each other directly. This
-  was the driving design requirement behind adopting ERC-8056 at all: OkuM is
-  meant to read as a 4626-style appreciating derivative with an ERC-8056 USD
-  display layer, priced by construction off the identical multiplier used for
-  OkuM↔UsdOku conversion — not two paths that happen to agree today. Added
-  `test_ToUIAmount_EqualsConvertToShares_AcrossMultiplierChanges`
-  (`OkuDollar.t.sol`), asserting `OkuMoney.toUIAmount(x) ==
-  OkuDollar.convertToShares(x)` (and the inverse) directly against each
-  other, across a discrete override and a year of streaming accrual — so a
-  future change that reads the multiplier through a different path on one
-  side (e.g. a caching optimisation) fails a test instead of silently
-  diverging.
-- Documented, not changed: `UIMultiplierUpdated` firing with `old == new`
-  is confirmed intentional (continuous accrual has no per-second event to
-  emit against; the *value* has no discontinuity at a rate-schedule change,
-  only the forward rate does) — added an "Integrator contract" note to
-  § ERC-8056 spelling out what a standards-only consumer should actually do
-  (poll `uiMultiplier()`/`balanceOfUI()`/`totalSupplyUI()`; treat
-  `UIMultiplierUpdated` as a schedule-invalidation hint, not a value diff;
-  the real trajectory lives on the non-standard `OkuMYieldRateUpdated`).
-  Also documented why OkuDollar/UsdOku deliberately does NOT implement
-  ERC-8056 (its shares are already dollar-denominated by construction; a
-  `uiMultiplier()` there would be a constant `1e18` forever) and the
-  forward-looking rationale for adopting a Draft standard at all (SVM's
-  Token-2022 `ScaledUiAmount` already fills this role there; expecting other
-  EVM yield-bearing stablecoins to converge on ERC-8056 the same way).
-
-### RESOLVED: simulation-suite integrity audit found a real ~3.5% mechanism bug masked by a cancelling buffer `[EVM]`
-
-**What happened:** a verification pass on the base+settlement simulation suite
-(prompted explicitly to check whether "passing" numbers made real-world
-sense, not just whether assertions were green) found that `deriveSettlementRate`
-never subtracted the base window's own projected distribution over its
-remaining tail (staging → `baseEndSec`), and `distributedUsdOverWindow` silently
-dropped the gap between the last sample and the window end. Together these
-produced a **~3.5% systematic OVER-distribution** at recommended settings —
-which happened to nearly cancel the deliberate 3% `conservativeFactor` buffer,
-producing a reported ~0.5% error that looked like the mechanism working
-correctly. It was not: with `conservativeFactor = 1.0` (no buffer), the
-pre-fix mechanism over-distributed by ~3.5% on FLAT supply with ZERO
-volatility — the case that should be exact.
-
-**Also found in the same pass**, all fixed:
-- The "epoch length is flat across 5 orders of magnitude" finding was a
-  tautology — all 5 scenarios used identical FRACTIONAL staging lead and
-  sample count, forcing identical discretization error by construction. Fixed
-  to use absolute (non-fractional) staging lead + sample cadence — see the
-  residual limitation noted in `epochAccounting.simulation.ts`'s "Epoch
-  length" describe block (the mid-epoch shock's position is still fractional,
-  so the fix is partial; not fully chased down per the "don't
-  over-troubleshoot" directive).
-- The "no-split" control used `baseWindowFraction: 1.0`, which still runs a
-  same-rate settlement window — not a genuine feed-forward baseline. Added a
-  `noSettlement` mode that runs one rate for the whole epoch with no
-  correction at all, which is the honest comparison.
-- Several assertions were vacuous (`.to.not.be.NaN`, `.to.be.greaterThan(0)`
-  on obviously-positive quantities) or compared against the wrong baseline
-  (asserting near-zero error against raw `Y*` for scenarios that DELIBERATELY
-  apply a buffer, where a permanent ~-3% gap vs. raw `Y*` is correct behavior,
-  not error). All replaced with concrete bounds against the correct baseline.
-- The on-chain/model parity assertion had 5+ orders of magnitude of slack
-  (`< 0.01%` threshold vs. `~1e-7%` measured) — tightened to `< 1e-5%`. This
-  tightening then caught a SECOND real bug: the simulation's ground-truth
-  model used the un-clamped theoretical rate while the actual contract call
-  used `floatRateToBigint`'s clamped rate, producing a spurious ~25.6%
-  "divergence" on the one scenario extreme enough to trigger clamping. Fixed
-  by re-deriving the model's rate from the clamped bigint everywhere.
-- Zero test coverage existed for: the carry mechanism across multiple epochs
-  end-to-end against a real contract, a genuine `MAX_RATE`-clamping scenario,
-  and a negative-carry (deceleration) scenario. All three added.
-
-**Status: fixed and re-verified.** `test/hardhat/unit/epochDistribution.test.ts`'s
-"CORE VALIDATION" test proves flat supply + no buffer now lands within 0.1% of
-`Y*` (was ~3.5%). All 25 simulation scenarios re-run and pass with numbers that
-now compose correctly (e.g. the recommended and excessive buffer scenarios land
-almost exactly on `-(1-conservativeFactor)`, as they should). Every accuracy
-number in `EVM/README.md` § Rear-Facing Epoch Accounting has been regenerated
-from the fixed mechanism. See `EVM/scripts/utils/epochDistribution.ts` for the
-fix itself and its doc comments for the precise mechanism.
-
-### RESOLVED: fork runs dirtied the tracked address book `[EVM]`
-
-`scripts/config/addresses.json` is **tracked**, and every fork run wrote
-`fork:<chain>` entries into it — `dryRunForks.sh`, a hand-run
-`npm run deploy --network localhost`, and the hardhat drills alike. Those
-addresses are ephemeral by construction (the fork is torn down seconds later),
-so the diff was pure noise, but it showed as an uncommitted change and was easy
-to commit by accident.
-
-**Fixed structurally rather than per-caller.** `scripts/utils/addressBook.ts`
-now splits the book across two files by key prefix:
-
-| File | Tracked? | Keys |
-|---|---|---|
-| `scripts/config/addresses.json` | tracked | live chains (`base`, `sepolia`, …) |
-| `scripts/config/addresses.local.json` | **gitignored** | local forks (`fork:base`, …) |
-
-`loadAddressBook()` returns a merged view of both, and `saveAddressBook()`
-re-derives the partition on every write — so a fork entry cannot reach tracked
-state regardless of how a caller assembled the object. The reserved `upgrades`
-audit-trail index is partitioned the same way, so fork upgrade records don't
-leak either. The local file is created only when fork state exists and removed
-when the last fork entry goes, so pure-live workflows never see a stray file.
-
-**Chosen over the alternatives** (an `ADDRESS_BOOK_PATH` env override set by
-`dryRunForks.sh`, or snapshot/restore inside the shell script) because those
-fix only that one script — a hand-run local-fork deploy would still dirty the
-file. This approach requires nobody to remember anything.
-
-**Contained to one file:** every caller already routed through
-`loadAddressBook` / `saveAddressBook` (the latter has exactly one call site
-outside the helper, in `deploy/index.ts`), so `deploy/index.ts`,
-`upgrade/index.ts`, `verify.ts` and all 14 operator scripts needed no changes.
-One test did: `deployDrill.test.ts` read the raw tracked file to assert the
-written entry, and now reads the merged view.
-
-**No migration needed** — the committed `addresses.json` was verified to hold
-only live keys (`sepolia`, `baseSepolia`, `bscTestnet`, `base`, `bsc`,
-`arbSepolia`); there were no `fork:` entries to move.
-
-**Coverage added:** `addressBook.ts` previously had **no** direct unit tests —
-only indirect exercise through the drills, which is how this went unnoticed.
-`test/hardhat/unit/addressBook.test.ts` (12 tests) now covers the split,
-the merged read, `upgrades` partitioning, local-file lifecycle, and — as the
-direct regression guard — that the tracked file is **byte-identical** across a
-pure fork run. `deployDrill.test.ts` additionally asserts the tracked book
-contains no `fork:` keys after a real deploy.
-
-**Verified** by running `./scripts/deploy/dryRunForks.sh sepolia` and
-confirming `git status` reports `addresses.json` clean.
-
-### Carry-ledger + V̄-sample-store persistence `[EVM]`
-
-**Decision made:** yield is fully **rear-facing** with fixed epochs — the rate
-published for an epoch is derived from the prior epoch's confirmed, realized
-off-chain proceeds, divided by that epoch's TIME-WEIGHTED AVERAGE global value
-(not a spot value — see "Two V's" below). No forecasting, no deliberate
-withholding by default. See `EVM/README.md` § Rear-Facing Epoch Accounting for
-the full mechanism (the impossibility of hitting a nominal USD amount exactly,
-why a rate-based design is a reframe rather than a downgrade, and the
-cumulative-conservation identity), and
-`EVM/scripts/utils/yieldRate.ts::realisedYieldToRatePerSecond` /
-`reconcileActualPayout` for the implementation (unit-tested in
-`EVM/test/hardhat/unit/yieldRate.test.ts`).
-
-The carry/measurement math itself required no contract changes — every input
-is off-chain, feeding the existing `setOkuMYieldRate` / `setNextOkuMYieldRate`
-rate integers. Adopting the base+settlement design on top of it DID add one
-contract function, `setOkuMYieldRateWithSuccessor` — a pure atomic composition
-of the two existing setters (no new state, no new validation logic beyond
-what each already had) closing a real two-transaction race the base+settlement
-model otherwise hits every epoch — see the "Epoch-grid convention" item below.
-
-The remaining gap either way: **both the carry balance and the V̄ sample
-history are cross-chain-critical state with no on-chain representation.** The
-published rate is independently verifiable via `okuMRatePerSecond()`; neither
-the carry balance nor the time-weighted average backing that rate is
-verifiable by anyone except whoever holds the off-chain stores.
-
-**Resolves the previously-filed "AUM-drift: realized payout ≠ realized yield"
-item.** That item's root cause was `realisedYieldToRatePerSecond` dividing by a
-SPOT global value at epoch start rather than a time-weighted average, which
-made the accounting error scale with AUM growth (5–25% for realistic mid-epoch
-mint volume — see the "spot vs time-weighted" test in
-`EVM/test/hardhat/unit/yieldRate.test.ts`). Fixed by requiring the denominator
-to be `measuredAvgValueUsd`, a time-weighted average (see "Two V's" in
-`EVM/README.md` § Rear-Facing Epoch Accounting). The residual that remains
-after this fix is driven by RATE drift between the measurement and paying
-epochs, not AUM — an order of magnitude smaller (see the buffer-sizing table
-in that same README section: single-digit percent of the distribution for
-normal epoch-to-epoch rate changes, vs. 5–25% from the AUM term this replaces).
-
-Reference implementations now exist for both, explicitly marked as
-reference-only in their own module docs:
-- `EVM/scripts/utils/carryLedger.ts` — append-only local JSON ledger of every
-  epoch's rate derivation; `summarizeLedger()` computes the cumulative
-  conservation identity. Read (diagnostic-only) by `checkMultiplierDrift.ts`.
-- `EVM/scripts/utils/globalValue.ts` + `EVM/scripts/operator/sampleGlobalValue.ts`
-  — cross-chain `totalSupply() * okuMMultiplier()` sampler + local JSON store;
-  `samplesInWindow()` feeds `timeWeightedAverage()` for a given epoch.
-
-**Follow-up required before this can be closed:**
-- **DECIDED** (`SVM/DECISIONS.md` D-26): a **signed off-chain ledger**, not
-  on-chain anchoring. Still a **mainnet prerequisite** — the stores must become
-  durable, versioned, append-only and signed before they back real rate
-  decisions. Under a backend-controlled architecture these files ARE the
-  protocol's system of record; losing them means the cumulative-conservation
-  identity cannot be reconstructed.
-  The trade-off (rate-derivation inputs are trusted, not provable from public
-  data) is documented for users in the root `README.md` § "What is and isn't
-  independently verifiable". Anchoring a per-epoch hash on-chain remains
-  available and additive if third-party verifiability ever becomes a
-  requirement; it needs no change to any deployed contract.
-- ~~Decide the V̄ sampling cadence~~ — **DECIDED: hourly**
-  (`SVM/DECISIONS.md` D-27). At the adopted 24h grid that is ~24 samples per
-  epoch, comfortably past `samplesInWindow`'s ">= 2 samples" floor. The
-  remaining work is operational, not a decision: nothing runs the sampler on a
-  schedule yet (see the deploy-day runbook below).
-- ~~Consider failing hard once SVM is live~~ — **SHIPPED.**
-  `globalValue.ts` includes SVM and requires `SVM_RPC_URL`,
-  `SVM_LITE_PSM_PROGRAM_ID` and `SVM_OKU_M_MINT`. With `SVM_EXPECTED=true` a
-  missing or unreadable SVM configuration **throws** rather than warning;
-  `checkMultiplierDrift.ts` takes the same flag with the same semantics. The
-  flag exists because "SVM is absent" is a legitimate pre-launch state that
-  must stay distinguishable from "SVM is misconfigured" — set it the moment
-  SVM carries supply. Without it, SVM drops out of V(t) and, since V is the
-  DENOMINATOR, every derived rate comes out too high.
-  See `SVM/DECISIONS.md` D-27.
-- Decide whether `checkMultiplierDrift.ts` should assert the published rate is
-  consistent with a declared `(epochId, realisedYieldUsd, measuredAvgValueUsd,
-  carryInUsd)` tuple per epoch (it currently only reports the ledger's
-  cumulative summary, it does not cross-check a given epoch's derivation
-  against on-chain state). Note this is the *internal* equivalent of the
-  third-party verifiability declined in D-26 — same cross-check, run by us
-  against our own ledger rather than by anyone against a published hash.
-- If `conservativeFactor < 1` is ever adopted (not the current default),
-  confirm the steady-state carry buffer it implies
-  (`realizedYieldPerEpoch × (1 − conservativeFactor)`) is an acceptable
-  permanent float, not a number picked without doing this arithmetic.
-
-### Epoch-grid convention: length, anchor sizing `[EVM]`
-
-**Decision made:** base + settlement window ("design B3") is adopted — see
-`EVM/README.md` § Rear-Facing Epoch Accounting for the mechanism,
-`scripts/utils/{epochDistribution,epochSchedule}.ts` for the implementation,
-and `test/hardhat/simulation/epochAccounting.simulation.ts` (26 scenarios
-against a real deployed contract) for the accuracy characterization —
-on-chain/off-chain model parity held to ~1e-7% across every normal-range
-scenario (looser, ~1e-5%, at the deliberate `MAX_RATE`-clamping scenario).
-Settlement-window sizing is solved generically: `DEFAULT_SETTLEMENT_FRACTION =
-1/15` scales proportionally with epoch length (2 days of 30, 4 minutes of 1
-hour), rather than needing a fixed absolute value.
-
-`baseWindowFraction = 0.9` is now backed by a targeted experiment, not just
-the general axis table: a +50% shock landing specifically INSIDE the
-settlement window (after its rate is already staged against a forecast that
-couldn't see it) shows `0.9` at −0.57% error vs. `0.3` at +13.99% — confirming
-the claimed risk (0.3 concentrates target weight into the settlement window)
-is real. An earlier version of this recommendation cited only a mid-BASE-window
-shock scenario, which does not actually test that claim (a smaller base
-commitment means LESS exposure to a shock landing IN the base window) — see
-the "EXPERIMENT" test in the simulation suite.
-
-Epoch LENGTH and ANCHOR are **decided and committed**: 24 hours, anchored
-2026-01-01T00:00:00Z, in `EVM/scripts/config/epoch.ts` (`SVM/DECISIONS.md`
-D-23). `checkMultiplierDrift.ts` defaults to that committed grid, so the
-alignment check runs on every invocation; `EPOCH_ANCHOR_UNIX` /
-`EPOCH_LENGTH_SECONDS` / `EPOCH_GRID_TOLERANCE_SECONDS` survive only as
-overrides.
-
-**Follow-up required before this can be closed:**
-- ~~Pick epoch length~~ — **DECIDED: 24 hours, anchored 2026-01-01T00:00:00Z**
-  (superseded an initial 30-day decision), committed in
-  `EVM/scripts/config/epoch.ts` (`SVM/DECISIONS.md` D-23).
-
-  **Revision note (24h adoption).** The move from 30 days to 24 hours was a
-  pure backend-config change — zero contract or program edits, exactly as D-22
-  predicted when on-chain grid validation was declined. What it touched:
-  `EPOCH_LENGTH_SECONDS`, the grid tolerance (see below),
-  `EXPIRY_WARN_HOURS` (48h exceeded a whole epoch and warned permanently), and
-  the epoch-shaped test fixtures. The simulation's `1 day` row was promoted
-  from "characterization only" to a fully-tested candidate: it measures 2.27%
-  error with ~9.4e-8% on-chain parity, indistinguishable from the 7-day and
-  30-day rows.
-
-  Three things the shorter epoch genuinely changes, recorded so they are not
-  rediscovered:
-  1. **`MAX_RATE` headroom drops 30x.** ~0.8677% expressible growth per 24h vs
-     ~29.6% per 30d. Realistic daily yield leaves ~63x margin; a *monthly-sized*
-     target pushed through a daily window leaves only ~2x. Pinned by the
-     `MAX_RATE headroom at a 24h epoch` tests in `unit/yieldRate.test.ts`.
-  2. **Grid tolerance had to be decoupled from the settlement fraction.** Both
-     were `epochLength/15`, which made the tolerance exactly equal to the
-     legitimate `baseEnd` offset — the alignment check passed only because the
-     comparison is strict (`>`), with zero slack. Now `epochLength/10`.
-  3. **The cadence is now daily**, which is past what a human can drive by
-     hand. The operator CLIs are intended to be driven by an external
-     scheduler; they stay non-interactive and exit-code-clean for that reason.
-
-  The original 30-day reasoning is retained below for context.
-  Retained below for the reasoning. The simulation's epoch-length axis is a MECHANISM smoke
-  test (confirms the contract/schedule work correctly from 1 hour to 90 days),
-  **not an isolated accuracy comparison** — measured error came out flat
-  (2.27–2.29%) across all five lengths, but this is very likely because the
-  shock scenario's position is still specified as a fraction of the epoch, so
-  it scales alongside the (now-absolute) staging lead — see the "Known
-  test-design limitation" note in `EVM/README.md` § Rear-Facing Epoch
-  Accounting. This axis has not demonstrated a genuine accuracy-vs-length
-  relationship either way; do not cite it as one. The DECISIVE constraint
-  remains operational: a 1-hour epoch leaves only a 4-minute settlement-staging
-  window, unrealistically tight for a reliable transaction. That rules out
-  sub-day epochs; 24 hours (1.6-hour settlement window) is the shortest grid
-  that clears it, and is the one adopted.
-  **Follow-up:** if a genuine accuracy-vs-length comparison is wanted, fix the
-  shock's position to an ABSOLUTE time (not `atFraction`) so it doesn't scale
-  with the epoch under test. **Not worth doing first** — with on-chain grid
-  validation declined (D-22), epoch length is a backend constant and changing
-  it later is a config edit, not an upgrade. (This proved correct: the grid was
-  subsequently changed to 24h with no contract or program change.) The original
-  recommendation was 30 days on the operational argument alone; see the
-  revision note above for why 24h was adopted instead. See `SVM/DECISIONS.md`
-  D-23.
-- ~~Pick `conservativeFactor`~~ — **DECIDED: 1.0**, already the shipped
-  default. An earlier 0.97 recommendation was withdrawn: it was justified as
-  protection against the early-shock overshoot, and a 3% margin against a ~28%
-  overshoot is not meaningful mitigation (`SVM/DECISIONS.md` D-24). Original
-  analysis retained: (recommended: ~0.97 — simulation shows the
-  recommended and excessive settings now land almost exactly on
-  `-(1-conservativeFactor)` post-fix: 0.97 → −3.00%, 0.5 → −50.00%, confirming
-  the buffer costs exactly what it's designed to and no more).
-- ~~Once decided, set the `EPOCH_ANCHOR_UNIX`/`EPOCH_LENGTH_SECONDS` env vars~~ —
-  **DONE.** `checkMultiplierDrift.ts` now defaults to the committed grid, so
-  the alignment check runs rather than being silently skipped; env vars remain
-  as overrides.
-- ~~Consider whether the epoch grid should be validated ON-CHAIN~~ —
-  **DECIDED: no.** Pure business policy, and it would hard-code a still-open
-  parameter (epoch length) into six live contracts, turning a config choice
-  into an upgrade. Detection stays in `checkMultiplierDrift.ts`'s optional
-  grid check. See `SVM/DECISIONS.md` D-22 and the governing principle there.
-
-### Early-shock detection: no automated monitoring for the "irreversible base-window overshoot" failure mode `[EVM]`
-
-The simulation surfaced a real, non-obvious finding (see `EVM/README.md`
-§ Rear-Facing Epoch Accounting, "monotonicity means an early shock is worse
-than an equal-size late one"): because the multiplier is monotonic, an early,
-long-duration supply shock can push actual distribution past the epoch target
-BEFORE the scheduled settlement-staging instant — at which point settlement
-can only halt (`PRECISION`) going forward, never claw back the overshoot. In
-the simulation this produced the WORST error of any scenario tested (28.61%
-for a shock at 5% through the epoch, vs. −0.82% for the identical shock at 97%
-through).
-
-The mitigation is straightforward in principle — monitor `distributedSoFarUsd`
-continuously (computable live via `globalValue.ts` samples +
-`epochDistribution.ts::distributedUsdOverWindow`) and trigger an emergency
-re-anchor to `PRECISION` via `setOkuMYieldRateWithSuccessor` the moment it
-exceeds target, rather than waiting for the scheduled staging time — but it is
-**not implemented**. Today, detecting and responding to this failure mode is
-entirely manual.
-
-**DECIDED: the exposure is accepted** (`SVM/DECISIONS.md` D-25). Supply
-shocks are treated as part of the deal; the mitigation is conservative
-off-chain and on-chain liquidity plus conservative rate-setting, not
-additional guards. What is being accepted, numerically, **at the adopted
-24-hour grid**: at $100M AUM / 5% APY the epoch yield target is ~$13.7k, so
-the worst TESTED overshoot of 28.61% is ~$3.9k over-distributed and
-irreversible. (An earlier revision of this entry sized it against the
-superseded 30-day grid — ~$411k target / ~$118k overshoot — i.e. ~30x too
-large. The *percentage* exposure is unchanged; only the per-epoch dollar
-amount shrank, and epochs now arrive 30x more often, so size reserves against
-a run of epochs.) 28.61% is the worst case tested, not a proven bound. The
-monitor remains available (it needs no contract change) if that proves
-uncomfortable. See `SVM/DECISIONS.md` D-25.
-
-### EVM/SVM yield-model divergence — RESOLVED `[SVM]`
-
-SVM's `lite-psm` has been ported to EVM's streaming rate-schedule
-model. The multiplier is no longer stored or bumped: it is computed on
-read from six schedule fields on `PsmConfig` plus
-`Clock::unix_timestamp`, via a line-for-line port of `MathLib.sol` in
-`crates/oku-shared/src/rate.rs`.
-
-What this closed:
-
-- **The MEV window.** There is no longer a discrete tick to straddle,
-  which is what the EVM refactor set out to remove and what widening
-  the sandwich lock could never fix.
-- **The "no messaging" carve-out.** Both stacks now run the same
-  `rpow` at the same `PRECISION = 1e18` with the same half-up
-  rounding, so a schedule broadcast everywhere produces the same
-  multiplier at the same wall-clock second. The sandwich lock is
-  re-scoped to the emergency override only, which also retires the
-  "wait one slot after a price tick before bridging" rule.
-- **The 365.24-day friction.** Moot: Token-2022's
-  `InterestBearingConfig` is not used, so no token-program rate math
-  happens on our behalf. Both stacks consume the same derived
-  per-second integer under the same 365-day convention.
-
-`PRECISION` moved 1e9 → 1e18, which was forced rather than cosmetic —
-at 1e9 one ulp of a per-second rate is 3.2% APY, so the schedule was
-literally inexpressible.
-
-**Since closed (see `SVM/DECISIONS.md`):**
-
-- **D-05 DONE** — cross-language differential harness. 3,290 vectors
-  generated from the Solidity reference and replayed against Rust and
-  TypeScript, reverts included, all three agreeing exactly. Validated by
-  mutation: a one-ulp rounding slip fails 1,218 vectors.
-- **D-03 / D-04 handled** — `globalValue.ts` and `checkMultiplierDrift.ts`
-  now read SVM. The former mattered economically: SVM supply is a term in
-  the denominator of every derived rate, so omitting it systematically
-  over-paid yield.
-- **D-15 FIXED** — compute budget. The first implementation cost >200k CU
-  in the two-`rpow` overhang branch, i.e. mints and redeems would have
-  failed outright after every epoch handover. Now ~81k worst case, pinned
-  in CI.
-
-**Still open:**
-
-- **D-01** no `MAX_ACCRUAL_WINDOW` on either stack. Deferred because it is
-  the only item touching `OkuMoney.sol`, which is live on six networks, so
-  it needs a scheduled upgrade rather than a code change. Nothing depends
-  on it.
-- **D-16** wallet display freshness now depends entirely on the
-  permissionless crank. Bounded and safe (the mirror reads low, never
-  high), but an operational responsibility.
-- Wallet display remains a lagging staircase — unavoidable, since
-  `ScaledUiAmount` cannot stream and `InterestBearingConfig` is
-  mutually exclusive with it.
-
-### Deploy readiness — internal testing MVP `[both]`
-
-Audited both stacks' deploy pipelines end to end ahead of an internal-testing
-deploy (testnets: sepolia/baseSepolia/arbSepolia + SVM devnet). Findings below;
-the code-level fixes are recorded in `SVM/DECISIONS.md` D-28 (cross-stack
-epoch orchestration) and D-14 (extended `tsc` coverage). This entry is the
-deploy-specific summary.
-
-**EVM contracts currently live on all six networks predate the
-streaming-accrual refactor entirely** — at the last live redeploy commit,
-`OkuMoney.sol` had zero references to `setOkuMYieldRate`/`okuMRatePerSecond`.
-A fresh deploy is required on the EVM side too, not just SVM. Decided:
-bump `DEPLOYMENT_VERSION` to `v0.3` for a clean CREATE2 generational break;
-archive `scripts/config/addresses.json` before deploying so the old v0.2
-addresses are preserved for reference rather than overwritten. **Not yet
-done** — this pass fixed the tooling and correctness bugs the deploy would
-have exercised; the deploy itself is a separate step.
-
-**SVM: clean-slate redeploy, not an in-place upgrade.** Decided (not just
-because the config layout grew 562→626 bytes, which alone would have been a
-clean init at an already-empty PDA — and which is no longer the class of
-problem it was, see the `reserved` note below): close
-the existing program
-(`close-programs --allow-anchor-toml-ids`, recovering ~4.35 SOL of stranded
-ProgramData rent), rotate `target/deploy/lite_psm-keypair.json`, run
-`anchor keys sync` (NOT on the standard build path today — `build.ts` only
-does this on the fork path — must be done explicitly), update `Anchor.toml`
-and `declare_id!`, then `deploy:programs` → `deploy:init` → `grant-roles`.
-
-**SVM deployment state files were stale and actively misleading — archived,
-not fixed in place.** `deployments/devnet.json`'s recorded `psm_config` PDA
-pointed at a 562-byte orphan the current program cannot deserialize
-(`PsmConfig::LEN` is now 754), alongside dead two-token-model keys (`tokens.okuMoney`,
-`tokens.usdOku`, `redemptionQueue`, `vaultConfig`) and three `OkuDollar`
-upgrade records for a program that no longer exists in this workspace.
-`devnet-fork.json` additionally carried a live `okuDollarProgram` reference
-and pointed at the wrong program ID entirely. Both renamed to
-`*.v1-pre-streaming.json` (see `SVM/oku-programs/deployments/README.md`)
-rather than left in place — `saveDeployment`'s merge behavior
-(`{...existing.tokens, ...addresses.tokens}`) would have carried every dead
-key forward into a "fresh" file otherwise.
-
-**The SVM upgrade path (`scripts/upgrade/`) is broken for this class of
-change, in three ways — moot given clean-slate redeploy, but worth recording
-so `npm run upgrade` isn't reached for reflexively on a future layout
-change:** the IDL-diff guard is inert whenever the prior deployment record
-has no `idlSnapshot` (true today); the pre/post state-invariant check
-excludes fetch errors from its diff, so if BOTH the pre- and post-upgrade
-account reads fail (as they would here, since the real config PDA doesn't
-exist) it prints a false "all state invariants preserved"; and
-`didUpgradeLand`'s post-timeout recheck hashes the on-chain ELF without an
-`expectedSize`, so it can never match once the account has grown from a
-prior generation's smaller allocation. None of the three were fixed this
-pass — not worth it given the redeploy makes them unreachable for this
-specific transition, but a genuine in-place upgrade later should not trust
-any of these three checks without revisiting them first.
-
-**`verify.ts` was existence-only** and would have reported the stale
-562-byte orphan config as a passing check. Fixed: now also checks owner,
-account size against `PSM_CONFIG_LEN`, and the `PsmConfig` discriminator.
-
-**RESOLVED — config-layout growth no longer forces a redeploy.** `PsmConfig`
-now carries a `reserved: [u8; 128]` tail (`PsmConfig::LEN` = **754**, pinned by
-a compile-time `assert!`). Future fields are consumed from the front of
-`reserved` with `LEN` held constant, so they change no existing byte offset and
-leave every deployed account already the right size — no resize instruction
-needed. Size and accrual-block offsets pinned by
-`tests/bankrun/config-layout.ts`.
-
-A `migrate_config_space` instruction shipped alongside this and was later
-**removed**: the only pre-padding account ever deployed is the 562-byte
-pre-single-token orphan, which it explicitly could not translate, and the
-626-byte current-layout state it did target never existed on any network. It
-also had zero test coverage, while three doc sites (including a claim that
-`config-layout.ts` exercised it) asserted otherwise. See `SVM/DECISIONS.md`
-D-07.
-
-**`initialize.ts` wired `direct_minter` post-init but never `direct_burner`**
-— the SVM→EVM bridge burn path was silently dead until a separate
-`grant-roles` run, with nothing surfacing the gap. Fixed: mirrors the
-`direct_minter` wiring exactly.
-
-**`runEpoch.ts`'s `roll-epoch` phase derived its rate from the LOCAL
-reference chain's supply, not the global value across all chains** —
-exactly the mistake `distributeYield` was removed for, reintroduced at the
-operator-tooling layer instead of the contract layer. Running the (correctly
-documented, single-chain) script once per EVM chain, as its own usage
-examples instruct, would have derived a **different rate per chain**. Fixed,
-and replaced with a proper derive-once/broadcast-to-all architecture — see
-`SVM/DECISIONS.md` D-28 for the full writeup, including what is explicitly
-NOT yet done (the V̄ sampler has never been run on a schedule, so the new
-path is correct but not yet exercised end-to-end against a live deployment).
-
-**Both stacks now typecheck clean, including scripts (not just tests).**
-SVM's `tsconfig.json` only ever covered `tests/**`, so `npm run typecheck`
-passed while hiding a real compile error in `withdraw-buffer.ts` (dead
-account keys an instruction doesn't take) — see `SVM/DECISIONS.md` D-14.
-
-**Follow-up required before this can be closed:** actually run the EVM v0.3
-and SVM clean-slate deploys; bootstrap the V̄ sampler on a schedule; run one
-full derive→broadcast→drift-check cycle against the live testnet + devnet
-deployment as the closing verification.
-
-**Second pass: the derive-once/broadcast architecture above shipped with four
-real defects, caught by an audit BEFORE deploy rather than during it — all
-fixed, with new tests, in this pass.** It had zero test coverage and was
-never executed, only typechecked, which is how these survived:
-
-1. **`deriveEpochSchedule.ts` had no CLI entrypoint** — the derivation step
-   was not invocable at all; only `broadcastSchedule.ts` had a `require.main`
-   block. Fixed: added the entrypoint, dispatching on `--phase`/`PHASE`.
-2. **Artifact collision.** Keyed on `epochId` alone, so `stage-settlement`
-   and `roll-epoch` for the SAME epoch wrote to the same file and the second
-   `saveArtifact` call threw. Fixed: artifact I/O split into a new,
-   deliberately hardhat-free `scripts/utils/epochArtifact.ts` (also fixes #5
-   below), keyed on `(epochId, phase)`.
-3. **Carry semantics inverted — the subtle one.** `deriveRollEpoch` set
-   `meta.carryInUsd` and `meta.carryForwardUsd` to the SAME value, and
-   `broadcastSchedule` fed that into the ledger, so `summarizeLedger()`'s
-   "carry to apply next epoch" actually returned THIS epoch's carry-IN,
-   silently double-counting it. Root cause: two genuinely different
-   quantities — the derivation-time residual (`RateWithCarry.carryForwardUsd`,
-   known immediately) and the ex-post reconciliation (`reconcileActualPayout`,
-   only knowable one epoch later) — were sharing one field. Fixed:
-   `CarryLedgerEntry` now has both `carryForwardUsd` (derivation-time,
-   currently always `0` since `deriveBaseRate` doesn't clamp) and a separate
-   `reconciledCarryUsd`, backfilled onto the PRIOR epoch's entry via the new
-   `backfillReconciliation()` once the NEXT roll computes it.
-   `deriveStageSettlement`'s carry-in default was also silently wrong for the
-   same reason — it read `outstandingCarryUsd` (the carry the CURRENTLY OPEN
-   epoch will produce) instead of `currentEpochCarryInUsd` (what was already
-   baked into that epoch's own target), which would have double-applied it.
-4. **Chain scoping was three independent copies of "every `CHAIN_METADATA`
-   key"** — `broadcastSchedule.ts::targets()`, `sampleGlobalValueUsd()`'s
-   default, and `deriveRollEpoch`'s call to it. That set includes `mainnet`,
-   `base`, `bsc` (the last two carrying the stale pre-streaming deployment).
-   Nothing guaranteed V̄'s denominator and the broadcast's recipient set were
-   ever the same set. Fixed: new `scripts/config/epochChains.ts` is the
-   single source of truth (`participatingChains()`, defaulting to
-   `sepolia`/`baseSepolia`/`arbSepolia`/`bscTestnet` + SVM devnet), refusing
-   any mainnet chain without an explicit `YES_MAINNET` gate (separate from
-   `mainnetGuard.ts`'s per-transaction check — this one guards the epoch's
-   SCOPE). All three call sites now import it.
-5. `broadcastSchedule.ts` transitively imported `hardhat` (via
-   `deriveEpochSchedule.ts`), so the chain-agnostic multi-chain driver could
-   not actually run standalone under `tsx`. Fixed as a side effect of #2's
-   `epochArtifact.ts` split.
-6. No npm scripts existed for the three new files. Added
-   `operator:deriveEpochSchedule`, `operator:broadcastSchedule` (`tsx`, not
-   `hardhat run` — see #5), `operator:applyScheduleSingleChain`.
-7. Zero test coverage for any of this — root cause of 1-4. Added:
-   `epochArtifact.test.ts`, `epochChains.test.ts`, ledger tests for
-   `upsertLedgerEntry`/`backfillReconciliation`/the carry split
-   (`carryLedger.test.ts`), and a full two-epoch derive→apply→reconcile cycle
-   in `operatorDrill.test.ts` exercising `deriveStageSettlement`/
-   `deriveRollEpoch` against a real local deployment (the actual multi-chain
-   subprocess fan-out in `broadcastSchedule.ts` remains untested by
-   necessity — it requires live per-chain RPCs, same limitation as
-   `sampleGlobalValueUsd()` / `checkMultiplierDrift.ts` above it).
-
-**Deploy prep executed this pass (still NOT an actual deploy):**
-`DEPLOYMENT_VERSION` bumped `v0.2` → `v0.3`. `addresses.json` pruned to
-`MockUSDC`-only entries for the four MVP testnets (`sepolia`, `baseSepolia`,
-`arbSepolia`, `bscTestnet` — deliberately so `deployMockUSDC`'s `tryAttach`
-reuses the existing token rather than deploying a new one), with `base`/`bsc`
-mainnet entries removed entirely; the full pre-streaming state archived to
-`addresses.pre-streaming.json` (see `scripts/config/addresses.README.md` for
-why leaving the four contract-address keys in place would have caused a v0.3
-deploy to silently reuse the live v0.2 contracts). Verified locally: the
-existing `deployDrill.test.ts` (8 tests) passes unchanged against the new
-CREATE2 salts, confirming the version bump doesn't break the deploy pipeline
-itself.
-
-**SVM program-ID rotation intentionally NOT executed this pass.**
-Close-existing-program → rotate keypair → `anchor keys sync` → update
-`declare_id!` is real surgery on committed program source and live program
-rent, explicitly out of scope for this pass ("do not recover/close the
-existing devnet deployments"). Left for the actual deploy day.
-
-**Third pass: verification of the second pass found two more defects, both
-introduced BY the second pass.** Recorded because the pattern is the point —
-both were at boundaries the fixes themselves never executed:
-
-1. **`EPOCH_PHASE` vs `PHASE`.** `broadcastSchedule.ts` set `EPOCH_PHASE` in
-   each subprocess's environment; `applyScheduleSingleChain.ts` reads
-   `parseArg("phase")`, which resolves to `PHASE`. Every EVM chain's
-   subprocess would have aborted with "Required: --phase". It appeared to
-   work only when the operator happened to have `PHASE=` set on the parent
-   process, which then leaked through `...process.env`. The env-var name is
-   produced by a camelCase→SCREAMING_SNAKE transform inside `cli.ts` and
-   appears literally nowhere at either end, so reading both files could not
-   reveal the mismatch — only executing it could. Fixed, and
-   `broadcastArtifact` now takes an injectable `SubprocessRunner` purely so
-   that boundary is assertable; `test/hardhat/unit/broadcastSchedule.test.ts`
-   executes the real function with a recording stub and pins the exact env
-   every chain receives. Verified by mutation: reintroducing `EPOCH_PHASE`
-   fails the suite.
-2. **The second pass made the legacy `runEpoch.ts` path worse.** (`runEpoch.ts`
-   has since been deleted outright — see `SVM/DECISIONS.md` D-28. Recorded
-   because the failure shape generalises.) It fixed
-   `deriveStageSettlement`'s carry-in source but not `runEpoch.ts`'s, which
-   still read `outstandingCarryUsd`. That was latent while the legacy path ran
-   alone (it only ever wrote `carryForwardUsd: 0`, so the value was always 0)
-   but became live the instant the new path started backfilling real non-zero
-   reconciliations into the SHARED ledger — the legacy path would then read
-   one and double-apply it. Both paths now use `currentEpochCarryInUsd`, and
-   `runRollEpoch`'s ledger write was aligned with `broadcastSchedule.ts`'s
-   (backfill-then-upsert, rather than a blind `appendLedgerEntry` that left
-   `reconciledCarryUsd` permanently undefined on every row it wrote).
-
-Also closed in the same pass: `sampleGlobalValueUsd` was only validating the
-DEFAULT chain list — an explicit `CHAINS=base,bsc` bypassed
-`participatingChains()` entirely, so the sampler could still include mainnets
-the broadcaster refuses, reopening the V̄-vs-recipients divergence one layer
-down. Explicit lists now route through the same validation.
-`EVM/.env.example` was created (it did not exist); the `SVM_*` bridge vars
-that `globalValue.ts` needs were previously documented only in code comments,
-so an operator had no way to discover that forgetting `SVM_EXPECTED=true`
-silently under-counts V̄ and over-pays yield on every chain.
-
----
-
-### Contract & program audit — the on-chain MVP gate `[both]`
-
-Every prior pass in this cycle targeted off-chain tooling. This one audited
-the artifacts that actually ship. Two blockers per stack, all fixed, all with
-regression tests; where a fix guards behaviour rather than shape, the test was
-mutation-verified (reintroduce the bug, confirm the suite goes red).
-
-**EVM — `OkuDollar.withdraw()` returned assets instead of shares.**
-`shares = previewWithdraw(assets)` was immediately overwritten by
-`return _redeemShares(...)`, which returns OkuM. An EIP-4626 integrator got a
-number ~25% off at a 1.33 multiplier. No funds were ever at risk — the
-`Withdraw` event payload and all share accounting were correct — but the
-contract declares `IERC4626`. It survived because **not one test in the suite
-captured the return value of any of the four 4626 entry points**; they were
-called for effects and the result discarded. Fixed, plus return-value tests for
-all four, run at a non-unit multiplier so assets and shares can't coincide.
-
-**SVM — `initialize` was completely unauthenticated.** `role_admin: Signer`
-with no constraint of any kind. `PsmConfig` is a singleton PDA, deploy and
-init are necessarily separate transactions, and there is no `close_config` and
-no re-init — so the first caller to land it would own `role_admin` permanently
-AND choose `usdc_mint`, for which only the decimal count is validated (an
-attacker-controlled fake mint passes). The program ID would be unrecoverable.
-Now gated on the program's own BPF upgrade authority via `ProgramData`, which
-needs no environment-specific constant baked into the binary and grants no
-authority the holder didn't already have (they could replace the program
-outright). Anchor's `address =` constraint pins it to *this* program's
-ProgramData PDA, so a foreign program's account can't be substituted —
-tested. Related: `deploy/lib/initialize.ts` swallowed
-`AccountAlreadyInitialized` as success, which would have reported a hostile
-land-grab as a clean deploy; it now verifies the existing config's
-`role_admin` is the deployer before adopting it.
-
-Worth recording how that one was verified: bankrun loads programs under
-**BPFLoader2** and creates no ProgramData account at all, so a naive fix would
-have made `initialize` unreachable in all 118 tests. Rather than feature-flag
-the check off under `cfg(test)` — which would leave the deployed path
-untested — the harness seeds a real ProgramData account (`seedProgramData`),
-so the tests exercise the same code path production runs, including both
-negative cases.
-
-**SVM — CI was red.** `cargo fmt --all -- --check` failed with 21 diffs across
-5 files, and the workflow gates on it. Fixed.
-
-**EVM — `RedemptionQueue` held `OKUM_MINTER` plus a 1e27 minter allowance and
-contains no mint call.** It calls exactly two OkuMoney methods, `burn` and
-`okuMMultiplier`. The justifying comment ("RedemptionQueue mints rebase
-deltas") described the pre-streaming-accrual design. That was a live, unused
-mint-anything capability on an upgradeable contract whose `QUEUE_UPGRADER` is
-the same admin key. Removed, and asserted as an explicit **negative** check in
-both the deploy verifier and the drill — a future re-grant, or a stale
-deployment reused through the address book, now fails loudly rather than
-silently restoring it. The drill's end-to-end mint still passes on 20 grants
-instead of 21, which is the evidence the role was genuinely dead.
-
-**Both stacks — rate windows were unbounded, and the docs claimed otherwise.**
-`MathLib.compoundFor` asserts "every caller bounds `elapsed` via the mandatory
-rate-window timestamps"; `MAX_RATE`'s Rust doc says the bounded window "is what
-keeps the reachable domain small". Neither was enforced — the only check was
-`endTimestamp > now`. The `MAX_MULTIPLIER` clamp applies to `compoundFor`'s
-OUTPUT and cannot stop `rpow` overflowing internally. Measured empirically
-against the real crate: first failure at `MAX_RATE` after ~472,763,099 s
-(~15 years). Unreachable in practice, but the consequence is unrecoverable —
-once the multiplier read reverts, **every** recovery path reverts with it,
-including the emergency override, leaving only an upgrade. Now bounded at
-**90 days on both stacks** (~60x margin, 3x a production epoch), applied
-independently to the active window and to a successor's own
-`[rateEnd, pendingEnd]` span, since those are separate `rpow` calls. A Rust
-parity assertion pins the two constants together — a divergence here means one
-chain accepts a schedule the other rejects.
-
-That bound broke 45 Foundry tests, which is itself informative: the fixtures
-were opening single 100-year and 50-year windows, a shape the contracts will
-never see in production. They now walk long horizons via
-`_accrueAtCurrentRate`, chaining 90-day re-anchors exactly as the epoch model
-does. The 50-year compounding test now passes through ~203 chained anchors and
-still lands within tolerance — incidental evidence that re-anchoring is
-value-preserving at scale.
-
-**EVM — smaller hardening.** `LitePSM.processQueue` was the only
-multiplier-consuming path missing `whenYieldNotDistributing`, while
-`RedemptionQueue.processQueue` caches the multiplier once and pays real USDC
-against it. `RedemptionQueue.enqueue` didn't reject `address(0)`, which is the
-load-bearing "slot cleared" sentinel — a zero-user entry would be permanently
-unprocessable, unrescuable, and would permanently block `withdrawUsdc` via
-`WouldStrandQueue`. And `processQueue` now deletes the slot before the external
-transfer, restoring it on failure: re-entry was already closed, but only
-because the configured USDC has no transfer callback, which is a property of
-the token rather than of the code.
-
-**Deliberately deferred** (no fund risk, not blocking internal testing):
-`approveAmount` validation and a paid-vs-queued return signal on the PSM
-redeem path; `update_token_metadata`'s missing rent payer (it can only
-re-assert the existing name, not perform a real rename); Token-2022 CPI error
-opacity; and cold-ATA CU measurement — the measured worst case (80,883)
-excludes first-time ATA creation, which would add ~20-25k and breach the
-self-imposed 100k ceiling while remaining far inside the 200k limit.
+| **Emergency-override sandwich** (AR "discrete-tick MEV") | `YieldSandwichGuard` is forward-only: it blocks the same-block backrun but not a mint one block before the override paired with a redeem one block after. That captures the whole discrete step on **one block** of capital exposure, for gas. | A round-trip must clear `tin + tout`. Even 1–5 bps makes the one-block hold unprofitable for any realistic step, without touching the guard. |
+| **Free buffer drain** | `mintOkuM -> redeemOkuM` costs only gas and at most one collateral unit of dust, so transient capital can drain the buffer to par and force all redemptions into the queue. | Round-tripping becomes strictly loss-making. |
+| **Queue stuffing** (AR "queue dust floor") | Once the buffer is empty, entries can be created at the dust floor, which collapses to 1 wei on 18-decimal collateral. The processor pays full loop-body gas plus an external `burn` per entry. | Prices entry creation in **dollar** terms rather than in units that scale with collateral decimals. |
+
+That last row is why a fee and an absolute minimum-redemption floor are
+**alternative** fixes — so the dust-floor item must not be closed
+independently of this one.
+
+**What it would cost**
+
+- **Peg band widens to `[1 - tout, 1 + tin]`** rather than exactly 1. This is
+  the real trade, and it is a product decision, not an engineering one.
+- **ERC-4626 conformance.** `mintUsdOku`/`redeemUsdOku` route through
+  `OkuDollar`, so the fee must appear in `previewDeposit`/`previewMint`/
+  `previewWithdraw`/`previewRedeem` — but **must not** appear in `convertTo*`,
+  which the spec requires to be fee-free. The two families diverge; a classic
+  integrator-bug source.
+- **Rounding placement** must be identical on both stacks or it becomes a new
+  differential-parity obligation. Applying the fee after `dollarsToOkuM`
+  compounds two truncations; before it changes the dollar basis.
+- **Test surface.** Every PSM test asserts exact conversion outputs.
+
+**Where it would live:** `LitePSM` storage + an admin lever
+(`PSM_FEE_MANAGER`?), mirrored by a `PsmConfig` field and a `set_fee`
+instruction on SVM. Both need a hard upper bound in constants — an unbounded
+fee setter is a rug vector — and the role sits alongside `PSM_BUFFER_*` in
+`AUTHORITY-MATRIX.md`.
+
+**Open sub-questions**
+
+1. Symmetric (`tin == tout`) or asymmetric? Asymmetric lets the protocol lean
+   against whichever direction is draining the buffer.
+2. Does the fee accrue to the buffer (strengthening backing) or to a treasury?
+   Buffer accrual is simpler and avoids a new withdrawal path.
+3. Is a fee of zero a valid configured state? If yes, ship fee-capable and
+   launch at zero. **This is probably the answer** — it decouples the mechanism
+   from the economics call instead of blocking a deploy on it.
+
+**Status: not decided, not implemented, no code written against it.**
+`LitePSM.redeemOkuM`'s NatSpec names the no-fee property as the load-bearing
+precondition for having no min-out parameter: if a fee lands, min-out
+parameters must land *with* it, not after.
+
+### OPEN: carry ledger + V̄ sample store are not durable `[EVM]`
+
+Both are JSON files under `EVM/scripts/config/`, and both are **gitignored**.
+Under a backend-controlled architecture these files *are* the protocol's
+system of record: losing them means the cumulative-conservation identity
+cannot be reconstructed.
+
+**Decided:** a signed off-chain ledger, not on-chain anchoring. Anchoring a
+hash on-chain proves the file was not edited after the fact but proves nothing
+about whether its inputs were honest, which is the property that actually
+matters — so it buys attestation theatre at the cost of a new write path.
+
+**Still a mainnet prerequisite:** the stores must become durable, versioned,
+append-only and signed before they back real rate decisions. The user-facing
+trade-off (rate-derivation inputs are trusted, not provable from public data)
+is documented in the root `README.md` § "What is and isn't independently
+verifiable".
+
+**Also open:**
+- Should `checkMultiplierDrift.ts` cross-check a declared
+  `(epochId, realisedYieldUsd, measuredAvgValueUsd, carryInUsd)` tuple against
+  on-chain state? Undecided.
+- `conservativeFactor < 1` keeps permanent float arithmetic in the derivation
+  path. Currently 1.0, so moot — but a future change to it reopens this.
+
+**Hazard worth stating once:** V̄ is the **denominator** of the rate
+derivation, so a chain silently dropping out of the sample set makes every
+derived rate come out *too high*. `SVM_EXPECTED=true` exists to turn that
+specific silent failure into a hard error.
+
+### OPEN: orchestration glue is untested and unexercised end-to-end `[both]`
+
+The epoch math (`epochSchedule`/`epochDistribution`/`yieldRate`) is unit-tested
+where it lives in `packages/yield-tooling`. The orchestration layer on top of
+it is not:
+
+- **No test coverage for `deriveEpochSchedule.ts` or
+  `applyScheduleSingleChain.ts`.** (`broadcastSchedule.ts` *is* covered — see
+  the env-boundary note below.)
+- **`deriveRollEpoch`'s ex-post reconciliation is an approximation.** It infers
+  the global actual-paid delta from the prior ledger entry's
+  `measuredAvgValueUsd` times the reference chain's multiplier ratio, rather
+  than a fresh global sample at the settlement window's close. Exact if
+  `measuredAvgValueUsd` was correctly time-weighted (it is, structurally) and
+  the multiplier ratio is identical across chains (which drift monitoring is
+  supposed to guarantee) — but never exercised against a live multi-chain
+  deployment.
+- **The V̄ sample store has never been bootstrapped.** `sampleGlobalValueUsd`
+  and its persistence half exist and are unit-tested, but nothing runs the
+  sampler on a schedule. `deriveRollEpoch` hard-errors on an empty store, which
+  is correct, but means the path cannot be exercised end-to-end until the
+  sampler is wired into a cron.
+- **`broadcastSchedule.ts`'s SVM leg has never run against a live SVM
+  deployment** — verified by code review and by the shape of SVM's
+  `set-yield-rate.ts --mode=atomic` CLI, not by an integration test.
+
+**Trap that cost real time and will recur:** env-var names at a process
+boundary are *generated* by `cli.ts`'s camelCase→SCREAMING_SNAKE transform and
+appear literally nowhere at either end. An `EPOCH_PHASE` vs `PHASE` mismatch
+was unreadable and only discoverable by execution. `broadcastSchedule` takes an
+injectable `SubprocessRunner` purely so that boundary is assertable;
+`broadcastSchedule.test.ts` pins the exact env every chain receives. Keep it.
+
+### OPEN: `npm run upgrade` has three structurally broken checks `[SVM]`
+
+Do **not** reach for it on an SVM layout change until these are fixed:
+
+1. The IDL-diff guard is inert when the prior record has no `idlSnapshot`.
+2. The pre/post state-invariant check excludes fetch errors from its diff, so
+   if *both* reads fail it prints "all state invariants preserved".
+3. `didUpgradeLand`'s post-timeout recheck hashes the ELF with no
+   `expectedSize`, so it can never match once the account has grown.
+
+Not fixed because the clean-slate deploy path avoids all three. Revisit before
+any genuine in-place upgrade.
+
+### OPEN: CI gates went false-red for reasons unrelated to the code `[EVM]`
+
+`forge fmt --check` and the 95%-per-file `forge coverage` gate in
+`.github/workflows/test.yml` both failed during a recent cycle on files the
+change did not touch. Decide whether they earn their strictness — loosen the
+per-file coverage threshold, or move `fmt` to a pre-commit hook — before
+audit, rather than training the team to ignore red CI.
+
+### OPEN: deferred audit items `[both]`
+
+Reviewed, understood, deliberately not fixed:
+
+- `approveAmount` validation on the EVM side.
+- No paid-vs-queued return signal on the PSM redeem path, so a caller cannot
+  tell from the return value whether they were paid or enqueued.
+- `update_token_metadata` has no rent payer.
+- Token-2022 CPI errors surface opaquely.
+- **Cold-ATA compute is unmeasured.** The pinned 80,883 CU excludes first-time
+  ATA creation (~+20–25k), which breaches the self-imposed 100k ceiling while
+  staying inside Solana's 200k limit.
 
 ---
 
 ## Deploy-day runbook — internal-testing MVP
 
-Ordered. Each step's verification is the gate for the next.
+Ordered. Each step's verification is the gate for the next. **None of this has
+been executed yet** — the EVM v0.3 and SVM clean-slate deploys are both
+outstanding.
 
 **0. Pre-flight.** `EVM/.env` populated from `.env.example` (deployer key,
 four testnet RPCs, explorer keys). Confirm `DEPLOYMENT_VERSION === "v0.3"`
@@ -1580,9 +260,9 @@ five contracts per chain.
 rotate `target/deploy/lite_psm-keypair.json`, `anchor keys sync` — **NOT on
 the standard build path; must be run explicitly** — update `Anchor.toml` and
 `declare_id!`, then `npm run deploy:programs` → `deploy:init` →
-`admin:grant-roles:devnet`. Verify with `scripts/deploy/verify.ts` (now
-checks owner, size against `PSM_CONFIG_LEN`, and the `PsmConfig`
-discriminator — not just existence).
+`admin:grant-roles:devnet`. Verify with `scripts/deploy/verify.ts` (checks
+owner, size against `PSM_CONFIG_LEN`, and the `PsmConfig` discriminator — not
+just existence).
 
 **3. Wire the bridge env. THE EASIEST STEP TO SKIP AND THE MOST COSTLY.**
 Set `SVM_RPC_URL`, `SVM_LITE_PSM_PROGRAM_ID`, `SVM_OKU_M_MINT`, and
@@ -1618,30 +298,66 @@ carry ledger has exactly one row per epoch, that the prior row's
 `reconciledCarryUsd` was backfilled, and that `checkMultiplierDrift` reports
 agreement across all four testnets and SVM.
 
-### RESOLVED: SVM `tsc --noEmit` now passes, tests AND scripts `[SVM]`
+### Deploy-time traps that are not visible from the scripts
 
-Was 21 errors across the bankrun test files (`Program<LitePsm>` vs
-`Program<Idl>` generic-variance around `addEventListener`), fixed by typing
-the shared test helpers concretely. This entry's title said RESOLVED before
-that fix actually shipped — left contradicting its own body for a full pass;
-corrected here.
-
-Extended further during the deploy-readiness pass: `tsconfig.json`'s
-`include` was `tests/**/*` only, so `npm run typecheck` — gated in CI —
-covered zero scripts and was hiding a real compile error in
-`withdraw-buffer.ts` (dead account keys an instruction doesn't take).
-`include` now covers `scripts/**/*` too; see `SVM/DECISIONS.md` D-14.
-
-### SVM audit-tooling note `[SVM]`
-
-The Trail of Bits `solana-lints`/dylint integration
-(`[workspace.metadata.dylint]`, `deny.toml` git-allow, `audit/`
-package) was removed. If a static-analysis gate is wanted for the audit,
-re-introduce a lint runner (dylint or an alternative) in CI.
+- **`verifyDeployment()` must throw, never warn.** It asserts the complete
+  role-grant matrix, both minter allowances, and address-book completeness.
+  Roles and allowances are checked separately on purpose: `OkuMoney.mint` gates
+  on **both** `onlyRole(OKUM_MINTER)` and the `minterAllowance` mapping, which
+  `initialize` populates for nobody — so a grant without an allowance still
+  reverts `ExceedsAllowance`. `expectedRoleGrants()` is exported so the drill
+  asserts against the deploy's own source of truth; never hand-copy the list.
+- **`RedemptionQueue` must not hold `OKUM_MINTER`.** Asserted as an explicit
+  negative in both `verifyDeployment` and the drill, so a re-grant or a stale
+  address-book reuse fails loudly rather than silently widening mint authority.
+- **`LitePSM.initialize`'s `QueueUsdcMismatch`/`QueueOkuMoneyMismatch` checks
+  and `verifyDeployment`'s re-assertion of the same two edges are not
+  redundant.** The init-time check structurally cannot cover a PSM or queue
+  reused from the address book via `tryAttach` without re-running `initialize`.
+  Do not remove either. A mismatched queue fails *closed* — the unguarded
+  `burn` reverts the whole batch, including the already-executed USDC
+  transfer — not silently.
+- **`scripts/config/addresses.json` is tracked and must never receive `fork:`
+  keys.** `saveAddressBook()` re-derives the tracked / `addresses.local.json`
+  partition on every write, including the reserved `upgrades` index, so no
+  caller has to remember. Never add a writer that bypasses the helper.
+- **Operator scripts are env-var driven, never flag-driven.** `npx hardhat run`
+  parses argv itself and rejects unrecognised `--flag` (HH305/HH310) before the
+  script runs. `parseArg()` maps camelCase→SCREAMING_SNAKE
+  (`minAmountOut`→`MIN_AMOUNT_OUT`); `isYesMainnet()` accepts `YES_MAINNET=1|true`.
+  Do not reintroduce `--flag=value` into any script header, README, or error
+  message.
+- **The drill clears and backs up `carryLedger.json` and
+  `globalValueSamples.json` in `before()`.** Both are gitignored, so stale
+  local state silently corrupts a rerun's carry/target math with no error and
+  no visible diff — and they can hold real operator state.
+- **Never hardcode `NETWORK` in a drill.** The fork's chainId comes from
+  `FORK_NETWORK` at hardhat startup; let `resolveNetworkContext()` auto-detect.
+- **`PsmConfig` carries `reserved: [u8; 128]`, `LEN` = 754 pinned by a
+  compile-time `assert!`.** New fields are consumed **from the front of
+  `reserved` with `LEN` held constant** — no offset moves, no resize, no
+  redeploy.
+- **V̄'s denominator set and the broadcast's recipient set must be the same
+  set.** `scripts/config/epochChains.ts` is the single source of truth
+  (`participatingChains()`); all call sites route through it, including
+  explicit `CHAINS=` lists.
+- **SVM `initialize` is gated on the program's own BPF upgrade authority via
+  `ProgramData`**, pinned with Anchor's `address =` so a foreign program's
+  account cannot be substituted. Bankrun loads programs under BPFLoader2 and
+  creates no ProgramData account, so the harness seeds a real one
+  (`seedProgramData`) rather than feature-flagging the check off under
+  `cfg(test)`. Any new init-path test must do the same.
 
 ---
 
 ## ⚪ Post-launch / low priority
+
+### SVM audit-tooling note `[SVM]`
+
+The Trail of Bits `solana-lints`/dylint integration
+(`[workspace.metadata.dylint]`, `deny.toml` git-allow, `audit/` package) was
+removed. If a static-analysis gate is wanted for the audit, re-introduce a lint
+runner (dylint or an alternative) in CI.
 
 ### `RedemptionQueue.QueueEntry` storage packing `[EVM]`
 
@@ -1661,22 +377,21 @@ audit feedback narrows the surface.
 ### Branch coverage is the weak spot in an otherwise strong forge suite `[EVM]`
 
 CI gates on **line** coverage (95% per `src/` file) and the suite clears it
-comfortably — 98.90% lines, 99.32% functions, 582/582 passing. **Branch**
+comfortably — 99.19% lines, 99.31% functions, 613 tests passing. **Branch**
 coverage is materially weaker and ungated:
 
 | File | Branches |
 |---|---|
-| `src/psm/LitePSM.sol` | 74.07% (20/27) |
-| `src/lib/MathLib.sol` | 75.00% (9/12) |
-| `src/token/OkuDollar.sol` | 81.25% (26/32) |
-| **Total** | **85.48% (106/124)** |
+| `src/lib/MathLib.sol` | 70.00% (7/10) |
+| `src/token/OkuDollar.sol` | 83.78% (31/37) |
+| `src/psm/LitePSM.sol` | 84.62% (22/26) |
+| `src/psm/RedemptionQueue.sol` | 94.74% (18/19) |
+| `src/token/OkuMoney.sol` | 97.56% (40/41) |
+| **Total** | **88.89% (120/135)** |
 
-`LitePSM` being lowest is notable given `_redeemOkuMShared` is already flagged
-under "Audit-attention surfaces" below as the densest control flow in the EVM
-suite — the branchiest function is also among the least branch-covered. Not
-urgent (the uncovered branches are mostly defensive/unreachable-by-construction
-paths), but it's where an auditor will look first, and worth closing before
-external review rather than during it.
+Not urgent — the uncovered branches are mostly defensive or
+unreachable-by-construction — but it is where an auditor looks first, and
+worth closing before external review rather than during it.
 
 ### Two-chain Foundry invariant harness `[EVM]`
 
@@ -1694,65 +409,41 @@ between them. Better suited as nightly CI than per-PR.
 
 **Effort:** 2–3 weeks.
 
+### Spawn-based operator CLI smoke test `[EVM]`
+
+Operator CLI entry points are covered only in-process by the drill. A
+spawn-based test asserting exit codes against a fork would have caught the
+flag-vs-env-var breakage on day one. Deferred post-audit.
+
+### Operator CLI gaps `[SVM]`
+
+`accept-role-admin.ts`, `cancel-role-admin-transfer.ts` — the two-step
+`role_admin` transfer's second step happens once per rotation by the cold
+multisig via Squads; a documented IDL call in the runbook is sufficient. Build
+CLIs only if the runbook requires them.
+
 ### Audit-attention surfaces `[both]`
 
-Informational only — no functional issue, just where reviewer time
-will concentrate:
+Informational only — no functional issue, just where reviewer time will
+concentrate:
 
 - **SVM manual Token-2022 mint construction in `initialize`**
-  (`instructions/init.rs`) is the highest-complexity code in the crate:
-  extension-length math, a two-step `CreateAccount`, and four raw
-  `invoke`/`invoke_signed` calls. Correct and well-commented as
-  written; flagged for focused audit attention rather than as a
-  defect.
-- **SVM `f64` multiplier round-trip** (`helpers/scaled_ui.rs`,
-  `instructions/yield_ops.rs`) is the most numerically-sensitive path:
-  the `u64 → f64 → u64` conversion is exact only under the compile-time
-  `MAX_MULTIPLIER < 2^52` assertion, and `read_multiplier` re-implements
-  effective-multiplier selection to work around the Token-2022 zero-init
-  edge case. Carries an in-code `AUDITOR ATTENTION` block.
-- **EVM `LitePSM._redeemOkuMShared`** (`LitePSM.sol:257-316`) is the
-  densest control flow in the EVM suite — a single function serving
-  4 call shapes via a `bool okuMAtPsm` flag that toggles both the
-  token-pull and the event emission. Logic is correct and commented;
-  flagged as where auditor review time will concentrate, not as a
-  defect.
-- **EVM PSM has no user-supplied slippage/min-out parameter on any of
-  its 4 entry points, unlike SVM's `redeem_oku_m(..., min_usdc_out)`.**
-  Reviewed and left as-is — the guarantee (redeem can only return ≥
-  quoted USDC; mint preserves dollar value exactly) rests on two
-  properties that both hold today: the multiplier is monotonic
-  (rate floored at `PRECISION`, override strictly-increasing), and
-  **`LitePSM` has no fee mechanism anywhere in it.** See
-  `EVM/README.md § LitePSM.sol` for the full argument and
-  `SVM/README.md § PSM` for why SVM keeps the parameter regardless
-  (defense-in-depth + reused as a live Rust-vs-TS differential probe,
-  since Solana has no view functions to observe pricing directly).
-  **Flagging the precondition explicitly: if a PSM fee is ever
-  introduced on any of the four paths, this entire analysis stops
-  holding** — output becomes a function of a mutable admin parameter,
-  and a user-supplied min-out becomes necessary rather than
-  structurally unreachable. Re-open this item the moment a fee is on
-  the roadmap; add min-out parameters *before* the fee lands, not
-  after.
-
-### Operator CLI gaps `[both]`
-
-Still missing CLIs — defer until post-audit when the function
-kill-list is finalised:
-
-**SVM:**
-
-- `accept-role-admin.ts`, `cancel-role-admin-transfer.ts` — the
-  two-step `role_admin` transfer's second step happens once per
-  rotation by the cold multisig via Squads; a documented IDL call in
-  the runbook is sufficient. Build CLIs only if the runbook requires
-  them.
+  (`instructions/init.rs`): extension-length math, a two-step `CreateAccount`,
+  and four raw `invoke`/`invoke_signed` calls. Correct and well-commented;
+  flagged for focused attention rather than as a defect.
+- **SVM `f64` multiplier round-trip** (`helpers/display_sync.rs`,
+  `instructions/yield_ops.rs`): the most numerically-sensitive path. See
+  standing invariant 4 above.
+- **EVM `LitePSM._redeemOkuMShared`**: the densest control flow in the EVM
+  suite — one function serving 4 call shapes via a `bool okuMAtPsm` flag that
+  toggles both the token-pull and the event emission.
 
 ---
 
 ## Pointers
 
 - [`README.md`](README.md) — workspace overview + orchestrator runbook
-- [`EVM/README.md`](EVM/README.md) — EVM-specific docs (contracts, deployment, runbook, accepted risks)
-- [`SVM/README.md`](SVM/README.md) — SVM-specific docs (programs, design, runbook, EVM divergence, accepted risks)
+- [`AUTHORITY-MATRIX.md`](AUTHORITY-MATRIX.md) — canonical role/authority reference
+- [`EVM/README.md`](EVM/README.md) — EVM contracts, deployment, accepted risks
+- [`EVM/docs/epoch-accounting.md`](EVM/docs/epoch-accounting.md) — rear-facing epoch model + simulation record
+- [`SVM/README.md`](SVM/README.md) — SVM programs, design, runbook, EVM divergence

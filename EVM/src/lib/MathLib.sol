@@ -30,7 +30,7 @@ import {Constants} from "./Constants.sol";
  *      is `mul_div_ceil`, which takes `u64` arguments and therefore cannot represent a
  *      WAD-scale multiplier as its divisor. If any of the above is ever ported, it needs
  *      a new primitive — reaching for `dollars_to_raw` (floor) would invert the rounding
- *      direction on a user withdrawal. See `SVM/DECISIONS.md` D-06.
+ *      direction on a user withdrawal. See `oku-shared/src/math.rs`.
  */
 library MathLib {
     /**
@@ -156,13 +156,12 @@ library MathLib {
         // {OkuMoney.setOkuMMultiplier} clears rate and window together; and
         // {OkuMoney.setNextOkuMYieldRate} can only arm a successor while `rateEnd != 0`.
         //
-        // This branch therefore does NOT carry an overhang leg. An earlier version did,
-        // as a defensive fallback, but it compounded the successor from `rateEnd` rather
-        // than from `max(anchor, rateEnd)` as branch 2 does — so in the very state it
-        // claimed to protect against (`anchor > rateEnd`) it applied yield across
-        // `[rateEnd, anchor]`, a span that precedes the snapshot and is already baked
-        // into `base`. Deleting it removes that latent double-count rather than
-        // preserving an unreachable path that was wrong anyway.
+        // This branch therefore carries NO overhang leg, and must not acquire one. A
+        // defensive fallback here would have to compound from `max(anchor, rateEnd)` as
+        // branch 2 does; compounding from `rateEnd` — the obvious implementation —
+        // applies yield across `[rateEnd, anchor]`, a span that precedes the snapshot and
+        // is already baked into `base`, double-counting it in exactly the state the
+        // fallback claims to protect.
         if (rate <= Constants.PRECISION) {
             return base;
         }

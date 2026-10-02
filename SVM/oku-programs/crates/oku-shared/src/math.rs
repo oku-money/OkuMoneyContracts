@@ -105,6 +105,14 @@ pub fn dollars_to_raw(dollar_value: u64, multiplier: u128) -> Option<u64> {
 ///
 /// Strictly `>= mul_div_floor(a, b, divisor)` for the same inputs, and
 /// `== mul_div_floor(a, b, divisor)` iff the product divides evenly.
+///
+/// **This has no on-chain caller today, and that is deliberate — it is not
+/// dead code to be reaped.** It is fuzzed, Kani-proven and unit-tested, and is
+/// retained for a future reserve-accounting path per the rounding policy
+/// above. As a `pub fn` in a library crate with no caller it costs nothing in
+/// the deployed `.so`, and deleting then re-deriving it later is worse than
+/// keeping a proven primitive. Note it takes `u64` and so cannot serve a
+/// WAD-scale divisor; see `wad.rs` for the multiplier paths.
 #[inline]
 pub fn mul_div_ceil(a: u64, b: u64, divisor: u64) -> Option<u64> {
     if divisor == 0 {

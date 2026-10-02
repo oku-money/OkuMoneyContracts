@@ -27,21 +27,6 @@ agility:
 - **Legal framework** — registered with FinCEN as an MSB. Licensed
   as a money transmitter in states where we onboard users.
 
-```
-                    ┌─────────────────────────┐
-                    │    Off-Chain             │
-                    │    Orchestrator          │
-                    │    (Cloud KMS)           │
-                    └───────────┬──────────────┘
-                                │
-        ┌───────────────────────┼───────────────────────┐
-        │                       │                       │
-        ▼                       ▼                       ▼
-   ┌─────────┐            ┌─────────┐            ┌─────────┐
-   │ Ethereum│            │ Arbitrum│            │ Solana  │
-   │   EVM   │            │   EVM   │            │   SVM   │
-   └─────────┘            └─────────┘            └─────────┘
-```
 
 ---
 
@@ -126,7 +111,7 @@ Determinism](EVM/README.md#streaming-accrual--cross-chain-determinism)
 and [`SVM/README.md` § Yield (streaming rate schedule)](SVM/README.md).
 The derivation of the published rate from realized off-chain yield —
 epochs, carry ledger, base+settlement split — lives in
-[`EVM/README.md` § Rear-Facing Epoch Accounting](EVM/README.md#rear-facing-epoch-accounting).
+[`EVM/docs/epoch-accounting.md`](EVM/docs/epoch-accounting.md).
 
 ### What is and isn't independently verifiable
 
@@ -181,8 +166,10 @@ directly, the same way they would verify any other book.
 derivation becomes a product requirement — a partner, regulator or
 listing that wants to check our arithmetic without a trust relationship.
 The change is additive and needs no modification to any deployed
-contract: a standalone attestation contract, one hash per epoch. See
-`SVM/DECISIONS.md` D-26.
+contract: a standalone attestation contract, one hash per epoch. Decided
+against for now — anchoring a hash proves the file was not edited after the
+fact, but proves nothing about whether its inputs were honest, which is the
+property that actually matters. See `TRACKER.md` § carry ledger.
 
 Separately, and regardless of that choice: because the carry ledger and
 V̄ history have no on-chain representation, **losing them means the
@@ -465,121 +452,54 @@ stores, it is not reconstructible from chain state alone. Implementation:
 
 ### Signer trust implications
 
-okuMoney is a **centralized financial product**. Users trust Oku
-Money as an institution — the same way they trust Circle for USDC or
-Paxos for PYUSD. On-chain RBAC enforces *separation of duties within
-the company*, not protection *against* the company.
+okuMoney is a **centralized financial product.** Users trust Oku Money as an
+institution — the same way they trust Circle for USDC or Paxos for PYUSD.
+On-chain RBAC enforces *separation of duties within the company*, not
+protection *against* the company. Read every "cannot" below in that light.
 
-#### Cold Multisig (Squads / Safe, hardware-backed quorum)
+**Per-path blast radius, guards and reversibility:
+[`AUTHORITY-MATRIX.md`](AUTHORITY-MATRIX.md).** That file is canonical and is
+verified against the contract source. The tiering below is the organisational
+model it assumes.
 
-**Can:**
-- Upgrade any contract (EVM: UUPS `_authorizeUpgrade`; SVM: BPF
-  program upgrade authority). A malicious or erroneous upgrade can
-  replace all logic — the highest-impact key.
-- Configure `maxSupply` and `minterAllowance`. Raising allowance to
-  the cap and minting up to it is the worst-case mint outcome.
-- Drain the USDC buffer (`withdrawUsdc` / `withdraw_buffer`). On EVM,
-  bounded by pending redemption-queue obligations; on SVM, bounded
-  only by the vault's current balance (no queue to protect).
-- Rescue OkuMoney donated directly to the EVM vault (`rescueDonation`)
-  — cannot touch OkuM backing outstanding shares; there is no
-  "surplus" beyond accidental donations under the single-multiplier
-  design (collateralization is exactly 1.0 by construction).
-- Grant any role to any address (DEFAULT_ADMIN_ROLE / role_admin SVM).
-- Unblacklist, unpause, unfreeze ATAs.
-- Rotate operational authority pubkeys.
+| Tier | Key material | Holds | Shape of the worst case |
+|---|---|---|---|
+| **Cold Multisig** | Squads / Safe, hardware-backed quorum | Upgrade authority, all `UNPAUSER`/`UNBLACKLISTER`, `CAP_MANAGER`, `ALLOWANCE_MANAGER`, `BUFFER_WITHDRAWER`, `VAULT_RESCUER`, `DEFAULT_ADMIN_ROLE` / `role_admin` | Total. Upgrade replaces all logic with no timelock. **Do not read `maxSupply` or `minterAllowance` as a bound on this tier** — it sets both. |
+| **Warm Multisig** | Lower quorum, faster to sign | All `PAUSER`, all `BLACKLISTER` / `freezer` | Denial of service only. Pause is a **one-way door** — unpausing needs cold. No access to funds or parameters. |
+| **Orchestrator** | KMS-backed, automated | `OKUM_REBASER`, `QUEUE_PROCESSOR`, `BUFFER_DEPOSITOR`, plus SVM `direct_minter`/`direct_burner` | Can ratchet the multiplier toward `MAX_MULTIPLIER`, inflating dollar value beyond actual backing. Cannot mint on EVM (`OKUM_MINTER` is held by contracts), cannot drain the buffer, cannot touch roles or upgrades. |
+| **Protocol contracts** | n/a | `OKUM_MINTER` / `OKUM_BURNER` (EVM); mint authority on the Token-2022 mint (SVM) | Mint only from inside `mintOkuM` / `processQueue`, bounded by `minterAllowance` and `maxSupply` — bounds that the cold tier can raise. |
 
-**Cannot (on-chain code prevents even at quorum):**
-- Mint above `maxSupply` or `minterAllowance`.
-- Move the multiplier below its current value on either stack (monotonic).
-- Set a yield rate outside `[PRECISION, MAX_RATE]` (EVM).
-- Set `maxSupply` below current `totalSupply`.
-- Rescue any OkuM below `totalUsdShares` (EVM `rescueDonation`).
+**The one bound that is structural rather than administrative:** the multiplier
+is monotonically non-decreasing on both stacks. No key, at any quorum, can move
+it backwards. Everything else in the "cannot" column is a parameter that the
+cold tier can re-parameterise.
 
-#### Warm Multisig (lower-quorum, faster to sign)
-
-**Can:**
-- Pause all protocol contracts, halting mint / redeem / bridging.
-- Blacklist any address on OkuMoney and OkuDollar (EVM).
-- On SVM: freeze any OkuM ATA via Token-2022 freeze authority.
-
-**Cannot:**
-- Unpause or unblacklist (cold multisig only). Pause is a one-way
-  door for the warm key.
-- Access any funds or parameters.
-
-#### Orchestrator (KMS-backed, automated)
-
-**Can:**
-- Update the OkuM yield-rate schedule (EVM: `setOkuMYieldRate` /
-  `setNextOkuMYieldRate` / `setOkuMYieldRateWithSuccessor`; SVM:
-  `set_okum_yield_rate` / `set_next_okum_yield_rate` /
-  `set_okum_yield_rate_with_successor` — both bounded to
-  `[PRECISION, MAX_RATE]`), and the emergency override
-  (`setOkuMMultiplier` / `set_okum_multiplier`, strictly increasing,
-  capped at `MAX_MULTIPLIER`). A compromised rebaser key can ratchet the
-  multiplier toward the ceiling, inflating token dollar value beyond
-  the actual T-Bill backing rate. On EVM this single schedule governs
-  **both** OkuM and UsdOku, since UsdOku has no rate of its own.
-- Process the redemption queue (EVM only — SVM has no queue).
-- Deposit USDC to the PSM buffer.
-- Call `mintOkuM` / `redeemOkuM` (EVM) or `mint_oku_m` /
-  `redeem_oku_m` (SVM) as a normal user (**permissionless** — the
-  orchestrator holds no special mint authority, only USDC custody).
-- On SVM: call `mint_oku_m_direct` / `burn_oku_m_direct` for
-  cross-chain bridge operations (requires `direct_minter` /
-  `direct_burner` roles).
-
-**Cannot:**
-- Mint OkuM directly on EVM. `OKUM_MINTER` is held by the PSM /
-  RedemptionQueue contracts.
-- Access admin parameters, role grants, upgrades.
-- Drain the USDC buffer (cold-multisig BUFFER_WITHDRAWER only).
-
-#### Protocol contracts (LitePSM, RedemptionQueue)
-
-**EVM:** Hold `OKUM_MINTER` / `OKUM_BURNER`. Mint via
-`OkuMoney.mint()` only during `mintOkuM` / `processQueue`, gated by
-per-minter `minterAllowance` and the global `maxSupply` cap. Burn
-(cycle-4 split role) only via `OkuMoney.burn()` from inside
-`redeemOkuM` / `processQueue`.
-
-**SVM:** lite-psm holds mint authority on the OkuM Token-2022 mint.
-Minting via `mint_oku_m` / `mint_oku_m_direct` is gated by
-`minterAllowance` and `maxSupply`. Burning via `redeem_oku_m` /
-`burn_oku_m_direct`. `redeem_oku_m` is buffer-only — there is no
-redemption queue on SVM to fall back to.
-
-**On timelocks:** okuMoney is centralized US-regulated, not
-decentralized. Industry peers (USDC, USDT, USDP, PYUSD, FDUSD) do
-not use on-chain timelocks; they rely on operational, procedural,
-and regulatory controls. Trust is anchored in Oku Money as a legal
-entity, its MSB registration, and its internal control framework —
-not in on-chain delay mechanics. The cold-multisig quorum
-requirement is itself the delay mechanism. **Timelocks are not pursued.**
+**On timelocks.** okuMoney is centralized and US-regulated, not decentralized.
+Industry peers (USDC, USDT, USDP, PYUSD, FDUSD) do not use on-chain timelocks;
+they rely on operational, procedural and regulatory controls. Trust is anchored
+in Oku Money as a legal entity, its MSB registration and its internal control
+framework — not in on-chain delay mechanics. The cold-multisig quorum
+requirement is itself the delay. **Timelocks are not pursued.**
 
 ---
 
-## EVM vs SVM at a glance
+## EVM vs SVM
 
-| Aspect | EVM | SVM |
+The two stacks diverge deliberately in several places, and the catalogue of
+*why* — token model, multiplier location, pause semantics, bridging asymmetry,
+approval model, event shapes — lives in
+[`SVM/README.md` § EVM vs SVM — divergence catalogue](SVM/README.md#evm-vs-svm--divergence-catalogue).
+Role and authority asymmetries are in
+[`AUTHORITY-MATRIX.md`](AUTHORITY-MATRIX.md) § 4; constants are in each stack's
+constants file and must agree.
+
+The three differences that are pure toolchain rather than design:
+
+| | EVM | SVM |
 |---|---|---|
 | Language | Solidity 0.8.28 | Rust (Anchor 1.0.2) |
-| Token model | Dual-token: OkuMoney (non-rebasing) + OkuDollar (rebasing) | Single-token: OkuM with ScaledUiAmount extension (displays as usdOku) |
-| Multiplier | **Computed** `uint256` at `PRECISION = 1e18` (`okuMMultiplier()`), `rpow` over the rate schedule | **Computed** `u128` at the same `PRECISION = 1e18`, same ported `rpow` over the schedule on `PsmConfig` |
-| Wallet display of `m` | OkuDollar's rebasing `balanceOf()` — continuous | `ScaledUiAmount` mint extension — a write-only, permissionlessly-cranked lagging mirror (`display <= canonical`) |
-| Yield lock | `block.number` comparison | `Clock::slot` comparison |
-| Token standard | ERC-20 (custom rebasing for OkuDollar) | Token-2022 (OkuM with ScaledUiAmount + MetadataPointer + TokenMetadata) |
-| Decimals | 18 | 6 |
-| Proxy pattern | UUPS (all four contracts) | Solana BPF program upgrades (Squads authority) |
-| Convenience functions | On LitePSM contract | Direct OkuM mint/redeem on the PSM; no wrapping needed |
-| Redemption when buffer insufficient | Escrowed in `RedemptionQueue`, drained via `processQueue` | Reverts `InsufficientBuffer` — no queue (deliberately removed) |
-| Cross-chain transfers (v1) | Off-chain orchestrator + LitePSM mint/burn (USDC-mediated) | Off-chain orchestrator + direct burn/mint of OkuM (`burn_oku_m_direct` / `mint_oku_m_direct`) |
-
-**Full cross-chain parity matrix** — constants, roles, pause
-semantics, sandwich-fence behaviour, event schema diffs, deliberate
-non-parity items — see [`SVM/README.md § EVM vs SVM — divergence
-catalogue`](SVM/README.md#evm-vs-svm--divergence-catalogue).
+| Yield lock primitive | `block.number` | `Clock::slot` |
+| Upgrade mechanism | UUPS proxy (all four contracts) | Solana BPF program upgrade (Squads authority) |
 
 ---
 
@@ -587,34 +507,21 @@ catalogue`](SVM/README.md#evm-vs-svm--divergence-catalogue).
 
 ```
 contracts/
-├── README.md            # this file
-├── TRACKER.md           # Open issues + follow-ups (EVM + SVM)
-├── EVM/                 # Solidity contracts (Foundry + Hardhat)
-│   ├── README.md        # EVM-specific deployment, contracts, runbook
-│   ├── src/
-│   │   ├── token/       # OkuMoney.sol, OkuDollar.sol
-│   │   ├── psm/         # LitePSM.sol, RedemptionQueue.sol
-│   │   ├── interfaces/  # IOkuMoney.sol, IOkuDollar.sol, IScaledUIAmount.sol
-│   │   └── lib/         # Roles, Constants, MathLib, events
-│   ├── test/            # Foundry + Hardhat suites
-│   └── scripts/         # Deploy + operator scripts
-├── SVM/                 # Anchor programs (Rust)
-│   ├── README.md        # SVM-specific runbook, divergence catalogue, deployment
-│   └── oku-programs/
-│       ├── programs/
-│       │   └── lite-psm/    # PSM (buffer-only, no queue) + yield ops + compliance + direct mint/burn
-│       ├── crates/
-│       │   └── oku-shared/  # Pure-Rust shared constants + math + yield lock
-│       ├── tests/
-│       ├── scripts/
-│       ├── deployments/     # Per-network deployment records
-│       └── keys/            # Local keypair directory (gitignored, see keys/README.md)
-├── artifacts/           # Curated ABIs + IDLs for backend / SDK / frontend use
-│   ├── evm/             # Slim Hardhat artifacts (abi + bytecode) per contract
-│   ├── svm/             # Anchor IDL JSON per program
-│   └── README.md        # Consumption docs for downstream services
-└── testnet-addresses.json  # Canonical live deployment registry (auto-generated)
+├── README.md                  # this file — cross-stack model, trust, runbook
+├── TRACKER.md                 # open issues + standing invariants
+├── AUTHORITY-MATRIX.md        # canonical role/authority reference
+├── EVM/                       # Solidity (Foundry + Hardhat)
+│   ├── README.md              # contracts, deployment, accepted risks
+│   └── docs/
+│       └── epoch-accounting.md   # off-chain epoch/yield model
+├── SVM/                       # Anchor programs (Rust)
+│   └── README.md              # programs, design, divergence catalogue
+├── packages/yield-tooling/    # shared multiplier math (TS) + differential corpus
+├── artifacts/                 # curated ABIs + IDLs for downstream consumers
+└── testnet-addresses.json     # live deployment registry (auto-generated)
 ```
+
+Each stack's README documents its own internal layout.
 
 ---
 
@@ -638,29 +545,14 @@ on-chain bridge.
 
 ### Prerequisites
 
-**EVM:**
-```bash
-cd EVM
-cp .env.example .env
-# PRIVATE_KEY=<deployer key>
-# ALCHEMY_API_KEY=<covers Eth/OP/Arb/Base/BSC/Sepolia>
-# ETHERSCAN_API_KEY=<single Etherscan V2 key — covers all of the above for verification>
-npm install && npx hardhat compile
-```
+Copy `.env.example` to `.env` in `EVM/` and `SVM/oku-programs/` and fill it in;
+each file documents its own keys. Then `npm install` plus `npx hardhat compile`
+(EVM) / `anchor build` (SVM). SVM local-fork testing additionally needs
+[Surfpool](https://run.surfpool.run/).
 
-**SVM:**
-```bash
-cd SVM/oku-programs
-cp .env.example .env
-solana config set --url devnet
-solana-keygen new --outfile ~/.config/solana/id.json   # if needed
-npm install && anchor build
-```
-
-**(Optional) Surfpool** for SVM local-fork testing:
-```bash
-curl -sL https://run.surfpool.run/ | bash
-```
+One EVM key worth calling out because it is not obvious: a **single**
+`ETHERSCAN_API_KEY` covers verification on all supported chains via the
+Etherscan V2 API — you do not need a per-explorer key.
 
 ### Phase 1 — local-fork pre-flight (recommended)
 
@@ -812,12 +704,15 @@ PRIVATE_KEY=<evm-key> tsx scripts/test/bridge-svm-evm.ts \
 
 ### Troubleshooting
 
-| Symptom | Cause / fix |
-|---|---|
-| `Sender doesn't have enough funds` | Top up dev wallet on target chain. The pre-flight fork shows the *real* funding shortfall before you spend live ETH. |
-| `nonce too low` / `replacement transaction underpriced` | RPC nonce-cache race. `withRetry` should absorb it; if persistent, switch RPC (`BASE_RPC_URL` / `BSC_RPC_URL`) or wait. |
-| `BAD_DATA: invalid address (value="")` | BSC pending-tx quirk. `scripts/utils/rpcCompat.ts` normalises it preventatively. |
-| `Chain ID mismatch: local node reports chainId X, but NETWORK=Y expects Z` | Restart `hh node` with `FORK_NETWORK=Y`, OR unset `NETWORK` so the script auto-detects. |
+Generic RPC flakiness (insufficient funds, `nonce too low`, replacement
+underpriced) is absorbed by `withRetry`; if it persists, switch RPC. Two
+non-generic ones:
+
+- **`BAD_DATA: invalid address (value="")`** — a BSC pending-tx quirk.
+  `scripts/utils/rpcCompat.ts` normalises it preventatively.
+- **`Chain ID mismatch: local node reports X, NETWORK=Y expects Z`** — restart
+  `hh node` with `FORK_NETWORK=Y`, or unset `NETWORK` and let the script
+  auto-detect from the live chainId.
 
 ### Initial deploy parameters (testnet defaults)
 
@@ -862,23 +757,11 @@ See `SVM/oku-programs/scripts/admin/set-upgrade-authority.ts`.
 
 ### Chain ID reference
 
-EVM chain IDs follow EIP-155. SVM chain identifiers (Ankr convention)
-are protocol-internal — they appear only in deployment registry
-metadata after the noBridge refactor.
-
-| Network | EIP-155 / chain ID | Type |
-|---|---|---|
-| Solana Mainnet | 101 | Ankr convention |
-| Solana Devnet | 103 | Ankr convention |
-| Ethereum | 1 | EIP-155 |
-| Optimism | 10 | EIP-155 |
-| BSC | 56 | EIP-155 |
-| Base | 8453 | EIP-155 |
-| Arbitrum One | 42161 | EIP-155 |
-| Eth Sepolia | 11155111 | EIP-155 |
-| OP Sepolia | 11155420 | EIP-155 |
-| Base Sepolia | 84532 | EIP-155 |
-| BSC Testnet (Chapel) | 97 | EIP-155 |
+EVM chain IDs follow EIP-155 and are listed per-network in
+[`EVM/scripts/config/chains.ts`](EVM/scripts/config/chains.ts), which is the
+source of truth. The only identifiers worth repeating are the Solana ones,
+because they are an Ankr convention rather than a standard and appear only in
+deployment-registry metadata: **mainnet 101, devnet 103.**
 
 ---
 

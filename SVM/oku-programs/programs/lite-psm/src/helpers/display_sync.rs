@@ -90,23 +90,22 @@ use oku_shared::PRECISION;
 ///
 /// BUT NOTE WHAT THAT PROOF IS: the two-ULP decrement **exactly cancels** the
 /// two roundings, leaving `2^-104` of relative slack. It is a second-order
-/// margin, not a cushion. An earlier version of this comment claimed the bias
-/// "dominates the error budget by ~2.5x"; that figure was computed at
-/// `m ~ 1e18`, where the quotient lands on `2^0` — the single point of
-/// MAXIMUM relative ULP in the entire domain, and therefore the best case
-/// rather than the worst. Across the real domain the quotient ranges over
-/// `[1, 1e6]`, and just below a power of two the relative ULP halves to
-/// `2^-53`, so two ULPs buy `2^-52` against a budget of `2 * 2^-53` — equal,
-/// not 2.5x. Measured over 400k samples the minimum relative downward bias is
-/// `1.05e-16` at `m ~ 1.306e23`, against a `2 * 2^-53 = 2.22e-16` budget: a
-/// ratio of **0.47x**.
+/// margin, not a cushion — there is no headroom here.
 ///
-/// The practical consequence: do not treat this as having headroom. Adding a
-/// third rounding operation anywhere in this function (an intermediate `f32`,
-/// a normalisation multiply, a different divisor) breaks the cancellation and
-/// makes `display > canonical` reachable. The test below checks the invariant
-/// EXACTLY, in integer arithmetic, rather than via a float-relative threshold,
-/// precisely so that such a change fails rather than slipping through.
+/// The weak region is just BELOW a power of two, where relative ULP halves to
+/// `2^-53`, so two ULPs buy `2^-52` against a budget of `2 * 2^-53` — equal,
+/// not comfortable. Measured minimum relative downward bias is `1.05e-16` at
+/// `m ~ 1.306e23`, i.e. 0.47x of the `2.22e-16` budget. Note that `m ~ 1e18`
+/// is the BEST case, not the worst: the quotient lands on `2^0`, the point of
+/// maximum relative ULP. Any sampling that skips the weak region will measure
+/// the margin as several times larger than it is.
+///
+/// Practical consequence: adding a third rounding operation anywhere in this
+/// function (an intermediate `f32`, a normalisation multiply, a different
+/// divisor) breaks the cancellation and makes `display > canonical` reachable.
+/// The test below checks the invariant EXACTLY, in integer arithmetic, rather
+/// than via a float-relative threshold, precisely so such a change fails
+/// rather than slipping through. Do not "simplify" it back to a float compare.
 ///
 /// ## The step itself is a standard operation, not a bit-hack
 ///
@@ -115,12 +114,10 @@ use oku_shared::PRECISION;
 /// stabilised it as [`f64::next_down`] in 1.86; this workspace pins 1.90
 /// (`rust-toolchain.toml`), so it is used directly rather than reconstructed.
 ///
-/// An earlier revision open-coded it as `f64::from_bits(x.to_bits() - 2)`.
-/// That is bit-identical here — for a positive, finite, normal `x`, a raw
-/// decrement of the bit pattern IS `nextDown` — but it open-codes an
-/// assumption (`x` is normal and positive, so no exponent/sign boundary is
-/// crossed) that `next_down` encodes in the standard library instead. The
-/// guard below keeps that assumption from ever being load-bearing anyway.
+/// Do not open-code it as `f64::from_bits(x.to_bits() - 2)`. That is
+/// bit-identical for a positive, finite, normal `x`, but it hardcodes the
+/// assumption that no exponent or sign boundary is crossed, which `next_down`
+/// encodes in the standard library instead.
 ///
 /// ## What this actually guarantees
 ///
@@ -158,11 +155,11 @@ pub fn multiplier_to_f64_floor(multiplier: u128) -> f64 {
 ///
 /// ## Why the timestamp is not a parameter
 ///
-/// It used to be, and that made leg 1 of the module invariant a convention
-/// every call site had to honour independently: nothing coupled the
-/// `multiplier` argument to the `effective_timestamp` argument, so a caller
-/// could pair a multiplier computed at one instant with an effective time at
-/// another. Both call sites did the right thing, but only by inspection.
+/// Taking it as a parameter would make leg 1 of the module invariant a
+/// convention every call site has to honour independently: nothing would
+/// couple the `multiplier` argument to the `effective_timestamp` argument, so
+/// a caller could pair a multiplier computed at one instant with an effective
+/// time at another.
 ///
 /// Reading `Clock` here instead makes "effective immediately" a property of
 /// this function rather than a property of its callers. A future caller cannot

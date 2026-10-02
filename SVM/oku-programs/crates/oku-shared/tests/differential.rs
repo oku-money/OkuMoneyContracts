@@ -34,7 +34,7 @@
 //!
 //! Vectors are confined to what a compliant writer can produce. Outside it
 //! there is a documented, accepted divergence in the far tail
-//! (`SVM/DECISIONS.md` D-04): Solidity reverts when an intermediate *product*
+//! (see `rate.rs` § reachability): Solidity reverts when an intermediate *product*
 //! exceeds `uint256`, whereas this port returns `None` when a *quotient*
 //! exceeds `u128`, and the Rust bound binds first. Both lie far beyond any
 //! reachable schedule. See the generator for the full reasoning.

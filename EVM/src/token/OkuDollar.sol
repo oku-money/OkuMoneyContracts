@@ -244,35 +244,24 @@ contract OkuDollar is
         uint256 multiplier = usdMultiplier();
         uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
         _transferUsdShares(msg.sender, to, shares, multiplier);
-        // Emit `Transfer` with the effective post-rounding dollar amount
-        // (`shares * multiplier / 1e18`) rather than the caller-specified `amount`: it is
-        // the closest single number to the value that actually moved, and it is never
-        // ABOVE it.
+        // Emit the effective post-rounding dollar amount rather than the caller's
+        // `amount`: it is the closest single number to the value that moved, and never
+        // above it.
         //
-        // IT DOES NOT MAKE `sum(Transfer.value) == Δ balanceOf` HOLD. An earlier version
-        // of this comment claimed it did; that claim was false and has been removed
-        // rather than weakened, because an indexer built on it would silently drift.
+        // NO emitted value can make `sum(Transfer.value) == Δ balanceOf` hold.
+        // `balanceOf` floors PER ACCOUNT, so the sender's decrease and the receiver's
+        // increase each depend on that party's own residue and need not agree. At
+        // `m = 1.5e18`, `transfer(bob, 2)` moves 1 share: Alice's balanceOf falls 1
+        // while Bob's rises 2. One event cannot report both.
         //
-        // Why no emitted value can make it hold: `balanceOf` floors PER ACCOUNT
-        // (`floor(sharesOf(a) * m / 1e18)`), so the sender's decrease and the receiver's
-        // increase are each independently `floor(shares*m/1e18)` or that plus one,
-        // depending on each party's own fractional residue. The two sides need not even
-        // agree with each other. Worked example at `m = 1.5e18`, amounts in wei-shares:
-        // Alice holds 3 (balanceOf 4), Bob holds 1 (balanceOf 1); `transfer(bob, 2)`
-        // moves 1 share; Alice -> 2 shares (balanceOf 3, delta -1) while Bob -> 2 shares
-        // (balanceOf 3, delta +2). One event cannot report both -1 and +2.
+        // INTEGRATORS MUST READ BALANCES FROM `balanceOf()`. `Transfer.value` is
+        // advisory, +/-1 wei per transfer and unbounded in aggregate. Same for `wrap`'s
+        // and `_unwrap`'s mint/burn events. Inherent to share-based rebasing; stETH
+        // behaves identically.
         //
-        // This is inherent to share-based rebasing and stETH has the same property. The
-        // correct guidance, and the only one that is actually true: INTEGRATORS MUST READ
-        // BALANCES FROM `balanceOf()`. `Transfer.value` is advisory and may differ from
-        // the realised per-account delta by +/-1 wei per transfer, without bound in
-        // aggregate. The same applies to `wrap`'s and `_unwrap`'s mint/burn `Transfer`s.
-        //
-        // Related and also worth stating: `totalSupply()` floors the AGGREGATE share
-        // count, while `sum(balanceOf)` floors each holder separately, so
-        // `totalSupply() >= sum(balanceOf)` with a gap of up to `holders - 1` wei. The
-        // direction is safe (supply over-reports, never under-reports, so the vault never
-        // looks under-collateralised) but conservation-style invariant checks must use
+        // Related: `totalSupply()` floors the AGGREGATE share count while `sum(balanceOf)`
+        // floors each holder, so `totalSupply() >= sum(balanceOf)` with a gap up to
+        // `holders - 1` wei. Direction is safe, but conservation invariants must use
         // `>=`, not `==`.
         uint256 effective =
             Math.mulDiv(shares, multiplier, Constants.PRECISION, Math.Rounding.Floor);

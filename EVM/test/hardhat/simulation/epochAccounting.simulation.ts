@@ -4,7 +4,7 @@
  * on-chain `rpow`/`computeMultiplier` behavior is exercised, not just our
  * off-chain model of it.
  *
- * See EVM/README.md § Rear-Facing Epoch Accounting for the design this
+ * See EVM/docs/epoch-accounting.md for the design this
  * validates, and `scripts/utils/{epochDistribution,epochSchedule}.ts` for the
  * math under test.
  *
@@ -375,7 +375,7 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
 
     after(() => {
         // Human-readable summary — the numbers backing the accuracy tables in
-        // EVM/README.md § Rear-Facing Epoch Accounting. Run
+        // EVM/docs/epoch-accounting.md. Run
         // `npx hardhat test test/hardhat/simulation/epochAccounting.simulation.ts`
         // to regenerate after changing any scenario parameters.
         console.log("\n=== Simulation summary (name | error% vs raw target | on-chain parity diff%) ===");
@@ -832,8 +832,8 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             expect(Math.abs(earlyResult.errorPctVsRawTarget)).to.be.greaterThan(
                 Math.abs(lateResult.errorPctVsRawTarget)
             );
-            // OPERATIONAL IMPLICATION (see EVM/README.md § Rear-Facing Epoch
-            // Accounting): monitoring should not wait for the fixed staging
+            // OPERATIONAL IMPLICATION (see EVM/docs/epoch-accounting.md):
+            // monitoring should not wait for the fixed staging
             // instant — if distributedSoFarUsd is observed to exceed the target
             // WELL BEFORE the scheduled staging time, the operator should
             // re-anchor to PRECISION (halt) immediately via the same atomic

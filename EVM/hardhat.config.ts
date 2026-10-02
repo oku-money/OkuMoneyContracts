@@ -116,6 +116,12 @@ const config: HardhatUserConfig & { typechain?: any } = {
         runs: 200,
       },
       evmVersion: "cancun",
+      // Keep the source-text metadata hash out of creation bytecode, so CREATE2
+      // addresses depend on code semantics rather than on comment text. Must
+      // match `bytecode_hash` in `foundry.toml` — see the rationale there.
+      metadata: {
+        bytecodeHash: "none",
+      },
     },
   },
 

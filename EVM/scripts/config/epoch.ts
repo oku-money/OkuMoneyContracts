@@ -2,7 +2,7 @@
  * The epoch grid — the protocol's yield calendar.
  *
  * Deliberately off-chain: nothing on-chain knows epochs exist; contracts see
- * only `(rate, rateEnd)` absolute timestamps (`SVM/DECISIONS.md` D-22). So
+ * only `(rate, rateEnd)` absolute timestamps. So
  * changing these values is cheap — they are a backend constant no contract or
  * program reads. The trade is that a fat-fingered `endTimestamp` on one chain
  * cannot be rejected on-chain; it is caught by `checkMultiplierDrift.ts`'s

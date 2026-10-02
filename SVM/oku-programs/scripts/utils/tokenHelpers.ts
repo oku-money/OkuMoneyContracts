@@ -56,8 +56,7 @@ async function sendWithRetry(
 // They initialised an `InterestBearingConfig` extension and had no callers —
 // the OkuM mint is created on-chain inside `initialize`, not by this helper.
 // That extension is also mutually exclusive with `ScaledUiAmount`, which OkuM
-// does use, so the code could never have applied to this protocol's mint
-// (`SVM/DECISIONS.md` D-18).
+// does use, so the code could never have applied to this protocol's mint.
 
 export async function createSPLTokenMint(
   connection: Connection,

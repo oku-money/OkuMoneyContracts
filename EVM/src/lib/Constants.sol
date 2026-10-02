@@ -40,8 +40,8 @@ library Constants {
     ///      upgrade: once `okuMMultiplier()` reverts, EVERY recovery path reverts with it,
     ///      including `setOkuMYieldRate` and the `setOkuMMultiplier` emergency override,
     ///      because both read the current multiplier to re-anchor. 90 days keeps ~60x
-    ///      margin against that bound and ~90x headroom over the 24-hour (86400s)
-    ///      production epoch.
+    ///      margin against that bound while comfortably exceeding any plausible epoch
+    ///      length, so a schedule never needs to span more than one window.
     ///
     ///      Must equal SVM's `MAX_RATE_WINDOW_SECONDS` in `oku-shared/src/constants.rs`
     ///      or the differential harness diverges.

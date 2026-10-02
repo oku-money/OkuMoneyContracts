@@ -20,7 +20,7 @@
  *      forever" or "diverges".
  *   4. The on-chain multiplier matches the TS mirror exactly at every point
  *      tested — the closest thing we have to a cross-implementation check
- *      until the differential harness (DECISIONS.md D-05) exists.
+ *      beyond the differential harness itself.
  *   5. Every write rail from `OkuMoney.sol` rejects what it should.
  *
  * Time progression is driven by `warpBy` / `warpSlots` from

@@ -424,8 +424,7 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
 /// dependency on Token-2022's future-timestamp resolve semantics.
 ///
 /// The cost: if the crank stops the display freezes rather than advancing one
-/// more step. That is stale-LOW, which is safe, and nothing prices against it
-/// (`SVM/DECISIONS.md` D-16).
+/// more step. That is stale-LOW, which is safe, and nothing prices against it.
 ///
 /// Does NOT stamp the sandwich lock — see `PsmConfig::last_yield_distribution_slot`.
 pub fn sync_display_multiplier(ctx: Context<SyncDisplayMultiplier>) -> Result<()> {

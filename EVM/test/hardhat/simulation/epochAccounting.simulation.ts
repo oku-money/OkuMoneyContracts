@@ -423,7 +423,7 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
         ];
 
         for (const c of cases) {
-            it(`${c.name}: base+settlement stays within ~1% of ADJUSTED target under moderate volatility`, async () => {
+            it(`${c.name}: base+settlement stays within 3% of ADJUSTED target under moderate volatility`, async () => {
                 const result = await recordedRunScenario({
                     ...BASELINE,
                     name: c.name,
@@ -438,6 +438,10 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
                 // own effect explicitly.
                 const errorVsAdjustedPct =
                     ((result.exactDistributedUsd - result.adjustedTargetUsd) / result.adjustedTargetUsd) * 100;
+                // 3%, and the title says 3%. It previously said "~1%" while
+                // asserting 3 -- someone measured ~2.3, raised the bound and left
+                // the claim, so the suite summary advertised an accuracy figure
+                // the suite does not check.
                 expect(Math.abs(errorVsAdjustedPct)).to.be.lessThan(3);
                 expect(result.onChainMultiplierParityDiffPct).to.be.lessThan(1e-5);
             });
@@ -479,9 +483,19 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             // weaker, epoch-length-dependent consequence of it.
             const MAX_RATE_FLOAT = 1 + 1e-7; // Constants.sol: PRECISION + 1e11, in float terms
             expect(result.rBaseFloat).to.be.closeTo(MAX_RATE_FLOAT, 1e-12);
-            // Distribution still happens (bounded by MAX_RATE), doesn't throw/NaN.
-            expect(Number.isFinite(result.exactDistributedUsd)).to.be.true;
-            expect(result.exactDistributedUsd).to.be.greaterThan(0);
+            // Distribution still happens, bounded by the clamp. `isFinite` and
+            // `> 0` were vacuous on a monotone multiplier; the clamped rate makes
+            // the payout computable, so assert that instead.
+            //
+            // At the ceiling, 1M tokens held for the 90% base window of a 24h
+            // epoch distribute `S x (MAX_RATE^baseLen - 1)`. Derived from the
+            // scenario's own inputs, so it moves with them rather than being a
+            // transcribed constant.
+            const baseWindowSec = BASELINE.epochLengthSec * BASELINE.baseWindowFraction;
+            const clampedBaseFloor =
+                BASELINE.initialSupplyTokens * (Math.pow(MAX_RATE_FLOAT, baseWindowSec) - 1);
+            expect(result.exactDistributedUsd, "clamped distribution still pays the ceiling rate")
+                .to.be.greaterThan(clampedBaseFloor * 0.5);
             // With such an extreme target, actual distribution is necessarily
             // far below it (clamped) — this is the EXPECTED failure mode: the
             // config is unreachable at this AUM, and the mechanism reports a
@@ -738,21 +752,46 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
                     stagingFraction,
                     supplyEvents: [{ atFraction: 0.4, rawDelta: ethers.parseEther("300000") }], // +30% mid-epoch
                 });
-                // Error now varies genuinely with epoch length (absolute lead
-                // time is a SMALLER fraction of a longer epoch), rather than
-                // being forced identical by construction.
-                expect(Math.abs(result.errorPctVsRawTarget)).to.be.lessThan(20);
+                // Measured error is ~2.27-2.29% at EVERY length tested -- see the
+                // HONEST LIMITATION note above, which explains why
+                // (`atFraction` still scales the shock's position with epoch
+                // length, so the scenario is not actually decoupled).
+                //
+                // The bound is therefore stated as what is observed, two-sided,
+                // not as `< 20`. That bound was ~9x looser than any measurement
+                // and sat under an inline comment claiming "error now varies
+                // genuinely with epoch length" -- which the note 50 lines above
+                // directly contradicts. A 5x regression would have passed.
+                expect(
+                    Math.abs(result.errorPctVsRawTarget),
+                    "epoch-length error is self-similar at ~2.28% until atFraction is decoupled"
+                ).to.be.closeTo(2.28, 0.5);
                 expect(result.onChainMultiplierParityDiffPct).to.be.lessThan(1e-5);
                 if (!l.fullyTested) {
-                    // Sub-day epochs: flag the operational infeasibility explicitly
-                    // rather than silently treating the accuracy number as sufficient.
+                    // Sub-day epochs: ASSERT the operational infeasibility rather
+                    // than only logging it. The previous version's guarded branch
+                    // contained a `console.log` and no assertion at all, so a
+                    // length silently becoming operationally viable -- or a
+                    // `fullyTested` flag going stale -- would not surface.
+                    // A length is characterization-only for one of two reasons,
+                    // and they are opposites: the settlement window is too short
+                    // to operate (1 hour -> 4 minutes), or the epoch itself
+                    // exceeds `MAX_RATE_WINDOW` so a single window cannot span it
+                    // (90 days). Assert it fails at least one bound, so a length
+                    // that quietly becomes viable -- or a stale `fullyTested`
+                    // flag -- surfaces instead of passing silently.
                     const settlementWindowSec = l.epochLengthSec * settlementFraction;
-                    if (settlementWindowSec < 3600) {
-                        console.log(
-                            `  NOTE: ${l.name} settlement window is only ${(settlementWindowSec / 60).toFixed(1)} minutes — ` +
-                                "not recommended operationally regardless of measured accuracy."
-                        );
-                    }
+                    const MAX_RATE_WINDOW_SEC = 90 * 86400;
+                    expect(
+                        settlementWindowSec < 3600 || l.epochLengthSec >= MAX_RATE_WINDOW_SEC,
+                        `${l.name} is marked characterization-only but is operationally viable: ` +
+                            `settlement window ${(settlementWindowSec / 60).toFixed(1)} min, ` +
+                            `epoch ${(l.epochLengthSec / 86400).toFixed(1)} days`
+                    ).to.be.true;
+                    console.log(
+                        `  NOTE: ${l.name} settlement window is only ${(settlementWindowSec / 60).toFixed(1)} minutes — ` +
+                            "not recommended operationally regardless of measured accuracy."
+                    );
                 }
             });
         }
@@ -859,13 +898,26 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
         });
 
         it("doubling (extreme stress, +100% mid-epoch): error grows but the mechanism doesn't break", async () => {
+            const flat = await recordedRunScenario({
+                ...BASELINE,
+                name: "doubling control (flat supply)",
+                stagingFraction,
+                supplyEvents: [],
+            });
             const result = await recordedRunScenario({
                 ...BASELINE,
                 name: "doubling",
                 stagingFraction,
                 supplyEvents: [{ atFraction: 0.4, rawDelta: ethers.parseEther("1000000") }],
             });
-            expect(result.exactDistributedUsd).to.be.greaterThan(0);
+            // "Error grows" is the test's own claim, so assert it against a flat
+            // control rather than only checking the run produced a number.
+            // `greaterThan(0)` was vacuous on a monotone multiplier.
+            expect(
+                Math.abs(result.errorPctVsRawTarget),
+                "a +100% mid-epoch shock must degrade accuracy vs flat supply"
+            ).to.be.greaterThan(Math.abs(flat.errorPctVsRawTarget));
+            // ...and "doesn't break" means the on-chain mirror still agrees.
             expect(result.onChainMultiplierParityDiffPct).to.be.lessThan(1e-5);
         });
     });
@@ -984,11 +1036,16 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
 
             // Decelerates: distributes LESS than the zero-carry control.
             expect(withCarry.exactDistributedUsd).to.be.lessThan(withoutCarry.exactDistributedUsd);
-            // Never breaks monotonicity: rate is still >= 1 (checked via
-            // on-chain parity succeeding at all — a negative/garbage rate would
-            // have reverted floatRateToBigint's clamp or the on-chain setter).
-            expect(Number.isFinite(withCarry.rBaseFloat)).to.be.true;
-            expect(withCarry.rBaseFloat).to.be.greaterThanOrEqual(1);
+            // Never breaks monotonicity. `>= 1` was true by construction --
+            // `floatRateToBigint` returns PRECISION for any input <= 1, so
+            // `rBaseFloat` cannot be below 1 whatever the carry does. The real
+            // content is that carry only DECELERATES: it must stay strictly
+            // between the no-yield floor and the control rate.
+            expect(withCarry.rBaseFloat, "carry decelerates but never halts accrual")
+                .to.be.greaterThan(1);
+            expect(withCarry.rBaseFloat, "carry must not accelerate past the control")
+                .to.be.lessThan(withoutCarry.rBaseFloat);
+            expect(withCarry.onChainMultiplierParityDiffPct).to.be.lessThan(1e-5);
         });
     });
 });

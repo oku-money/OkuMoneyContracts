@@ -38,8 +38,12 @@ describe("mainnetGuard", () => {
 
     describe("gate behaviour", () => {
         it("throws on a mainnet without opt-in", () => {
-            expect(() => mainnetGuard("base", {})).to.throw();
-            expect(() => mainnetGuard("optimism", {})).to.throw();
+            // Matched on the message, not bare `.to.throw()`. This is the last
+            // gate before a live mainnet broadcast, and a TypeError introduced by
+            // a refactor would satisfy a bare throw -- the file's own header warns
+            // that its failure mode is silence.
+            expect(() => mainnetGuard("base", {})).to.throw(/Refusing to broadcast/i);
+            expect(() => mainnetGuard("optimism", {})).to.throw(/Refusing to broadcast/i);
         });
 
         it("allows a mainnet with explicit opt-in", () => {

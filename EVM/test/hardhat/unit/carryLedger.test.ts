@@ -68,6 +68,10 @@ describe("scripts/utils/carryLedger", () => {
         const realisedPerEpoch = 40_000;
 
         let carry = 0;
+        // Accumulate the expected total INDEPENDENTLY as the loop runs, so the
+        // assertion below has something to compare against that is not simply a
+        // restatement of `summarizeLedger`'s own arithmetic.
+        let expectedAchieved = 0;
         for (let epoch = 1; epoch <= 5; epoch++) {
             const result = realisedYieldToRatePerSecond(
                 realisedPerEpoch,
@@ -86,17 +90,22 @@ describe("scripts/utils/carryLedger", () => {
                 timestampSec: epoch * windowSeconds,
             });
             upsertLedgerEntry(entry, tmpPath);
+            // What this epoch actually paid out: what came in (realised + prior
+            // carry) minus what is still owed forward.
+            expectedAchieved += realisedPerEpoch + carry - result.carryForwardUsd;
             carry = result.carryForwardUsd;
         }
 
         const summary = summarizeLedger(tmpPath);
         expect(summary.epochCount).to.equal(5);
         expect(summary.cumulativeRealisedYieldUsd).to.be.closeTo(realisedPerEpoch * 5, 1e-6);
-        // The identity itself, to high precision (not just "close"):
-        expect(summary.cumulativeAchievedUsd).to.be.closeTo(
-            summary.cumulativeRealisedYieldUsd - summary.outstandingCarryUsd,
-            1e-9
-        );
+        // Checked against the independently accumulated total, NOT against
+        // `cumulativeRealisedYieldUsd - outstandingCarryUsd` -- which is the
+        // literal definition of `cumulativeAchievedUsd` (`carryLedger.ts:242`).
+        // Comparing a field to its own definition is arithmetic, not a test; the
+        // previous version labelled it "the identity itself" and could not fail.
+        expect(summary.cumulativeAchievedUsd, "cumulative achieved matches the per-epoch sum")
+            .to.be.closeTo(expectedAchieved, 1e-6);
         // With conservativeFactor < 1, SOME carry must still be outstanding —
         // this isn't a degenerate all-zero test.
         expect(summary.outstandingCarryUsd).to.be.greaterThan(0);

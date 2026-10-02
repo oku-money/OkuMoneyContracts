@@ -221,16 +221,23 @@ describe("scripts/utils/yieldRate", () => {
             it("a realistic daily yield (5% APY) sits far below MAX_RATE — ample headroom", () => {
                 const dailyAt5Pct = (V * 0.05) / 365; // ~$1,370
                 const used = excessPerSecond(dailyAt5Pct) / maxExcess;
-                expect(used).to.be.lessThan(0.05); // under 5% of the cap (~63x headroom)
+                // Pinned to the MEASURED value, not merely "under 5%". A bound of
+                // 0.05 against an actual 0.0159 would let the headroom degrade
+                // from ~63x to ~20x unnoticed -- which is the erosion the comment
+                // above says this test exists to catch.
+                expect(used, "5% APY daily yield uses ~1.6% of the rate cap")
+                    .to.be.closeTo(0.0159, 0.002);
             });
 
             it("a MONTHLY-sized figure pushed through a DAILY window approaches the cap — the regression to watch", () => {
                 const monthlySized = 40_000; // 0.4% of V, i.e. a 30-day-shaped target
                 const used = excessPerSecond(monthlySized) / maxExcess;
-                // Not yet clamping, but only ~2x margin — a fraction of the
-                // ~63x a correctly-sized daily figure enjoys.
-                expect(used).to.be.greaterThan(0.25);
-                expect(used).to.be.lessThan(1);
+                // ~2x margin, against the ~63x a correctly-sized daily figure
+                // enjoys. Two-sided and tight: the bracket [0.25, 1] was 2x slack
+                // either side of the actual ~0.5 and could not detect the margin
+                // halving again.
+                expect(used, "a monthly-sized figure in a daily window uses ~half the cap")
+                    .to.be.closeTo(0.5, 0.05);
             });
 
             it("an ANNUAL-sized figure in a daily window does clamp, and conserves the shortfall as carry", () => {
@@ -322,12 +329,24 @@ describe("scripts/utils/yieldRate", () => {
             // more than was actually realised.
             expect(spotResult.ratePerSecond).to.be.greaterThan(twaResult.ratePerSecond);
 
-            // Quantify: growth cancels out of the accounting error's driver — a
-            // spot-vs-average gap of ~25% here (10M vs ~12.5M) produces a
-            // proportionally similar overstatement in implied APY.
+            // Quantify. The denominator error is 12.5/10 = 1.25x, but ANNUALISING
+            // amplifies it: APY is `(1 + daily)^365 - 1`, which is convex, so a
+            // 25% larger daily growth becomes a ~49% larger APY.
+            //
+            // The old comment here claimed the overstatement was "proportionally
+            // similar" to the 25% denominator gap. It is not, and the assertion
+            // under it (`> 1.2`) was loose enough to hide the difference.
             const spotApy = ratePerSecondToApy(spotResult.ratePerSecond);
             const twaApy = ratePerSecondToApy(twaResult.ratePerSecond);
-            expect(spotApy / twaApy).to.be.greaterThan(1.2);
+
+            const dailySpot = realisedYieldUsd / spotAtStart;
+            const dailyTwa = realisedYieldUsd / twa;
+            const expectedRatio =
+                (Math.pow(1 + dailySpot, 365) - 1) / (Math.pow(1 + dailyTwa, 365) - 1);
+            expect(expectedRatio, "sanity: annualisation amplifies 1.25x to ~1.49x")
+                .to.be.closeTo(1.49, 0.01);
+            expect(spotApy / twaApy, "APY overstatement matches the closed form")
+                .to.be.closeTo(expectedRatio, 0.01);
         });
     });
 
@@ -381,23 +400,52 @@ describe("scripts/utils/yieldRate", () => {
             expect(residual).to.be.closeTo(-4_000, 1);
         });
 
-        it("cumulative conservation: summing residuals across epochs tracks cumulative realised yield", () => {
-            // Simulate 4 epochs where the paying epoch's real AUM always differs
-            // from what was assumed when the rate was derived, and confirm the
-            // sum of (target - actual) equals the sum of targets minus the sum
-            // of actuals exactly (tautological, but confirms no silent drift in
-            // the accounting identity as carry threads through epochs).
-            const targets = [40_000, 42_000, 41_000, 39_500];
-            const actuals = [38_000, 43_500, 40_800, 39_000];
+        it("carry threaded across epochs converges to the withheld amount, not to zero", () => {
+            // REPLACES a test that summed `reconcileActualPayout(t, a)` over four
+            // epochs and asserted the total equalled `sum(t) - sum(a)`. Since the
+            // function IS `t - a`, that is float associativity, not protocol
+            // behaviour -- and the test's own comment conceded "(tautological...)".
+            //
+            // The property actually worth pinning is what carry does when it is
+            // threaded back in: under a conservative factor the shortfall is
+            // deliberate and must settle at a fixed point, not accumulate.
+            const realisedPerEpoch = 40_000;
+            const measuredAvgValueUsd = 10_000_000;
+            const windowSeconds = 86_400;
+            const conservativeFactor = 0.9;
 
-            let cumulativeResidual = 0;
-            for (let i = 0; i < targets.length; i++) {
-                cumulativeResidual += reconcileActualPayout(targets[i], actuals[i]);
+            let carry = 0;
+            const carries: number[] = [];
+            for (let epoch = 0; epoch < 6; epoch++) {
+                const r = realisedYieldToRatePerSecond(
+                    realisedPerEpoch,
+                    measuredAvgValueUsd,
+                    windowSeconds,
+                    carry,
+                    conservativeFactor
+                );
+                carry = r.carryForwardUsd;
+                carries.push(carry);
             }
 
-            const expectedCumulative =
-                targets.reduce((a, b) => a + b, 0) - actuals.reduce((a, b) => a + b, 0);
-            expect(cumulativeResidual).to.be.closeTo(expectedCumulative, 1e-9);
+            // Fixed point, derived: each epoch withholds `(1 - cf)` of what it
+            // takes in, and the carry it hands forward is re-paid the next epoch,
+            // so the balance settles at `(1 - cf) x realised` = $4,000.
+            const expectedFixedPoint = realisedPerEpoch * (1 - conservativeFactor);
+
+            // EVERY epoch from the first onward sits at that point -- a stronger
+            // claim than "the last two are close", which could not distinguish a
+            // fixed point from a slow drift that happened to pause.
+            //
+            // The band is 1e-3 USD (a hundredth of a cent) rather than exact: the
+            // published rate is quantised to an integer WAD by `floatRateToBigint`,
+            // so successive epochs land a fraction of a cent either side of the
+            // fixed point rather than exactly on it. Measured oscillation is
+            // ~1e-4; the bound is one order above that, and ~2.5e-7 relative.
+            for (let i = 1; i < carries.length; i++) {
+                expect(carries[i], `epoch ${i} carry must sit at the fixed point`)
+                    .to.be.closeTo(expectedFixedPoint, 1e-3);
+            }
         });
     });
 });

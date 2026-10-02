@@ -56,8 +56,16 @@ describe("scripts/utils/epochDistribution", () => {
             }));
 
             const distributed = distributedUsdOverWindow(segments, samples, 0, 1000);
-            const expected = S * (multiplierAt(segments, 1000) - multiplierAt(segments, 0));
-            expect(distributed).to.be.closeTo(expected, 1e-6);
+            // Nothing in the previous expectation was hand-computed: the samples
+            // are built FROM `multiplierAt`, so `supplyAtPrev` reduces to S
+            // exactly and the sum telescopes to `S * (m(1000) - m(0))`
+            // algebraically -- for any `multiplierAt`, including a wrong one.
+            //
+            // Closed form instead: constant supply S growing at a constant rate
+            // for 1000 seconds distributes S * (rate^1000 - 1).
+            const expected = S * (Math.pow(rate, 1000) - 1);
+            expect(distributed, "flat-supply distribution is S * (rate^t - 1)")
+                .to.be.closeTo(expected, 1e-6);
         });
 
         it("a mid-window supply INCREASE contributes proportionally less than if it had been present from the start", () => {

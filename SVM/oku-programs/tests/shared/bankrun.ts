@@ -647,12 +647,34 @@ export async function expectBankrunError(
   try {
     await fn();
   } catch (err: unknown) {
-    const e = err as { message?: string; logs?: string[]; transactionMessage?: string };
-    const haystack = [
-      e.message ?? '',
-      e.transactionMessage ?? '',
-      ...(e.logs ?? []),
-    ].join(' ');
+    const e = err as {
+      message?: string;
+      logs?: string[];
+      transactionMessage?: string;
+      error?: { errorCode?: { code?: string } };
+    };
+
+    // Prefer Anchor's STRUCTURED error code. Substring matching over the log
+    // blob is a last resort: it cannot distinguish `Paused` from `NotPaused` or
+    // `Unpaused`, it matches an incidental occurrence anywhere in a multi-KB
+    // log, and it accepts a CLIENT-side failure (a bad pubkey, a serialization
+    // error) whose message happens to contain the string -- i.e. a test that
+    // never reached the program at all.
+    const structured = e.error?.errorCode?.code;
+    if (structured !== undefined) {
+      if (structured !== expectedCode) {
+        throw new Error(
+          `Expected Anchor error code "${expectedCode}" but got "${structured}"\n` +
+            `  message: ${e.message}`
+        );
+      }
+      return;
+    }
+
+    // No structured code (SPL/system program errors, or a raw log). Fall back to
+    // the log blob, but exclude the client-side `message` so a serialization or
+    // account-resolution failure cannot satisfy the match.
+    const haystack = [e.transactionMessage ?? '', ...(e.logs ?? [])].join(' ');
     if (!haystack.includes(expectedCode)) {
       throw new Error(
         `Expected bankrun error matching "${expectedCode}" but got:\n` +

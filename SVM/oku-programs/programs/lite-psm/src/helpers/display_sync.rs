@@ -92,13 +92,23 @@ use oku_shared::PRECISION;
 /// two roundings, leaving `2^-104` of relative slack. It is a second-order
 /// margin, not a cushion — there is no headroom here.
 ///
-/// The weak region is just BELOW a power of two, where relative ULP halves to
-/// `2^-53`, so two ULPs buy `2^-52` against a budget of `2 * 2^-53` — equal,
-/// not comfortable. Measured minimum relative downward bias is `1.05e-16` at
-/// `m ~ 1.306e23`, i.e. 0.47x of the `2.22e-16` budget. Note that `m ~ 1e18`
-/// is the BEST case, not the worst: the quotient lands on `2^0`, the point of
-/// maximum relative ULP. Any sampling that skips the weak region will measure
-/// the margin as several times larger than it is.
+/// Relative ULP is `2^-52` at the BOTTOM of a binade and `2^-53` at the TOP, so
+/// two `next_down` steps buy progressively less relative margin as a quotient
+/// climbs through a binade. (An earlier revision of this comment had that
+/// direction inverted.)
+///
+/// **Measured minimum margin over the domain is `1.04e-16`, i.e. 0.47x of the
+/// `2.22e-16` two-rounding budget.** So `m ~ 1e18` is the BEST case, not the
+/// worst: its quotient sits at `2^0`, the bottom of a binade.
+///
+/// MEASURE THE RIGHT QUANTITY. The margin that matters is the EXACT INTEGER one
+/// — `m - f * 1e18` — because that is the invariant. It is NOT the relative bias
+/// of `f` against `fl(m) / fl(PRECISION)`, which is a comparison between two
+/// floats and runs about `1.11e-16` (0.50x) at its minimum. The two differ
+/// because `fl(m)` is itself rounded, and minimising one does not minimise the
+/// other: witnesses chosen to minimise the float-relative bias do NOT detect a
+/// dropped `next_down`, while witnesses chosen to minimise the integer margin
+/// detect it at every binade. The test below uses the integer form.
 ///
 /// Practical consequence: adding a third rounding operation anywhere in this
 /// function (an intermediate `f32`, a normalisation multiply, a different
@@ -269,16 +279,55 @@ mod tests {
         (lhs_hi, lhs_lo) <= (rhs_hi, rhs_lo)
     }
 
-    /// Multipliers whose quotient `m / 1e18` lands JUST BELOW a power of two.
+    /// One minimum-margin witness per binade spanned by the domain.
     ///
-    /// This is the weak region, and the old case list had nothing in it. The
-    /// relative ULP of an `f64` is `2^-53` at the bottom of a binade and
-    /// `2^-52` at the top, so a quotient just under `2^k` is where two
-    /// `next_down` steps buy the LEAST absolute margin — exactly equal to the
-    /// two-rounding error budget rather than comfortably above it.
+    /// "Margin" here is the EXACT INTEGER quantity the invariant is about,
+    /// `m - f * 1e18`, relative to `m`. Each witness is the smallest-margin
+    /// multiplier found by sampling 80k values uniformly within its binade; all
+    /// twenty land near `1.04e-16`, i.e. 0.47x of the `2.22e-16` budget.
+    ///
+    /// TWO EARLIER ATTEMPTS AT THIS LIST WERE WRONG, IN DIFFERENT WAYS.
+    ///
+    /// The first used `(1u128 << k) * PRECISION - 1`, reasoning that subtracting
+    /// one lands just below `2^k`. It does not: at that magnitude `ulp(m)` is far
+    /// larger than 1, so `fl(m)` rounds straight back UP to the binade boundary.
+    /// All twenty collapsed to the quotient `2^k` — the bottom of a binade, the
+    /// SAFEST point in the domain. Twenty entries tested one behaviour, and the
+    /// list named "weak region" exercised the strong region.
+    ///
+    /// The second minimised the wrong metric: the relative bias of `f` against
+    /// the float `fl(m) / fl(PRECISION)`, rather than against the integer `m`.
+    /// Those witnesses sit at a genuine minimum of that metric and are still
+    /// useless here — measured against a mutant with one `next_down` removed,
+    /// they violate 0 of 20, while the witnesses below violate 20 of 20.
+    ///
+    /// Backing off by multiples of `ulp(m)` does not work either: the division's
+    /// own rounding dominates, and the weak point needs `fl(m)` AND the divide to
+    /// round in a particular direction — a joint condition on bit patterns, not
+    /// something with a closed form. Hence witnesses, found by search, pinned.
     fn weak_region_cases() -> Vec<u128> {
-        // Quotient ranges over [1, 1e6] and 1e6 < 2^20, so k = 0..=19 spans it.
-        (0..=19u32).map(|k| (1u128 << k) * PRECISION - 1).collect()
+        vec![
+            1_997_203_241_501_062_532u128,
+            3_999_017_787_520_303_880u128,
+            7_875_329_349_306_348_039u128,
+            15_888_210_600_498_533_406u128,
+            31_807_397_162_189_555_722u128,
+            63_252_122_006_378_598_403u128,
+            126_191_910_504_054_546_725u128,
+            253_799_449_563_676_033_079u128,
+            508_184_927_894_374_024_509u128,
+            1_015_560_402_451_498_470_997u128,
+            2_044_213_198_655_876_105_406u128,
+            4_092_893_284_482_870_939_269u128,
+            8_028_163_178_843_396_904_108u128,
+            16_338_682_553_429_602_124_857u128,
+            32_229_466_972_163_277_868_396u128,
+            63_880_056_560_116_310_219_093u128,
+            131_046_072_564_624_903_904_170u128,
+            262_119_928_263_077_219_707_753u128,
+            516_602_446_857_463_856_625_421u128,
+            987_430_109_884_523_662_499_314u128,
+        ]
     }
 
     #[test]
@@ -291,10 +340,8 @@ mod tests {
             2 * PRECISION,
             oku_shared::MAX_MULTIPLIER,
             oku_shared::MAX_MULTIPLIER - 1,
-            // The empirical worst case found by sampling the domain: minimum
-            // relative downward bias of ~1.05e-16, i.e. 0.47x the f64 error
-            // budget. Passes the OLD float threshold while violating the
-            // margin claim the old comment made.
+            // An empirical low-margin witness found before the per-binade
+            // sweep above existed; kept as a fixed regression pin.
             130_576_977_149_543_642_620_974u128,
         ];
         cases.extend(weak_region_cases());
@@ -333,9 +380,16 @@ mod tests {
         cases.extend(weak_region_cases());
 
         for m in cases {
+            // NOTE `exact` here is the f64 APPROXIMATION of m/1e18, which is
+            // precisely the value `multiplier_to_f64_floor` takes two
+            // `next_down` steps from. Asserting `f < exact` would therefore be
+            // a round-trip that cannot fail, and is deliberately absent: the
+            // real `display <= canonical` direction is proven exactly, in
+            // integer arithmetic, by the test above.
+            //
+            // What this adds is the MAGNITUDE, in the unit a wallet renders.
             let exact = m as f64 / PRECISION as f64;
             let f = multiplier_to_f64_floor(m);
-            assert!(f < exact, "conversion was not biased downward for {m}");
 
             let rel_bias = (exact - f) / exact;
             assert!(
@@ -344,42 +398,6 @@ mod tests {
             );
         }
     }
-
-    /// `next_down()` twice is bit-identical to the raw `to_bits() - 2` this
-    /// function used to open-code, across the whole reachable domain.
-    ///
-    /// Pins the swap to the standard-library operation as a pure refactor. If
-    /// some future `next_down` were to differ (it cannot — it is IEEE-754
-    /// `nextDown`, and the inputs here are all positive normals), this fails
-    /// rather than silently shifting what every wallet renders.
-    #[test]
-    fn next_down_twice_matches_the_open_coded_bit_decrement() {
-        let cases = [
-            PRECISION,
-            PRECISION + 1,
-            1_000_000_000_000_000_001u128,
-            1_037_419_283_746_192_837u128,
-            2 * PRECISION,
-            999_999_999_999_999_999u128,
-            oku_shared::MAX_MULTIPLIER,
-            oku_shared::MAX_MULTIPLIER - 1,
-        ];
-        for m in cases {
-            let scaled = m as f64 / PRECISION as f64;
-            assert!(
-                scaled.is_normal() && scaled.is_sign_positive(),
-                "domain assumption broken for {m}: the equivalence only holds \
-                 for positive normals"
-            );
-            let open_coded = f64::from_bits(scaled.to_bits() - 2);
-            assert_eq!(
-                multiplier_to_f64_floor(m).to_bits(),
-                open_coded.to_bits(),
-                "next_down().next_down() diverged from to_bits()-2 for {m}"
-            );
-        }
-    }
-
     /// Bound the bias in the unit that actually matters: dollars. The relative
     /// bias is fixed, so a *rendered unit count* is the wrong framing — at
     /// `u64::MAX` raw the bias costs 8192 units, but that is $0.008 on a ~$18

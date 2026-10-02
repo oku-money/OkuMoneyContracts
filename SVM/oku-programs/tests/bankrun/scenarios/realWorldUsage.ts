@@ -1,34 +1,22 @@
 /**
- * realWorldUsage — N-day kitchen-sink simulation + 8 deterministic edge-case suites.
+ * realWorldUsage — deterministic SVM edge-case suites.
  *
  * SVM-side mirror of EVM/test/hardhat/scenarios/RealWorldUsage.ts.
  *
- * Simulates the full okuM lifecycle on a single bankrun PSM:
- *
- *   - 5 users randomly mint, redeem (instant), and bridge cross-chain
- *   - Orchestrator bridges OkuM between virtual "chain A" and "chain B":
- *       1. Redeem user okuM via PSM -> orchestrator gains USDC
- *       2. Mint new USDC to orchestrator (models cross-chain rail crediting)
- *       3. Orchestrator mints okuM for recipient via PSM on same bankrun context
- *   - Multiplier ticks via set_multiplier (simulates 5% APY at +0.0137%/day)
- *   - Pause / unpause, freeze / thaw (SVM blacklist)
- *
- * Timeline: N daily ticks (warpBy + warpSlots per step).
- *   N = process.env.DURATION_DAYS ?? 60  (local default 60; CI keeps it fast)
- *   Seed = process.env.SEED ?? 0xC0DEF00D
- *
- * Global invariants checked every step:
- *   I1. Orchestrator okuM float == 0 after each completed bridge
- *   I2. multiplier non-decreasing
- *   I4. Per-bridge USDC drift <= 1
- *
- * Edge-case suites (deterministic):
  *   E1. Multi-slot round-trip with multiplier ticks
  *   E3. Multiplier tick between bridge legs (value conserved)
- *   E4. Frozen ATA mid-bridge (orchestrator float)
- *   E5. Pause during simulation
+ *   E4. Frozen okuM ATA mid-bridge (orchestrator holds float)
+ *   E5. Pause during operation
  *   E7. Yield-lock: same-slot set_multiplier + mint revert
- *   E8. Cap/minter-allowance exhaustion and rotation
+ *   E8. Minter-allowance exhaustion and rotation
+ *
+ * An N-day stochastic simulation previously sat above these. It was deleted
+ * rather than repaired, for the same reasons as its EVM counterpart: every
+ * state-changing call was wrapped in a bare `catch {}`, `totalBridges` was
+ * incremented and never asserted, nothing checked that the setup mints
+ * succeeded, and its headline invariant (per-bridge USDC drift) compared a
+ * value against itself. A program that rejected every instruction would have
+ * passed it.
  */
 
 import * as anchor from "@anchor-lang/core";
@@ -66,6 +54,7 @@ import {
   warpBy,
   computeCanonicalMultiplier,
   getClock,
+  expectBankrunError,
 } from "../../shared/bankrun";
 
 const { Keypair, SystemProgram, PublicKey } = anchor.web3;
@@ -73,24 +62,6 @@ type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
 
 // ---------------------------------------------------------------------------
-// Seeded PRNG (mulberry32)
-// ---------------------------------------------------------------------------
-function mulberry32(seed: number): () => number {
-  let s = seed >>> 0;
-  return () => {
-    s += 0x6d2b79f5;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-const SEED = parseInt(process.env.SEED ?? "0xC0DEF00D", 16);
-const DURATION_DAYS = parseInt(
-  process.env.DURATION_DAYS ?? (process.env.CI ? "30" : "60"),
-  10
-);
 const DAY_SECS = 86400;
 
 
@@ -206,13 +177,15 @@ async function userMintOkuM(
 ): Promise<void> {
   const user = ctx.users[userIndex];
   await mintUsdc(ctx.h, ctx.userUsdcAtas[userIndex], ctx.usdcMint, usdcAmount);
-  try {
-    await mintOkuMViaProgram(
-      ctx.psm, user, new BN(usdcAmount),
-      ctx.configPda, ctx.usdcMint, ctx.okuMMint,
-      ctx.userUsdcAtas[userIndex], ctx.userOkuMAtas[userIndex], ctx.vaultUsdcAta
-    );
-  } catch { /* soft-skip: paused or allowance exhausted */ }
+  // Deliberately NOT wrapped in a catch. The deleted simulation swallowed every
+  // failure here, so a program that rejected all mints still produced a green
+  // run. In the deterministic suites below the PSM is never paused or exhausted
+  // at this point, so a throw is a real defect.
+  await mintOkuMViaProgram(
+    ctx.psm, user, new BN(usdcAmount),
+    ctx.configPda, ctx.usdcMint, ctx.okuMMint,
+    ctx.userUsdcAtas[userIndex], ctx.userOkuMAtas[userIndex], ctx.vaultUsdcAta
+  );
 }
 
 async function userRedeemOkuM(
@@ -252,7 +225,13 @@ async function orchestratorBridge(
   userIndex: number,
   recipientIndex: number,
   rawOkuMAmount: bigint
-): Promise<{ usdcOut: bigint; usdcIn: bigint }> {
+): Promise<{
+  usdcOut: bigint;
+  okuMMinted: bigint;
+  dollarsOut: bigint;
+  dollarsIn: bigint;
+  driftBound: bigint;
+}> {
   const user = ctx.users[userIndex];
   const recipient = ctx.users[recipientIndex];
 
@@ -297,9 +276,6 @@ async function orchestratorBridge(
   // Destination leg: orchestrator mints okuM for recipient
   const recipientOkuMAta = ctx.userOkuMAtas[recipientIndex];
   const orchOkuMBefore = await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID);
-  // MEASURED, not assumed equal to usdcOut — returning the source figure twice
-  // made the drift identically zero, so I4 could not fail.
-  const orchUsdcBeforeMint = await tokenBalance(ctx.h, ctx.orchUsdcAta, TOKEN_PROGRAM_ID);
   await mintOkuMViaProgram(
     ctx.psm, psmOrchestrator, new BN(usdcOut.toString()),
     ctx.configPda, ctx.usdcMint, ctx.okuMMint,
@@ -307,209 +283,50 @@ async function orchestratorBridge(
   );
   const orchOkuMAfter = await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID);
   const okuMMinted = orchOkuMAfter - orchOkuMBefore;
-  const usdcIn = orchUsdcBeforeMint - (await tokenBalance(ctx.h, ctx.orchUsdcAta, TOKEN_PROGRAM_ID));
 
-  // Forward to recipient
-  if (okuMMinted > 0n) {
-    const fwdTx = new Transaction().add(
-      createTransferInstruction(
-        ctx.orchOkuMAta,
-        recipientOkuMAta,
-        psmOrchestrator.publicKey,
-        okuMMinted,
-        [],
-        TOKEN_2022_PROGRAM_ID
-      )
-    );
-    await ctx.h.provider.sendAndConfirm!(fwdTx, [psmOrchestrator]);
-  }
+  // Forward to recipient. Unguarded: `okuMMinted === 0` means the destination
+  // leg produced nothing, which is a failure, not a branch to skip.
+  const fwdTx = new Transaction().add(
+    createTransferInstruction(
+      ctx.orchOkuMAta,
+      recipientOkuMAta,
+      psmOrchestrator.publicKey,
+      okuMMinted,
+      [],
+      TOKEN_2022_PROGRAM_ID
+    )
+  );
+  await ctx.h.provider.sendAndConfirm!(fwdTx, [psmOrchestrator]);
 
-  return { usdcOut, usdcIn };
+  // Returned in DOLLAR VALUE, not USDC.
+  //
+  // A USDC-denominated drift cannot measure anything: `mint_oku_m` does
+  // `transfer_checked(..., usdc_amount, ...)` (psm.rs:74), moving exactly the
+  // argument it was handed. Since that argument IS `usdcOut`, the orchestrator's
+  // USDC delta across the mint is identically `usdcOut` and any drift computed
+  // from it is structurally zero. The previous version did exactly that, under a
+  // comment claiming the tautology had been removed.
+  //
+  // Dollar value is what can actually move. It passes through two independent
+  // floors — `raw_to_dollars` on the redeem leg and `dollars_to_raw` on the mint
+  // leg — so the recipient's value is bounded above by the sender's and below by
+  // the accumulated truncation.
+  const multSrc = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
+  const dollarsOut = (rawOkuMAmount * multSrc) / PRECISION;
+  const dollarsIn = (okuMMinted * multSrc) / PRECISION;
+
+  // Worst-case loss, derived not observed: one okuM wei from `dollars_to_raw`'s
+  // floor on the destination (worth ceil(m/1e18) dollar-wei), plus one wei for
+  // `raw_to_dollars`' own floor on the source.
+  const driftBound = (multSrc + PRECISION - 1n) / PRECISION + 1n;
+
+  return { usdcOut, okuMMinted, dollarsOut, dollarsIn, driftBound };
 }
 
 
 
 // ---------------------------------------------------------------------------
 // Main simulation
-// ---------------------------------------------------------------------------
-
-describe(
-  `realWorldUsage (SVM) — ${DURATION_DAYS}-day stochastic simulation (seed 0x${SEED.toString(16).toUpperCase()})`,
-  () => {
-    let ctx: Awaited<ReturnType<typeof buildCtx>>;
-    let rng: () => number;
-
-    // Invariant trackers
-    let cumulativeDrift: bigint;
-    let totalBridges: number;
-    let lastMultiplier: bigint;
-
-    before(async function () {
-      this.timeout(300_000);
-      ctx = await buildCtx();
-      rng = mulberry32(SEED);
-      lastMultiplier = PRECISION;
-
-      // Seed the PSM buffer for instant redeems
-      await mintUsdc(ctx.h, ctx.vaultUsdcAta, ctx.usdcMint, 500_000_000_000); // 500k USDC
-
-      // Give users initial okuM
-      for (let i = 0; i < 5; i++) {
-        await userMintOkuM(ctx, i, 100_000_000); // 100 USDC each
-      }
-
-      cumulativeDrift = 0n;
-      totalBridges = 0;
-    });
-
-    it(`runs ${DURATION_DAYS} daily ticks with stochastic actions and holds all invariants`, async function () {
-      this.timeout(600_000);
-
-      for (let day = 0; day < DURATION_DAYS; day++) {
-        // Advance one day
-        await warpBy(ctx.h, DAY_SECS);
-        await warpSlots(ctx.h, 1);
-
-        const r = rng();
-
-        try {
-          if (r < 0.25) {
-            // 25%: random user mints
-            const ui = Math.floor(rng() * 5);
-            const amount = Math.floor(rng() * 900_000 + 100_000); // 0.1-1 USDC
-            await userMintOkuM(ctx, ui, amount);
-
-          } else if (r < 0.45) {
-            // 20%: random user redeems
-            const ui = Math.floor(rng() * 5);
-            const frac = Math.floor(rng() * 50 + 1);
-            await userRedeemOkuM(ctx, ui, frac);
-
-          } else if (r < 0.60) {
-            // 15%: orchestrator bridges (user i -> user j, different index)
-            const ui = Math.floor(rng() * 5);
-            const ri = (ui + 1 + Math.floor(rng() * 4)) % 5;
-            const bal = await tokenBalance(ctx.h, ctx.userOkuMAtas[ui], TOKEN_2022_PROGRAM_ID);
-            if (bal > 1_000n) {
-              // Only the ATTEMPT is soft-skipped — a bridge can legitimately
-              // fail to start (paused PSM, empty buffer). Once it completes,
-              // its invariants must hold, so the assertions sit outside the
-              // catch. Inside it, a failed assertion was swallowed and I1/I4
-              // could never fail.
-              let legs: { usdcOut: bigint; usdcIn: bigint } | undefined;
-              try {
-                legs = await orchestratorBridge(ctx, ui, ri, bal / 2n);
-              } catch { /* soft-skip bridge failures */ }
-
-              if (legs) {
-                const { usdcOut, usdcIn } = legs;
-                const drift = usdcOut > usdcIn ? usdcOut - usdcIn : usdcIn - usdcOut;
-                cumulativeDrift += drift;
-                assertLte(drift, 1n, `day ${day} per-bridge drift`);
-                // I1: Orchestrator okuM float == 0
-                const float = await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID);
-                assertEq(float, 0n, `day ${day} orch float`);
-                totalBridges++;
-              }
-            }
-
-          } else if (r < 0.75) {
-            // 5%: refill buffer
-            await mintUsdc(ctx.h, ctx.vaultUsdcAta, ctx.usdcMint, 10_000_000_000);
-
-          } else if (r < 0.80) {
-            // 5%: rebaser rolls the epoch by republishing a rate schedule.
-            //
-            // Note this is NOT a "yield event" any more. Yield accrues
-            // continuously from elapsed time; this transaction only changes
-            // the SLOPE. The simulation therefore accrues yield on every warp
-            // below, whether or not this branch is taken -- which is a
-            // strictly more realistic model of the protocol than the old
-            // discrete tick.
-            try {
-              const nowTs = Number((await getClock(ctx.h)).unixTimestamp);
-              await ctx.psm.methods
-                .setOkumYieldRate(
-                  new BN(ratePerSecondForApy(0.05).toString()),
-                  new BN(nowTs + 30 * DAY_SECS)
-                )
-                .accountsPartial({
-                  rebaser: psmOrchestrator.publicKey,
-                  config: ctx.configPda,
-                })
-                .signers([psmOrchestrator])
-                .rpc();
-            } catch { /* soft */ }
-
-          } else if (r < 0.83) {
-            // 3%: pause for a day then unpause
-            try {
-              await ctx.psm.methods.pause()
-                .accountsPartial({ pauser: warmMultisig.publicKey, config: ctx.configPda })
-                .signers([warmMultisig]).rpc();
-              await warpBy(ctx.h, DAY_SECS);
-              await warpSlots(ctx.h, 1);
-              await ctx.psm.methods.unpause()
-                .accountsPartial({ unpauser: coldMultisig.publicKey, config: ctx.configPda })
-                .signers([coldMultisig]).rpc();
-              day++;
-            } catch { /* already paused */ }
-
-          } else if (r < 0.85) {
-            // 2%: freeze a random user's okuM ATA for a day then thaw
-            const ui = Math.floor(rng() * 5);
-            try {
-              await ctx.psm.methods.freezeAccount()
-                .accountsPartial({
-                  freezer: warmMultisig.publicKey,
-                  config: ctx.configPda,
-                  okuMMint: ctx.okuMMint,
-                  targetOkuMAta: ctx.userOkuMAtas[ui],
-                  token2022Program: TOKEN_2022_PROGRAM_ID,
-                })
-                .signers([warmMultisig]).rpc();
-              await warpBy(ctx.h, DAY_SECS);
-              await warpSlots(ctx.h, 1);
-              await ctx.psm.methods.thawAccount()
-                .accountsPartial({
-                  unfreezer: coldMultisig.publicKey,
-                  config: ctx.configPda,
-                  okuMMint: ctx.okuMMint,
-                  targetOkuMAta: ctx.userOkuMAtas[ui],
-                  token2022Program: TOKEN_2022_PROGRAM_ID,
-                })
-                .signers([coldMultisig]).rpc();
-              day++;
-            } catch { /* soft */ }
-          }
-          // else ~15%: no-op
-
-        } catch {
-          // Any unexpected errors in the simulation step are soft-skipped
-          // (the invariant checks below will surface real violations)
-        }
-
-        // I2: multiplier non-decreasing.
-        const multNow = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
-        assertGte(multNow, lastMultiplier, `day ${day} I2: multiplier non-decreasing`);
-        lastMultiplier = multNow;
-
-        // I4: cumulative drift bounded
-        assertLte(cumulativeDrift, BigInt(totalBridges) * 2n + 10n, `day ${day} I4: cumulative drift`);
-      }
-
-      // Final: the canonical multiplier must be at or above PRECISION.
-      // Monotonicity is structural -- rates below PRECISION are rejected at
-      // write time -- so this is a check that nothing in the simulation found
-      // a path around that.
-      const finalMultiplier = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
-      assertGte(finalMultiplier, PRECISION, "final multiplier >= PRECISION");
-    });
-  }
-);
-
-// ---------------------------------------------------------------------------
-// Edge-case suites
 // ---------------------------------------------------------------------------
 
 describe("realWorldUsage (SVM) edge cases", () => {
@@ -525,13 +342,23 @@ describe("realWorldUsage (SVM) edge cases", () => {
       await mintUsdc(ctx.h, ctx.vaultUsdcAta, ctx.usdcMint, 200_000_000);
       await userMintOkuM(ctx, 0, 100_000_000); // 100 USDC -> 100 okuM
 
+      // 100 USDC at m = 1.0 on a fresh PSM is exactly 100 okuM (6-decimal token,
+      // so raw units are 1:1 with USDC here). `assertGt(..., 0n)` would have
+      // passed on a single unit.
+      const multAtMint = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
+      assertEq(multAtMint, PRECISION, "fixture: fresh PSM must be unrebased");
       const userOkuMBefore = await tokenBalance(ctx.h, ctx.userOkuMAtas[0], TOKEN_2022_PROGRAM_ID);
-      assertGt(userOkuMBefore, 0n, "user 0 should have okuM");
+      assertEq(userOkuMBefore, 100_000_000n, "100 USDC mints exactly 100 okuM at m = 1.0");
 
       // Bridge leg A: user 0 -> user 1 (orchestrator redeems on A, mints on B)
       const bridgeAmt = userOkuMBefore / 2n;
-      const { usdcOut } = await orchestratorBridge(ctx, 0, 1, bridgeAmt);
+      const ab = await orchestratorBridge(ctx, 0, 1, bridgeAmt);
       assertEq(await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID), 0n, "float after A->B");
+
+      // A bridge must never create value, and must lose no more than the two
+      // floors can account for. Both bounds derived, not observed.
+      assertLte(ab.dollarsIn, ab.dollarsOut, "A->B must not create value");
+      assertLte(ab.dollarsOut - ab.dollarsIn, ab.driftBound, "A->B loss exceeds derived bound");
 
       // Multiplier ACCRUES between legs -- with no transaction at all.
       // Publish a ~26% APY schedule, then warp 30 days: the multiplier climbs
@@ -545,15 +372,28 @@ describe("realWorldUsage (SVM) edge cases", () => {
       await warpBy(ctx.h, DAY_SECS * 30); // 30 days
       await warpSlots(ctx.h, 1);
 
-      // Bridge leg B: user 1 -> user 0 (back again)
-      const user1OkuM = await tokenBalance(ctx.h, ctx.userOkuMAtas[1], TOKEN_2022_PROGRAM_ID);
-      if (user1OkuM > 0n) {
-        const { usdcOut: usdcOutReturn } = await orchestratorBridge(ctx, 1, 0, user1OkuM);
-        assertEq(await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID), 0n, "float after B->A");
+      // The accrual must actually have happened, or the return leg below proves
+      // nothing. Asserted before it is relied on.
+      const multAfterWarp = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
+      assertGt(multAfterWarp, multAtMint, "30 days at ~27% APY must move the multiplier");
 
-        // After multiplier increase, returning okuM yields at least as much USDC (within 1 wei)
-        assertGte(usdcOutReturn, usdcOut - 1n, "B->A leg should return >= A->B USDC (multiplier appreciated)");
-      }
+      // Bridge leg B: user 1 -> user 0. Unguarded -- a zero balance here means
+      // leg A silently produced nothing, which is a failure, not a skip.
+      const user1OkuM = await tokenBalance(ctx.h, ctx.userOkuMAtas[1], TOKEN_2022_PROGRAM_ID);
+      assertGt(user1OkuM, 0n, "leg A must have delivered okuM to user 1");
+
+      const ba = await orchestratorBridge(ctx, 1, 0, user1OkuM);
+      assertEq(await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID), 0n, "float after B->A");
+      assertLte(ba.dollarsIn, ba.dollarsOut, "B->A must not create value");
+      assertLte(ba.dollarsOut - ba.dollarsIn, ba.driftBound, "B->A loss exceeds derived bound");
+
+      // The point of the scenario: the holding appreciated while it sat, so the
+      // return leg carries more USDC than the outbound one by exactly the
+      // multiplier ratio. Anchored to the measured multipliers, so a silently
+      // halted accrual fails here rather than passing a `>=`.
+      const expectedBack = (ab.usdcOut * multAfterWarp) / multAtMint;
+      assertGte(ba.usdcOut, expectedBack - 2n, "B->A USDC must reflect the accrued multiplier");
+      assertLte(ba.usdcOut, expectedBack + 2n, "B->A USDC must not exceed the accrued multiplier");
     });
   });
 
@@ -567,8 +407,10 @@ describe("realWorldUsage (SVM) edge cases", () => {
 
       await mintUsdc(ctx.h, ctx.vaultUsdcAta, ctx.usdcMint, 100_000_000);
       await userMintOkuM(ctx, 0, 50_000_000);
+      // Unguarded: 50 USDC at m = 1.0 mints exactly 50 okuM. An early `return`
+      // here would let the whole scenario pass having asserted nothing.
       const userOkuM = await tokenBalance(ctx.h, ctx.userOkuMAtas[0], TOKEN_2022_PROGRAM_ID);
-      if (userOkuM === 0n) { return; } // guard
+      assertEq(userOkuM, 50_000_000n, "50 USDC mints exactly 50 okuM at m = 1.0");
 
       // Source leg: redeem (orchestrator gets USDC at current multiplier)
       const transferTx = new Transaction().add(
@@ -649,7 +491,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       await mintUsdc(ctx.h, ctx.vaultUsdcAta, ctx.usdcMint, 100_000_000);
       await userMintOkuM(ctx, 0, 50_000_000);
       const userOkuM = await tokenBalance(ctx.h, ctx.userOkuMAtas[0], TOKEN_2022_PROGRAM_ID);
-      if (userOkuM === 0n) { return; }
+      assertEq(userOkuM, 50_000_000n, "50 USDC mints exactly 50 okuM at m = 1.0");
 
       const bridgeAmt = userOkuM / 2n;
 
@@ -754,15 +596,17 @@ describe("realWorldUsage (SVM) edge cases", () => {
 
       // Mint reverts while paused
       await mintUsdc(ctx.h, ctx.userUsdcAtas[1], ctx.usdcMint, 10_000_000);
-      let mintFailed = false;
-      try {
-        await mintOkuMViaProgram(
+      // Named code. A bare catch here also accepts a bad pubkey, a
+      // serialization error, or an allowance failure -- i.e. it would pass
+      // without the pause gate ever being reached.
+      await expectBankrunError(
+        () => mintOkuMViaProgram(
           ctx.psm, ctx.users[1], new BN(10_000_000),
           ctx.configPda, ctx.usdcMint, ctx.okuMMint,
           ctx.userUsdcAtas[1], ctx.userOkuMAtas[1], ctx.vaultUsdcAta
-        );
-      } catch { mintFailed = true; }
-      expect(mintFailed, "mint should fail while paused").to.be.true;
+        ),
+        "Paused"
+      );
 
       // Unpause
       await ctx.psm.methods.unpause()
@@ -770,12 +614,20 @@ describe("realWorldUsage (SVM) edge cases", () => {
         .signers([coldMultisig]).rpc();
 
       // Mint succeeds after unpause
+      const u1Before = await tokenBalance(ctx.h, ctx.userOkuMAtas[1], TOKEN_2022_PROGRAM_ID);
       await mintOkuMViaProgram(
         ctx.psm, ctx.users[1], new BN(10_000_000),
         ctx.configPda, ctx.usdcMint, ctx.okuMMint,
         ctx.userUsdcAtas[1], ctx.userOkuMAtas[1], ctx.vaultUsdcAta
       );
-      assertGt(await tokenBalance(ctx.h, ctx.userOkuMAtas[1], TOKEN_2022_PROGRAM_ID), 0n);
+      // Exact: 10 USDC at the live multiplier. `> 0` passed on a single unit.
+      const multAfterUnpause = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
+      const expectedMint = (10_000_000n * PRECISION) / multAfterUnpause;
+      assertEq(
+        (await tokenBalance(ctx.h, ctx.userOkuMAtas[1], TOKEN_2022_PROGRAM_ID)) - u1Before,
+        expectedMint,
+        "post-unpause mint credits the exact converted amount"
+      );
     });
   });
 
@@ -816,15 +668,14 @@ describe("realWorldUsage (SVM) edge cases", () => {
         .signers([psmOrchestrator]).rpc();
 
       // Attempt mint in SAME slot -> should revert with YieldDistributionInProgress
-      let mintFailed = false;
-      try {
-        await mintOkuMViaProgram(
+      await expectBankrunError(
+        () => mintOkuMViaProgram(
           psm, user, new BN(10_000_000),
           configPda, usdcMint, okuMMint,
           userUsdcAta, userOkuMAta, setup.vaultUsdcAta
-        );
-      } catch { mintFailed = true; }
-      expect(mintFailed, "mint should fail in same slot as set_multiplier").to.be.true;
+        ),
+        "YieldDistributionInProgress"
+      );
 
       // Next slot succeeds
       await warpSlots(h, 1);
@@ -866,15 +717,31 @@ describe("realWorldUsage (SVM) edge cases", () => {
 
       // Large mint exceeds exhausted allowance -> fails
       await mintUsdc(ctx.h, ctx.userUsdcAtas[0], ctx.usdcMint, 10_000_000);
-      let mintFailed = false;
-      try {
-        await mintOkuMViaProgram(
+      const balBeforeFail = await tokenBalance(ctx.h, ctx.userOkuMAtas[0], TOKEN_2022_PROGRAM_ID);
+      const cfgBeforeFail: any = await ctx.psm.account.psmConfig.fetch(ctx.configPda);
+
+      await expectBankrunError(
+        () => mintOkuMViaProgram(
           ctx.psm, ctx.users[0], new BN(10_000_000),
           ctx.configPda, ctx.usdcMint, ctx.okuMMint,
           ctx.userUsdcAtas[0], ctx.userOkuMAtas[0], ctx.vaultUsdcAta
-        );
-      } catch { mintFailed = true; }
-      expect(mintFailed, "mint should fail after allowance exhausted").to.be.true;
+        ),
+        "AllowanceExceeded"
+      );
+
+      // The failed mint must be fully atomic -- no partial credit, no allowance
+      // consumed. A bare catch proved only that *something* threw.
+      assertEq(
+        await tokenBalance(ctx.h, ctx.userOkuMAtas[0], TOKEN_2022_PROGRAM_ID),
+        balBeforeFail,
+        "failed mint credits nothing"
+      );
+      const cfgAfterFail: any = await ctx.psm.account.psmConfig.fetch(ctx.configPda);
+      assertEq(
+        BigInt(cfgAfterFail.minterAllowance.toString()),
+        BigInt(cfgBeforeFail.minterAllowance.toString()),
+        "failed mint consumes no allowance"
+      );
 
       // Rotate allowance via allowanceManager (coldMultisig)
       await ctx.psm.methods

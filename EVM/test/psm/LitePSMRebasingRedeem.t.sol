@@ -111,6 +111,25 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         litePsm.redeemUsdOku(usdAmount);
         usdcReceived = usdc.balanceOf(user) - usdcBefore;
         strandedUsdOku = okuDollar.balanceOf(address(litePsm)) - strandedBefore;
+
+        // THE invariant every caller cares about, asserted once here rather than
+        // as `assertGt(usdcOut, 0)` at seven call sites -- which would have
+        // passed on a single wei at any multiplier.
+        //
+        // usdOku is dollar-denominated, so redeeming `usdAmount` pays
+        // `usdAmount / 1e12` USDC REGARDLESS of the multiplier. That invariance
+        // is the whole point of the vault, and it is what these live-compounding
+        // scenarios exist to confirm still holds after years of accrual.
+        //
+        // Tolerance is 2 collateral units: `OkuDollar.transferFrom` floors the
+        // share conversion while `unwrap` ceils the burn, so the pair can differ
+        // by a wei before the 18->6 truncation (see `LitePSM._redeemUsdOku`).
+        assertApproxEqAbs(
+            usdcReceived,
+            usdAmount / 1e12,
+            2,
+            "redeeming usdOku must pay its dollar value regardless of the multiplier"
+        );
     }
 
     // ============================================================
@@ -254,7 +273,6 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         assertGt(okuDollar.usdMultiplier(), PRECISION, "Multiplier must accrue in 1s");
 
         (uint256 usdcOut, uint256 stranded) = _redeemAndMeasure(user1, 1e18);
-        assertGt(usdcOut, 0);
         assertLe(stranded, MAX_STRANDED_DUST);
     }
 
@@ -289,7 +307,6 @@ contract LitePSMRebasingRedeemTest is BaseTest {
 
         uint256 redeemAmount = 1000e18;
         (uint256 usdcOut, uint256 stranded) = _redeemAndMeasure(user1, redeemAmount);
-        assertGt(usdcOut, 0);
         assertLe(stranded, MAX_STRANDED_DUST);
     }
 
@@ -304,7 +321,6 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         assertApproxEqRel(okuDollar.usdMultiplier(), 1_276_281_562_500_000_000, 1e15);
 
         (uint256 usdcOut, uint256 stranded) = _redeemAndMeasure(user1, 500e18);
-        assertGt(usdcOut, 0);
         assertLe(stranded, MAX_STRANDED_DUST);
     }
 
@@ -319,7 +335,6 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         assertApproxEqRel(okuDollar.usdMultiplier(), 1_628_894_626_777_442_000, 2e15);
 
         (uint256 usdcOut, uint256 stranded) = _redeemAndMeasure(user1, 500e18);
-        assertGt(usdcOut, 0);
         assertLe(stranded, MAX_STRANDED_DUST);
     }
 
@@ -334,7 +349,6 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         assertApproxEqRel(okuDollar.usdMultiplier(), 3_386_354_941_000_000_000, 5e15);
 
         (uint256 usdcOut, uint256 stranded) = _redeemAndMeasure(user1, 100e18);
-        assertGt(usdcOut, 0);
         assertLe(stranded, MAX_STRANDED_DUST);
     }
 
@@ -349,7 +363,6 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         assertApproxEqRel(okuDollar.usdMultiplier(), 2_691_588_029_000_000_000, 1e16);
 
         (uint256 usdcOut, uint256 stranded) = _redeemAndMeasure(user1, 100e18);
-        assertGt(usdcOut, 0);
         assertLe(stranded, MAX_STRANDED_DUST);
     }
 
@@ -392,8 +405,10 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         uint256 redeemsExpected = 30 * 24; // 720 hourly redeems
         for (uint256 i = 0; i < redeemsExpected; i++) {
             _accrueAtCurrentRate(1 hours);
-            (uint256 usdcOut,) = _redeemAndMeasure(user1, 1e17); // 0.1 UsdOku each
-            assertGt(usdcOut, 0);
+            // `_redeemAndMeasure` already asserts the dollar-value conversion
+            // for every call, so the per-iteration check here is redundant --
+            // the loop's own property is the cumulative dust budget below.
+            _redeemAndMeasure(user1, 1e17); // 0.1 UsdOku each
         }
 
         // Cumulative dust budget: at most 1 wei per redeem.

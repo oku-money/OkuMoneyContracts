@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -253,7 +254,11 @@ contract OkuMoneyTest is BaseTest {
         _mintOkuMoney(minter, 100e18);
 
         vm.prank(minter);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC20Errors.ERC20InsufficientBalance.selector, minter, 100e18, 150e18
+            )
+        );
         okuMoney.burn(150e18);
     }
 
@@ -369,7 +374,11 @@ contract OkuMoneyTest is BaseTest {
         _mintOkuMoney(user1, 100e18);
 
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC20Errors.ERC20InsufficientBalance.selector, user1, 100e18, 150e18
+            )
+        );
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuMoney.transfer(user2, 150e18);
     }
@@ -378,7 +387,9 @@ contract OkuMoneyTest is BaseTest {
         _mintOkuMoney(user1, 100e18);
 
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC20Errors.ERC20InvalidReceiver.selector, address(0))
+        );
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuMoney.transfer(address(0), 30e18);
     }
@@ -1211,7 +1222,13 @@ contract OkuMoneyTest is BaseTest {
     /// @notice Only OKUM_REBASER may call the combined function.
     function test_SetOkuMYieldRateWithSuccessor_RevertsIfNotRebaser() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(this),
+                OKUM_REBASER
+            )
+        );
         okuMoney.setOkuMYieldRateWithSuccessor(
             PRECISION + 1e10, endTime, PRECISION + 2e10, endTime + 30 days
         );
@@ -1795,7 +1812,9 @@ contract OkuMoneyTest is BaseTest {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPk, digest);
 
-        vm.expectRevert(); // ERC2612ExpiredSignature
+        vm.expectRevert(
+            abi.encodeWithSelector(ERC20Permit.ERC2612ExpiredSignature.selector, deadline)
+        );
         okuMoney.permit(user, user2, amount, deadline, v, r, s);
     }
 
@@ -1823,7 +1842,12 @@ contract OkuMoneyTest is BaseTest {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongPk, digest); // Wrong signer
 
-        vm.expectRevert(); // ERC2612InvalidSigner
+        // The recovered signer is the WRONG key's address, and `owner` is `user`.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ERC20Permit.ERC2612InvalidSigner.selector, vm.addr(wrongPk), user
+            )
+        );
         okuMoney.permit(user, user2, amount, deadline, v, r, s);
     }
 

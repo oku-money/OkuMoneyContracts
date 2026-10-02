@@ -15,6 +15,11 @@ import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {RedemptionQueueEvents} from "../../src/lib/events/RedemptionQueueEvents.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
+import {OkuDollar} from "../../src/token/OkuDollar.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {Deploy} from "../shared/Deploy.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 import {Constants} from "../../src/lib/Constants.sol";
@@ -1282,7 +1287,10 @@ contract LitePSMTest is BaseTest {
         _approveOkuDollar(user1, address(litePsm), usdBalance);
 
         vm.prank(user1);
-        vm.expectRevert(); // OkuDollar.InsufficientReserves bubbles up through unwrap
+        // Named, not a comment: a bare expectRevert would also accept an
+        // allowance or pause failure, i.e. it would pass without ever reaching
+        // the reserves check this test exists for.
+        vm.expectRevert(OkuDollar.InsufficientReserves.selector);
         litePsm.redeemUsdOku(usdBalance);
     }
 
@@ -1341,7 +1349,12 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePsm.mintOkuM(100e6);
 
-        assertGt(okuMoney.balanceOf(user1), 0);
+        // 100 USDC at the live multiplier. `> 0` would have passed on one wei.
+        assertEq(
+            okuMoney.balanceOf(user1),
+            (100e6 * 1e12 * PRECISION) / okuMoney.okuMMultiplier(),
+            "mint credits the exact converted amount"
+        );
     }
 
     function test_RedeemOkuM_RevertsInYieldDistributionBlock() public {
@@ -1427,7 +1440,12 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePsm.mintOkuM(100e6);
 
-        assertGt(okuMoney.balanceOf(user1), 0);
+        // 100 USDC at the live multiplier. `> 0` would have passed on one wei.
+        assertEq(
+            okuMoney.balanceOf(user1),
+            (100e6 * 1e12 * PRECISION) / okuMoney.okuMMultiplier(),
+            "mint credits the exact converted amount"
+        );
     }
 
     /// @notice PINS THE DOCUMENTED LIMITATION, end to end: `YieldSandwichGuard` is
@@ -1609,7 +1627,13 @@ contract LitePSMTest is BaseTest {
         _mintUsdc(user1, 100e6);
         _approveUsdc(user1, address(litePsm), 100e6);
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(litePsm),
+                OKUM_MINTER
+            )
+        );
         litePsm.mintOkuM(100e6);
     }
 
@@ -1620,7 +1644,13 @@ contract LitePSMTest is BaseTest {
         assertFalse(litePsm.hasRole(PSM_QUEUE_PROCESSOR, queueProcessor));
 
         // queueProcessor can no longer drain
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                queueProcessor,
+                PSM_QUEUE_PROCESSOR
+            )
+        );
         vm.prank(queueProcessor);
         litePsm.processQueue(0, 0, 0);
     }
@@ -1634,14 +1664,14 @@ contract LitePSMTest is BaseTest {
     // ---- WS3.1.c: reinit guard on LitePSM and RedemptionQueue ----
 
     function test_LitePSM_Initialize_CannotReinitialize() public {
-        vm.expectRevert();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
         litePsm.initialize(
             address(okuMoney), address(okuDollar), address(usdc), address(redemptionQueue), admin
         );
     }
 
     function test_RedemptionQueue_Initialize_CannotReinitialize() public {
-        vm.expectRevert();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
         redemptionQueue.initialize(address(okuMoney), address(usdc), admin);
     }
 
@@ -1669,7 +1699,7 @@ contract LitePSMTest is BaseTest {
         litePsm.pause();
 
         // processQueue should revert while paused
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         vm.prank(queueProcessor);
         litePsm.processQueue(0, 1, 200e6);
     }

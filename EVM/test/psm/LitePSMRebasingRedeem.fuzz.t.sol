@@ -191,7 +191,15 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
         try litePsm.redeemUsdOku(redeemAmount) {
             uint256 usdcReceived = usdc.balanceOf(user1) - usdcBefore;
             uint256 strandedDelta = okuDollar.balanceOf(address(litePsm)) - strandedBefore;
-            assertGt(usdcReceived, 0);
+            // usdOku is dollar-denominated, so a successful redeem pays its own
+            // dollar value scaled to collateral decimals, whatever the fuzzer
+            // picked for the multiplier. `> 0` passed on a single wei.
+            assertApproxEqAbs(
+                usdcReceived,
+                redeemAmount / 1e12,
+                2,
+                "redeem pays dollar value regardless of multiplier"
+            );
             assertLe(strandedDelta, MAX_STRANDED_DUST);
         } catch (bytes memory reason) {
             bytes4 sel;

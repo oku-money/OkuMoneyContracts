@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {ReentrancyGuardHarness} from "../mocks/ReentrancyGuardHarness.sol";
 import {ReentrancyGuardUpgradeable} from "../../src/lib/ReentrancyGuardUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 /**
  * @title ReentrancyGuardTest
@@ -40,7 +41,7 @@ contract ReentrancyGuardTest is Test {
 
     function test_Init_DoubleInitReverts() public {
         // OZ Initializable rejects re-initialization (forwards to InvalidInitialization).
-        vm.expectRevert();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
         h.init();
     }
 }

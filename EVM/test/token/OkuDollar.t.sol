@@ -11,6 +11,12 @@ import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {OkuDollarEvents} from "../../src/lib/events/OkuDollarEvents.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 /**
@@ -305,8 +311,10 @@ contract OkuDollarTest is BaseTest {
         uint256 okuMAmount = 100e18;
         _mintUsdOku(user1, okuMAmount);
 
+        // _mintUsdOku wraps `okuMAmount` at the live multiplier; at base the
+        // share count IS the OkuM count. `> 0` would have passed on a wei.
         uint256 sharesBefore = okuDollar.usdSharesOf(user1);
-        assertGt(sharesBefore, 0);
+        assertEq(sharesBefore, okuMAmount, "wrap mints one share per OkuM at m = 1.0");
 
         vm.prank(user1);
         okuDollar.unwrap(okuMAmount, user1);
@@ -482,8 +490,15 @@ contract OkuDollarTest is BaseTest {
         _mintUsdOku(user1, 1000e18);
         _setOkuMMultiplierAndRoll(PRECISION + PRECISION / 3); // ~$1.33, forces ceil-vs-floor daylight
 
+        // 1000 OkuM wrapped at m = 1.0, then the multiplier moved to ~1.333.
+        // A usdOku BALANCE is shares priced at the current multiplier, so it
+        // grew with it -- that is the rebasing property under test.
         uint256 ownerShares = okuDollar.balanceOf(user1);
-        assertGt(ownerShares, 0);
+        assertEq(
+            ownerShares,
+            (1000e18 * okuDollar.usdMultiplier()) / PRECISION,
+            "balance is shares priced at the live multiplier"
+        );
 
         vm.prank(user1);
         okuDollar.approve(user2, ownerShares);
@@ -492,7 +507,9 @@ contract OkuDollarTest is BaseTest {
         uint256 assetsOut = okuDollar.redeem(ownerShares, user2, user1);
 
         assertEq(okuDollar.balanceOf(user1), 0, "owner balance must be fully drained");
-        assertGt(assetsOut, 0);
+        // The owner wrapped 1000 OkuM; a full exit returns them, less at most a
+        // wei to the ceil-vs-floor asymmetry that favours the vault.
+        assertApproxEqAbs(assetsOut, 1000e18, 1, "full redeem returns the wrapped OkuM");
         assertEq(okuMoney.balanceOf(user2), assetsOut);
     }
 
@@ -1148,7 +1165,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.pause();
 
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuDollar.transfer(user2, 50e18);
     }
 
@@ -1162,7 +1179,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.pause();
 
         vm.prank(user2);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuDollar.transferFrom(user1, user2, 50e18);
     }
 
@@ -1176,7 +1193,7 @@ contract OkuDollarTest is BaseTest {
 
         // M-4 fix: wrap is now blocked when paused (full freeze)
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuDollar.wrap(okuMAmount, user1, 0);
     }
 
@@ -1188,7 +1205,7 @@ contract OkuDollarTest is BaseTest {
 
         // M-4 fix: unwrap is now blocked when paused (full freeze)
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuDollar.unwrap(100e18, user1);
     }
 
@@ -1294,7 +1311,11 @@ contract OkuDollarTest is BaseTest {
         _mintUsdOku(user1, 100e18);
 
         vm.prank(user2);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC20Errors.ERC20InsufficientAllowance.selector, user2, 0, 50e18
+            )
+        );
         okuDollar.transferFrom(user1, user2, 50e18);
     }
 
@@ -1901,7 +1922,12 @@ contract OkuDollarTest is BaseTest {
         vm.prank(user1);
         okuDollar.wrap(50e18, user1, 0);
 
-        assertGt(okuDollar.balanceOf(user1), 0);
+        // 50 OkuM at the live multiplier. `> 0` would have passed on a wei.
+        assertEq(
+            okuDollar.balanceOf(user1),
+            (50e18 * okuDollar.usdMultiplier()) / PRECISION,
+            "wrap credits the exact dollar value"
+        );
     }
 
     function test_Unwrap_RevertsInYieldDistributionBlock() public {
@@ -2013,7 +2039,7 @@ contract OkuDollarTest is BaseTest {
     // ---- WS3.1.c: reinit guard on OkuDollar ----
 
     function test_Initialize_CannotReinitialize() public {
-        vm.expectRevert();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
         okuDollar.initialize(address(okuMoney), "OkuDollar", "usdOku", admin);
     }
 
@@ -2021,7 +2047,11 @@ contract OkuDollarTest is BaseTest {
 
     function test_UUPS_Upgrade_RevertsForNonUpgrader() public {
         OkuDollar newImpl = new OkuDollar();
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, VAULT_UPGRADER
+            )
+        );
         vm.prank(user1);
         okuDollar.upgradeToAndCall(address(newImpl), "");
     }

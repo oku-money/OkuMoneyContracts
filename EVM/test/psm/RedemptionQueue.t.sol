@@ -1705,7 +1705,16 @@ contract RedemptionQueueTest is BaseTest {
         uint256 queuedBefore = redemptionQueue.totalQueuedOkuM();
         uint256 escrowBefore = okuMoney.balanceOf(address(redemptionQueue));
 
-        vm.expectRevert();
+        // Named: the point is that the BURN authority was revoked, so a bare
+        // expectRevert would also accept a pause or bounds failure and the test
+        // would pass without exercising the unwind it exists to prove.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(redemptionQueue),
+                OKUM_BURNER
+            )
+        );
         redemptionQueue.processQueue(0, 2);
 
         // Nothing moved: the revert unwound the in-flight transfer.

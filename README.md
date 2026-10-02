@@ -219,14 +219,23 @@ on either stack. Orchestrator key compromise grants no mint privilege
 beyond its own USDC custody — and, on SVM, beyond
 `direct_minter_allowance`.
 
-**Cross-chain USDC flow conservation invariant (USDC-mediated routes):**
+**Cross-chain conservation invariant (USDC-mediated routes).** Stated in
+DOLLAR VALUE, not USDC. A USDC-denominated drift is structurally zero and
+therefore unfalsifiable: `LitePSM.mintOkuM(x)` transfers exactly `x`, so the
+amount redeemed on the source and the amount supplied on the destination are
+the same number by construction. Value is what can actually move, through two
+independent floors:
 
 ```
-|USDC_redeemed_A - USDC_minted_B| ≤ 1 USDC-unit per bridge
-Cumulative drift across N bridges ≤ N USDC-units
+dollars_received_B ≤ dollars_redeemed_A              (a bridge never creates value)
+dollars_redeemed_A - dollars_received_B < 1 USDC-unit + ceil(m_B / 1e18)
 ```
 
-Tested by `EVM/test/hardhat/scenarios/RealWorldUsage.ts` and
+The upper bound is the accumulated truncation: up to one collateral unit from
+`dollarsToUsdc`'s floor on the source, plus up to one OkuM wei from
+`dollarsToOkuM`'s floor on the destination.
+
+Tested by `EVM/test/hardhat/scenarios/RealWorldUsage.ts` (E1, E3) and
 `SVM/oku-programs/tests/bankrun/crossChainBridging.ts`.
 
 ### Future bridging

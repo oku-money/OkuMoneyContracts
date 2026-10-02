@@ -16,7 +16,7 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 
 ```bash
 forge install && forge build && forge test    # 622 unit + invariant tests
-npx hardhat compile && npx hardhat test       # 259 fork/integration/simulation/drill tests
+npx hardhat compile && npx hardhat test       # 258 fork/integration/simulation/drill tests
 ```
 
 Targeted invocations and what each suite covers: § Testing.
@@ -206,7 +206,7 @@ shipped deployments.
 | `npm run compile` | `hardhat compile` (regenerates typechain) |
 | `npm run typechain` | Typechain bindings only |
 | `npm run test:forge` | Foundry unit + invariant suite (622 tests) |
-| `npm run test` | Full Hardhat suite (259 tests, incl. fork + drills) |
+| `npm run test` | Full Hardhat suite (258 tests, incl. fork + drills) |
 | `npm run test:unit` | Off-chain math + simulation + deploy/operator drills (221). Needs fork RPC |
 | `npm run test:all` | Both |
 | `npm run node` | Start `hardhat node` (default forks Sepolia; override via `FORK_NETWORK`) |
@@ -1801,7 +1801,7 @@ first.
 
 ## Testing
 
-**Counts (measured):** `forge test` **622**, `npx hardhat test` **259**
+**Counts (measured):** `forge test` **622**, `npx hardhat test` **258**
 (of which `npm run test:unit` is **232**). Cross-stack:
 `packages/yield-tooling` 3,867 differential vectors; SVM 61 Rust + 124 bankrun.
 
@@ -1815,13 +1815,13 @@ forge fmt --check                                  # CI gate — formatting
 forge coverage --no-match-coverage 'test/|script/' --report summary  # CI gate — 95% per-file line coverage
 
 npx hardhat test test/hardhat/drill/*.ts           # Deploy drill + operator drill only
-npx hardhat test test/hardhat/scenarios/RealWorldUsage.ts  # 365-day simulation + 7 edge cases
+npx hardhat test test/hardhat/scenarios/RealWorldUsage.ts  # 7 deterministic edge cases
 ```
 
 The Foundry suite is the authoritative functional coverage. The Hardhat suite covers five areas:
 1. **Fork tests** (`test/hardhat/fork/`): exercise the protocol against real mainnet / Sepolia state that Foundry can't reach in CI.
 2. **Happy-path integration** (`test/hardhat/happyPath/`): full deposit/yield/withdraw walk-through against the OZ upgrades plugin's real proxy machinery.
-3. **Real-world scenario simulation** (`test/hardhat/scenarios/RealWorldUsage.ts`): 365-day stochastic simulation (seeded PRNG, 7 action categories, daily `evm_increaseTime` steps) plus 7 deterministic edge-case suites covering round-trips, queued redeems, multiplier divergence, blacklist/freeze, pause windows, yield-lock, and cap exhaustion.
+3. **Real-world scenario suites** (`test/hardhat/scenarios/RealWorldUsage.ts`): 7 deterministic dual-chain edge cases covering round-trips with yield accrual, queued redeems blocking the orchestrator, multiplier divergence, blacklist, pause windows, the same-block yield lock, and allowance exhaustion. A 365-day stochastic simulation sat above these and was deleted: every call in it was wrapped in a silent `try/catch`, nothing counted successes, and its headline invariant compared a value against itself — a PSM that reverted every call would have passed it.
 4. **Off-chain rate/epoch math + rear-facing accounting simulation** (`test/hardhat/unit/`, `test/hardhat/simulation/`): pure-TS unit tests for `yieldRate.ts` / `epochDistribution.ts` / `epochSchedule.ts` / `globalValue.ts` / `carryLedger.ts`, plus the base+settlement accuracy simulation — see [`docs/epoch-accounting.md`](docs/epoch-accounting.md).
 5. **Deploy + operator drills** (`test/hardhat/drill/`): `deployDrill.test.ts` runs the **real** `scripts/deploy/index.ts` against a local fork and asserts the resulting chain (all five proxies deployed, address book written, the complete 21-grant role matrix present, privileged roles *not* held by outsiders, and a live PSM mint succeeding). `operatorDrill.test.ts` then exercises **every operator-script lever** in-process against that same deploy, so the scripts are tested against the production role topology rather than a bespoke fixture.
 
@@ -1840,26 +1840,24 @@ Per-file coverage (`forge coverage --no-match-coverage 'test/|script/'`):
 
 | File | Lines | Statements | Branches | Funcs |
 |---|---|---|---|---|
-| `src/lib/MathLib.sol` | **100 %** (53/53) | 97.47 % | 75.00 % | 100 % |
+| `src/lib/MathLib.sol` | **100 %** (48/48) | 100 % | **100 %** (10/10) | 100 % |
 | `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** (17/17) | 100 % | 100 % | 100 % |
 | `src/lib/YieldSandwichGuard.sol` | **100 %** (3/3) | 100 % | 100 % | 100 % |
-| `src/psm/LitePSM.sol` | **97.92 %** (141/144) | 96.02 % | 74.07 % | 100 % |
-| `src/psm/RedemptionQueue.sol` | **100 %** (106/106) | 99.25 % | 93.33 % | 100 % |
-| `src/token/OkuDollar.sol` | **97.91 %** (187/191) | 95.73 % | 81.25 % | 97.78 % |
-| `src/token/OkuMoney.sol` | **99.53 %** (211/212) | 99.19 % | 97.22 % | 100 % |
-| **Total** | **98.90 %** (718/726) | 97.57 % | **85.48 %** | 99.32 % |
+| `src/psm/LitePSM.sol` | **100 %** (137/137) | 99.40 % | 96.15 % (25/26) | 100 % |
+| `src/psm/RedemptionQueue.sol` | **100 %** (117/117) | 100 % | **100 %** (19/19) | 100 % |
+| `src/token/OkuDollar.sol` | **97.50 %** (195/200) | 96.41 % | 89.19 % (33/37) | 97.83 % |
+| `src/token/OkuMoney.sol` | **99.54 %** (217/218) | 99.61 % | **100 %** (41/41) | 100 % |
+| **Total** | **99.19 %** (734/740) | 98.86 % | **96.30 %** (130/135) | 99.31 % |
 
-A CI gate in `.github/workflows/test.yml` fails the build if any `src/` file
-or the overall total drops below **95 % line coverage**. Every file clears it;
-the worst is `OkuDollar.sol` at 97.91 %.
+Two CI gates in `.github/workflows/test.yml` fail the build on a regression:
+every `src/` file and the total must clear **95 % line coverage**, and the
+total must clear **95 % branch coverage**. The branch gate is overall rather
+than per-file because five branches are provably unreachable (documented
+below), which pins `OkuDollar.sol` at 89 % through no fault of the suite.
 
-> **Branch coverage is the weak spot and is _not_ gated.** At 85.48 % overall —
-> `LitePSM.sol` 74.07 %, `MathLib.sol` 75.00 %, `OkuDollar.sol` 81.25 % — it is
-> materially below the line figure. `LitePSM` being lowest is worth noting:
-> `_redeemOkuMShared` is already flagged as the densest control flow in the
-> suite (see § Auditor checklist), so the branchiest function is also among the
-> least branch-covered. Most uncovered branches are the defensive guards listed
-> below, but this is where audit attention will land. Tracked in `TRACKER.md`.
+**Branch coverage is gated too**, at 95 % overall, and currently sits at
+**96.30 % (130/135)**. The five uncovered branches are documented below with
+the structural reason each is unreachable.
 
 ### Uncovered lines (intentional)
 

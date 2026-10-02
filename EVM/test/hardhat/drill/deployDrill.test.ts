@@ -126,36 +126,82 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         expect(local[result.bookKey], `local book missing ${result.bookKey}`).to.exist;
     });
 
-    it("grants the COMPLETE role matrix the deploy script declares", async () => {
+    it("declares every contract-to-contract role the chain actually recorded", async () => {
+        // This REPLACES a loop that asserted `expectedRoleGrants()` against the
+        // chain. That loop could not fail: `runDeploy()` calls
+        // `verifyDeployment()`, which runs the identical loop and THROWS
+        // (`deploy/index.ts` ~:789, ~:873), so by the time `before()` returned
+        // every declared grant was already proven present.
+        //
+        // Re-running the deploy's own check also left the dangerous direction
+        // untested. `expectedRoleGrants()` is a SECOND hand-maintained list
+        // parallel to the `grantRole` calls in `configureRoles`. They agree
+        // today only by manual coincidence. A grant added to `configureRoles`
+        // and not declared here is invisible to the deploy's self-verification
+        // AND to this drill — an unverified live privilege, which is exactly
+        // the failure worth catching.
+        //
+        // So: enumerate what the chain RECORDED, and require each one to be
+        // declared. The source of truth is `RoleGranted` events, not a list.
         const contracts: Record<string, any> = {
             okuMoney: result.okuMoney,
             okuDollar: result.okuDollar,
             redemptionQueue: result.redemptionQueue,
             litePSM: result.litePSM,
         };
-        const holders: Record<string, string> = {
-            litePSM: await result.litePSM.getAddress(),
-            redemptionQueue: await result.redemptionQueue.getAddress(),
-            deployer: result.deployerAddress,
-        };
+        const psmAddr = (await result.litePSM.getAddress()).toLowerCase();
+        const queueAddr = (await result.redemptionQueue.getAddress()).toLowerCase();
+        const deployerAddr = result.deployerAddress.toLowerCase();
 
-        const grants = expectedRoleGrants();
-        // Guard against the list being emptied/gutted — an empty matrix would
-        // make the loop below vacuously pass.
-        expect(grants.length).to.be.greaterThan(15);
+        const declared = new Set(
+            expectedRoleGrants().map((g) => {
+                const holder =
+                    g.holder === "litePSM" ? psmAddr : g.holder === "redemptionQueue" ? queueAddr : deployerAddr;
+                return `${g.contract}:${g.role}:${holder}`;
+            })
+        );
+        // An emptied matrix would make the check below vacuous.
+        expect(declared.size, "expectedRoleGrants() must not be gutted").to.equal(20);
 
-        for (const g of grants) {
-            const held = await contracts[g.contract].hasRole(g.role, holders[g.holder]);
-            expect(held, `missing role grant: ${g.label}`).to.be.true;
+        const undeclared: string[] = [];
+        let contractToContractGrants = 0;
+
+        for (const [name, c] of Object.entries(contracts)) {
+            const events = await c.queryFilter(c.filters.RoleGranted(), 0, "latest");
+            for (const ev of events) {
+                const role: string = ev.args.role;
+                const account: string = ev.args.account.toLowerCase();
+
+                // Grants to the deployer come from `initialize`, which hands the
+                // full role set to admin by design; those are covered by the
+                // separate negative checks below rather than by the matrix.
+                if (account === deployerAddr) continue;
+
+                contractToContractGrants++;
+                const key = `${name}:${role}:${account}`;
+                if (!declared.has(key)) {
+                    undeclared.push(`${name} granted ${role} to ${account} — NOT in expectedRoleGrants()`);
+                }
+            }
         }
+
+        // Anti-vacuity: the contract-to-contract grants are the whole point, so
+        // a run that recorded none means the harness broke, not that it passed.
+        expect(contractToContractGrants, "no contract-to-contract grants were observed").to.be.greaterThan(0);
+        expect(undeclared, `undeclared live role grants:\n  ${undeclared.join("\n  ")}`).to.be.empty;
     });
 
     it("sets a non-zero minter allowance for LitePSM, the only minting contract", async () => {
         // `OkuMoney.mint` checks BOTH the OKUM_MINTER role and a separate
         // per-minter allowance, so a role grant alone is not sufficient —
         // without the allowance every mint reverts with ExceedsAllowance.
+        // `verifyDeployment` also checks this is non-zero, so a bare `> 0` here
+        // would just re-run the deploy's own assertion. The value is what matters:
+        // it must be large enough that the PSM can mint against the whole supply
+        // cap, or minting silently stops working partway through a deployment's life.
         const psmAllowance = await result.okuMoney.minterAllowance(await result.litePSM.getAddress());
-        expect(psmAllowance).to.be.greaterThan(0n);
+        const maxSupply = await result.okuMoney.maxSupply();
+        expect(psmAllowance, "PSM allowance must cover the entire supply cap").to.equal(maxSupply);
     });
 
     it("grants RedemptionQueue NEITHER the minter role NOR an allowance — it only burns", async () => {

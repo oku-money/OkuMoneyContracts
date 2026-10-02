@@ -390,15 +390,24 @@ describe("Happy Path Testing", () => {
         const bobUsdcBefore = await usdc.balanceOf(bobAddr)
         const daveUsdcBefore = await usdc.balanceOf(daveAddr)
 
-        // Alice and Charlie redeem first — buffer has ~10,500 USDC, enough for both (~2,625 each)
+        // Alice and Charlie redeem first. The buffer was re-funded with exactly
+        // 5,250 USDC above -- NOT ~10,500, which a stale comment here claimed
+        // and which is 2x the actual figure. Each user redeems half of a ~5,250
+        // position, so 2,625 each is exactly the buffer, and the pair of them
+        // drains it to zero. That is the boundary this test is named for.
+        const expectedPayout = parseUnits("2625", 6)
         await psm.connect(Alice).redeemOkuM(aliceRedeem)
         await psm.connect(Charlie).redeemOkuM(charlieRedeem)
 
-        // Verify Alice and Charlie received USDC instantly (no queue)
+        // Both paid instantly, in full, and the buffer is exactly exhausted.
         const aliceUsdcAfterInstant = await usdc.balanceOf(aliceAddr)
         const charlieUsdcAfterInstant = await usdc.balanceOf(charlieAddr)
-        expect(aliceUsdcAfterInstant - aliceUsdcBefore).to.be.gt(0)
-        expect(charlieUsdcAfterInstant - charlieUsdcBefore).to.be.gt(0)
+        expect(aliceUsdcAfterInstant - aliceUsdcBefore, "Alice paid instantly")
+            .to.be.closeTo(expectedPayout, parseUnits("1", 6))
+        expect(charlieUsdcAfterInstant - charlieUsdcBefore, "Charlie paid instantly")
+            .to.be.closeTo(expectedPayout, parseUnits("1", 6))
+        expect(await usdc.balanceOf(psmAddr), "the two instant redeems drain the buffer")
+            .to.be.lt(parseUnits("1", 6))
         expect(await queue.queueLength()).to.equal(0)
 
         // Bob and Dave redeem — buffer is now depleted, these should be queued
@@ -432,20 +441,25 @@ describe("Happy Path Testing", () => {
         // Queue should now be empty
         expect(await queue.queueLength()).to.equal(0)
 
-        // Bob and Dave should have received USDC from queue processing
+        // Bob and Dave are paid out of the queue -- for the same amount as the
+        // instant pair, anchored to the absolute expectation rather than only to
+        // each other. Comparing the four measured outputs among themselves (the
+        // previous version) would pass even if the PSM paid everyone 1 USDC.
         const bobUsdcAfter = await usdc.balanceOf(bobAddr)
         const daveUsdcAfter = await usdc.balanceOf(daveAddr)
-        expect(bobUsdcAfter - bobUsdcBefore).to.be.gt(0)
-        expect(daveUsdcAfter - daveUsdcBefore).to.be.gt(0)
-
-        // All four users should have received roughly equal USDC amounts
         const aliceReceived = aliceUsdcAfterInstant - aliceUsdcBefore
         const charlieReceived = charlieUsdcAfterInstant - charlieUsdcBefore
         const bobReceived = bobUsdcAfter - bobUsdcBefore
         const daveReceived = daveUsdcAfter - daveUsdcBefore
 
-        expect(aliceReceived).to.be.closeTo(bobReceived, parseUnits("1", 6))
-        expect(charlieReceived).to.be.closeTo(daveReceived, parseUnits("1", 6))
+        expect(bobReceived, "Bob paid from the queue").to.be.closeTo(expectedPayout, parseUnits("1", 6))
+        expect(daveReceived, "Dave paid from the queue").to.be.closeTo(expectedPayout, parseUnits("1", 6))
+
+        // THE PROPERTY THAT MATTERS: the queued path pays the same as the
+        // instant path. Equal treatment regardless of which side of the buffer
+        // boundary a redemption landed on.
+        expect(aliceReceived, "instant and queued pay equally").to.be.closeTo(bobReceived, parseUnits("1", 6))
+        expect(charlieReceived, "instant and queued pay equally").to.be.closeTo(daveReceived, parseUnits("1", 6))
     })
 
     it("Withdraw", async () => {

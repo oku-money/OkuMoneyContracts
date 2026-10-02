@@ -198,16 +198,23 @@ describe("Operator drill: exercise every lever on a clean local chain", function
 
     it("psmOps: mintOkuM (USDC -> OkuM)", async () => {
         const before = await okuMoney.balanceOf(await user1.getAddress());
+        const mult = await okuMoney.okuMMultiplier();
         await runPsmOp(ctx, user1, "mintOkuM", 100_000_000_000n, false); // 100k USDC
         const afterBal = await okuMoney.balanceOf(await user1.getAddress());
-        expect(afterBal).to.be.greaterThan(before);
+        // 100k USDC -> dollars (x1e12) -> OkuM (/multiplier). `greaterThan` would
+        // have passed on a single wei.
+        const expected = (100_000_000_000n * 10n ** 12n * 10n ** 18n) / mult;
+        expect(afterBal - before, "mintOkuM credits the exact converted amount").to.equal(expected);
     });
 
     it("psmOps: mintUsdOku (USDC -> UsdOku)", async () => {
         const before = await okuDollar.balanceOf(await user1.getAddress());
         await runPsmOp(ctx, user1, "mintUsdOku", 50_000_000_000n, false); // 50k USDC
         const afterBal = await okuDollar.balanceOf(await user1.getAddress());
-        expect(afterBal).to.be.greaterThan(before);
+        // usdOku is dollar-denominated, so 50k USDC is 50k usdOku regardless of
+        // the multiplier -- that invariance is the point of the vault.
+        expect(afterBal - before, "mintUsdOku credits dollar-for-dollar")
+            .to.be.closeTo(50_000_000_000n * 10n ** 12n, 10n ** 12n);
     });
 
     it("vaultOps: deposit (ERC-4626 OkuM -> UsdOku)", async () => {
@@ -262,7 +269,9 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             rate: PRECISION + 10n ** 10n, // ~0.3% APY per-second, well within [PRECISION, MAX_RATE]
             endTimestamp,
         });
-        expect(confirmedRate).to.be.greaterThan(PRECISION);
+        // The submitted rate is a literal one line above; assert it landed
+        // verbatim rather than merely "above PRECISION".
+        expect(confirmedRate, "the submitted rate must land verbatim").to.equal(PRECISION + 10n ** 10n);
     });
 
     it("deriveEpochSchedule: stage-settlement derives and atomically stages the settlement rate", async function () {
@@ -405,13 +414,41 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const multNow = Number(await okuMoney.okuMMultiplier()) / 1e18;
         appendSample({ timestampSec: await time.latest(), valueUsd: supplyNow * multNow, perChain: {} });
 
-        // NOTE: the "runEpoch: roll-epoch" test above already appended a real
-        // ledger entry (runEpoch.ts's own CLI default epochId, today's ISO
-        // date) — this drill runs all `it`s against ONE shared chain/ledger,
-        // so this test must not assume a clean ledger. Capture whatever the
-        // ACTUAL current state is and assert relative to it, rather than
-        // hard-coding "no prior entries".
+        // The comment that used to sit here claimed the "runEpoch: roll-epoch"
+        // test above had already appended a ledger entry. It had not —
+        // `deriveRollEpoch` explicitly does NOT touch the carry ledger, and no
+        // test called `upsertLedgerEntry`. So the ledger was EMPTY here, which
+        // made the two regression guards below degenerate: both
+        // `currentEpochCarryInUsd` and `outstandingCarryUsd` were 0, so
+        // asserting against the wrong one would have passed, and
+        // `priorEpochId` compared `undefined === undefined`.
+        //
+        // Seed a prior epoch whose carry-in DIFFERS from its carry-forward, so
+        // the two candidate values are distinguishable and defect #3's fix is
+        // actually pinned.
+        const SEED_EPOCH = `${EPOCH_A}-seed`;
+        upsertLedgerEntry(
+            buildLedgerEntry({
+                epochId: SEED_EPOCH,
+                realisedYieldUsd: 1000,
+                carryInUsd: 250,
+                measuredAvgValueUsd: supplyNow * multNow,
+                conservativeFactor: 1,
+                // carryForwardUsd 400 != carryInUsd 250, which is what makes
+                // `currentEpochCarryInUsd` and `outstandingCarryUsd` differ.
+                result: { ratePerSecond: 1_000_000_000_000_000_000n, carryForwardUsd: 400 },
+            })
+        );
+
         const ledgerStateBeforeA = summarizeLedger();
+        // Anti-degeneracy: if these ever coincide again, the assertion below
+        // stops discriminating and must be re-seeded rather than left green.
+        expect(
+            ledgerStateBeforeA.currentEpochCarryInUsd,
+            "fixture: the two candidate carry values must differ, or defect #3's guard is vacuous"
+        ).to.not.equal(ledgerStateBeforeA.outstandingCarryUsd);
+        expect(ledgerStateBeforeA.latestEntry?.epochId, "fixture: a prior entry must exist")
+            .to.equal(SEED_EPOCH);
 
         // ---- Phase 1: stage-settlement — derive, apply, verify artifact identity ----
         const realisedYieldUsd = supplyNow * 0.0005;
@@ -462,7 +499,9 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         // Whatever the ledger's latest entry was BEFORE this derivation is
         // what gets reconciled — could be a pre-existing entry from an
         // earlier test in this shared-chain drill, or none.
-        expect(rollArtifactA.meta.priorEpochId).to.equal(ledgerStateBeforeA.latestEntry?.epochId);
+        // Now a real comparison: the seeded entry is what must get reconciled.
+        expect(rollArtifactA.meta.priorEpochId, "roll must reconcile the seeded prior epoch")
+            .to.equal(SEED_EPOCH);
         expect(rollArtifactA.meta.carryForwardUsd).to.equal(0); // unknown until epoch A is itself reconciled
 
         // Apply it, exactly as applyScheduleSingleChain.ts would.
@@ -475,10 +514,9 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         });
 
         // Simulate broadcastSchedule.ts's post-confirmation ledger write —
-        // backfill first (if there's a prior entry to reconcile), then insert.
-        if (rollArtifactA.meta.priorEpochId) {
-            backfillReconciliation(rollArtifactA.meta.priorEpochId, rollArtifactA.meta.carryInUsd);
-        }
+        // backfill first, then insert. Unguarded: the seed above guarantees a
+        // prior entry exists, so an `if` here would only hide a broken fixture.
+        backfillReconciliation(rollArtifactA.meta.priorEpochId!, rollArtifactA.meta.carryInUsd);
         upsertLedgerEntry(
             buildLedgerEntry({
                 epochId: rollArtifactA.epochId,
@@ -570,10 +608,12 @@ describe("Operator drill: exercise every lever on a clean local chain", function
 
     it("depositBuffer / withdrawBuffer: PSM USDC buffer management", async () => {
         const depositResult = await runDepositBuffer(ctx, admin, 10_000_000_000n); // 10k USDC
-        expect(depositResult.bufferAfter).to.be.greaterThan(depositResult.bufferBefore);
+        expect(depositResult.bufferAfter - depositResult.bufferBefore, "buffer grows by the deposit")
+            .to.equal(10_000_000_000n);
 
         const withdrawResult = await runWithdrawBuffer(ctx, admin, 1_000_000_000n, await admin.getAddress());
-        expect(withdrawResult.bufferAfter).to.be.lessThan(depositResult.bufferAfter);
+        expect(depositResult.bufferAfter - withdrawResult.bufferAfter, "buffer falls by the withdrawal")
+            .to.equal(1_000_000_000n);
     });
 
     it("blacklistBoth: blocks a bad actor on BOTH contracts, then reverses it", async () => {

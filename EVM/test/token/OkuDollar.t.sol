@@ -11,6 +11,7 @@ import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {OkuDollarEvents} from "../../src/lib/events/OkuDollarEvents.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 /**
  * @title OkuDollarTest
@@ -2394,5 +2395,113 @@ contract OkuDollarTest is BaseTest {
         okuMoney.setOkuMYieldRate(PRECISION + 1e9, block.timestamp + 30 days);
         assertEq(okuMoney.okuMLastAccrualTime(), block.timestamp);
         assertEq(okuDollar.usdMultiplier(), okuMoney.okuMMultiplier());
+    }
+
+    // ============ Initialization rails ============
+    //
+    // Relocated from the former CoverageGaps.t.sol.
+
+    function test_Initialize_RevertZeroOkuMoney() public {
+        OkuDollar impl = new OkuDollar();
+        bytes memory initData =
+            abi.encodeCall(OkuDollar.initialize, (address(0), "OkuDollar", "usdOku", admin));
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertZeroAdmin() public {
+        OkuDollar impl = new OkuDollar();
+        bytes memory initData = abi.encodeCall(
+            OkuDollar.initialize, (address(okuMoney), "OkuDollar", "usdOku", address(0))
+        );
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    // ============ Rescue / unwrap rails ============
+
+    function test_RescueDonation_RevertNoDonation() public {
+        vm.prank(vaultRescuer);
+        vm.expectRevert(OkuDollar.NoDonationAvailable.selector);
+        okuDollar.rescueDonation(1e18, admin);
+    }
+
+    function test_Unwrap_RevertInsufficientBalance() public {
+        vm.prank(user1);
+        vm.expectRevert(Errors.InsufficientBalance.selector);
+        okuDollar.unwrap(1e18, user1);
+    }
+
+    function test_Unwrap_RevertZeroReceiver() public {
+        _mintOkuMoney(user1, 100e18);
+        vm.prank(user1);
+        okuMoney.approve(address(okuDollar), 100e18);
+        vm.prank(user1);
+        okuDollar.wrap(100e18, user1, 0);
+
+        vm.prank(user1);
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        okuDollar.unwrap(1e18, address(0));
+    }
+
+    /// @notice A peer-to-peer transfer moves shares, not the inherited ERC-20 balance.
+    /// @dev Renamed from `test_OkuDollar_Update_PeerToPeerPassThrough`, which claimed
+    ///      to exercise the `_update` tripwire. It never reached `_update` -- OkuDollar
+    ///      overrides `transfer` entirely -- and asserted only `balanceOf(user2) > 0`.
+    ///      What is actually worth pinning is that the override moves the exact amount
+    ///      and conserves the share total.
+    function test_Transfer_MovesSharesNotInheritedBalance() public {
+        _mintOkuMoney(user1, 100e18);
+        vm.prank(user1);
+        okuMoney.approve(address(okuDollar), 100e18);
+        vm.prank(user1);
+        okuDollar.wrap(100e18, user1, 0);
+
+        uint256 totalBefore = okuDollar.totalUsdShares();
+        uint256 sharesBefore = okuDollar.usdSharesOf(user1);
+        uint256 half = okuDollar.balanceOf(user1) / 2;
+
+        vm.prank(user1);
+        okuDollar.transfer(user2, half);
+
+        // At m == PRECISION a dollar is a share, so the split is exact.
+        assertEq(okuDollar.usdMultiplier(), Constants.PRECISION, "fixture: unrebased");
+        assertEq(okuDollar.usdSharesOf(user2), half, "receiver gets exactly the sent amount");
+        assertEq(okuDollar.usdSharesOf(user1), sharesBefore - half, "sender debited exactly");
+        assertEq(okuDollar.totalUsdShares(), totalBefore, "transfers conserve total shares");
+    }
+
+    /// @notice Streaming accrual SATURATES at MAX_MULTIPLIER; it must not wrap or revert.
+    /// @dev The counterpart to `OkuMoney.setOkuMMultiplier`'s hard rejection above.
+    ///      The asymmetry is deliberate: an operator typo should fail loudly, but mere
+    ///      passage of time must never brick `balanceOf` -- every downstream read goes
+    ///      through the multiplier, so a revert here would freeze the whole vault.
+    function test_UsdMultiplier_SaturatesAtMaxMultiplier() public {
+        _mintOkuMoney(user1, 1e18);
+        vm.prank(user1);
+        okuMoney.approve(address(okuDollar), 1e18);
+        vm.prank(user1);
+        okuDollar.wrap(1e18, user1, 0);
+
+        // At MAX_RATE the unbounded multiplier crosses MAX_MULTIPLIER after roughly
+        // ln(1e6)/ln(1 + 1e-7) seconds (~4.4 years); 10 years lands well past it while
+        // staying inside rpow's safe input region.
+        vm.prank(rebaser);
+        okuMoney.setOkuMYieldRate(Constants.MAX_RATE, block.timestamp + MAX_RATE_WINDOW);
+        _accrueAtCurrentRate(10 * 365 days);
+
+        assertEq(
+            okuDollar.usdMultiplier(),
+            Constants.MAX_MULTIPLIER,
+            "usdMultiplier must saturate exactly at MAX_MULTIPLIER"
+        );
+
+        // The follow-on that matters: downstream reads keep working at the cap.
+        // One share at m == MAX_MULTIPLIER is worth exactly MAX_MULTIPLIER wei.
+        assertEq(
+            okuDollar.balanceOf(user1),
+            Constants.MAX_MULTIPLIER,
+            "balanceOf must price at the saturated multiplier, not revert"
+        );
     }
 }

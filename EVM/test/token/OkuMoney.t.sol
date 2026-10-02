@@ -13,6 +13,7 @@ import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Ini
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {
     IScaledUIAmount,
     IScaledUIAmountNewUIMultiplier,
@@ -2086,5 +2087,35 @@ contract OkuMoneyTest is BaseTest {
         vm.prank(unblacklister);
         vm.expectRevert(OkuMoney.NotBlacklisted.selector);
         okuMoney.unblacklist(user1);
+    }
+
+    // ============ Initialization rails ============
+    //
+    // Relocated from the former CoverageGaps.t.sol, which existed to move a
+    // branch-coverage number rather than to verify behaviour. These belong with
+    // the contract they test.
+
+    function test_Initialize_RevertZeroAdmin() public {
+        OkuMoney impl = new OkuMoney();
+        bytes memory initData =
+            abi.encodeCall(OkuMoney.initialize, ("OkuMoney", "OkuM", address(0), MAX_SUPPLY));
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    /// @notice The discrete override is hard-capped; it reverts rather than clamping.
+    /// @dev Deliberately asymmetric with streaming accrual, which SATURATES at the
+    ///      same ceiling (see `test_UsdMultiplier_SaturatesAtMaxMultiplier`). An
+    ///      operator typo must fail loudly; time passing must not brick the token.
+    function test_SetOkuMMultiplier_RevertMultiplierTooHigh() public {
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.MultiplierTooHigh.selector);
+        okuMoney.setOkuMMultiplier(Constants.MAX_MULTIPLIER + 1);
+    }
+
+    function test_ConfigureMinterAllowance_RevertZeroAddress() public {
+        vm.prank(allowanceManager);
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        okuMoney.configureMinterAllowance(address(0), 1000e18);
     }
 }

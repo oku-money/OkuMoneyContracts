@@ -20,6 +20,8 @@ import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {MathLib} from "../../src/lib/MathLib.sol";
 import {LitePSMEvents} from "../../src/lib/events/LitePSMEvents.sol";
+import {MockHighDecimalToken} from "../mocks/MockHighDecimalToken.sol";
+import {MockUSDC} from "../mocks/MockUSDC.sol";
 
 /**
  * @title LitePSMTest
@@ -2158,6 +2160,228 @@ contract LitePSMTest is BaseTest {
         assertEq(usdc.balanceOf(user1), user1UsdcBefore);
         // User's UsdOku is gone (transferred to PSM, then unwrapped).
         assertEq(okuDollar.balanceOf(user1), 0);
+    }
+
+    // ============ Initialization rails ============
+    //
+    // Relocated from the former CoverageGaps.t.sol, whose header stated its aim
+    // was "to push the per-contract branch coverage above the audit-readiness
+    // target rather than to add additional functional verification". The tests
+    // below are worth keeping; the bucket they lived in was not.
+
+    function test_Initialize_RevertZeroOkuMoney() public {
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (address(0), address(okuDollar), address(usdc), address(redemptionQueue), admin)
+        );
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertZeroOkuDollar() public {
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (address(okuMoney), address(0), address(usdc), address(redemptionQueue), admin)
+        );
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertZeroUsdc() public {
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (address(okuMoney), address(okuDollar), address(0), address(redemptionQueue), admin)
+        );
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertZeroRedemptionQueue() public {
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (address(okuMoney), address(okuDollar), address(usdc), address(0), admin)
+        );
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertZeroAdmin() public {
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (
+                address(okuMoney),
+                address(okuDollar),
+                address(usdc),
+                address(redemptionQueue),
+                address(0)
+            )
+        );
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertUsdcDecimalsTooLarge() public {
+        MockHighDecimalToken hd = new MockHighDecimalToken(19);
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (address(okuMoney), address(okuDollar), address(hd), address(redemptionQueue), admin)
+        );
+        vm.expectRevert(abi.encodeWithSelector(LitePSM.UsdcDecimalsTooLarge.selector, uint8(19)));
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    /// @notice LitePSM must reject an OkuDollar wired to a DIFFERENT OkuMoney than
+    ///         the one passed as `_okuMoney`.
+    /// @dev Every PSM price computation assumes a single shared multiplier; a
+    ///      mismatched pair would silently price both sides off the wrong token.
+    function test_Initialize_RevertAssetMismatch() public {
+        OkuMoney otherImpl = new OkuMoney();
+        bytes memory otherInit =
+            abi.encodeCall(OkuMoney.initialize, ("Other", "OTH", admin, MAX_SUPPLY));
+        OkuMoney other = OkuMoney(address(new ERC1967Proxy(address(otherImpl), otherInit)));
+
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (address(other), address(okuDollar), address(usdc), address(redemptionQueue), admin)
+        );
+        vm.expectRevert(LitePSM.AssetMismatch.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    /// @notice LitePSM must reject a queue configured with a DIFFERENT USDC.
+    /// @dev Without this check the PSM approves spending of its own USDC while the
+    ///      queue reads balance/allowance on the other token, zeroing `usdcAvailable`
+    ///      in every batch — the queue becomes undrainable via normal processing and
+    ///      surfaces only as a stream of `RedemptionSkipped(InsufficientFunds)`.
+    function test_Initialize_RevertQueueUsdcMismatch() public {
+        MockUSDC otherUsdc = new MockUSDC();
+        (RedemptionQueue otherQueue,) =
+            Deploy.deployRedemptionQueue(address(okuMoney), address(otherUsdc), admin);
+
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (address(okuMoney), address(okuDollar), address(usdc), address(otherQueue), admin)
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                LitePSM.QueueUsdcMismatch.selector, address(otherUsdc), address(usdc)
+            )
+        );
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    /// @notice LitePSM must reject a queue configured with a DIFFERENT OkuMoney.
+    /// @dev Otherwise `RedemptionQueue.processQueue` burns the wrong token's escrow
+    ///      against entries recorded and priced against this PSM's OkuMoney.
+    function test_Initialize_RevertQueueOkuMoneyMismatch() public {
+        OkuMoney otherImpl = new OkuMoney();
+        bytes memory otherInit =
+            abi.encodeCall(OkuMoney.initialize, ("Other", "OTH", admin, MAX_SUPPLY));
+        OkuMoney other = OkuMoney(address(new ERC1967Proxy(address(otherImpl), otherInit)));
+        (RedemptionQueue otherQueue,) =
+            Deploy.deployRedemptionQueue(address(other), address(usdc), admin);
+
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (address(okuMoney), address(okuDollar), address(usdc), address(otherQueue), admin)
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                LitePSM.QueueOkuMoneyMismatch.selector, address(other), address(okuMoney)
+            )
+        );
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    // ============ Zero-amount rails ============
+
+    function test_MintUsdOku_RevertZeroAmount() public {
+        vm.prank(user1);
+        vm.expectRevert(Errors.ZeroAmount.selector);
+        litePsm.mintUsdOku(0);
+    }
+
+    function test_RedeemUsdOku_RevertZeroAmount() public {
+        vm.prank(user1);
+        vm.expectRevert(Errors.ZeroAmount.selector);
+        litePsm.redeemUsdOku(0);
+    }
+
+    function test_DepositBuffer_RevertZeroAmount() public {
+        vm.prank(bufferDepositor);
+        vm.expectRevert(Errors.ZeroAmount.selector);
+        litePsm.depositBuffer(0);
+    }
+
+    // ============ WouldStrandQueue boundary ============
+
+    /// @notice `withdrawUsdc` must not drop the buffer below the queue's obligation.
+    /// @dev REPLACES a test named `UsdcBalance_GTE_TotalQueuedUsdc_After_QueuedRedeem`
+    ///      whose only assertion was `assertGe(balance, 0)` on a `uint256` — i.e. it
+    ///      could not fail — with the intended error named in a comment next to a bare
+    ///      `vm.expectRevert()`, and its one real check wrapped in `if (balance > queued)`.
+    ///
+    ///      The real invariant is a boundary, so it is tested as one: withdrawing the
+    ///      last wei that would strand the queue reverts with the typed error and its
+    ///      exact arguments; withdrawing everything above the obligation succeeds and
+    ///      lands the balance exactly on it.
+    function test_WithdrawUsdc_StrandBoundary_IsExact() public {
+        _mintOkuMoney(user1, 1000e18);
+        usdc.mint(user1, 1_000_000e6);
+
+        // Leave ~1 USDC so a 1000 OkuM redemption must queue.
+        uint256 buffer0 = usdc.balanceOf(address(litePsm));
+        vm.prank(bufferWithdrawer);
+        litePsm.withdrawUsdc(admin, buffer0 - 1e6);
+
+        vm.prank(user1);
+        okuMoney.approve(address(litePsm), 1000e18);
+        vm.prank(user1);
+        litePsm.redeemOkuM(1000e18);
+
+        // The redemption queued, so the buffer is now BELOW the obligation by
+        // construction. Refill past it so there is a boundary to probe at all.
+        vm.startPrank(user1);
+        usdc.approve(address(litePsm), 2000e6);
+        vm.stopPrank();
+        vm.prank(bufferDepositor);
+        usdc.mint(bufferDepositor, 2000e6);
+        vm.startPrank(bufferDepositor);
+        usdc.approve(address(litePsm), 2000e6);
+        litePsm.depositBuffer(2000e6);
+        vm.stopPrank();
+
+        uint256 balance = usdc.balanceOf(address(litePsm));
+        uint256 queued = redemptionQueue.totalQueuedUsdc();
+        assertGt(queued, 0, "fixture: redemption must actually be queued");
+        assertGt(balance, queued, "fixture: buffer must exceed the obligation to test the boundary");
+
+        uint256 withdrawable = balance - queued;
+
+        // One wei past the boundary reverts, with both arguments pinned.
+        vm.prank(bufferWithdrawer);
+        vm.expectRevert(
+            abi.encodeWithSelector(LitePSM.WouldStrandQueue.selector, queued - 1, queued)
+        );
+        litePsm.withdrawUsdc(admin, withdrawable + 1);
+
+        // Exactly at the boundary succeeds and lands on the obligation.
+        vm.prank(bufferWithdrawer);
+        litePsm.withdrawUsdc(admin, withdrawable);
+        assertEq(
+            usdc.balanceOf(address(litePsm)),
+            queued,
+            "post-withdraw balance must equal the queue obligation exactly"
+        );
     }
 }
 

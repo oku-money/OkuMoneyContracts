@@ -9,6 +9,7 @@ import {RedemptionQueueEvents} from "../../src/lib/events/RedemptionQueueEvents.
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
+import {MockHighDecimalToken} from "../mocks/MockHighDecimalToken.sol";
 
 /**
  * @title RedemptionQueueTest
@@ -1734,5 +1735,48 @@ contract RedemptionQueueTest is BaseTest {
         // MockUSDC is 6 decimals; multiplier = 10**(18-6) = 1e12.
         assertEq(redemptionQueue.usdcDecimalMultiplier(), 1e12);
         assertEq(redemptionQueue.usdcDecimalMultiplier(), DECIMAL_MULTIPLIER);
+    }
+
+    // ============ Initialization rails ============
+    //
+    // Relocated from the former CoverageGaps.t.sol.
+
+    function test_Initialize_RevertZeroOkuMoney() public {
+        RedemptionQueue impl = new RedemptionQueue();
+        bytes memory initData =
+            abi.encodeCall(RedemptionQueue.initialize, (address(0), address(usdc), admin));
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertZeroUsdc() public {
+        RedemptionQueue impl = new RedemptionQueue();
+        bytes memory initData =
+            abi.encodeCall(RedemptionQueue.initialize, (address(okuMoney), address(0), admin));
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertZeroAdmin() public {
+        RedemptionQueue impl = new RedemptionQueue();
+        bytes memory initData = abi.encodeCall(
+            RedemptionQueue.initialize, (address(okuMoney), address(usdc), address(0))
+        );
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    /// @dev The queue derives `usdcDecimalMultiplier` as `10**(18 - decimals)`, so
+    ///      anything above 18 underflows the exponent. Rejected at init rather than
+    ///      discovered on the first redemption.
+    function test_Initialize_RevertUsdcDecimalsTooLarge() public {
+        MockHighDecimalToken hd = new MockHighDecimalToken(20);
+        RedemptionQueue impl = new RedemptionQueue();
+        bytes memory initData =
+            abi.encodeCall(RedemptionQueue.initialize, (address(okuMoney), address(hd), admin));
+        vm.expectRevert(
+            abi.encodeWithSelector(RedemptionQueue.UsdcDecimalsTooLarge.selector, uint8(20))
+        );
+        new ERC1967Proxy(address(impl), initData);
     }
 }

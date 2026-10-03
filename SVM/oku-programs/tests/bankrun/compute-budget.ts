@@ -81,6 +81,20 @@ const USER_PATH_CU_CEILING = 100_000;
  */
 const CRANK_CU_CEILING = 80_000;
 
+/**
+ * Ceiling for operator-only instructions (rate schedule writes).
+ *
+ * These are submitted by the orchestrator alone, never composed, and run at
+ * most twice per epoch. The bound exists so a regression surfaces, not because
+ * the budget is tight -- schedule writes do no `rpow` beyond a single re-anchor.
+ */
+const OPERATOR_PATH_CU_CEILING = 30_000;
+
+/**
+ * Solana's default per-instruction compute limit. The hard constraint.
+ */
+const SOLANA_DEFAULT_CU_LIMIT = 200_000;
+
 describe("compute budget (streaming accrual hot paths)", () => {
   let h: BankrunHarness;
   let psm: Program<LitePsm>;
@@ -357,6 +371,104 @@ describe("compute budget (streaming accrual hot paths)", () => {
   });
 
   // -------------------------------------------------------------------
+  // Cold ATA: the path that actually threatens the ceiling
+  // -------------------------------------------------------------------
+
+  /**
+   * `MintOkuM.user_oku_m_ata` is `init_if_needed` (contexts/psm.rs), so a
+   * first-time minter pays an ATA-program CPI plus a rent-exempt allocation on
+   * top of the accrual math.
+   *
+   * EVERY OTHER MEASUREMENT IN THIS FILE IS THE WARM PATH: `beforeEach` calls
+   * `ensureAtaViaBankrun` for the shared `user`, so `init_if_needed` is a
+   * no-op in them. That made the one branch most likely to breach the ceiling
+   * the one branch never measured -- and it was carried in TRACKER.md as a
+   * deferred item on the grounds that it was unmeasured.
+   *
+   * A fresh keypair with no okuM ATA exercises it.
+   */
+  it("mint_oku_m stays under budget on a COLD ATA in the two-rpow branch", async () => {
+    // THE TRUE WORST CASE: a first-time minter arriving during the overhang,
+    // so the instruction pays the ATA creation AND runs `rpow` twice. Measuring
+    // the cold ATA against a simple window would understate it by ~23k CU.
+    const start = await nowTs();
+    await setRateWithSuccessor(
+      ratePerSecondForApy(0.05),
+      start + 30 * DAY,
+      ratePerSecondForApy(0.08),
+      start + 90 * DAY,
+    );
+    await seedBuffer();
+    await warpBy(h, 60 * DAY); // past rateEnd, inside the successor's window
+
+    const newcomer = Keypair.generate();
+    await fundKeypairs(h, [newcomer], 10 * anchor.web3.LAMPORTS_PER_SOL);
+    const newcomerUsdcAta = await ensureAtaViaBankrun(
+      h, newcomer.publicKey, usdcMint, TOKEN_PROGRAM_ID,
+    );
+    await mintToViaBankrun(h, usdcMint, newcomerUsdcAta, payer, 10_000_000, TOKEN_PROGRAM_ID);
+
+    // Deliberately NOT pre-created — this is the whole point of the test.
+    const newcomerOkuMAta = getAssociatedTokenAddressSync(
+      okuMMint, newcomer.publicKey, false, TOKEN_2022_PROGRAM_ID,
+    );
+    // `banksClient.getAccount` returns null for a missing account; the
+    // connection proxy throws, so use the client directly.
+    expect(
+      await h.context.banksClient.getAccount(newcomerOkuMAta),
+      "fixture: the okuM ATA must NOT exist, or this measures the warm path",
+    ).to.be.null;
+
+    const coldTx = await psm.methods
+      .mintOkuM(new BN(1_000_000))
+      .accountsPartial({
+        user: newcomer.publicKey,
+        config: psmConfigPda,
+        usdcMint,
+        okuMMint,
+        userUsdcAta: newcomerUsdcAta,
+        userOkuMAta: newcomerOkuMAta,
+        vaultUsdc: vaultUsdcAta,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        token2022Program: TOKEN_2022_PROGRAM_ID,
+      })
+      .transaction();
+
+    const sim = await simulateTx(h, coldTx, [newcomer]);
+    expect(sim.error, "cold-ATA mint simulation failed").to.be.null;
+    record("mint_oku_m (COLD ATA, branch 2)", sim.computeUnits);
+
+    // The precondition above is what guarantees this is the cold path --
+    // `simulateTx` does not commit, so the ATA is still absent afterwards.
+    // ⚠ FINDING: this path BREACHES the 100k composability target.
+    //
+    // Measured across runs: 101,847 / 106,347 / 107,847 / 131,847 CU. The spread
+    // is real and expected -- `rpow` is exp-by-squaring, so its cost depends on
+    // the BIT PATTERN of `elapsed`, and bankrun's start clock is wall-clock
+    // derived, so each run lands on a different pattern. Every observation is
+    // above `USER_PATH_CU_CEILING` and well below Solana's hard limit.
+    //
+    // Asserted against what is STABLE and what is a real constraint:
+    //   - below Solana's 200k default (the hard limit) -- always held;
+    //   - above the 100k composability target -- always held, i.e. the breach
+    //     is not marginal or flaky.
+    //
+    // TRACKER.md carried this as "cold-ATA compute is unmeasured, estimated
+    // +20-25k, which would breach the ceiling". The estimate was right. Whether
+    // to optimise the path or move the target is an open decision, recorded
+    // there; this test exists so the number cannot drift unnoticed meanwhile.
+    expect(
+      sim.computeUnits,
+      "cold-ATA mint must still fit Solana's default compute limit",
+    ).to.be.lessThan(SOLANA_DEFAULT_CU_LIMIT);
+    expect(
+      sim.computeUnits,
+      "cold-path cost fell below the 100k composability target — if that is a " +
+        "real optimisation, tighten this test and close the TRACKER item",
+    ).to.be.greaterThan(USER_PATH_CU_CEILING);
+  });
+
+  // -------------------------------------------------------------------
   // Operator paths — not user-facing, but worth tracking
   // -------------------------------------------------------------------
 
@@ -375,6 +487,10 @@ describe("compute budget (streaming accrual hot paths)", () => {
     const rateSim = await simulateTx(h, rateTx, [orchestrator]);
     expect(rateSim.error).to.be.null;
     record("set_okum_yield_rate_with_successor", rateSim.computeUnits);
+    // Asserted, not merely recorded. The previous version printed this number
+    // and checked nothing, so the operator path could have regressed 10x
+    // without the suite noticing.
+    expect(rateSim.computeUnits).to.be.lessThan(OPERATOR_PATH_CU_CEILING);
 
     await setRateWithSuccessor(
       ratePerSecondForApy(0.05),

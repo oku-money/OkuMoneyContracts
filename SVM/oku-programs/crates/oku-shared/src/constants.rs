@@ -86,40 +86,100 @@ mod tests {
     use super::*;
 
     /// The constants that MUST equal their EVM counterparts exactly.
-    /// If one of these fails, cross-chain multiplier agreement is broken.
+    ///
+    /// Reads `EVM/src/lib/Constants.sol` and compares against the values
+    /// actually declared there. An earlier version named each EVM constant in
+    /// its failure message but compared Rust literals to Rust literals
+    /// (`PRECISION` against `10u128.pow(18)`, which is the same expression in a
+    /// different notation) — it caught a digit-count typo and nothing else,
+    /// while reading as a cross-stack guarantee.
+    ///
+    /// If this cannot find the Solidity file it FAILS rather than skipping: a
+    /// parity check that silently no-ops when the other stack moves is worse
+    /// than no check.
     #[test]
     fn evm_parity_constants() {
-        assert_eq!(PRECISION, 10u128.pow(18), "EVM Constants.PRECISION");
+        use std::path::PathBuf;
+
+        let sol_path: PathBuf =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../EVM/src/lib/Constants.sol");
+        let src = std::fs::read_to_string(&sol_path).unwrap_or_else(|e| {
+            panic!(
+                "cannot read EVM constants at {}: {e}. This test is the only \
+                 direct cross-stack pin outside the differential corpus; if the \
+                 layout moved, repoint it rather than deleting it.",
+                sol_path.display()
+            )
+        });
+
+        /// Pull `<name> = <expr>;` out of a `uint256 public constant` line.
+        fn decl<'a>(src: &'a str, name: &str) -> &'a str {
+            let needle = format!("constant {name} = ");
+            let start = src
+                .find(&needle)
+                .unwrap_or_else(|| panic!("EVM Constants.sol no longer declares {name}"))
+                + needle.len();
+            let end = start
+                + src[start..]
+                    .find(';')
+                    .unwrap_or_else(|| panic!("unterminated declaration for {name}"));
+            src[start..end].trim()
+        }
+
+        assert_eq!(decl(&src, "PRECISION"), "1e18", "EVM Constants.PRECISION");
+        assert_eq!(PRECISION, 10u128.pow(18));
+
         assert_eq!(
-            MAX_RATE,
-            10u128.pow(18) + 10u128.pow(11),
+            decl(&src, "MAX_RATE"),
+            "PRECISION + 1e11",
             "EVM Constants.MAX_RATE"
         );
+        assert_eq!(MAX_RATE, PRECISION + 10u128.pow(11));
+
         assert_eq!(
-            MAX_MULTIPLIER,
-            10u128.pow(24),
+            decl(&src, "MAX_MULTIPLIER"),
+            "1e24",
             "EVM Constants.MAX_MULTIPLIER"
         );
+        assert_eq!(MAX_MULTIPLIER, 10u128.pow(24));
+
         // Not a multiplier-math constant, but a divergence here means the two
         // stacks ACCEPT DIFFERENT SCHEDULES — one chain would take a window the
         // other rejects, which is the same class of cross-chain inconsistency.
         assert_eq!(
-            MAX_RATE_WINDOW_SECONDS,
-            90 * 24 * 60 * 60,
-            "EVM Constants.MAX_RATE_WINDOW (90 days)"
+            decl(&src, "MAX_RATE_WINDOW"),
+            "90 days",
+            "EVM Constants.MAX_RATE_WINDOW"
         );
+        assert_eq!(MAX_RATE_WINDOW_SECONDS, 90 * 24 * 60 * 60);
     }
 
-    /// The window bound must sit far enough inside `compound_for`'s measured
-    /// failure point (~472,763,099 s at `MAX_RATE`) to be a real margin.
+    /// The window bound must sit far enough inside `compound_for`'s failure
+    /// point to be a real margin.
+    ///
+    /// CALLS `compound_for`. An earlier version declared
+    /// `let measured_failure_secs = 472_763_099;` and divided two literals —
+    /// the entire safety argument for `MAX_RATE_WINDOW_SECONDS` rested on a
+    /// number typed into the test, and a regression in `wad` or `rate` that
+    /// moved the real failure point to 1e8 seconds would have left it green.
     #[test]
     fn max_rate_window_leaves_large_margin_below_rpow_failure() {
-        let measured_failure_secs: i64 = 472_763_099;
-        let margin = measured_failure_secs / MAX_RATE_WINDOW_SECONDS;
+        use crate::rate::compound_for;
+
+        // 50 windows past the bound must still compute. This is the property;
+        // the ~472,763,099 s figure is just where it eventually stops.
+        let fifty_windows = (MAX_RATE_WINDOW_SECONDS * 50) as u64;
         assert!(
-            margin >= 50,
-            "window bound leaves only {}x margin below the rpow failure point",
-            margin
+            compound_for(PRECISION, MAX_RATE, fifty_windows).is_some(),
+            "compound_for failed at 50x the window bound ({fifty_windows}s) — \
+             the margin this constant relies on has eroded"
+        );
+
+        // ...and the failure point is still far beyond that, so the 50x is not
+        // itself sitting on the edge.
+        assert!(
+            compound_for(PRECISION, MAX_RATE, (MAX_RATE_WINDOW_SECONDS * 55) as u64).is_some(),
+            "margin is thinner than 55 windows"
         );
         // The window must divide evenly by any epoch length the orchestrator is
         // likely to run, so a whole number of epochs fits inside one window with

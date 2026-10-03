@@ -688,10 +688,32 @@ mod proofs {
         let elapsed: u64 = kani::any();
         kani::assume(base <= MAX_MULTIPLIER);
         kani::assume(rate <= crate::constants::MAX_RATE);
-        kani::assume(elapsed <= 90 * 86_400);
-        if let Some(v) = compound_for(base, rate, elapsed) {
-            assert!(v <= MAX_MULTIPLIER);
-        }
+        kani::assume(elapsed <= crate::constants::MAX_RATE_WINDOW_SECONDS as u64);
+
+        // These three assumptions ARE the reachability hypothesis: the rails on
+        // `_setOkuMYieldRate` bound the rate, and `MAX_RATE_WINDOW` bounds a
+        // single window. So this harness proves what the `reachability` test
+        // module below only samples.
+        //
+        // `is_some()` is asserted, not pattern-matched. An earlier version used
+        // `if let Some(v) = ...`, which passes vacuously if `compound_for` ever
+        // regresses to always-`None` — i.e. the proof that accrual cannot fail
+        // in-domain would itself have been satisfied by accrual always failing.
+        //
+        // ⚠ NOT CURRENTLY DISCHARGED. `cargo kani` does not terminate on this
+        // harness within 15 minutes, and did not before this assertion was
+        // strengthened either — the cost is the symbolic 256-bit arithmetic
+        // inside `rpow`, not the loop bound (capping `elapsed` at 2^20 does not
+        // help). Kani is also not run in CI. The statement below is the one we
+        // want; discharging it needs a different formulation (composing proofs
+        // of the primitives rather than symbolically executing `rpow`). Tracked
+        // in TRACKER.md.
+        let out = compound_for(base, rate, elapsed);
+        assert!(
+            out.is_some(),
+            "compound_for returned None inside the reachable domain"
+        );
+        assert!(out.unwrap() <= MAX_MULTIPLIER);
     }
 
     /// A halted schedule is flat for every timestamp — accrual genuinely

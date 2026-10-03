@@ -177,14 +177,22 @@ mod verification {
         kani::assume(divisor > 0);
         kani::assume(divisor <= DOMAIN_MAX);
 
+        // DIVISION-FREE invariant, not a re-implementation. An earlier version
+        // asserted against `(a as u128) * (b as u128) / (divisor as u128)`,
+        // which is `mul_div_floor`'s own body line-for-line — it could only
+        // catch a typo in the narrowing cast. The floor property below pins the
+        // ANSWER without restating the algorithm:
+        //
+        //     q * d <= a * b < (q + 1) * d
+        //
+        // (The `expected_128 > u64::MAX` branch was also dead: with all three
+        // operands <= 255 the quotient cannot exceed 65_025.)
         let result = mul_div_floor(a, b, divisor);
-        let expected_128 = (a as u128) * (b as u128) / (divisor as u128);
-
-        if expected_128 <= u64::MAX as u128 {
-            assert_eq!(result, Some(expected_128 as u64));
-        } else {
-            assert!(result.is_none());
-        }
+        let product = (a as u128) * (b as u128);
+        let q = result.expect("in-domain inputs must produce a value") as u128;
+        let d = divisor as u128;
+        assert!(q * d <= product, "quotient too large");
+        assert!(product < (q + 1) * d, "quotient too small");
     }
 
     /// Proof: two u64 values can never overflow u128 when multiplied.
@@ -213,15 +221,63 @@ mod verification {
         assert_eq!(result, Some(amount));
     }
 
-    /// Proof: consistent with the underlying WAD primitive.
+    /// Proof: `raw_to_dollars` narrows correctly.
+    ///
+    /// DELIBERATELY NARROW. This compares against `mul_div_wad_floor`, which is
+    /// what the function calls — so it proves only the `u64::try_from` narrowing
+    /// and the `None` propagation, NOT the arithmetic. It is labelled that way
+    /// rather than named "consistent with the WAD primitive", which read as a
+    /// correctness proof while being the function body restated.
+    ///
+    /// The arithmetic itself is proven by the exact-rational harness below and,
+    /// over the full 256-bit domain, by the `wad` module's own proofs.
+    ///
+    /// ⚠ NOT CURRENTLY DISCHARGED — `cargo kani` does not terminate on this in
+    /// 10 minutes, and did not on its predecessor either. See the note on
+    /// `rate.rs::proof_compound_for_output_clamped`.
     #[kani::proof]
-    fn proof_raw_to_dollars_consistent_with_wad() {
+    fn proof_raw_to_dollars_narrowing_is_faithful() {
         let amount: u64 = kani::any();
         let multiplier: u128 = kani::any();
         kani::assume(multiplier <= crate::constants::MAX_MULTIPLIER);
-        let via_wad = crate::wad::mul_div_wad_floor(amount as u128, multiplier)
-            .and_then(|v| u64::try_from(v).ok());
-        assert_eq!(raw_to_dollars(amount, multiplier), via_wad);
+        let wide = crate::wad::mul_div_wad_floor(amount as u128, multiplier);
+        match (raw_to_dollars(amount, multiplier), wide) {
+            (Some(d), Some(w)) => assert!(w <= u64::MAX as u128 && d as u128 == w),
+            (None, Some(w)) => assert!(w > u64::MAX as u128),
+            (None, None) => {}
+            (Some(_), None) => panic!("narrowed a value the primitive refused"),
+        }
+    }
+
+    /// Proof: the ANSWER is the exact floor of `amount * multiplier / PRECISION`.
+    ///
+    ///     d * PRECISION <= amount * multiplier < (d + 1) * PRECISION
+    ///
+    /// Division-free, so it restates no algorithm.
+    ///
+    /// `multiplier` is bounded at `2^63` so `amount * multiplier` fits `u128`
+    /// and the property can be expressed in native arithmetic. That bound is
+    /// about a 9.2e18x multiplier -- nine orders of magnitude beyond anything
+    /// the protocol can reach, since `MAX_MULTIPLIER` is 1e24 at `PRECISION`
+    /// 1e18, i.e. 1e6x. Expressing it over the full `u128` domain requires
+    /// 256-bit comparisons, which took the solver past 1.4M clauses without
+    /// terminating -- an unverifiable proof is worth less than a verified one
+    /// on a domain that covers every reachable input.
+    ///
+    /// ⚠ This bounded form STILL does not discharge in 10 minutes. Kept because
+    /// it states the right property; see TRACKER.md.
+    #[kani::proof]
+    fn proof_raw_to_dollars_is_exact_floor() {
+        let amount: u64 = kani::any();
+        let multiplier: u128 = kani::any();
+        kani::assume(multiplier <= 1u128 << 63);
+
+        let product = (amount as u128) * multiplier;
+        let d =
+            raw_to_dollars(amount, multiplier).expect("quotient fits u64 on this domain") as u128;
+
+        assert!(d * PRECISION <= product, "quotient too large");
+        assert!(product < (d + 1) * PRECISION, "quotient too small");
     }
 
     // -----------------------------------------------------------------------

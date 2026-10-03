@@ -80,7 +80,7 @@ const _: () = assert!(PRECISION < (1u128 << 64));
 /// instead. Holding the limbs as `u128` produces four `__multi3` calls per
 /// invocation, which alone pushed `mint_oku_m` over 150k compute units.
 #[inline]
-const fn widening_mul(a: u128, b: u128) -> (u128, u128) {
+pub(crate) const fn widening_mul(a: u128, b: u128) -> (u128, u128) {
     let a_lo = a as u64;
     let a_hi = (a >> 64) as u64;
     let b_lo = b as u64;
@@ -361,23 +361,48 @@ mod tests {
         assert_eq!(lo, 1);
     }
 
+    /// Random differential against the independent 32-bit-limb oracle.
+    ///
+    /// OPERANDS ARE CONSTRAINED, DELIBERATELY. An earlier version drew both
+    /// from the full `u128` range. The quotient `a*b / 1e18` then lands around
+    /// `2^196`, which fits `u128` only when `a*b < 2^187.8` -- probability
+    /// ~1.6e-19. Measured: all 20,000 iterations returned `None` from BOTH
+    /// sides, so all 40,000 assertions were `None == None`. A test named
+    /// `floor_matches_oracle_random` never compared a single computed value,
+    /// in the module whose entire purpose is 256-bit arithmetic.
+    ///
+    /// Masked so the quotient is ALWAYS representable and the comparison is
+    /// always real: `a < 2^120` and `b < 2^60` give `a*b < 2^180`, so
+    /// `a*b / 1e18 < 2^120.2`, comfortably inside `u128`. Both operands still
+    /// span far wider than the protocol domain, so the 256-bit path is
+    /// genuinely exercised (the sibling test covers the realistic range).
+    ///
+    /// `some_count` makes the vacuous mode impossible to reintroduce silently:
+    /// if a future change pushes the operands back out of range, the test fails
+    /// rather than passing on `None == None`.
     #[test]
     fn floor_matches_oracle_random() {
         let mut s: u128 = 0x243F_6A88_85A3_08D3;
+        let mut some_count = 0usize;
         for _ in 0..20_000 {
-            let a = lcg(&mut s);
-            let b = lcg(&mut s);
-            assert_eq!(
-                mul_div_wad_floor(a, b),
-                oracle_mul_div(a, b, false),
-                "floor a={a} b={b}"
-            );
+            let a = lcg(&mut s) & ((1u128 << 120) - 1);
+            let b = lcg(&mut s) & ((1u128 << 60) - 1);
+            let got = mul_div_wad_floor(a, b);
+            if got.is_some() {
+                some_count += 1;
+            }
+            assert_eq!(got, oracle_mul_div(a, b, false), "floor a={a} b={b}");
             assert_eq!(
                 mul_div_wad_half_up(a, b),
                 oracle_mul_div(a, b, true),
                 "half a={a} b={b}"
             );
         }
+        assert!(
+            some_count == 20_000,
+            "only {some_count}/20000 iterations produced a value — the operand \
+             range has drifted and this test is comparing None to None"
+        );
     }
 
     #[test]
@@ -571,11 +596,43 @@ mod proofs {
     /// divisor, which is what makes every partial quotient fit a `u64`.
     #[kani::proof]
     fn proof_div_wad_quotient_bound() {
+        // `hi` is SYMBOLIC. An earlier version assumed `hi == 0`, which deletes
+        // the entire four-limb long division this proof exists to cover and
+        // reduces it to `lo / PRECISION`. With `hi` free the harness actually
+        // exercises the carried-remainder path.
+        //
+        // Bounded so the quotient is representable: `div_wad` answers only when
+        // `(hi, lo) / PRECISION` fits `u128`, i.e. `hi < PRECISION`. Above that
+        // it must return `None`, which is asserted rather than assumed away.
+        //
+        // ⚠ NOT CURRENTLY DISCHARGED — see the note on
+        // `proof_compound_for_output_clamped` in `rate.rs`. With `hi` symbolic
+        // this is a genuine 256-bit long-division proof and the solver does not
+        // terminate in 15 minutes. The previous `kani::assume(hi == 0)` DID
+        // terminate, but only because it deleted the four-limb path this proof
+        // exists to cover. An intractable statement of the right property is
+        // more useful than a fast proof of the wrong one; both are tracked.
         let hi: u128 = kani::any();
         let lo: u128 = kani::any();
-        kani::assume(hi == 0);
-        // With hi == 0 the true quotient is lo / PRECISION, which always fits.
-        assert!(div_wad(hi, lo) == Some(lo / PRECISION));
+
+        match div_wad(hi, lo) {
+            Some(q) => {
+                // Soundness: the quotient must satisfy the division identity
+                // against the reconstructed 256-bit dividend, to within one
+                // divisor. Checked on the low limb, which is where a dropped
+                // carry would surface.
+                assert!(hi < PRECISION);
+                let (rhi, rlo) = widening_mul(q, PRECISION);
+                assert!(rhi <= hi);
+                if rhi == hi {
+                    assert!(rlo <= lo);
+                }
+            }
+            None => {
+                // The only reason to refuse is an unrepresentable quotient.
+                assert!(hi >= PRECISION);
+            }
+        }
     }
 
     /// `dollars_to_raw`'s product bound, proven rather than asserted.

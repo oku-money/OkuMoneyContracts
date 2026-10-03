@@ -715,7 +715,7 @@ the streaming-accrual and display-mirror tests will fail with an
 ### Suites
 
 The bankrun suite is **124 tests** (`npm run test:bankrun`); the pure-Rust
-suite is **61** (`npm run test:rust`). `npm test` runs both. The cross-language
+suite is **60** (`npm run test:rust`). `npm test` runs both. The cross-language
 agreement of `compute_multiplier` is enforced separately by the 3,867-vector
 differential corpus (`npm run test:differential` from the repo root).
 

@@ -1803,7 +1803,7 @@ first.
 
 **Counts (measured):** `forge test` **622**, `npx hardhat test` **258**
 (of which `npm run test:unit` is **232**). Cross-stack:
-`packages/yield-tooling` 3,867 differential vectors; SVM 61 Rust + 124 bankrun.
+`packages/yield-tooling` 3,867 differential vectors; SVM 60 Rust + 124 bankrun.
 
 ```bash
 forge test --match-path "test/invariants/*"        # Invariant suite (256 runs × 500 depth by default)

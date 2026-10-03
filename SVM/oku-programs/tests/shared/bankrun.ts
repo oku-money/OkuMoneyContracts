@@ -132,8 +132,15 @@ function assertProgramArtifactIsFresh(): void {
   const walk = (dir: string): void => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
+      // `crates/*/tests/` holds integration tests compiled as separate
+      // binaries; they never enter `lite_psm.so`. Including them made editing
+      // a test file report the PROGRAM as stale, which `anchor build` cannot
+      // clear (cargo correctly declines to relink an unchanged program) — a
+      // false positive that blocks the suite with no way forward.
+      if (entry.isDirectory()) {
+        if (entry.name === 'tests' || entry.name === 'fuzz') continue;
+        walk(full);
+      } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const m = fs.statSync(full).mtimeMs;
         if (m > newestSource) {
           newestSource = m;

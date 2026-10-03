@@ -108,6 +108,7 @@ fn matches_solidity_reference_exactly() {
     });
 
     let mut checked = 0usize;
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut revert_cases = 0usize;
     let mut mismatches: Vec<String> = Vec::new();
 
@@ -154,11 +155,17 @@ fn matches_solidity_reference_exactly() {
             }
         }
         checked += 1;
+        seen.insert(line.to_string());
     }
 
+    // UNIQUE vectors, not lines. 1,026 of the 3,867 lines are exact duplicates,
+    // so a line count overstates coverage by ~36% -- and a corpus that lost its
+    // variety while keeping its length would not show up in `checked`.
+    let unique = seen.len();
     assert!(
-        checked > 1_000,
-        "corpus looks truncated: only {checked} vectors. Regenerate it."
+        unique > 2_500,
+        "corpus has only {unique} unique vectors out of {checked} lines. \
+         Regenerate it: cd EVM && forge test --match-contract GenerateVectors"
     );
     assert!(
         mismatches.is_empty(),

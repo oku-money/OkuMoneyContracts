@@ -756,10 +756,21 @@ describe("lite-psm", () => {
           .signers([orchestrator])
           .rpc();
 
+        // THE POINT OF THE TEST: the multiplier actually moved to the value
+        // submitted. The previous version asserted only
+        // `lastYieldDistributionSlot > 0` -- an unrelated bookkeeping field,
+        // on a shared harness where an earlier test may already have stamped
+        // it, so a silently no-op override would have passed.
+        const after = await computeCanonicalMultiplier(h, program, configPda);
+        expect(after.toString(), "override must set the multiplier exactly").to.equal(
+          (current + 1n).toString(),
+        );
+
+        // ...and it collapses the schedule, which is what makes it an
+        // EMERGENCY override rather than a rate change.
         const configAfter = await program.account.psmConfig.fetch(configPda);
-        // lastYieldDistributionSlot should be set
+        expect(Number(configAfter.okumRateEnd), "override halts the schedule").to.equal(0);
         expect(Number(configAfter.lastYieldDistributionSlot)).to.be.greaterThan(0);
-        // Note: Multiplier cannot be reset - it can only increase (yield accrual model)
       });
 
       it("non-rebaser CANNOT force the multiplier", async () => {
@@ -842,36 +853,32 @@ describe("lite-psm", () => {
     });
 
     it("fails to mint zero amount", async () => {
-      // On bankrun, slot advancement happens naturally between txs; we
-      // accept either ZeroAmount (if we got a fresh slot) or
-      // YieldDistributionInProgress (if still in the yield slot).
-      try {
-        await program.methods
-          .mintOkuM(new BN(0))
-          .accountsPartial({
-            user: user.publicKey,
-            config: configPda,
-            usdcMint,
-            okuMMint,
-            userUsdcAta,
-            userOkuMAta,
-            vaultUsdc: vaultUsdcAta,
-        tokenProgram: TOKEN_PROGRAM_ID,
-            token2022Program: TOKEN_2022_PROGRAM_ID,
-            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-          })
-          .signers([user])
-          .rpc();
-        expect.fail("Should have failed");
-      } catch (err: any) {
-        const errorCode = err?.error?.errorCode?.code || err?.message || "";
-        // May also get YieldDistributionInProgress if in same slot as yield operation
-        expect(errorCode).to.satisfy((c: string) => 
-          c === "ZeroAmount" || c.includes("ZeroAmount") ||
-          c === "YieldDistributionInProgress" || c.includes("YieldDistributionInProgress")
-        );
-      }
+      // `ZeroAmount`, specifically. The previous version also accepted
+      // `YieldDistributionInProgress`, justified by "if we got a fresh slot" --
+      // but this file's harness uses the default `autoBumpSlot: true`, so every
+      // `.rpc()` advances the slot and that branch is unreachable. A dead
+      // alternative that weakens a test for no benefit.
+      await expectBankrunError(
+        () =>
+          program.methods
+            .mintOkuM(new BN(0))
+            .accountsPartial({
+              user: user.publicKey,
+              config: configPda,
+              usdcMint,
+              okuMMint,
+              userUsdcAta,
+              userOkuMAta,
+              vaultUsdc: vaultUsdcAta,
+              tokenProgram: TOKEN_PROGRAM_ID,
+              token2022Program: TOKEN_2022_PROGRAM_ID,
+              associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+              systemProgram: SystemProgram.programId,
+            })
+            .signers([user])
+            .rpc(),
+        "ZeroAmount",
+      );
     });
 
     it("fails to mint when max supply exceeded", async () => {
@@ -1102,22 +1109,18 @@ describe("lite-psm", () => {
           .rpc();
         expect.fail("Should have failed");
       } catch (err: any) {
-        // A user balance shortfall on redeem surfaces as
-        // `InsufficientUserBalance` from the program's pre-check. We also
-        // accept the SPL Token raw `InsufficientFunds` selector (and the
-        // PSM-side `InsufficientBuffer`) in case the underlying burn CPI
-        // is what rejects first.
+        // `InsufficientUserBalance`, specifically. The program has a dedicated
+        // pre-check (psm.rs) precisely so this is distinguishable.
+        //
+        // The previous version accepted a six-way disjunction including
+        // `InsufficientBuffer` -- a semantically DIFFERENT failure (the vault
+        // is empty, not the user) -- and `custom program error: 0x1`, which
+        // matches error code 1 from ANY program. A test named for a user
+        // balance shortfall passed when the vault was the thing that was short.
         const code = err?.error?.errorCode?.code;
-        const msg = String(err?.message ?? err);
-        const isInsufficient =
-          code === "InsufficientFunds" ||
-          code === "InsufficientBuffer" ||
-          code === "InsufficientUserBalance" ||
-          msg.includes("custom program error: 0x1") ||
-          msg.includes("insufficient funds") ||
-          msg.includes("InsufficientBuffer") ||
-          msg.includes("InsufficientUserBalance");
-        expect(isInsufficient, `unexpected error: ${msg}`).to.equal(true);
+        expect(code, `expected InsufficientUserBalance, got: ${err?.message ?? err}`).to.equal(
+          "InsufficientUserBalance",
+        );
       }
     });
   });

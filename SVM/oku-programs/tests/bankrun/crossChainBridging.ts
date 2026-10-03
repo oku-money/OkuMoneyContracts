@@ -58,6 +58,7 @@ import {
   computeCanonicalMultiplier,
   warpBy,
   getClock,
+  expectBankrunError,
 } from "../shared/bankrun";
 
 const { Keypair, SystemProgram, PublicKey, Transaction } = anchor.web3;
@@ -429,7 +430,7 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
   // Test 3 — Authority boundary: random key cannot mint okuM directly
   // ---------------------------------------------------------------------
 
-  it("a non-orchestrator key cannot mint okuM directly (PSM public mint is permissionless)", async () => {
+  it("the public PSM mint is permissionless — a random key mints identically to the orchestrator", async () => {
     // Bob — random key with USDC — tries to call mint_oku_m directly
     // against his own ATA. mint_oku_m is permissionless, so this should
     // SUCCEED for him, but the result must not differ from any other
@@ -458,15 +459,35 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
       .signers([bob])
       .rpc();
     const bobOkuMAfter = await ataAmount(bobOkuMAta, TOKEN_2022_PROGRAM_ID);
-    expect(Number(bobOkuMAfter) - Number(bobOkuMBefore)).to.be.greaterThan(0);
+    // Exact: 100 USDC at the live multiplier. `> 0` passed on a single unit.
+    const mult = await computeCanonicalMultiplier(h, psm, psmConfigPda);
+    const expected = (100_000_000n * 10n ** 18n) / mult;
+    expect(
+      (BigInt(bobOkuMAfter) - BigInt(bobOkuMBefore)).toString(),
+      "an unprivileged key mints the same amount anyone else would",
+    ).to.equal(expected.toString());
 
-    // The orchestrator role-set (buffer_depositor /
-    // rebaser / direct_minter / direct_burner) does NOT grant a public
-    // mint privilege — confirm by inspecting PsmConfig. Bob can mint
-    // because `mint_oku_m` is permissionless; the PSM PDA signs the
-    // inner CPI to Token-2022's `mint_to`.
-    const cfg = await psm.account.psmConfig.fetch(psmConfigPda);
-    expect(cfg.bufferDepositor.toString()).to.equal(orchestrator.publicKey.toString());
-    expect(cfg.rebaser.toString()).to.equal(orchestrator.publicKey.toString());
+    // The DIRECT mint, by contrast, IS gated -- Bob holds no `direct_minter`
+    // role. Previously this was "proven" by reading back config fields the
+    // fixture had written, which demonstrates nothing about an authority
+    // boundary. Exercise the boundary instead.
+    await expectBankrunError(
+      () =>
+        psm.methods
+          .mintOkuMDirect(new BN(1_000_000))
+          .accountsPartial({
+            directMinter: bob.publicKey,
+            config: psmConfigPda,
+            okuMMint,
+            recipient: bob.publicKey,
+            recipientOkuMAta: bobOkuMAta,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([bob])
+          .rpc(),
+      "Unauthorized",
+    );
   });
 });

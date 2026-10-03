@@ -30,6 +30,7 @@ import {
   seedProgramData,
   programDataAddress,
   fundKeypairs,
+  readDisplayMultiplier,
 } from "../shared/bankrun";
 import { initializePsm, DECIMALS, MAX_SUPPLY, MINTER_ALLOWANCE } from "../shared/setup";
 
@@ -66,20 +67,34 @@ describe("init invariants (OkuM mint extensions)", () => {
     expect(mintAcctInfo, "OkuM mint account should exist").to.not.be.null;
     expect(mintAcctInfo!.owner.equals(TOKEN_2022_PROGRAM_ID)).to.be.true;
 
-    // The mint account should be larger than a plain mint (MINT_SIZE = 82)
-    // because it includes Token-2022 extensions (ScaledUiAmount,
-    // MetadataPointer, TokenMetadata).
+    // The test name promises THREE SPECIFIC extensions. `data.length >
+    // MINT_SIZE` is satisfied by any one of them, so assert each by its TLV
+    // discriminator instead.
     expect(mintAcctInfo!.data.length).to.be.greaterThan(MINT_SIZE);
+    const tlvTypes = new Set<number>();
+    {
+      const d = mintAcctInfo!.data;
+      let i = 166; // 82 mint + 83 padding + 1 account type
+      while (i + 4 <= d.length) {
+        const t = d[i] | (d[i + 1] << 8);
+        const len = d[i + 2] | (d[i + 3] << 8);
+        if (t === 0 && len === 0) break;
+        tlvTypes.add(t);
+        i += 4 + len;
+      }
+    }
+    expect(tlvTypes.has(25), "ScaledUiAmount extension missing").to.be.true;
+    expect(tlvTypes.has(18), "MetadataPointer extension missing").to.be.true;
+    expect(tlvTypes.has(19), "TokenMetadata extension missing").to.be.true;
 
     // Parse the mint and verify basic properties
     const mintData = unpackMint(okuMMint, mintAcctInfo!, TOKEN_2022_PROGRAM_ID);
     expect(mintData.mintAuthority?.equals(configPda)).to.be.true;
     expect(Number(mintData.decimals)).to.equal(DECIMALS);
 
-    // The mint should carry TLV extension data (ScaledUiAmount +
-    // MetadataPointer + TokenMetadata). Non-empty TLV confirms the
-    // extensions were initialized.
-    expect(mintData.tlvData.length).to.be.greaterThan(0);
+    // The initial multiplier the test name promises, which was never read.
+    const display = await readDisplayMultiplier(h, okuMMint);
+    expect(display.effective, "mint must start at a 1.0 display multiplier").to.equal(1.0);
 
     // Verify PsmConfig references the correct OkuM mint
     const config = await program.account.psmConfig.fetch(configPda);

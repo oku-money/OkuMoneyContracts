@@ -18,7 +18,13 @@ import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getTokenMetadata } from "@sola
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
 import { initializePsm, DECIMALS } from "../shared/setup";
-import { BankrunHarness, startBankrun, createMintViaBankrun } from "../shared/bankrun";
+import {
+  BankrunHarness,
+  startBankrun,
+  createMintViaBankrun,
+  fundKeypairs,
+  expectBankrunError,
+} from "../shared/bankrun";
 
 const { Keypair } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
@@ -98,22 +104,24 @@ describe("OkuM Token-2022 metadata identity", () => {
   });
 
   it("update_token_metadata rejects a non-role_admin signer", async () => {
+    // Funded, so the rejection can only be about authority -- an unfunded
+    // fresh keypair could fail for fee/rent reasons and a bare catch would
+    // have accepted that as a pass.
     const attacker = Keypair.generate();
-    let failed = false;
-    try {
-      await program.methods
-        .updateTokenMetadata()
-        .accountsPartial({
-          roleAdmin: attacker.publicKey,
-          config: configPda,
-          okuMMint,
-          token2022Program: TOKEN_2022_PROGRAM_ID,
-        })
-        .signers([attacker])
-        .rpc();
-    } catch (_e) {
-      failed = true;
-    }
-    expect(failed, "unauthorized signer must be rejected").to.be.true;
+    await fundKeypairs(h, [attacker], 10 * anchor.web3.LAMPORTS_PER_SOL);
+    await expectBankrunError(
+      () =>
+        program.methods
+          .updateTokenMetadata()
+          .accountsPartial({
+            roleAdmin: attacker.publicKey,
+            config: configPda,
+            okuMMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([attacker])
+          .rpc(),
+      "Unauthorized",
+    );
   });
 });

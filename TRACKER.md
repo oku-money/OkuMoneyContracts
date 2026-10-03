@@ -195,6 +195,94 @@ was unreadable and only discoverable by execution. `broadcastSchedule` takes an
 injectable `SubprocessRunner` purely so that boundary is assertable;
 `broadcastSchedule.test.ts` pins the exact env every chain receives. Keep it.
 
+### OPEN: cold-ATA mint breaches the 100k compute target — decision needed `[SVM]`
+
+**Now measured, and the old estimate was right.** A first-time minter arriving
+during the two-`rpow` overhang costs **101,847–131,847 CU**, against a
+self-imposed **100,000 CU** composability target. Solana's 200,000 hard limit
+is never approached.
+
+`MintOkuM.user_oku_m_ata` is `init_if_needed`, so a user who has never held
+okuM also pays an ATA-program CPI and a rent-exempt allocation (~+27k over the
+warm path) on top of the accrual math.
+
+This sat in TRACKER as "unmeasured, estimated +20–25k, would breach the
+ceiling". It was unmeasured because `compute-budget.ts`'s `beforeEach`
+pre-created the okuM ATA, so **every** measurement in that file was the warm
+path and the one branch most likely to breach was the one never exercised.
+`tests/bankrun/compute-budget.ts` now measures it with a fresh keypair and
+asserts the ATA is absent beforehand.
+
+**The run-to-run spread is expected, not flaky.** `rpow` is exp-by-squaring, so
+cost depends on the bit pattern of `elapsed`, and bankrun's start clock is
+wall-clock derived. Every observation is above 100k and below 200k, so the test
+asserts both bounds — the breach is structural, not marginal.
+
+**The decision:** optimise the cold path, or move the composability target.
+The 100k figure exists so the instruction can be composed with a CPI wrapper
+(aggregators, vaults). At ~102–132k that is still possible within 200k but with
+less headroom than intended. Options: pre-create ATAs off the hot path in the
+client; split `init_if_needed` into a separate instruction; or accept 150k as
+the target and document it. Not fixed here — it is a product/integration call,
+not a defect.
+
+### OPEN: several Kani proofs do not discharge, and Kani is not in CI `[SVM]`
+
+`cargo kani` does not terminate within 15 minutes on
+`rate.rs::proof_compound_for_output_clamped`,
+`wad.rs::proof_div_wad_quotient_bound`, or either `raw_to_dollars` harness. The
+cost is symbolic 256-bit arithmetic inside `rpow`/`div_wad`, not loop bounds —
+capping `elapsed` at `2^20` does not help.
+
+**This is not a regression.** The predecessors of all four also timed out,
+verified by checking out HEAD's versions and running them. What changed is that
+the statements are now the ones we want: `rate.rs` asserts `is_some()` rather
+than `if let Some(v)` (which passed vacuously if accrual regressed to
+always-`None`), and `wad.rs` drops `kani::assume(hi == 0)` (which had deleted
+the four-limb long division the proof exists to cover).
+
+So the proofs are decorative today. Discharging them needs a different
+formulation — proving properties of the primitives separately and composing,
+rather than symbolically executing the whole path. Until then, `cargo kani` is
+also absent from `.github/workflows/test.yml`, so nothing runs even the
+harnesses that DO verify (`proof_mul_div_floor_correctness_bounded`,
+`proof_mul_div_floor_no_u128_overflow`). Adding the cheap ones to CI is a
+smaller, separable win.
+
+### OPEN: the differential corpus has no provenance pin `[both]`
+
+`EVM/test/differential/vectors.jsonl` is the oracle for all cross-language
+multiplier parity, but nothing ties it to a generator revision — no hash, no
+version field, no `GenerateVectors.t.sol` checksum. A corpus accidentally
+regenerated **from the Rust** rather than the Solidity would be undetectable,
+and it is the one place a tautology could be introduced wholesale.
+
+Related: only **4 of 3,867** vectors are revert cases, and all four are the same
+shape (`nowTs < anchor`). Nothing covers `rpow` overflow or window/rate
+rejection, so the "reverts are checked as strictly as values" claim in the
+header is true of the code but far broader than the corpus backing it.
+
+Both fixes require **regenerating the committed oracle corpus**, and the
+provenance mechanism is a design choice (hash of the generator? a version
+field? a forge-emitted manifest?). Regenerating the thing that *is* the oracle
+is a deliberate act. The duplicate-counting half is already fixed — the test
+now asserts unique vectors, since 1,026 of the 3,867 lines are exact duplicates
+and a line count overstated coverage by ~36%.
+
+### OPEN: shared-harness test-order coupling in `lite-psm.ts` `[SVM]`
+
+Module-level singleton keypairs in `tests/shared/setup.ts` plus one `before()`
+harness shared across a 1,517-line file mean tests observe each other's state.
+The symptom is assertions weakened to accommodate it — `minterAllowance` is
+checked with `> 0` and `at.most(...)` because it "may have been partially
+consumed by earlier tests". The coupling is the defect; the weakened assertion
+is the symptom.
+
+The fix is per-test harnesses (as `streaming-accrual.ts`, `display-mirror.ts`
+and `compute-budget.ts` already use), which costs a bankrun boot per test
+across ~39 tests. Isolation versus suite runtime — a judgement call, not a
+mechanical change.
+
 ### OPEN: `npm run upgrade` has three structurally broken checks `[SVM]`
 
 Do **not** reach for it on an SVM layout change until these are fixed:
@@ -217,9 +305,10 @@ Reviewed, understood, deliberately not fixed:
   tell from the return value whether they were paid or enqueued.
 - `update_token_metadata` has no rent payer.
 - Token-2022 CPI errors surface opaquely.
-- **Cold-ATA compute is unmeasured.** The pinned 80,883 CU excludes first-time
-  ATA creation (~+20–25k), which breaches the self-imposed 100k ceiling while
-  staying inside Solana's 200k limit.
+- Token-2022 CPI error mapping: exactly one call site (`display_sync.rs`'s
+  `update_multiplier`) wraps its CPI error; ~12 others — every hot-path
+  `transfer_checked`/`mint_to`/`burn`, both freeze/thaw, both metadata writes —
+  propagate raw SPL codes.
 
 ---
 

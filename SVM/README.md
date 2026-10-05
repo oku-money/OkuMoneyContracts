@@ -165,7 +165,7 @@ crates/
   oku-shared/                # Pure-Rust workspace lib (no solana-*, no anchor-lang)
     src/
       lib.rs
-      constants.rs           # PRECISION, BASIS_POINTS, MAX_MULTIPLIER, TOKEN_DECIMALS
+      constants.rs           # PRECISION, MAX_MULTIPLIER, TOKEN_DECIMALS
       math.rs                # mul_div_floor, mul_div_ceil + siblings, overflow-safe Option<u64>
                              # + Kani harnesses gated on #[cfg(kani)]
       yield_lock.rs          # Pure slot-comparison primitive
@@ -544,7 +544,6 @@ None can be changed without a program upgrade.
 |---|---|---|
 | `PRECISION` | `1_000_000_000_000_000_000` (1e18, WAD) | Fixed-point base for multipliers and per-second rates. **Byte-identical to EVM `Constants.PRECISION`** — that equality is what makes cross-chain agreement work without messaging. |
 | `MAX_RATE` | `PRECISION + 1e11` (~2242% APY) | Sanity bound on `rpow` inputs. Mirrors EVM `Constants.MAX_RATE`. |
-| `BASIS_POINTS` | `10_000` | Universal bps denominator. Unused on-chain; retained for EVM constant parity. |
 | `MAX_MULTIPLIER` | `1_000_000_000_000_000_000_000_000` (1e24, = $1M/token) | Math-sanity bound. `compound_for` CLAMPS here; the emergency override REJECTS above it. Mirrors EVM `Constants.MAX_MULTIPLIER`. |
 | `TOKEN_DECIMALS` | `6` | OkuM uses 6 decimals on SVM (matches USDC). Asserted at init. **Unrelated to `PRECISION`** — token decimals govern raw balances, `PRECISION` governs multiplier/rate fixed-point. Do not conflate them. |
 

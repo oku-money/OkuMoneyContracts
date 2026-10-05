@@ -17,10 +17,11 @@
 //!
 //! `EVM/test/differential/vectors.jsonl` is generated FROM the Solidity, which
 //! is the reference implementation — it shipped first and it is what the live
-//! EVM deployments run. Regenerate with:
+//! EVM deployments run. Regenerate (and re-run this replay + the TypeScript
+//! one) with:
 //!
 //! ```text
-//! cd EVM && forge test --match-contract GenerateVectors -vv
+//! npm run test:differential   # from the repo root
 //! ```
 //!
 //! Each line records the inputs, whether Solidity REVERTED, and the value if it
@@ -29,6 +30,18 @@
 //! surface is still a divergence. (One such bug — the atomic setter accepting a
 //! halt plus a successor — was found by hand in the instruction layer during
 //! this work, which is exactly why the corpus records them.)
+//!
+//! # Provenance
+//!
+//! The committed file carries no hash or version field. Provenance is
+//! structural instead: `.github/workflows/test.yml`'s `differential` job
+//! regenerates the corpus from this exact Solidity on every push and
+//! hard-fails on any byte difference, and `GenerateVectors.t.sol`'s generation
+//! is fully deterministic (fixed-seed keccak chain, no wall-clock/block
+//! dependence) — so a corpus that did not come from that generator would fail
+//! CI on the very next run. See that file's doc comment for the caveat (this
+//! proves the CURRENT tree is self-consistent, not that history was honest)
+//! and for what the corpus's revert-case coverage does and doesn't include.
 //!
 //! # Domain
 //!

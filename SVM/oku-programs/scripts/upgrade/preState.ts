@@ -123,9 +123,18 @@ export const STATE_READERS: Record<string, StateReader> = {
  * Compare two snapshots. Returns an array of changed fields.
  * An empty array means no storage invariant was broken by the upgrade.
  *
- * Error sentinel fields (*.fetchError) are excluded from diff:
- * a fetch that succeeds pre-upgrade but fails post-upgrade IS a real error
- * (layout break) and will surface via the exception, not via this diff.
+ * Error sentinel fields (*.fetchError) are excluded from diff: a fetch that
+ * succeeds pre-upgrade but fails post-upgrade IS a real error (layout break).
+ *
+ * IMPORTANT: a non-empty diff is sufficient for "invariants changed" but NOT
+ * necessary for "invariants were actually checked". A fetch failure is
+ * swallowed into a `*.fetchError` sentinel string, not rethrown — so if BOTH
+ * reads fail (wrong PDA, wrong program ID, RPC outage spanning both), the
+ * sentinel key is identical on both sides, this function sees zero real
+ * fields and returns an empty diff, and a caller that only checks
+ * `diffs.length === 0` would report "all invariants preserved" having
+ * verified nothing. Callers MUST pair this with {hasUncheckedFields} (or
+ * equivalent) before treating an empty diff as a pass.
  */
 export function diffSnapshots(
   before: StateSnapshot,
@@ -140,6 +149,19 @@ export function diffSnapshots(
     if (b !== a) diffs.push({ field: f, before: b, after: a });
   }
   return diffs;
+}
+
+/**
+ * True if the post-upgrade snapshot has no real (non-sentinel) fields, or
+ * carries a fetch-error sentinel at all. Either case means `diffSnapshots`
+ * compared nothing meaningful — see its doc comment for why an empty diff
+ * alone is not sufficient evidence that invariants held.
+ */
+export function hasUncheckedFields(after: StateSnapshot): boolean {
+  const keys = Object.keys(after);
+  const realFields = keys.filter((f) => !f.endsWith('fetchError'));
+  const sentinels = keys.filter((f) => f.endsWith('fetchError'));
+  return realFields.length === 0 || sentinels.length > 0;
 }
 
 /**

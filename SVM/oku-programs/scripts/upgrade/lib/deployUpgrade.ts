@@ -30,7 +30,7 @@ import { execSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { getProgramDataAddress, PROGRAM_DATA_HEADER_SIZE, readOnChainElf } from './elfCompare';
+import { getProgramDataAddress, readOnChainElf } from './elfCompare';
 
 // ============================================================================
 // Transient-error patterns
@@ -93,14 +93,22 @@ export function getOrCreateBufferKeypairPath(programKey: string): string {
  * After the CLI exits (possibly killed by timeout), re-read the on-chain ELF
  * and compare its SHA-256 to the local .so. Returns true if the upgrade
  * landed, false if the chain still shows the old program.
+ *
+ * `expectedSize` MUST be passed (the local ELF's byte length): BPFLoaderUpgradeable
+ * does not shrink the ProgramData account on upgrade (it allocates ~2x the
+ * initial ELF length for headroom from the very first deploy), so hashing the
+ * full account tail hashes `<new ELF><stale padding>` and can never equal a
+ * hash of the bare `.so` — this recheck would return `false` unconditionally
+ * without it. See `readOnChainElf`'s doc comment in `./elfCompare.ts`.
  */
 async function didUpgradeLand(
   connection: Connection,
   programId: PublicKey,
-  expectedSha256: string
+  expectedSha256: string,
+  expectedSize: number
 ): Promise<boolean> {
   try {
-    const onChain = await readOnChainElf(connection, programId);
+    const onChain = await readOnChainElf(connection, programId, expectedSize);
     return onChain.sha256 === expectedSha256;
   } catch {
     return false;
@@ -172,6 +180,8 @@ export interface DeployUpgradeOptions {
   walletPubkey: PublicKey;
   /** SHA-256 of the local .so (for post-timeout recheck). */
   localElfSha256: string;
+  /** Byte length of the local .so (for post-timeout recheck truncation). */
+  localElfSize: number;
   connection: Connection;
   /** RPC endpoint URL passed directly to the solana CLI (`--url`). */
   rpcUrl: string;
@@ -201,7 +211,7 @@ export async function deployUpgrade(
 ): Promise<DeployUpgradeResult> {
   const {
     programName, programKey, programId, keypairPath, soPath,
-    walletPubkey, localElfSha256, connection, rpcUrl,
+    walletPubkey, localElfSha256, localElfSize, connection, rpcUrl,
     priorityFee, maxRetries, retryDelayMs, deployTimeoutMs, logger,
   } = opts;
 
@@ -260,7 +270,7 @@ export async function deployUpgrade(
         );
         // Brief pause for the RPC to see any tx that mined in the last few seconds.
         await sleep(3_000);
-        if (await didUpgradeLand(connection, programId, localElfSha256)) {
+        if (await didUpgradeLand(connection, programId, localElfSha256, localElfSize)) {
           logger.success(
             `  ${programName}: post-timeout recheck shows upgrade IS on-chain ` +
               `— treating CLI timeout as a false alarm.`

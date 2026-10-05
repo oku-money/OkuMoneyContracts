@@ -1094,14 +1094,20 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_DecimalConversion_RedeemTooSmall() public {
-        // 1 wei of OkuMoney should fail since it rounds to 0 USDC
+        // 1 wei of OkuMoney is below the dust floor at 6-decimal collateral
+        // (`decimalMultiplier == MIN_REDEMPTION_OKUM == 1e12` here, so either
+        // term alone would already catch it).
         uint256 tinyAmount = 1; // 1 wei of OkuMoney
 
         _mintOkuMoney(user1, tinyAmount);
         _approveOkuMoney(user1, address(litePsm), tinyAmount);
 
         vm.prank(user1);
-        vm.expectRevert(LitePSM.AmountTooSmall.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                LitePSM.BelowMinimumRedemption.selector, tinyAmount, DECIMAL_MULTIPLIER
+            )
+        );
         litePsm.redeemOkuM(tinyAmount);
     }
 
@@ -1834,6 +1840,45 @@ contract LitePSMTest is BaseTest {
         vm.expectRevert(LitePSM.AmountTooSmall.selector);
         psm18.mintUsdOku(1);
         vm.stopPrank();
+    }
+
+    /// @notice This is the case `EVM/README.md`'s "queue dust floor" Accepted Risk
+    ///         describes: at 18-decimal collateral `decimalMultiplier` collapses to
+    ///         1 (no floor at all), so without `Constants.MIN_REDEMPTION_OKUM` a
+    ///         1-wei redemption would be enqueueable. Confirms the absolute floor
+    ///         is what actually gates this collateral, not `decimalMultiplier`.
+    function test_MultiDecimal_18Dec_RedeemBelowMinRedemptionReverts() public {
+        MockUSDC18Dec usdc18 = new MockUSDC18Dec();
+        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+
+        uint256 tinyAmount = Constants.MIN_REDEMPTION_OKUM - 1;
+        _mintOkuMoney(user1, tinyAmount);
+        _approveOkuMoney(user1, address(psm18), tinyAmount);
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                LitePSM.BelowMinimumRedemption.selector, tinyAmount, Constants.MIN_REDEMPTION_OKUM
+            )
+        );
+        psm18.redeemOkuM(tinyAmount);
+    }
+
+    /// @notice Boundary check: exactly at the floor succeeds, confirming the gate
+    ///         is `<`, not `<=`.
+    function test_MultiDecimal_18Dec_RedeemAtMinRedemptionSucceeds() public {
+        MockUSDC18Dec usdc18 = new MockUSDC18Dec();
+        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+        usdc18.mint(address(psm18), 1_000_000e18); // buffer, 18-decimal collateral
+
+        uint256 amount = Constants.MIN_REDEMPTION_OKUM;
+        _mintOkuMoney(user1, amount);
+        _approveOkuMoney(user1, address(psm18), amount);
+
+        vm.prank(user1);
+        psm18.redeemOkuM(amount);
+
+        assertEq(okuMoney.balanceOf(user1), 0);
     }
 
     /// @notice A mint whose dollar value does not divide evenly by the multiplier

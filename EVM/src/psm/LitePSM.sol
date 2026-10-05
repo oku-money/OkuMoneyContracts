@@ -89,6 +89,12 @@ contract LitePSM is
     // Do not reintroduce them — see {redeemOkuM} for why a min-out has nothing to bound.
     // {OkuDollar} keeps its own `OutputBelowMinimum` for `wrap`; that one is reachable
     // and unrelated.
+    //
+    // `BelowMinimumRedemption` below is NOT one of those — it is an anti-griefing
+    // floor on redemption SIZE (queue-entry dust), not a slippage/min-out check on
+    // redemption PRICE. Monotonicity of `okuMMultiplier` has nothing to say about it.
+    // Do not fold it into the "no min-out" argument above or delete it under that
+    // banner.
     error InsufficientBuffer(uint256 available, uint256 required);
     error WouldStrandQueue(uint256 remainingBalance, uint256 queueObligation);
     /// @dev Reverted when the configured USDC reports more decimals than supported (>18).
@@ -105,6 +111,9 @@ contract LitePSM is
     ///      otherwise `RedemptionQueue.processQueue` burns the wrong token's escrow against
     ///      entries denominated in this one.
     error QueueOkuMoneyMismatch(address queueOkuMoney, address psmOkuMoney);
+    /// @dev Reverted by the redeem path's dust floor. See
+    ///      `Constants.MIN_REDEMPTION_OKUM` and {_redeemOkuMShared}.
+    error BelowMinimumRedemption(uint256 provided, uint256 minimum);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -261,9 +270,12 @@ contract LitePSM is
     ///      There is no downside to bound. Pinned by
     ///      `test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier`.
     ///
-    ///      This argument has one load-bearing precondition: THE PSM CHARGES NO FEE. A
-    ///      `tin`/`tout` would make output non-monotone in time and the reasoning above
-    ///      collapses — add min-out parameters before any fee lands, not after.
+    ///      This argument has one load-bearing precondition: THE PSM CHARGES NO FEE.
+    ///      A fee was considered (see `TRACKER.md` git history) and ruled out as
+    ///      protocol policy — a `tin`/`tout` would make output non-monotone in time
+    ///      and the reasoning above would collapse. If that policy is ever
+    ///      reversed, min-out parameters must land in the SAME change that adds a
+    ///      fee, not after.
     ///
     ///      SVM DIVERGES DELIBERATELY: `lite-psm`'s `redeem_oku_m` does take a
     ///      `min_usdc_out`. Same monotonicity holds there, so it is client-side
@@ -296,24 +308,23 @@ contract LitePSM is
         LitePSMStorage storage $ = _getLitePSMStorage();
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
-        // Minimum redemption granularity: one collateral unit's worth of OkuM.
+        // Minimum redemption granularity: the queue's dust floor.
         //
-        // RATIONALE REWRITTEN — this guard previously justified itself by reference to
-        // the `okuMFloor` slippage check below it ("a non-zero `usdcAmount` could pair
-        // with a slippage floor that collapses to zero and trivially passes"). That
-        // check has been removed as unreachable (see {redeemOkuM}), so the old reasoning
-        // no longer describes anything. The guard stays, on its own independent footing:
-        // it is the queue's dust floor. Every redemption the buffer cannot cover becomes
-        // a `QueueEntry` costing two SSTOREs to create and full loop-body gas plus an
-        // external `burn` to process, so without a floor an attacker could stuff the
-        // queue with economically meaningless entries at the processor's expense.
+        // Every redemption the buffer cannot cover becomes a `QueueEntry` costing two
+        // SSTOREs to create and full loop-body gas plus an external `burn` to process,
+        // so without a floor an attacker could stuff the queue with economically
+        // meaningless entries at the processor's expense.
         //
-        // NOTE the floor is denominated in `decimalMultiplier`, which is `10**(18-d)`.
-        // At 6-decimal collateral that is 1e12 OkuM wei (~$0.000001) — a real floor. At
-        // 18-decimal collateral it is 1, i.e. no floor at all beyond the `usdcAmount == 0`
-        // check below. Closing that gap needs an absolute minimum independent of
-        // `decimalMultiplier`; see `EVM/README.md` § Accepted Risks, "queue dust floor".
-        if (okuMAmount < decimalMultiplier) revert AmountTooSmall();
+        // `decimalMultiplier` (`10**(18-d)`) is a real floor at 6-decimal collateral
+        // (1e12 OkuM wei, ~$0.000001) but COLLAPSES TO 1 — no floor at all — at
+        // 18-decimal collateral (e.g. Binance-Peg USDC on BSC). `MIN_REDEMPTION_OKUM`
+        // is an absolute constant floor independent of collateral decimals, so the
+        // effective floor is whichever of the two is larger; 6-decimal chains are
+        // unaffected since `decimalMultiplier` already dominates there.
+        uint256 minRedemption = decimalMultiplier > Constants.MIN_REDEMPTION_OKUM
+            ? decimalMultiplier
+            : Constants.MIN_REDEMPTION_OKUM;
+        if (okuMAmount < minRedemption) revert BelowMinimumRedemption(okuMAmount, minRedemption);
 
         uint256 okuMMult = $.okuMoney.okuMMultiplier();
         uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, okuMMult);

@@ -28,9 +28,6 @@ library TestConstants {
     ///      `src/lib/Constants.sol` propagates to every fixture automatically.
     uint256 public constant MAX_RATE_WINDOW = SrcConstants.MAX_RATE_WINDOW;
 
-    /// @notice Basis points denominator (10000 = 100%)
-    uint256 public constant BASIS_POINTS = SrcConstants.BASIS_POINTS;
-
     // REMOVED (single-multiplier refactor): MIN_COLLATERAL_RATIO_FLOOR re-export —
     // see src/lib/Constants.sol.
 

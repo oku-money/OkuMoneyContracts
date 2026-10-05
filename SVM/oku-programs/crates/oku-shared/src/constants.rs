@@ -12,7 +12,7 @@
 //! representation).
 
 // ---------------------------------------------------------------------------
-// Precision / basis points
+// Precision
 // ---------------------------------------------------------------------------
 
 /// Fixed-point scale for multipliers and per-second rates (1e18 = 1.0).
@@ -49,13 +49,6 @@ pub const MAX_RATE: u128 = PRECISION + 100_000_000_000;
 /// EVM mirror: `Constants.MAX_RATE_WINDOW`. These MUST agree or the two stacks
 /// accept different schedules.
 pub const MAX_RATE_WINDOW_SECONDS: i64 = 90 * 24 * 60 * 60;
-
-/// Basis-points denominator (10_000 = 100%). Mirrors EVM
-/// `Constants.BASIS_POINTS`.
-///
-/// The SVM PSM is fee-free, so no instruction consumes this; it is retained
-/// so the SVM ↔ EVM constant set stays 1:1.
-pub const BASIS_POINTS: u64 = 10_000;
 
 // ---------------------------------------------------------------------------
 // Multiplier ceiling

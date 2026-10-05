@@ -8,7 +8,9 @@ use crate::constants::TOKEN_DECIMALS;
 use crate::contexts::{DepositBuffer, MintOkuM, RedeemOkuM, WithdrawBuffer};
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{check_yield_lock, dollars_to_raw, multiplier, raw_to_dollars};
+use crate::helpers::{
+    check_yield_lock, check_yield_lock_with_clock, dollars_to_raw, multiplier, raw_to_dollars,
+};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
@@ -21,8 +23,13 @@ use anchor_spl::token_interface;
 /// Blocked during the same slot as a yield distribution (sandwich
 /// prevention).
 pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
+    // One Clock::get() for both the yield-lock check and the multiplier read
+    // below, rather than each fetching the sysvar independently. See
+    // `multiplier::at`'s doc comment.
+    let clock = Clock::get()?;
+
     // Check yield distribution lock FIRST
-    check_yield_lock(&ctx.accounts.config)?;
+    check_yield_lock_with_clock(&ctx.accounts.config, &clock)?;
 
     // Read state
     let is_paused = ctx.accounts.config.is_paused;
@@ -35,7 +42,7 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
 
     // Price against the CANONICAL multiplier from the rate schedule, NOT the
     // mint's ScaledUiAmount extension (a lagging display mirror).
-    let multiplier = multiplier::current(&ctx.accounts.config)?;
+    let multiplier = multiplier::at(&ctx.accounts.config, clock.unix_timestamp)?;
 
     // Treat usdc_amount as a dollar value.
     let raw_oku_m_amount = dollars_to_raw(usdc_amount, multiplier)?;
@@ -109,10 +116,17 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     // Calculate dollar value for event
     let dollar_value = raw_to_dollars(raw_oku_m_amount, multiplier)?;
 
-    // Reload the mint's `supply` field after the mint_to CPI so the event
-    // reports the post-mint total (the cached value is pre-mint).
-    ctx.accounts.oku_m_mint.reload()?;
-    let new_total_supply = ctx.accounts.oku_m_mint.supply;
+    // Post-mint total, computed rather than `reload()`-ed: `current_supply`
+    // above was read before the `mint_to` CPI, and the mint amount is exactly
+    // `raw_oku_m_amount` (checked for overflow against `max_supply` above), so
+    // this is the correct post-mint value without paying for a second
+    // Token-2022 `StateWithExtensions` unpack of the whole mint account.
+    // Caveat accepted: this would need revisiting if a transfer-hook-style
+    // Token-2022 extension could change `supply` independent of this CPI —
+    // none does today (see `instructions/init.rs` for the extension set).
+    let new_total_supply = current_supply
+        .checked_add(raw_oku_m_amount)
+        .ok_or(LitePsmError::Overflow)?;
 
     emit!(MintEvent {
         user: user_key,
@@ -156,20 +170,26 @@ pub fn redeem_oku_m(
     raw_oku_m_amount: u64,
     min_usdc_out: u64,
 ) -> Result<()> {
+    // One Clock::get() for both the yield-lock check and the multiplier read
+    // below, rather than each fetching the sysvar independently. See
+    // `multiplier::at`'s doc comment.
+    let clock = Clock::get()?;
+
     // Check yield distribution lock FIRST
-    check_yield_lock(&ctx.accounts.config)?;
+    check_yield_lock_with_clock(&ctx.accounts.config, &clock)?;
 
     // Read state
     let is_paused = ctx.accounts.config.is_paused;
     let bump = ctx.accounts.config.bump;
     let vault_usdc_balance = ctx.accounts.vault_usdc.amount;
+    let current_supply = ctx.accounts.oku_m_mint.supply;
 
     require!(!is_paused, LitePsmError::Paused);
     require!(raw_oku_m_amount > 0, LitePsmError::ZeroAmount);
 
     // Price against the CANONICAL multiplier from the rate schedule, NOT the
     // mint's ScaledUiAmount extension (a lagging display mirror).
-    let multiplier = multiplier::current(&ctx.accounts.config)?;
+    let multiplier = multiplier::at(&ctx.accounts.config, clock.unix_timestamp)?;
 
     // Treat the dollar value as USDC.
     let usdc_amount = raw_to_dollars(raw_oku_m_amount, multiplier)?;
@@ -229,9 +249,16 @@ pub fn redeem_oku_m(
         TOKEN_DECIMALS,
     )?;
 
-    // Emit post-burn supply for indexer reconciliation.
-    ctx.accounts.oku_m_mint.reload()?;
-    let new_total_supply = ctx.accounts.oku_m_mint.supply;
+    // Post-burn total, computed rather than `reload()`-ed: `current_supply`
+    // above was read before the `burn` CPI, and the burn amount is exactly
+    // `raw_oku_m_amount` (checked against the user's balance above), so this
+    // is the correct post-burn value without a second Token-2022
+    // `StateWithExtensions` unpack of the whole mint account. Same caveat as
+    // `mint_oku_m`: would need revisiting if a transfer-hook-style extension
+    // could move `supply` independent of this CPI — none does today.
+    let new_total_supply = current_supply
+        .checked_sub(raw_oku_m_amount)
+        .ok_or(LitePsmError::Overflow)?;
 
     emit!(RedeemEvent {
         user: ctx.accounts.user.key(),

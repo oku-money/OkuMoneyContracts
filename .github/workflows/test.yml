@@ -284,6 +284,41 @@ jobs:
       - name: Run cargo unit tests
         run: cargo test --workspace --lib --quiet
 
+      # ---------------------------------------------------------------------
+      # Kani: only the harnesses that discharge today. Four others
+      # (rate.rs::proof_compound_for_output_clamped,
+      # wad.rs::proof_div_wad_quotient_bound, both raw_to_dollars harnesses)
+      # do not terminate within 15 minutes — symbolic 256-bit arithmetic
+      # inside rpow/div_wad, not a loop-bound issue. Kept in-file as
+      # documentation, deliberately NOT added here; `--harness` is an
+      # allowlist, not a glob, so they cannot accidentally get pulled in.
+      # Always scope to --package oku-shared: the sibling `lite-psm` crate
+      # pulls in the full Anchor/Solana dependency graph, which Kani is not
+      # set up to codegen.
+      # ---------------------------------------------------------------------
+      - name: Cache Kani
+        uses: actions/cache@v4
+        id: kani-cache
+        with:
+          path: |
+            ~/.cargo/bin/cargo-kani
+            ~/.cargo/bin/kani
+            ~/.kani
+          key: kani-0.67.0
+
+      - name: Install Kani
+        if: steps.kani-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo install --locked kani-verifier --version 0.67.0
+          cargo kani setup
+
+      - name: Run Kani (cheap, discharging harnesses only)
+        timeout-minutes: 10
+        run: |
+          cargo kani --package oku-shared \
+            --harness proof_mul_div_floor_correctness_bounded \
+            --harness proof_mul_div_floor_no_u128_overflow
+
       - name: Cache cargo-llvm-cov binary
         uses: actions/cache@v4
         id: cargo-llvm-cov-cache

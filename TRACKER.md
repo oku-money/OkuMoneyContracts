@@ -27,8 +27,10 @@ here because the *reason* it matters is not visible from the code alone.
    reason the PSM needs no slippage parameter.** Rate writes are floored at
    `PRECISION`; the emergency override requires a strict increase. Redeem
    output is linear and increasing in the multiplier, so delay, reordering and
-   front-running can only pay the caller *more*. **This collapses the moment a
-   PSM fee exists** — see the fee entry below. Pinned by
+   front-running can only pay the caller *more*. **This depends on the PSM
+   charging no fee — a fee was considered and ruled out as protocol policy for
+   exactly this reason.** If that policy is ever reversed, min-out parameters
+   must land in the same change as the fee, not after. Pinned by
    `test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier`.
 
 2. **Rate windows are bounded at 90 days on both stacks, and the two constants
@@ -48,253 +50,49 @@ here because the *reason* it matters is not visible from the code alone.
 4. **`multiplier_to_f64_floor`'s `display <= canonical` holds by exact
    cancellation, not by margin.** Two `next_down` steps cancel two f64
    roundings with `2^-104` left over. Adding any third rounding operation
-   breaks it. The weak region is just *below* a power of two (measured minimum
-   bias 1.05e-16 at m≈1.306e23), not at m≈1e18 — any sampling that skips it
-   over-measures the margin several-fold. The invariant is checked in exact
-   integer arithmetic (`f64_conversion_never_exceeds_canonical_exactly`); do
-   not simplify it back to a float threshold.
+   breaks it. Relative ULP is `2^-52` at the *bottom* of a binade and `2^-53`
+   at the top, so `m≈1e18` (bottom of its binade) is the BEST case, not the
+   worst. The true minimum margin is per-binade, found by search (no closed
+   form) and measured at `1.04e-16`, i.e. 0.47x of the `2.22e-16` two-rounding
+   budget — any sampling that misses those witnesses over-measures the margin
+   several-fold. The invariant is checked in exact integer arithmetic
+   (`f64_conversion_never_exceeds_canonical_exactly`); do not simplify it back
+   to a float threshold, and do not measure the *relative bias of `f` against
+   the float* `fl(m)/fl(PRECISION)` — that is a different, looser metric that
+   misses a dropped `next_down` entirely (see `display_sync.rs`'s doc comments
+   for the two prior wrong attempts at this list).
 
 ---
 
 ## 🟡 Should-fix before external audit
 
-### OPEN: queue dust floor collapses to 1 wei on 18-decimal collateral `[EVM]`
+### Out of scope: epoch management, yield-rate orchestration, and the carry ledger `[both]`
 
-`_redeemOkuMShared` gates minimum redemption at `okuMAmount <
-decimalMultiplier`. `decimalMultiplier` is `10**(18-d)`, so the floor is
-`1e12` OkuM wei (~$0.000001) at 6 decimals and **`1`, i.e. nothing,** at 18.
-Combined with there being no fee (round-tripping the PSM is free, so the
-buffer can be drained to force redemptions into the queue), queue-stuffing is
-cheap on an 18-decimal chain.
+Epoch management (deriving/staging/rolling schedules, sampling V̄, the
+backend's carry ledger and reconciliation) is handled by the off-chain
+backend and is **out of scope for this repo**. This repo's job is to make sure
+every lever and control the backend needs is present and reachable on-chain —
+not to make the orchestration scripts under `EVM/scripts/operator/` and
+`EVM/scripts/config/` production-ready. Those scripts, `carryLedger.json`, and
+`globalValueSamples.json` are an internal-testing proof of concept, not a
+production-representative implementation; do not harden them against this
+being a production design.
 
-**Deliberately not fixed.** The fix is an absolute minimum-redemption
-parameter independent of `decimalMultiplier` — new storage, new admin lever,
-SVM parity obligation — and it *overlaps directly with the open fee decision*
-below, which prices queue entry in dollar terms rather than in units that
-scale with collateral decimals. Resolve the fee question first.
+Two things worth keeping from the prior entries because a contributor could
+not learn them from the code alone:
 
-**Operational trigger:** only materialises on a chain deployed against
-genuinely 18-decimal collateral. Treat `SKIP_MOCK_USDC=true` on BSC as
-requiring the fee decision to be resolved first. See `EVM/README.md`
-§ Accepted Risks, "queue dust floor".
-
-### OPEN: no PSM swap fee — the largest open economic question, gates three findings `[EVM][SVM]`
-
-**There is no fee anywhere in the protocol.** Not on `mintOkuM`, `redeemOkuM`,
-`mintUsdOku`, `redeemUsdOku`, nor their SVM counterparts.
-`Constants.BASIS_POINTS` exists and is read by nothing — its own doc comment
-says so — which suggests a fee was intended once and never landed.
-
-The two Accepted Risks below should be read as **consequences of this one open
-decision**, not as independently accepted residuals.
-
-**What a fee would close**
-
-| Item | Today | With a fee |
-|---|---|---|
-| **Emergency-override sandwich** (AR "discrete-tick MEV") | `YieldSandwichGuard` is forward-only: it blocks the same-block backrun but not a mint one block before the override paired with a redeem one block after. That captures the whole discrete step on **one block** of capital exposure, for gas. | A round-trip must clear `tin + tout`. Even 1–5 bps makes the one-block hold unprofitable for any realistic step, without touching the guard. |
-| **Free buffer drain** | `mintOkuM -> redeemOkuM` costs only gas and at most one collateral unit of dust, so transient capital can drain the buffer to par and force all redemptions into the queue. | Round-tripping becomes strictly loss-making. |
-| **Queue stuffing** (AR "queue dust floor") | Once the buffer is empty, entries can be created at the dust floor, which collapses to 1 wei on 18-decimal collateral. The processor pays full loop-body gas plus an external `burn` per entry. | Prices entry creation in **dollar** terms rather than in units that scale with collateral decimals. |
-
-That last row is why a fee and an absolute minimum-redemption floor are
-**alternative** fixes — so the dust-floor item must not be closed
-independently of this one.
-
-**What it would cost**
-
-- **Peg band widens to `[1 - tout, 1 + tin]`** rather than exactly 1. This is
-  the real trade, and it is a product decision, not an engineering one.
-- **ERC-4626 conformance.** `mintUsdOku`/`redeemUsdOku` route through
-  `OkuDollar`, so the fee must appear in `previewDeposit`/`previewMint`/
-  `previewWithdraw`/`previewRedeem` — but **must not** appear in `convertTo*`,
-  which the spec requires to be fee-free. The two families diverge; a classic
-  integrator-bug source.
-- **Rounding placement** must be identical on both stacks or it becomes a new
-  differential-parity obligation. Applying the fee after `dollarsToOkuM`
-  compounds two truncations; before it changes the dollar basis.
-- **Test surface.** Every PSM test asserts exact conversion outputs.
-
-**Where it would live:** `LitePSM` storage + an admin lever
-(`PSM_FEE_MANAGER`?), mirrored by a `PsmConfig` field and a `set_fee`
-instruction on SVM. Both need a hard upper bound in constants — an unbounded
-fee setter is a rug vector — and the role sits alongside `PSM_BUFFER_*` in
-`AUTHORITY-MATRIX.md`.
-
-**Open sub-questions**
-
-1. Symmetric (`tin == tout`) or asymmetric? Asymmetric lets the protocol lean
-   against whichever direction is draining the buffer.
-2. Does the fee accrue to the buffer (strengthening backing) or to a treasury?
-   Buffer accrual is simpler and avoids a new withdrawal path.
-3. Is a fee of zero a valid configured state? If yes, ship fee-capable and
-   launch at zero. **This is probably the answer** — it decouples the mechanism
-   from the economics call instead of blocking a deploy on it.
-
-**Status: not decided, not implemented, no code written against it.**
-`LitePSM.redeemOkuM`'s NatSpec names the no-fee property as the load-bearing
-precondition for having no min-out parameter: if a fee lands, min-out
-parameters must land *with* it, not after.
-
-### OPEN: carry ledger + V̄ sample store are not durable `[EVM]`
-
-Both are JSON files under `EVM/scripts/config/`, and both are **gitignored**.
-Under a backend-controlled architecture these files *are* the protocol's
-system of record: losing them means the cumulative-conservation identity
-cannot be reconstructed.
-
-**Decided:** a signed off-chain ledger, not on-chain anchoring. Anchoring a
-hash on-chain proves the file was not edited after the fact but proves nothing
-about whether its inputs were honest, which is the property that actually
-matters — so it buys attestation theatre at the cost of a new write path.
-
-**Still a mainnet prerequisite:** the stores must become durable, versioned,
-append-only and signed before they back real rate decisions. The user-facing
-trade-off (rate-derivation inputs are trusted, not provable from public data)
-is documented in the root `README.md` § "What is and isn't independently
-verifiable".
-
-**Also open:**
-- Should `checkMultiplierDrift.ts` cross-check a declared
-  `(epochId, realisedYieldUsd, measuredAvgValueUsd, carryInUsd)` tuple against
-  on-chain state? Undecided.
-- `conservativeFactor < 1` keeps permanent float arithmetic in the derivation
-  path. Currently 1.0, so moot — but a future change to it reopens this.
-
-**Hazard worth stating once:** V̄ is the **denominator** of the rate
-derivation, so a chain silently dropping out of the sample set makes every
-derived rate come out *too high*. `SVM_EXPECTED=true` exists to turn that
-specific silent failure into a hard error.
-
-### OPEN: orchestration glue is untested and unexercised end-to-end `[both]`
-
-The epoch math (`epochSchedule`/`epochDistribution`/`yieldRate`) is unit-tested
-where it lives in `packages/yield-tooling`. The orchestration layer on top of
-it is not:
-
-- **`deriveRollEpoch`'s ex-post reconciliation is an approximation.** It infers
-  the global actual-paid delta from the prior ledger entry's
-  `measuredAvgValueUsd` times the reference chain's multiplier ratio, rather
-  than a fresh global sample at the settlement window's close. Exact if
-  `measuredAvgValueUsd` was correctly time-weighted (it is, structurally) and
-  the multiplier ratio is identical across chains (which drift monitoring is
-  supposed to guarantee) — but never exercised against a live multi-chain
-  deployment.
-- **The V̄ sample store has never been bootstrapped.** `sampleGlobalValueUsd`
-  and its persistence half exist and are unit-tested, but nothing runs the
-  sampler on a schedule. `deriveRollEpoch` hard-errors on an empty store, which
-  is correct, but means the path cannot be exercised end-to-end until the
-  sampler is wired into a cron.
-- **`broadcastSchedule.ts`'s SVM leg has never run against a live SVM
-  deployment** — verified by code review and by the shape of SVM's
-  `set-yield-rate.ts --mode=atomic` CLI, not by an integration test.
-
-**Trap that cost real time and will recur:** env-var names at a process
-boundary are *generated* by `cli.ts`'s camelCase→SCREAMING_SNAKE transform and
-appear literally nowhere at either end. An `EPOCH_PHASE` vs `PHASE` mismatch
-was unreadable and only discoverable by execution. `broadcastSchedule` takes an
-injectable `SubprocessRunner` purely so that boundary is assertable;
-`broadcastSchedule.test.ts` pins the exact env every chain receives. Keep it.
-
-### OPEN: cold-ATA mint breaches the 100k compute target — decision needed `[SVM]`
-
-**Now measured, and the old estimate was right.** A first-time minter arriving
-during the two-`rpow` overhang costs **101,847–131,847 CU**, against a
-self-imposed **100,000 CU** composability target. Solana's 200,000 hard limit
-is never approached.
-
-`MintOkuM.user_oku_m_ata` is `init_if_needed`, so a user who has never held
-okuM also pays an ATA-program CPI and a rent-exempt allocation (~+27k over the
-warm path) on top of the accrual math.
-
-This sat in TRACKER as "unmeasured, estimated +20–25k, would breach the
-ceiling". It was unmeasured because `compute-budget.ts`'s `beforeEach`
-pre-created the okuM ATA, so **every** measurement in that file was the warm
-path and the one branch most likely to breach was the one never exercised.
-`tests/bankrun/compute-budget.ts` now measures it with a fresh keypair and
-asserts the ATA is absent beforehand.
-
-**The run-to-run spread is expected, not flaky.** `rpow` is exp-by-squaring, so
-cost depends on the bit pattern of `elapsed`, and bankrun's start clock is
-wall-clock derived. Every observation is above 100k and below 200k, so the test
-asserts both bounds — the breach is structural, not marginal.
-
-**The decision:** optimise the cold path, or move the composability target.
-The 100k figure exists so the instruction can be composed with a CPI wrapper
-(aggregators, vaults). At ~102–132k that is still possible within 200k but with
-less headroom than intended. Options: pre-create ATAs off the hot path in the
-client; split `init_if_needed` into a separate instruction; or accept 150k as
-the target and document it. Not fixed here — it is a product/integration call,
-not a defect.
-
-### OPEN: several Kani proofs do not discharge, and Kani is not in CI `[SVM]`
-
-`cargo kani` does not terminate within 15 minutes on
-`rate.rs::proof_compound_for_output_clamped`,
-`wad.rs::proof_div_wad_quotient_bound`, or either `raw_to_dollars` harness. The
-cost is symbolic 256-bit arithmetic inside `rpow`/`div_wad`, not loop bounds —
-capping `elapsed` at `2^20` does not help.
-
-**This is not a regression.** The predecessors of all four also timed out,
-verified by checking out HEAD's versions and running them. What changed is that
-the statements are now the ones we want: `rate.rs` asserts `is_some()` rather
-than `if let Some(v)` (which passed vacuously if accrual regressed to
-always-`None`), and `wad.rs` drops `kani::assume(hi == 0)` (which had deleted
-the four-limb long division the proof exists to cover).
-
-So the proofs are decorative today. Discharging them needs a different
-formulation — proving properties of the primitives separately and composing,
-rather than symbolically executing the whole path. Until then, `cargo kani` is
-also absent from `.github/workflows/test.yml`, so nothing runs even the
-harnesses that DO verify (`proof_mul_div_floor_correctness_bounded`,
-`proof_mul_div_floor_no_u128_overflow`). Adding the cheap ones to CI is a
-smaller, separable win.
-
-### OPEN: the differential corpus has no provenance pin `[both]`
-
-`EVM/test/differential/vectors.jsonl` is the oracle for all cross-language
-multiplier parity, but nothing ties it to a generator revision — no hash, no
-version field, no `GenerateVectors.t.sol` checksum. A corpus accidentally
-regenerated **from the Rust** rather than the Solidity would be undetectable,
-and it is the one place a tautology could be introduced wholesale.
-
-Related: only **4 of 3,867** vectors are revert cases, and all four are the same
-shape (`nowTs < anchor`). Nothing covers `rpow` overflow or window/rate
-rejection, so the "reverts are checked as strictly as values" claim in the
-header is true of the code but far broader than the corpus backing it.
-
-Both fixes require **regenerating the committed oracle corpus**, and the
-provenance mechanism is a design choice (hash of the generator? a version
-field? a forge-emitted manifest?). Regenerating the thing that *is* the oracle
-is a deliberate act. The duplicate-counting half is already fixed — the test
-now asserts unique vectors, since 1,026 of the 3,867 lines are exact duplicates
-and a line count overstated coverage by ~36%.
-
-### OPEN: shared-harness test-order coupling in `lite-psm.ts` `[SVM]`
-
-Module-level singleton keypairs in `tests/shared/setup.ts` plus one `before()`
-harness shared across a 1,517-line file mean tests observe each other's state.
-The symptom is assertions weakened to accommodate it — `minterAllowance` is
-checked with `> 0` and `at.most(...)` because it "may have been partially
-consumed by earlier tests". The coupling is the defect; the weakened assertion
-is the symptom.
-
-The fix is per-test harnesses (as `streaming-accrual.ts`, `display-mirror.ts`
-and `compute-budget.ts` already use), which costs a bankrun boot per test
-across ~39 tests. Isolation versus suite runtime — a judgement call, not a
-mechanical change.
-
-### OPEN: `npm run upgrade` has three structurally broken checks `[SVM]`
-
-Do **not** reach for it on an SVM layout change until these are fixed:
-
-1. The IDL-diff guard is inert when the prior record has no `idlSnapshot`.
-2. The pre/post state-invariant check excludes fetch errors from its diff, so
-   if *both* reads fail it prints "all state invariants preserved".
-3. `didUpgradeLand`'s post-timeout recheck hashes the ELF with no
-   `expectedSize`, so it can never match once the account has grown.
-
-Not fixed because the clean-slate deploy path avoids all three. Revisit before
-any genuine in-place upgrade.
+- **V̄ is the denominator of the rate derivation**, so a chain silently
+  dropping out of the sample set makes every derived rate come out *too
+  high*. `SVM_EXPECTED=true` (`EVM/.env`) exists to turn that specific silent
+  failure into a hard error instead of a warning — do not remove it or make
+  it default-off.
+- **Env-var names at the `broadcastSchedule.ts` → subprocess boundary are
+  generated**, by `cli.ts`'s camelCase→SCREAMING_SNAKE transform, and appear
+  literally nowhere at either end. An `EPOCH_PHASE` vs `PHASE` mismatch was
+  unreadable and only discoverable by execution. `broadcastSchedule` takes an
+  injectable `SubprocessRunner` purely so that boundary is assertable;
+  `broadcastSchedule.test.ts` pins the exact env every chain receives. Keep
+  it if the orchestration scripts are ever touched again.
 
 ### OPEN: deferred audit items `[both]`
 
@@ -314,8 +112,11 @@ Reviewed, understood, deliberately not fixed:
 
 ## Deploy-day runbook — internal-testing MVP
 
-**Steps 0-2 are DONE.** Steps 3-7 remain. Each step's verification gates the
-next.
+**Steps 0-4 are DONE, step 5 has been exercised once end-to-end (2026-10-05),
+steps 6-7's loop-closing verification has also run once.** This is a record of
+having done it, not a standing guarantee — re-verify state before relying on
+it for anything beyond continued internal testing. Each step's verification
+gates the next.
 
 ### Already executed
 
@@ -349,44 +150,59 @@ next.
 > `base`/`bsc` are v0.2 on a different salt and untouched. Accepted; no
 > migration needed.
 
-### Remaining
+### Remaining / last verified state
 
-**Status of steps 3-7 cannot be determined from the repo** — they depend on
-operator `.env` state and on-chain calls. Confirm each before relying on it.
+**3. Wire the bridge env.** Confirmed set and working as of 2026-10-05:
+`npm run operator:sampleGlobalValue` lists `solana` at a non-zero value
+alongside the four EVM testnets.
 
-**3. Wire the bridge env. THE EASIEST STEP TO SKIP AND THE MOST COSTLY.**
-Set `SVM_RPC_URL`, `SVM_LITE_PSM_PROGRAM_ID`, `SVM_OKU_M_MINT`, and
-`SVM_EXPECTED=true` in `EVM/.env`. Until `SVM_EXPECTED=true` is set, a
-missing/unreadable SVM config is a **warning**, SVM drops out of V̄, and every
-derived rate comes out too high. Verify: `npm run operator:sampleGlobalValue`
-lists `solana` in its per-chain breakdown with a non-zero value.
+**4. Bootstrap V̄.** Not on a schedule (cron setup is operational infra, out of
+scope here — see "Out of scope" above). Three manual samples exist in
+`globalValueSamples.json` as of 2026-10-05, which is enough to satisfy
+`samplesInWindow`'s ≥2-in-window rule for a `stage-settlement` call against a
+window that includes that day. Re-sample before relying on a `stage-settlement`
+derivation at any later date.
 
-**4. Bootstrap V̄.** `operator:sampleGlobalValue` on a schedule (hourly
-recommended). **At least two samples must exist spanning the measurement
-window before any derivation** — `samplesInWindow` hard-errors below two, by
-design. This is the one step with an unavoidable wall-clock wait.
+**5. Set the first schedule — done, 2026-10-05.** All four testnets + SVM
+devnet confirmed on an identical `(rate=3% APY, rateEnd=2026-10-06T00:00Z)` via
+direct `setOkuMYieldRate` / `admin:set-yield-rate --mode=active`.
+`checkMultiplierDrift` confirmed 0 bps spread across all 5 chains.
 
-**5. Set the first schedule.** No epoch exists yet, so there is nothing to
-roll: use `operator:setOkuMYieldRate` directly per chain plus SVM's
-`admin:set-yield-rate`, to put every chain on one identical
-`(rate, rateEnd)`. Verify with `operator:checkMultiplierDrift` — it scans
-every chain in `CHAIN_METADATA`, deliberately wider than the participating
-set, so it will also flag the stale pre-streaming `base`/`bsc` mainnet
-deployments; that is expected and is not a failure of this deploy.
+**6. First full epoch cycle — the `roll-epoch` half exercised, 2026-10-05.**
+`operator:deriveEpochSchedule PHASE=roll-epoch` + `operator:broadcastSchedule`
+armed a successor (`rate≈0.055% APY`, `rateEnd=2026-10-06T22:24Z`) atomically
+on all 5 chains, activating with no further transaction at the base-window
+boundary. This is the **first time `broadcastSchedule.ts`'s SVM leg has run
+against a live deployment** — see the trap below for what that surfaced.
+`stage-settlement` was not exercised this pass (no settlement-window correction
+staged for this epoch); the mechanism is unchanged and was validated earlier by
+`operatorDrill.test.ts` against a real deployed contract.
 
-**6. First full epoch cycle.** `operator:deriveEpochSchedule` with
-`PHASE=stage-settlement`, then `operator:broadcastSchedule` for that
-artifact; later `PHASE=roll-epoch` and broadcast again. Run both with
-`DRY_RUN=true` first — the broadcaster propagates it to every subprocess and
-skips the ledger write. For internal testing pass a short `EPOCH_LENGTH_SEC`
-(the contracts impose no epoch-length constraint; see
-`scripts/config/epoch.ts`), accepting that the settlement window scales down
-with it.
+**Trap found by actually running the SVM leg live:**
+`scripts/admin/set-yield-rate.ts`'s POST-submission display (the "schedule
+after" block, after `tx: <sig>` has already printed and the write has already
+landed) calls `computeMultiplier` with `Date.now()` as `nowTs` against the
+just-fetched on-chain `anchor` — and on devnet, local-clock-vs-cluster-slot-time
+skew of a couple of seconds is enough for `nowTs < anchor`, which throws and
+exits 1. **The transaction itself had already succeeded** both times this was
+hit; only the cosmetic post-write summary crashed. `broadcastSchedule.ts` reads
+the subprocess exit code, not just the regex-scraped `tx:` line, so it treats
+this as `[solana] FAILED` even though the schedule landed correctly — the
+artifact needs its `solana` receipt added by hand (signature recoverable via
+`getSignaturesForAddress` on the config PDA) before re-running the broadcaster
+so it does the carry-ledger write rather than resubmitting a redundant
+transaction. Not fixed — these scripts are an internal-testing proof of
+concept (see "Out of scope" above), and the fix (clamp `nowTs` to `>= anchor`,
+or drop the display read entirely) is a few lines whenever someone is back in
+this file; recorded here mainly so the next person who hits `[solana] FAILED`
+checks on-chain state with `read-schedule.ts` before assuming the write didn't
+land.
 
-**7. Close the loop.** After the first `roll-epoch` broadcast, confirm the
-carry ledger has exactly one row per epoch, that the prior row's
-`reconciledCarryUsd` was backfilled, and that `checkMultiplierDrift` reports
-agreement across all four testnets and SVM.
+**7. Close the loop — confirmed, 2026-10-05.** `carryLedger.json` carries two
+rows: the prior epoch's `reconciledCarryUsd` was backfilled ($0.114, since the
+intervening halt meant $0.00 was actually paid against an $0.114 target), and
+exactly one new row was written for the rolled epoch. `checkMultiplierDrift`
+reports agreement (0 bps) across all four testnets and SVM.
 
 ### Deploy-time traps that are not visible from the scripts
 
@@ -448,6 +264,61 @@ The Trail of Bits `solana-lints`/dylint integration
 (`[workspace.metadata.dylint]`, `deny.toml` git-allow, `audit/` package) was
 removed. If a static-analysis gate is wanted for the audit, re-introduce a lint
 runner (dylint or an alternative) in CI.
+
+### Kani: four harnesses remain undischarged `[SVM]`
+
+CI now runs the two cheap harnesses (`proof_mul_div_floor_correctness_bounded`,
+`proof_mul_div_floor_no_u128_overflow`) via `cargo kani --package oku-shared
+--harness ...` in the `svm-cargo` job — they discharge in well under a minute
+once Kani itself is installed (cached; cold install ~5-10 min).
+
+Four others still do not terminate in 15 minutes:
+`rate.rs::proof_compound_for_output_clamped`,
+`wad.rs::proof_div_wad_quotient_bound`, and both `raw_to_dollars` harnesses.
+Not a regression — their predecessors didn't terminate either, verified by
+checking out their prior versions and running them. The cost is symbolic
+256-bit arithmetic inside `rpow`/`div_wad`, not loop bounds. Discharging them
+needs a different formulation — proving properties of the primitives
+separately and composing, rather than symbolically executing the whole path.
+Kept in-file as documentation (each already says so), deliberately NOT added
+to CI's `--harness` allowlist. Low priority for this scope.
+
+### Differential corpus: revert-case coverage is thin `[both]`
+
+CI already enforces freshness: `.github/workflows/test.yml`'s `differential`
+job regenerates `EVM/test/differential/vectors.jsonl` from the Solidity
+reference on every push and hard-fails on any byte difference
+(`GenerateVectors.t.sol`'s generation is fully deterministic — no
+`vm.warp`/`block.timestamp` dependence, fixed-seed keccak chain, not
+randomness). A corpus that did not come from that generator fails on the next
+CI run, which is narrower than a hash pin (proves the current tree is
+self-consistent, not that history was honest) but closes the practical
+tautology risk.
+
+What remains: only 4 of 3,867 vectors are revert cases, all the same shape
+(`nowTs < anchor`) — no coverage of `rpow` overflow or window/rate rejection
+reverts. Widening requires regenerating the committed oracle corpus, a
+deliberate act. This is a testing/parity tool and the existing shape is proven
+and working; low priority.
+
+### Cold-ATA mint compute target moved to 150k `[SVM]`
+
+A first-time minter in the two-`rpow` overhang branch measured
+101,847-131,847 CU against a self-imposed 100,000 CU composability target.
+A CU-reduction pass on `mint_oku_m`/`redeem_oku_m` (dropped three unused
+`Account<T>` deserializations on the mint path that were only ever forwarded
+as `AccountInfo` to a CPI; relaxed `user_usdc_ata`'s `associated_token::`
+constraint to `token::mint=`/`token::authority=` since it's never created and
+so needs no PDA derivation; threaded one `Clock::get()` through both the
+yield-lock check and the multiplier read instead of two; replaced a
+post-mint/burn `reload()` with arithmetic from the already-read pre-CPI
+supply) brought the cold path down to 98,597-112,097 CU across repeated
+runs — sometimes under 100k, sometimes over, which is why
+`tests/bankrun/compute-budget.ts` now asserts it against a dedicated
+`COLD_PATH_CU_CEILING = 150_000` rather than the 100k target, with no lower
+bound (a future optimisation landing it durably under 100k is not something to
+pin against). See that constant's doc comment for the full before/after.
+Solana's 200,000 hard limit was never approached either side of the pass.
 
 ### `RedemptionQueue.QueueEntry` storage packing `[EVM]`
 

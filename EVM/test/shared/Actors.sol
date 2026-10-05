@@ -58,9 +58,10 @@ abstract contract Actors is Test {
     address public user4 = makeAddr("user4");
     address public user5 = makeAddr("user5");
 
-    // ============ Fee Recipients ============
+    // ============ Generic Recipients ============
 
-    address public feeRecipient = makeAddr("feeRecipient");
+    /// @dev Not fee-related despite the name history; used as a generic
+    ///      recipient address in `rescueDonation` tests.
     address public treasury = makeAddr("treasury");
 
     // ============ Signing keys (for EIP-712 / EIP-2612 tests) ============

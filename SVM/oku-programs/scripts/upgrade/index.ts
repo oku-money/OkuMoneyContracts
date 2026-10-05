@@ -56,7 +56,7 @@ import { logger } from '../utils/logger';
 import {
   loadDeployment,
   appendUpgradeRecord,
-  getLastUpgradeRecord,
+  getLastUpgradeRecordWithIdlSnapshot,
   UpgradeRecord,
 } from '../utils/addressBook';
 import { isDryRun, confirmIfMainnet, summaryBlock } from '../admin/_lib/confirm';
@@ -74,6 +74,7 @@ import {
   ProgramSet,
   StateSnapshot,
   diffSnapshots,
+  hasUncheckedFields,
   printStateTable,
 } from './preState';
 
@@ -356,6 +357,10 @@ async function upgradeOne(
       // mutate the on-disk audit log (otherwise repeated dry-runs accumulate
       // noise records that future IDL-diff comparisons would have to walk).
       if (!isDryRun()) {
+        // Populate `idlSnapshot` here too (not just on the real-upgrade path
+        // below) — otherwise this is the newest record for the program, and
+        // `getLastUpgradeRecordWithIdlSnapshot` has to walk past it to find a
+        // usable snapshot. See that function's doc comment.
         const skipRecord: UpgradeRecord = {
           program:      name,
           programId:    programId.toBase58(),
@@ -366,6 +371,7 @@ async function upgradeOne(
           txSignature:  '<bytecode-unchanged>',
           timestamp:    new Date().toISOString(),
           deployer:     walletPubkey.toBase58(),
+          idlSnapshot:  buildIdlSnapshot(idlPath) ?? undefined,
         };
         appendUpgradeRecord(networkName, skipRecord);
         logger.info(`  Recorded skip in deployments/${networkName}.json`);
@@ -402,7 +408,10 @@ async function upgradeOne(
   // ── 6. IDL diff guard ─────────────────────────────────────────────────────
   if (process.env.SKIP_IDL_CHECK !== 'true') {
     const currentIdlSnap = buildIdlSnapshot(idlPath);
-    const priorRecord    = getLastUpgradeRecord(networkName, name);
+    // Deliberately skips past `<bytecode-unchanged>` / IDL-read-failure
+    // records with no snapshot, rather than taking the chronologically-last
+    // record unconditionally — see that function's doc comment.
+    const priorRecord = getLastUpgradeRecordWithIdlSnapshot(networkName, name);
 
     if (currentIdlSnap && priorRecord?.idlSnapshot) {
       const diff = describeIdlDiff(priorRecord.idlSnapshot, currentIdlSnap);
@@ -423,7 +432,15 @@ async function upgradeOne(
         logger.success(`  IDL account types unchanged since last upgrade.`);
       }
     } else if (!priorRecord) {
-      logger.info(`  No prior upgrade record — IDL diff skipped (first upgrade).`);
+      logger.info(`  No prior upgrade record with an IDL snapshot — diff skipped (first upgrade, or no snapshot has ever been recorded for this program).`);
+    } else {
+      // priorRecord exists (with a snapshot) but currentIdlSnap is null —
+      // buildIdlSnapshot failed to read/parse the local IDL. This must not
+      // fall through in silence: it means the guard did NOT run this time.
+      logger.warning(
+        `  Could not read the local IDL to compare against the prior snapshot — ` +
+          `IDL diff guard did NOT run this upgrade. Check target/idl/${name}.json.`
+      );
     }
   }
 
@@ -478,6 +495,7 @@ async function upgradeOne(
     soPath,
     walletPubkey,
     localElfSha256:   localElf.sha256,
+    localElfSize:     localElf.size,
     connection,
     rpcUrl,
     priorityFee:      DEPLOYMENT_CONFIG.priorityFee,
@@ -522,6 +540,22 @@ async function upgradeOne(
   const postState = await reader(programs, programId);
   const diffs = diffSnapshots(preState, postState);
   printStateTable(preState, postState);
+
+  // MUST be checked before trusting an empty `diffs` as "preserved" — see
+  // `hasUncheckedFields`'s doc comment. Without this, a post-upgrade read
+  // that fails for the SAME reason the pre-upgrade read failed (wrong PDA,
+  // wrong program ID, an RPC outage spanning both) produces an empty diff
+  // over zero real fields, and the script would print success having
+  // verified nothing.
+  if (hasUncheckedFields(postState)) {
+    logger.error(`  Post-upgrade state read for ${name} did not return any checkable fields:`);
+    printStateTable(preState, postState);
+    throw new Error(
+      `Post-upgrade state read for ${name} failed or returned no real fields — ` +
+        `cannot assert storage invariants were preserved. Investigate before proceeding ` +
+        `(this is NOT the same as "invariants preserved").`
+    );
+  }
 
   if (diffs.length > 0) {
     logger.error(`  Storage invariants changed during upgrade on ${name}:`);

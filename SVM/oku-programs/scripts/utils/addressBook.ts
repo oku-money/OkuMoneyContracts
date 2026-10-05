@@ -459,3 +459,23 @@ export function getLastUpgradeRecord(
   // Records are appended chronologically; find last matching entry.
   return [...all].reverse().find((r) => r.program === programName);
 }
+
+/**
+ * Find the most recent UpgradeRecord for the given program name that ALSO
+ * carries an `idlSnapshot`.
+ *
+ * `getLastUpgradeRecord` takes the chronologically-last match unconditionally,
+ * including `<bytecode-unchanged>` skip records, which never carry a
+ * snapshot. A single no-op upgrade run therefore permanently poisons
+ * `getLastUpgradeRecord` for the IDL-diff guard: the newest record has no
+ * snapshot even though a perfectly good one may sit one or two records
+ * earlier. This variant skips snapshot-less records so the guard keeps
+ * working across skip runs.
+ */
+export function getLastUpgradeRecordWithIdlSnapshot(
+  network: NetworkName,
+  programName: string
+): UpgradeRecord | undefined {
+  const all = getUpgradeRecords(network);
+  return [...all].reverse().find((r) => r.program === programName && r.idlSnapshot);
+}

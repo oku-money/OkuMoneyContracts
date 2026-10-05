@@ -35,7 +35,6 @@ abstract contract BaseTest is Test, Actors {
     uint256 public constant DECIMAL_MULTIPLIER = TestConstants.DECIMAL_MULTIPLIER;
     uint256 public constant MAX_RATE = TestConstants.MAX_RATE;
     uint256 public constant MAX_RATE_WINDOW = TestConstants.MAX_RATE_WINDOW;
-    uint256 public constant BASIS_POINTS = TestConstants.BASIS_POINTS;
 
     // ============ Re-exported Roles ============
 

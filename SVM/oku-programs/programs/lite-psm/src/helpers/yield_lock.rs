@@ -33,7 +33,18 @@ use oku_shared::yield_lock_engaged;
 /// EVM mirror: `YieldSandwichGuard.whenYieldNotDistributing`, which likewise
 /// keys on a field written only by `setOkuMMultiplier`.
 pub fn check_yield_lock(config: &PsmConfig) -> Result<()> {
-    let clock = Clock::get()?;
+    check_yield_lock_with_clock(config, &Clock::get()?)
+}
+
+/// Same check, taking an already-fetched [`Clock`].
+///
+/// A caller that also needs the clock for another read in the same
+/// instruction (e.g. [`crate::helpers::multiplier::at`]'s `unix_timestamp`)
+/// should fetch it once and pass it here, rather than letting this function
+/// make its own `Clock::get()` sysvar call. Both reads are cheap individually,
+/// but the hot mint/redeem paths are already close to the compute budget —
+/// see `tests/bankrun/compute-budget.ts`.
+pub fn check_yield_lock_with_clock(config: &PsmConfig, clock: &Clock) -> Result<()> {
     require!(
         !yield_lock_engaged(config.last_yield_distribution_slot, clock.slot),
         LitePsmError::YieldDistributionInProgress

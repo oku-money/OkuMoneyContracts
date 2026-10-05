@@ -57,10 +57,6 @@ library Constants {
     ///      program, so there it governs only the OkuM-side price cap.
     uint256 public constant MAX_MULTIPLIER = 1e24;
 
-    /// @notice Basis points denominator (10000 = 100%). Present for SVM constant
-    ///         parity; unused by any contract in this repo.
-    uint256 public constant BASIS_POINTS = 10_000;
-
     /// @notice Decimal count of OkuM itself.
     /// @dev Supplies the exponent in `10 ** (OKU_M_DECIMALS - usdcDecimals)` used by
     ///      LitePSM and RedemptionQueue to convert USDC amounts into OkuM units. Distinct
@@ -72,4 +68,15 @@ library Constants {
     /// @dev USDC uses 6. Cannot exceed {OKU_M_DECIMALS} or the conversion exponent
     ///      underflows; allowing up to that bound supports other stablecoin variants.
     uint8 public constant MAX_USDC_DECIMALS = 18;
+
+    /// @notice Absolute floor on a single redemption, in OkuM units (18 decimals).
+    /// @dev `1e12` OkuM wei ≈ $0.000001 at `okuMMultiplier == PRECISION` — the same
+    ///      floor 6-decimal collateral already gets for free from
+    ///      `usdcDecimalMultiplier == 10**(18-6) == 1e12`. LitePSM's redeem path gates
+    ///      on `max(usdcDecimalMultiplier, MIN_REDEMPTION_OKUM)` specifically because
+    ///      `usdcDecimalMultiplier` collapses to `1` (no floor at all) at 18-decimal
+    ///      collateral. A fixed constant rather than a configurable parameter: it needs
+    ///      no admin lever, no storage slot on an already-deployed UUPS proxy, and no
+    ///      SVM mirror — see {LitePSM-_redeemOkuMShared} and `TRACKER.md`.
+    uint256 public constant MIN_REDEMPTION_OKUM = 1e12;
 }

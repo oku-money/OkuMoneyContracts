@@ -317,7 +317,7 @@ src/
     IScaledUIAmount.sol     # ERC-8056 core + NewUIMultiplier / Conversion / Balances extensions
   lib/
     Roles.sol               # Shared RBAC role constants (prefix-namespaced)
-    Constants.sol           # PRECISION, MAX_RATE, MAX_MULTIPLIER, BASIS_POINTS + terminology legend
+    Constants.sol           # PRECISION, MAX_RATE, MAX_MULTIPLIER, MIN_REDEMPTION_OKUM + terminology legend
     Errors.sol              # Shared error types (ZeroAddress, InsufficientBalance, MultiplierCannotDecrease)
     MathLib.sol             # computeMultiplier / compoundFor / rpow + conversion helpers
     ReentrancyGuardUpgradeable.sol  # OZ-5.x-compatible upgradeable reentrancy guard
@@ -415,10 +415,6 @@ The judgement a reader actually needs, and which the code does not state:
   description of reality. Most USDC deployments use 6 — but BSC's canonical
   Binance-Peg USDC uses 18, which is why the PSM is decimals-agnostic rather
   than hardcoding 6.
-- **`BASIS_POINTS` is unused by any contract.** It exists for SVM constant
-  parity and is the residue of a fee that was never built — see the open fee
-  decision in [`TRACKER.md`](../TRACKER.md).
-
 Both stacks' constants must agree or the differential harness diverges; the
 SVM mirror is `oku-shared/src/constants.rs`.
 
@@ -967,10 +963,11 @@ devnet smoke test derives its floor from an independent TypeScript mirror and
 passes it in, turning every redeem into a live Rust-vs-TS differential check
 that reverts on-chain if the two disagree.
 
-> **This analysis has one load-bearing precondition: no PSM fee.** If a fee
-> lands on any of the four paths, output becomes a function of a mutable admin
-> parameter and everything above stops holding. Add min-out parameters
-> *before* the fee, not after. Tracked in [`TRACKER.md`](../TRACKER.md).
+> **This analysis has one load-bearing precondition: no PSM fee.** A fee was
+> considered and ruled out as protocol policy for exactly this reason — one
+> would make output a function of a mutable admin parameter and everything
+> above would stop holding. If that policy is ever reversed, min-out
+> parameters must land in the SAME change, not after.
 
 ### Convenience Functions (usdOku ↔ USDC via Vault)
 
@@ -1762,40 +1759,41 @@ recorded as one. `OkuDollar` keeps its own, unrelated `OutputBelowMinimum` for
 
 ---
 
-### 16. The queue's dust floor collapses at 18-decimal collateral
+### 16. The queue's dust floor collapsed at 18-decimal collateral — CLOSED
 
-`LitePSM._redeemOkuMShared` gates minimum redemption size at
-`okuMAmount < decimalMultiplier`, where `decimalMultiplier == 10**(18 - d)`. This
-is the **queue's dust floor**: every redemption the buffer cannot cover becomes a
-`QueueEntry` costing two SSTOREs to create, and full loop-body gas plus an external
-`burn` for `PSM_QUEUE_PROCESSOR` to clear. Without a floor, an attacker can stuff
-the queue with economically meaningless entries at the processor's expense.
+`LitePSM._redeemOkuMShared` used to gate minimum redemption size at
+`okuMAmount < decimalMultiplier` alone, where `decimalMultiplier == 10**(18 - d)`.
+This is the **queue's dust floor**: every redemption the buffer cannot cover
+becomes a `QueueEntry` costing two SSTOREs to create, and full loop-body gas plus
+an external `burn` for `PSM_QUEUE_PROCESSOR` to clear. Without a floor, an
+attacker can stuff the queue with economically meaningless entries at the
+processor's expense.
 
-The floor scales with the collateral's decimals, and **vanishes at the top end**:
+The `decimalMultiplier`-only floor scaled with the collateral's decimals, and
+**vanished at the top end**:
 
-| Collateral decimals | `decimalMultiplier` | Effective floor |
+| Collateral decimals | `decimalMultiplier` | Effective floor (before the fix) |
 | --- | --- | --- |
 | 6 (Circle USDC) | `1e12` | `1e12` OkuM wei ≈ **$0.000001** |
 | 8 | `1e10` | ≈ $0.0000001 |
 | 18 (Binance-Peg USDC) | `1` | **1 wei — no floor at all** |
 
-At 18 decimals the only remaining gate is `usdcAmount == 0`, so a 1-wei redemption
-is enqueueable. Combined with Accepted Risk #12 (round-tripping the PSM is free —
-there is no fee anywhere), draining the buffer to force redemptions into the queue
-and then stuffing it is cheap on an 18-decimal chain.
+**Fixed:** the gate is now `okuMAmount < max(decimalMultiplier,
+Constants.MIN_REDEMPTION_OKUM)`, where `MIN_REDEMPTION_OKUM = 1e12` is a fixed
+constant independent of collateral decimals. 6-decimal chains are unaffected —
+`decimalMultiplier` already equals or exceeds the constant there. 18-decimal
+chains now get the same real floor 6-decimal collateral always had. A constant
+was chosen over a configurable storage parameter deliberately: no new storage
+slot on an already-deployed UUPS proxy, no admin lever, no SVM mirror needed (see
+below). Pinned by `test_MultiDecimal_18Dec_RedeemBelowMinRedemptionReverts` /
+`test_MultiDecimal_18Dec_RedeemAtMinRedemptionSucceeds` (`test/psm/LitePSM.t.sol`).
 
-**Not fixed in this pass, deliberately.** The fix is an absolute minimum-redemption
-parameter independent of `decimalMultiplier`, which is a new storage field, a new
-admin lever and an SVM parity obligation — disproportionate to bundle into a
-dead-code removal, and it interacts directly with the open fee decision (a fee
-would price queue-stuffing without needing a separate floor). Tracked alongside
-that decision; see `TRACKER.md`.
+**No SVM equivalent needed.** SVM's `lite-psm` hard-requires 6-decimal USDC at
+`initialize` (`InvalidUsdcDecimals`), so it has no `decimal_multiplier` term to
+collapse, and it has no redemption queue at all — `redeem_oku_m` is buffer-only.
+The attack this fix closes does not exist on that stack.
 
-**Operational mitigation until then:** the risk only materialises on a chain
-deployed against genuinely 18-decimal collateral. BSC deploys currently default to
-`MockUSDC` (6 decimals), and flipping `SKIP_MOCK_USDC=true` there is the action
-that would expose it. Treat that flag as requiring this decision to be resolved
-first.
+`SKIP_MOCK_USDC=true` on BSC is unblocked; no open decision gates it.
 
 ---
 
@@ -1893,7 +1891,7 @@ path, each for a stated structural reason — not for want of a test.
 
 | Location | Guard | Why the revert arm is unreachable |
 |---|---|---|
-| `LitePSM.sol:321` | `usdcAmount == 0` in `_redeemOkuMShared` | The dust floor on the line above already requires `okuMAmount >= decimalMultiplier`. Since `m >= PRECISION`, `dollarValue18 >= okuMAmount >= decimalMultiplier`, so `usdcAmount = dollarValue18 / decimalMultiplier >= 1`. Defence-in-depth against a future change to either the floor or the monotonicity guarantee. |
+| `LitePSM.sol:332` | `usdcAmount == 0` in `_redeemOkuMShared` | The dust floor above already requires `okuMAmount >= max(decimalMultiplier, Constants.MIN_REDEMPTION_OKUM) >= decimalMultiplier`. Since `m >= PRECISION`, `dollarValue18 >= okuMAmount >= decimalMultiplier`, so `usdcAmount = dollarValue18 / decimalMultiplier >= 1`. Defence-in-depth against a future change to either floor term or the monotonicity guarantee. |
 | `OkuDollar.sol:322` | `from == address(0)` in `_transferUsdShares` | `transferFrom` spends the allowance first, and `address(0)` can never have granted one, so the allowance check always fires earlier. The `to` half of the same pair **is** reachable and is tested. |
 | `OkuDollar.sol:425`, `:426` | `UseWrapInstead` / `UseUnwrapInstead` in `_update` | Nothing in the contract invokes the inherited `_mint`/`_burn`; all supply changes go through `wrap`/`unwrap`, which manage `usdShares` directly. A tripwire for a future refactor that routes through the inherited ERC-20 hook — the one hazard in this table that is realistic, which is why it stays. |
 | `OkuDollar.sol:475` | `sharesToMint == 0` in `wrap` | `wrap` rejects `okuMAmount == 0` at entry, and `sharesToMint == actualReceived`, so reaching zero requires an asset that takes a 100% transfer fee. The asset is the typed `IOkuMoney` wired at init, which is not fee-on-transfer. Kept because the balance-delta pattern exists precisely to tolerate a fee-on-transfer asset. |

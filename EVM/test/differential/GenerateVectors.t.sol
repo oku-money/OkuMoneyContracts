@@ -50,9 +50,33 @@ import {Constants} from "../../src/lib/Constants.sol";
 ///
 ///          forge test --match-contract GenerateVectors -vv
 ///
-///      Writes `test/differential/vectors.json`, which is COMMITTED. Regenerate
-///      and re-run the Rust and TypeScript replays whenever any of the three
-///      implementations changes.
+///      Writes `test/differential/vectors.jsonl` (JSON Lines, no header line —
+///      see `OUT_PATH`'s doc comment for the schema), which is COMMITTED.
+///      Regenerate and re-run the Rust and TypeScript replays whenever any of
+///      the three implementations changes: `npm run test:differential` from
+///      the repo root does both in one command (`package.json`).
+///
+///      ## Provenance: enforced by CI regeneration, not a hash
+///
+///      Nothing in the committed file names a generator revision — no hash, no
+///      version field. The actual provenance mechanism is structural instead:
+///      `.github/workflows/test.yml`'s `differential` job re-runs THIS harness
+///      from the Solidity reference on every push and hard-fails
+///      (`git diff --quiet`) on any byte difference from the committed file.
+///      Generation is fully deterministic — no `vm.warp`, no `block.timestamp`
+///      dependence, no fuzz inputs; the "fuzz" half (`_buildFuzzCases`) is a
+///      fixed-seed keccak chain (`keccak256("okumoney-differential-v1")`), not
+///      randomness — so a corpus that did NOT come from this exact Solidity
+///      would fail that diff on the very next CI run. This is narrower than a
+///      hash pin (it does not prove the LAST commit was honest, only that the
+///      CURRENT tree is consistent), but it means the corpus cannot drift from
+///      its own generator without CI catching it.
+///
+///      What this does NOT cover: only 4 of 3,867 vectors are revert cases,
+///      and all four are the same shape (`nowTs < anchor`). There is no
+///      coverage of `rpow` overflow or window/rate rejection reverts in the
+///      committed corpus. Low priority to widen — this is a testing/parity
+///      tool, and the existing shape is proven and working.
 contract GenerateVectorsTest is Test {
     MathLibHarness internal harness;
 

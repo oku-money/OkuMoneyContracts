@@ -4,7 +4,7 @@
 //! `DssLitePsm`: deposit USDC → mint at peg, redeem from buffer when liquid.
 //! Taken from https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol
 
-use crate::constants::TOKEN_DECIMALS;
+use crate::constants::USDC_DECIMALS;
 use crate::contexts::{DepositBuffer, MintOkuM, RedeemOkuM, WithdrawBuffer};
 use crate::errors::LitePsmError;
 use crate::events::*;
@@ -67,9 +67,10 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         LitePsmError::AllowanceExceeded
     );
 
-    // Effects-checks-interactions: decrement minter allowance BEFORE the mint
-    // CPI so a future Token-2022 transfer-hook on OkuM cannot re-enter and
-    // double-spend the same allowance window.
+    // Decrement minter allowance BEFORE the mint CPI. NOT a reentrancy defense —
+    // Anchor only persists `Account<T>` mutations at instruction `exit()`, and Solana
+    // forbids a program calling back into itself within one transaction, so there is
+    // no reentrant path through the CPI below for this ordering to close.
     let bump = ctx.accounts.config.bump;
     ctx.accounts.config.minter_allowance = minter_allowance
         .checked_sub(raw_oku_m_amount)
@@ -89,7 +90,7 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
             },
         ),
         usdc_amount,
-        TOKEN_DECIMALS,
+        USDC_DECIMALS,
     )?;
 
     // Mint OkuM to user (Token-2022)
@@ -246,7 +247,7 @@ pub fn redeem_oku_m(
             signer,
         ),
         usdc_amount,
-        TOKEN_DECIMALS,
+        USDC_DECIMALS,
     )?;
 
     // Post-burn total, computed rather than `reload()`-ed: `current_supply`
@@ -293,7 +294,7 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
             },
         ),
         amount,
-        TOKEN_DECIMALS,
+        USDC_DECIMALS,
     )?;
 
     // Reload vault balance after transfer
@@ -341,7 +342,7 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
             signer,
         ),
         amount,
-        TOKEN_DECIMALS,
+        USDC_DECIMALS,
     )?;
 
     // Reload vault balance after transfer

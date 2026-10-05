@@ -21,7 +21,7 @@ import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {Deploy} from "../shared/Deploy.sol";
-import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
+import {OverrideBlockGuard} from "../../src/lib/OverrideBlockGuard.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {MathLib} from "../../src/lib/MathLib.sol";
 import {LitePSMEvents} from "../../src/lib/events/LitePSMEvents.sol";
@@ -1334,7 +1334,7 @@ contract LitePSMTest is BaseTest {
         // Same block — mintOkuM should revert
         _approveUsdc(user1, address(litePsm), 100e6);
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         litePsm.mintOkuM(100e6);
     }
 
@@ -1374,7 +1374,7 @@ contract LitePSMTest is BaseTest {
 
         // Same block — redeemOkuM should revert
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         litePsm.redeemOkuM(50e18);
     }
 
@@ -1406,7 +1406,7 @@ contract LitePSMTest is BaseTest {
         // Same block — mintUsdOku should revert
         _approveUsdc(user1, address(litePsm), 100e6);
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         litePsm.mintUsdOku(100e6);
     }
 
@@ -1421,7 +1421,7 @@ contract LitePSMTest is BaseTest {
 
         // Same block — redeemUsdOku should revert
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         litePsm.redeemUsdOku(50e18);
     }
 
@@ -1433,7 +1433,7 @@ contract LitePSMTest is BaseTest {
         // Same block — mintOkuM should revert
         _approveUsdc(user1, address(litePsm), 100e6);
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         litePsm.mintOkuM(100e6);
     }
 
@@ -1454,7 +1454,7 @@ contract LitePSMTest is BaseTest {
         );
     }
 
-    /// @notice PINS THE DOCUMENTED LIMITATION, end to end: `YieldSandwichGuard` is
+    /// @notice PINS THE DOCUMENTED LIMITATION, end to end: `OverrideBlockGuard` is
     ///         forward-only. A mint ordered BEFORE `setOkuMMultiplier` in the same
     ///         block is not blocked — it reads `lastYieldDistributionBlock` before
     ///         the override writes it — and a redeem one block later is not blocked
@@ -1463,7 +1463,7 @@ contract LitePSMTest is BaseTest {
     /// @dev This is NOT a reentrancy or ordering trick — forge executes top-level
     ///      calls in the order written, so simply not `vm.roll`-ing between the mint
     ///      and the override IS "same block, mint ordered first." See
-    ///      `YieldSandwichGuard.sol`'s NatSpec and `EVM/README.md` Accepted Risk #12.
+    ///      `OverrideBlockGuard.sol`'s NatSpec and `EVM/README.md` Accepted Risk #12.
     ///      If this test ever starts reverting on the mint or the redeem, the
     ///      guard's scope changed and Accepted Risk #12 needs re-examination, not
     ///      this test weakened to match.
@@ -1487,7 +1487,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         okuMoney.approve(address(litePsm), okuMReceived);
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         litePsm.redeemOkuM(okuMReceived);
 
         // 3. Back-run: roll one block, THEN redeem -- the guard has released.
@@ -1511,7 +1511,7 @@ contract LitePSMTest is BaseTest {
     ///         own pause state. Proves the ceremony actually closes BOTH legs the
     ///         on-chain guard alone does not -- the front-run mint before the
     ///         override, and the back-run redeem a block after it -- not just the
-    ///         same-block round-trip `YieldSandwichGuard` already blocks.
+    ///         same-block round-trip `OverrideBlockGuard` already blocks.
     function test_SetOkuMMultiplier_PauseCeremony_ClosesFrontRunWindow() public {
         // Seed user1 with OkuM from BEFORE the ceremony starts, so "the PSM is
         // paused" is the only thing stopping the attack on the mint side -- not
@@ -1573,11 +1573,11 @@ contract LitePSMTest is BaseTest {
         // Distribute yield to set lastYieldDistributionBlock to the current block.
         _stampYieldLockBlock();
 
-        // Same-block withdrawUsdc must revert via the YieldSandwichGuard. This closes the
+        // Same-block withdrawUsdc must revert via the OverrideBlockGuard. This closes the
         // historical NOTE in withdrawUsdc where queueObligation could be computed against
         // a freshly-shifted okuMMultiplier.
         vm.prank(bufferWithdrawer);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         litePsm.withdrawUsdc(user1, 1e6);
     }
 
@@ -1593,7 +1593,7 @@ contract LitePSMTest is BaseTest {
         _stampYieldLockBlock();
 
         vm.prank(queueProcessor);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         litePsm.processQueue(0, 0, 0);
     }
 

@@ -3,7 +3,7 @@
 //! Same-slot lock (Solana analogue of EVM's `block.number` lock) used by
 //! lite-psm to block user operations in the same slot as a yield
 //! distribution. SVM port of the EVM-side
-//! `YieldSandwichGuard` (`EVM/src/lib/YieldSandwichGuard.sol`).
+//! `OverrideBlockGuard` (`EVM/src/lib/OverrideBlockGuard.sol`).
 //!
 //! The slot comparison itself lives in `oku_shared::yield_lock_engaged`;
 //! this module is the Anchor-error mapping plus the `Clock::get()` sysvar
@@ -30,7 +30,7 @@ use oku_shared::yield_lock_engaged;
 /// The lock uses Solana slots (~400 ms each) and auto-releases in
 /// subsequent slots.
 ///
-/// EVM mirror: `YieldSandwichGuard.whenYieldNotDistributing`, which likewise
+/// EVM mirror: `OverrideBlockGuard.whenNoOverrideThisBlock`, which likewise
 /// keys on a field written only by `setOkuMMultiplier`.
 pub fn check_yield_lock(config: &PsmConfig) -> Result<()> {
     check_yield_lock_with_clock(config, &Clock::get()?)

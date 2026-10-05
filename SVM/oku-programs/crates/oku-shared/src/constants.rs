@@ -74,6 +74,13 @@ pub const MAX_MULTIPLIER: u128 = 1_000_000_000_000_000_000_000_000;
 /// which is the *multiplier* scale.
 pub const TOKEN_DECIMALS: u8 = 6;
 
+/// USDC's decimal count on SVM (the canonical USDC mint, 6 decimals).
+///
+/// A separate name from [`TOKEN_DECIMALS`] even though the value is currently
+/// identical: that one is OkuM's decimal count. Defined as `= TOKEN_DECIMALS`
+/// so the two cannot silently diverge if either changes.
+pub const USDC_DECIMALS: u8 = TOKEN_DECIMALS;
+
 #[cfg(test)]
 mod tests {
     use super::*;

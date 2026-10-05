@@ -6,7 +6,7 @@ use anchor_spl::{
     token::{Mint, Token, TokenAccount},
     token_2022::Token2022,
 };
-use oku_shared::TOKEN_DECIMALS;
+use oku_shared::USDC_DECIMALS;
 
 /// This program's ProgramData PDA: `[program_id]` under the BPF upgradeable
 /// loader. Computed rather than trusted from the caller, so `program_data`
@@ -61,11 +61,11 @@ pub struct Initialize<'info> {
 
     /// USDC mint (standard SPL).
     ///
-    /// Must have exactly `TOKEN_DECIMALS` (= 6) decimals, matching the OkuM
-    /// decimal model. EVM resolves a runtime `usdcDecimalMultiplier` from
+    /// Must have exactly `USDC_DECIMALS` (= 6, the canonical USDC mint) decimals.
+    /// EVM resolves a runtime `usdcDecimalMultiplier` from
     /// `IERC20Metadata.decimals()`; SVM hardcodes it and asserts at init.
     #[account(
-        constraint = usdc_mint.decimals == TOKEN_DECIMALS @ LitePsmError::InvalidUsdcDecimals
+        constraint = usdc_mint.decimals == USDC_DECIMALS @ LitePsmError::InvalidUsdcDecimals
     )]
     pub usdc_mint: Box<Account<'info, Mint>>,
 

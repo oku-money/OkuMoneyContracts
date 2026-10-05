@@ -72,7 +72,7 @@ bounds stay on-chain; business policy moves to the backend.
 
 **EVM permissionless (for completeness):** `LitePSM.mintOkuM/redeemOkuM/mintUsdOku/redeemUsdOku`
 (`:190/224/303/351`) and `OkuDollar.wrap/unwrap/redeem/withdraw` (`:371/423/600/583`) — all
-carry `nonReentrant + whenNotPaused + whenYieldNotDistributing`. `OkuDollar.deposit/mint`
+carry `nonReentrant + whenNotPaused + whenNoOverrideThisBlock`. `OkuDollar.deposit/mint`
 (`:565/571`) appear unguarded but delegate to `wrap`, inheriting its guards.
 `RedemptionQueue.advanceHead` (`:432`) is permissionless and safe — monotone, and only
 advances past already-cleared slots — but **only because it now carries `nonReentrant`**.

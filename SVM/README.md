@@ -918,7 +918,7 @@ EVM groups protocol-wide invariants into `EVM/src/lib/`:
 |---|---|
 | `lib/Constants.sol` | `crates/oku-shared/src/constants.rs` |
 | `lib/MathLib.sol` | `crates/oku-shared/src/math.rs` |
-| `lib/YieldSandwichGuard.sol` | `crates/oku-shared/src/yield_lock.rs` + `lite-psm/src/helpers/yield_lock.rs` wrapper |
+| `lib/OverrideBlockGuard.sol` | `crates/oku-shared/src/yield_lock.rs` + `lite-psm/src/helpers/yield_lock.rs` wrapper |
 | `lib/Roles.sol` | `programs/lite-psm/src/roles.rs` (single program owns all RBAC) |
 | `lib/Errors.sol` | `programs/lite-psm/src/errors.rs` |
 | `lib/events/*.sol` | `programs/lite-psm/src/events.rs` |

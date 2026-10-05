@@ -56,7 +56,11 @@ pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, raw_amount: u64) -> Resul
         LitePsmError::AllowanceExceeded
     );
 
-    // Effects-before-interactions: decrement allowance BEFORE the mint CPI
+    // Decrement allowance BEFORE the mint CPI. NOT a reentrancy defense — see the
+    // identical note in `instructions::psm::mint_oku_m`: Anchor only persists
+    // `Account<T>` mutations at instruction `exit()`, and Solana forbids a program
+    // from calling back into itself within one transaction, so there is no reentrant
+    // path through the CPI below for this ordering to close.
     let bump = ctx.accounts.config.bump;
     ctx.accounts.config.direct_minter_allowance = direct_minter_allowance
         .checked_sub(raw_amount)

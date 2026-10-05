@@ -322,7 +322,7 @@ src/
     MathLib.sol             # computeMultiplier / compoundFor / rpow + conversion helpers
     ReentrancyGuardUpgradeable.sol  # OZ-5.x-compatible upgradeable reentrancy guard
                             # (OZ dropped the upgradeable variant in v5)
-    YieldSandwichGuard.sol  # Shared whenYieldNotDistributing modifier (OkuDollar + LitePSM);
+    OverrideBlockGuard.sol  # Shared whenNoOverrideThisBlock modifier (OkuDollar + LitePSM);
                             # guards the DISCRETE emergency override only
     events/
       OkuMoneyEvents.sol    # Event declarations for OkuMoney
@@ -545,7 +545,7 @@ alongside a permissionless PSM. `setOkuMMultiplier` survives only as the
 
 **The vector.** `LitePSM.mintOkuM` / `redeemOkuM` charge **no fee** (`tin`/`tout`
 are both zero) and have **no cooldown** — a round-trip is instant whenever the
-USDC buffer covers it. `YieldSandwichGuard` blocks exactly **one block** around a
+USDC buffer covers it. `OverrideBlockGuard` blocks exactly **one block** around a
 discrete multiplier write. At 5% APY paid monthly (a 0.407% jump per tick),
 depositing immediately before the tick and withdrawing immediately after
 captures the whole month's yield for ~24 seconds of capital exposure:
@@ -674,7 +674,7 @@ range reverts rather than silently truncating.
 | `setOkuMMultiplier(newMultiplier)` | `OKUM_REBASER` | **Emergency discrete override.** Writes `okuMBaseMultiplier = newMultiplier`, resets `okuMLastAccrualTime` to now, and collapses the rate schedule to halted (`okuMRatePerSecond`/`okuMPendingRatePerSecond` = `PRECISION`, `okuMRateEnd`/`okuMPendingRateEnd` = 0) — an operator must re-arm via `setOkuMYieldRate`. Enforces `newMultiplier > current` and `<= MAX_MULTIPLIER`. Pause-gated. Stamps `lastYieldDistributionBlock`. |
 
 `setOkuMMultiplier` is the **sole remaining reason** `lastYieldDistributionBlock`
-and `YieldSandwichGuard` / `whenYieldNotDistributing` still exist.
+and `OverrideBlockGuard` / `whenNoOverrideThisBlock` still exist.
 
 **There is no `distributeYield()`.** Any "distribute N dollars" primitive must
 divide by *local* `totalSupply()` and therefore produces a different multiplier
@@ -798,7 +798,7 @@ Who holds what, and the blast radius of each: [`AUTHORITY-MATRIX.md`](../AUTHORI
 
 ## OkuDollar.sol
 
-**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `ReentrancyGuardUpgradeable`, `YieldSandwichGuard`, `UUPSUpgradeable`.
+**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `ReentrancyGuardUpgradeable`, `OverrideBlockGuard`, `UUPSUpgradeable`.
 
 **Concept**: Rebasing $1-pegged stablecoin wrapping OkuMoney. **Single multiplier** — `usdMultiplier()` returns exactly `okuMoney.okuMMultiplier()`; the vault holds no rate state of its own. Implements the IERC4626 surface with **rebasing** shares (see below); does not inherit OZ's `ERC4626Upgradeable`.
 
@@ -837,7 +837,7 @@ Signatures and full NatSpec in the source. Two things worth stating here:
   check. Collapsing them would hide which side is actually short.
 
 Both are `public` rather than `external` so the ERC-4626 entry points can call
-them internally, and both carry `whenYieldNotDistributing` + `whenNotPaused` +
+them internally, and both carry `whenNoOverrideThisBlock` + `whenNotPaused` +
 `nonReentrant`.
 
 ### ERC-4626 Surface
@@ -985,14 +985,14 @@ share burn: at `m > 1e18` the two diverge by up to 1 share and `unwrap` would
 revert `InsufficientBalance`. The same asymmetry is still open on
 `OkuDollar._redeemShares` — see Accepted Risks 11a.
 
-Every user-facing PSM function is protected by `whenYieldNotDistributing` + `whenNotPaused`.
+Every user-facing PSM function is protected by `whenNoOverrideThisBlock` + `whenNotPaused`.
 
 ### Admin / Operator Surface
 
 `depositBuffer` (`PSM_BUFFER_DEPOSITOR`), `withdrawUsdc`
 (`PSM_BUFFER_WITHDRAWER`, with `WouldStrandQueue` protection), `processQueue`
 (`PSM_QUEUE_PROCESSOR`), `pause`/`unpause`. All four also carry
-`whenYieldNotDistributing` — `withdrawUsdc` because it reads the
+`whenNoOverrideThisBlock` — `withdrawUsdc` because it reads the
 multiplier-aware `totalQueuedUsdc()`, `processQueue` for the same reason.
 
 ### Events
@@ -1049,11 +1049,11 @@ LitePSM.redeemOkuM(user, n) ─► orchestrator ─► LitePSM.mintOkuM (USDC cu
 
 ---
 
-## YieldSandwichGuard
+## OverrideBlockGuard
 
-Shared abstract at [`src/lib/YieldSandwichGuard.sol`](src/lib/YieldSandwichGuard.sol),
+Shared abstract at [`src/lib/OverrideBlockGuard.sol`](src/lib/OverrideBlockGuard.sol),
 inherited by both `OkuDollar` and `LitePSM`. Exposes the
-`whenYieldNotDistributing` modifier and the `YieldDistributionInProgress` error.
+`whenNoOverrideThisBlock` modifier and the `OverrideInProgress` error.
 
 **Narrowed scope after the streaming refactor.** Continuous accrual has no
 discrete step to sandwich, so normal yield operation does not engage this guard
@@ -1199,7 +1199,7 @@ radius above. The EVM-specific mitigations that bound a single-call
 compromise:
 
 - The discrete override `setOkuMMultiplier` stamps
-  `lastYieldDistributionBlock`, and `whenYieldNotDistributing` blocks
+  `lastYieldDistributionBlock`, and `whenNoOverrideThisBlock` blocks
   same-block sandwiching on every PSM + vault op that reads the
   multiplier. Streaming rate changes create no step and need no guard.
 - Defence-in-depth ceilings: `MAX_MULTIPLIER = 1e24`,
@@ -1488,8 +1488,8 @@ There is no discrete-tick sandwich vector on the normal yield path —
 current value, so there is no step to straddle (§ Why streaming, not
 discrete ticks). The vector survives **only** on `setOkuMMultiplier`,
 the one remaining function that creates a discontinuity, which is why
-`lastYieldDistributionBlock` and `whenYieldNotDistributing` are
-retained (§ YieldSandwichGuard).
+`lastYieldDistributionBlock` and `whenNoOverrideThisBlock` are
+retained (§ OverrideBlockGuard).
 
 **Two distinct residuals, not one** — both unmitigated on-chain, for
 different reasons and with different threat actors:
@@ -1499,7 +1499,7 @@ different reasons and with different threat actors:
   ahead of it. Not mitigated on-chain, for the same reasons given in
   Risk 1 (no timelock on privileged calls generally).
 - **Third-party front-run of an honest override, by anyone watching
-  the mempool** — no role required. `YieldSandwichGuard` is
+  the mempool** — no role required. `OverrideBlockGuard` is
   **forward-only**: `lastYieldDistributionBlock` is stamped *inside*
   `setOkuMMultiplier`, so a transaction ordered *before* it in the same
   block reads the pre-stamp value and is not blocked. Concretely: mint
@@ -1510,7 +1510,7 @@ different reasons and with different threat actors:
   combination captures the entire discrete step for one block of
   capital exposure, with no fee anywhere in the PSM to price it — the
   same economics as § Why streaming, not discrete ticks, on the one
-  function that still has a step. See `YieldSandwichGuard.sol`'s
+  function that still has a step. See `OverrideBlockGuard.sol`'s
   NatSpec for the mechanism in full.
 
 **Operational mitigation (no code change): pause around the
@@ -1529,7 +1529,7 @@ state, independent of `OkuMoney`'s — `setOkuMMultiplier` is gated on
 With both mint/redeem surfaces frozen before the call and held frozen
 until after it, no front-run or back-run transaction can land in
 between — closing both residuals above, not just the same-block one
-`YieldSandwichGuard` already handles. Cost: PSM/vault unavailability
+`OverrideBlockGuard` already handles. Cost: PSM/vault unavailability
 for the ceremony's duration, and (on the mainnet role topology)
 coordination across two tiers — pause sits on the Warm Multisig,
 unpause on the Cold Multisig. Appropriate overhead for a function
@@ -1840,7 +1840,7 @@ Per-file coverage (`forge coverage --no-match-coverage 'test/|script/'`):
 |---|---|---|---|---|
 | `src/lib/MathLib.sol` | **100 %** (48/48) | 100 % | **100 %** (10/10) | 100 % |
 | `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** (17/17) | 100 % | 100 % | 100 % |
-| `src/lib/YieldSandwichGuard.sol` | **100 %** (3/3) | 100 % | 100 % | 100 % |
+| `src/lib/OverrideBlockGuard.sol` | **100 %** (3/3) | 100 % | 100 % | 100 % |
 | `src/psm/LitePSM.sol` | **100 %** (137/137) | 99.40 % | 96.15 % (25/26) | 100 % |
 | `src/psm/RedemptionQueue.sol` | **100 %** (117/117) | 100 % | **100 %** (19/19) | 100 % |
 | `src/token/OkuDollar.sol` | **97.50 %** (195/200) | 96.41 % | 89.19 % (33/37) | 97.83 % |

@@ -26,7 +26,7 @@ import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
-import {YieldSandwichGuard} from "../lib/YieldSandwichGuard.sol";
+import {OverrideBlockGuard} from "../lib/OverrideBlockGuard.sol";
 import {OkuDollarEvents} from "../lib/events/OkuDollarEvents.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
 
@@ -53,7 +53,7 @@ contract OkuDollar is
     AccessControlUpgradeable,
     PausableUpgradeable,
     ReentrancyGuardUpgradeable,
-    YieldSandwichGuard,
+    OverrideBlockGuard,
     UUPSUpgradeable,
     OkuDollarEvents,
     IOkuDollar,
@@ -89,7 +89,7 @@ contract OkuDollar is
     // ============ Custom Errors ============
 
     // Common errors (ZeroAddress, MultiplierCannotDecrease, ZeroAmount, InsufficientBalance)
-    // live in lib/Errors.sol. YieldDistributionInProgress is inherited from YieldSandwichGuard.
+    // live in lib/Errors.sol. OverrideInProgress is inherited from OverrideBlockGuard.
     error SenderBlacklisted();
     error RecipientBlacklisted();
     error AlreadyBlacklisted();
@@ -243,6 +243,11 @@ contract OkuDollar is
     {
         uint256 multiplier = usdMultiplier();
         uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
+        // Reject a nonzero `amount` that floors to zero shares — otherwise this moves
+        // nothing while still emitting `Transfer(from, to, 0)` and returning `true`.
+        // `amount == 0` (a genuine, EIP-20-required no-op) is unaffected by the `amount != 0`
+        // guard.
+        if (amount != 0 && shares == 0) revert AmountTooSmall();
         _transferUsdShares(msg.sender, to, shares, multiplier);
         // Emit the effective post-rounding dollar amount rather than the caller's
         // `amount`: it is the closest single number to the value that moved, and never
@@ -297,6 +302,9 @@ contract OkuDollar is
         _spendAllowance(from, msg.sender, amount);
         uint256 multiplier = usdMultiplier();
         uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
+        // See `transfer` above. Also guards against debiting the allowance for a
+        // transfer that moves nothing.
+        if (amount != 0 && shares == 0) revert AmountTooSmall();
         _transferUsdShares(from, to, shares, multiplier);
         // See `transfer` above.
         uint256 effective =
@@ -429,8 +437,8 @@ contract OkuDollar is
 
     // ============ Yield Distribution Lock ============
 
-    /// @inheritdoc YieldSandwichGuard
-    function _yieldSandwichOkuMoney() internal view override returns (IOkuMoney) {
+    /// @inheritdoc OverrideBlockGuard
+    function _overrideBlockOkuMoney() internal view override returns (IOkuMoney) {
         return _getOkuDollarStorage().okuMoney;
     }
 
@@ -452,7 +460,7 @@ contract OkuDollar is
         public
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
+        whenNoOverrideThisBlock
         returns (uint256 usdMinted)
     {
         if (okuMAmount == 0) revert Errors.ZeroAmount();
@@ -503,7 +511,7 @@ contract OkuDollar is
         public
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
+        whenNoOverrideThisBlock
         returns (uint256 okuMReturned)
     {
         return _unwrap(msg.sender, usdAmount, receiver);
@@ -614,7 +622,7 @@ contract OkuDollar is
     ///      no `receiver` parameter to also check; `owner`'s own status is what the
     ///      spec means by "cannot be redeemed".)
     ///
-    ///      DELIBERATELY NOT MODELLED: `whenYieldNotDistributing`. `withdraw`/`redeem`
+    ///      DELIBERATELY NOT MODELLED: `whenNoOverrideThisBlock`. `withdraw`/`redeem`
     ///      also revert for the remainder of the block in which
     ///      {OkuMoney.setOkuMMultiplier} executes, so strictly this view over-reports
     ///      during that window. Omitted because the condition is transient by one block
@@ -654,7 +662,7 @@ contract OkuDollar is
     /// @notice Deposit `assets` OkuM, minting UsdOku to `receiver`.
     /// @dev Thin alias over {wrap}. The 4626 signature carries no slippage parameter, so
     ///      `minAmountOut` is 0 — EOAs should prefer {wrap}. Deliberately carries NO
-    ///      `nonReentrant` / `whenNotPaused` / `whenYieldNotDistributing`: `wrap` already
+    ///      `nonReentrant` / `whenNotPaused` / `whenNoOverrideThisBlock`: `wrap` already
     ///      enforces all three, and repeating them here would re-enter `wrap`'s own
     ///      `nonReentrant` guard and revert every call. {withdraw}/{redeem} DO carry
     ///      explicit modifiers because they route through the internal `_unwrap`.
@@ -684,7 +692,7 @@ contract OkuDollar is
         external
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
+        whenNoOverrideThisBlock
         returns (uint256 shares)
     {
         shares = previewWithdraw(assets);
@@ -701,7 +709,7 @@ contract OkuDollar is
         external
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
+        whenNoOverrideThisBlock
         returns (uint256)
     {
         return _redeemShares(shares, receiver, owner);

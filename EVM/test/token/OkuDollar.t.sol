@@ -9,7 +9,7 @@ import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {OkuDollarEvents} from "../../src/lib/events/OkuDollarEvents.sol";
-import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
+import {OverrideBlockGuard} from "../../src/lib/OverrideBlockGuard.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {
     PausableUpgradeable
@@ -1903,7 +1903,7 @@ contract OkuDollarTest is BaseTest {
 
         // Same block — wrap should revert
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         okuDollar.wrap(50e18, user1, 0);
     }
 
@@ -1939,7 +1939,7 @@ contract OkuDollarTest is BaseTest {
 
         // Same block — unwrap should revert
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         okuDollar.unwrap(50e18, user1);
     }
 
@@ -1972,7 +1972,7 @@ contract OkuDollarTest is BaseTest {
 
         // Same block — wrap should revert
         vm.prank(user1);
-        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         okuDollar.wrap(50e18, user1, 0);
     }
 

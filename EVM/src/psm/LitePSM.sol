@@ -20,7 +20,7 @@ import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
-import {YieldSandwichGuard} from "../lib/YieldSandwichGuard.sol";
+import {OverrideBlockGuard} from "../lib/OverrideBlockGuard.sol";
 import {LitePSMEvents} from "../lib/events/LitePSMEvents.sol";
 
 /**
@@ -49,7 +49,7 @@ contract LitePSM is
     AccessControlUpgradeable,
     PausableUpgradeable,
     ReentrancyGuardUpgradeable,
-    YieldSandwichGuard,
+    OverrideBlockGuard,
     UUPSUpgradeable,
     LitePSMEvents
 {
@@ -81,7 +81,7 @@ contract LitePSM is
     // ============ Custom Errors ============
 
     // Common errors (ZeroAddress, ZeroAmount) live in lib/Errors.sol.
-    // YieldDistributionInProgress is inherited from YieldSandwichGuard.
+    // OverrideInProgress is inherited from OverrideBlockGuard.
     error AmountTooSmall();
     // There is deliberately no slippage/drift error here. Two once existed
     // (`RoundTripDriftTooLarge`, `OutputBelowMinimum`); both read as slippage protection,
@@ -213,8 +213,8 @@ contract LitePSM is
 
     // ============ Yield Distribution Lock ============
 
-    /// @inheritdoc YieldSandwichGuard
-    function _yieldSandwichOkuMoney() internal view override returns (IOkuMoney) {
+    /// @inheritdoc OverrideBlockGuard
+    function _overrideBlockOkuMoney() internal view override returns (IOkuMoney) {
         return _getLitePSMStorage().okuMoney;
     }
 
@@ -239,7 +239,7 @@ contract LitePSM is
         external
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
+        whenNoOverrideThisBlock
     {
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
@@ -282,19 +282,26 @@ contract LitePSM is
     ///      defence-in-depth rather than a structural need — see that instruction's
     ///      doc comment, which documents the divergence from the other side.
     /// @param okuMAmount Amount of OkuMoney to redeem (18 decimals)
+    /// @return usdcAmount USDC paid immediately; `0` means queued (not a failure) — see
+    ///         {_redeemOkuMShared}.
     function redeemOkuM(uint256 okuMAmount)
         external
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
+        whenNoOverrideThisBlock
+        returns (uint256 usdcAmount)
     {
-        _redeemOkuMShared(msg.sender, okuMAmount, false);
+        return _redeemOkuMShared(msg.sender, okuMAmount, false);
     }
 
     /// @dev Shared core for the four redemption paths. `okuMAtPsm`: false -> pull OkuM
     ///      from `user` and emit OkuMRedeemed on the instant path; true -> OkuM is already
     ///      held here (by `_redeemUsdOku` after `okuDollar.unwrap()`), so do not emit —
     ///      the caller emits its own user-facing event.
+    ///      Returns `0` when the buffer is insufficient and the redemption is queued
+    ///      instead — a successful call, not a failure. Callers distinguishing
+    ///      "settled" vs. "queued" should check this return value or listen for
+    ///      `OkuMRedeemed` vs. `RedemptionQueue.RedemptionQueued`.
     function _redeemOkuMShared(
         address user,
         uint256 okuMAmount,
@@ -329,7 +336,10 @@ contract LitePSM is
         uint256 okuMMult = $.okuMoney.okuMMultiplier();
         uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, okuMMult);
         usdcAmount = MathLib.dollarsToUsdc(dollarValue18, decimalMultiplier);
-        if (usdcAmount == 0) revert AmountTooSmall();
+        // NO `usdcAmount == 0` check here (unlike `mintOkuM`'s): provably unreachable given
+        // `minRedemption` above and `okuMMult >= PRECISION`, since that makes
+        // `usdcAmount >= 1` always. See the error declarations above re: not reintroducing
+        // dead checks.
 
         // If buffer covers the redemption: burn OkuM (pulled or held), pay USDC.
         // Otherwise: route OkuM to the queue. Pull OkuM from user only when not held.
@@ -373,7 +383,7 @@ contract LitePSM is
         external
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
+        whenNoOverrideThisBlock
     {
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
@@ -409,16 +419,19 @@ contract LitePSM is
     /// @dev Reverts if the vault is undercollateralized (unwrap fails).
     ///      If the buffer is insufficient, OkuM is queued (the user earns yield while
     ///      queued via okuMMultiplier appreciation).
+    /// @return usdcOut USDC paid immediately; `0` means queued, same convention as
+    ///         {redeemOkuM}.
     function redeemUsdOku(uint256 usdAmount)
         external
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
+        whenNoOverrideThisBlock
+        returns (uint256 usdcOut)
     {
-        _redeemUsdOku(msg.sender, usdAmount);
+        return _redeemUsdOku(msg.sender, usdAmount);
     }
 
-    function _redeemUsdOku(address user, uint256 usdAmount) internal {
+    function _redeemUsdOku(address user, uint256 usdAmount) internal returns (uint256 usdcOut) {
         if (usdAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
@@ -437,7 +450,7 @@ contract LitePSM is
         // Reverts if vault undercollateralized (distinct failure mode).
         uint256 okuMReturned = $.okuDollar.unwrap(received, address(this));
         // UsdOkuRedeemed is the sole event for this path (no underlying OkuMRedeemed).
-        uint256 usdcOut = _redeemOkuMShared(user, okuMReturned, true);
+        usdcOut = _redeemOkuMShared(user, okuMReturned, true);
 
         emit UsdOkuRedeemed(user, received, usdcOut, $.okuMoney.okuMMultiplier());
     }
@@ -446,7 +459,7 @@ contract LitePSM is
     /// @param startIndex First queue index to process (inclusive)
     /// @param endIndex Last queue index to process (exclusive)
     /// @param approveAmount USDC amount to approve for processing (sum of entries by backend)
-    /// @dev `whenYieldNotDistributing` is required because
+    /// @dev `whenNoOverrideThisBlock` is required because
     ///      `RedemptionQueue.processQueue` caches `okuMMultiplier()` once and pays real
     ///      USDC against it, so a discrete multiplier bump in the same block would shift
     ///      every payout in the batch. Every multiplier-consuming path here carries it.
@@ -458,7 +471,7 @@ contract LitePSM is
         external
         nonReentrant
         whenNotPaused
-        whenYieldNotDistributing
+        whenNoOverrideThisBlock
         onlyRole(Roles.PSM_QUEUE_PROCESSOR)
     {
         LitePSMStorage storage $ = _getLitePSMStorage();
@@ -489,7 +502,7 @@ contract LitePSM is
     ///      while the PSM is paused. Pause blocks user-facing mint/redeem; buffer
     ///      operations are privileged and gated by `PSM_BUFFER_WITHDRAWER`.
     ///
-    ///      `whenYieldNotDistributing` guards the multiplier-aware `totalQueuedUsdc()`
+    ///      `whenNoOverrideThisBlock` guards the multiplier-aware `totalQueuedUsdc()`
     ///      read: without it a same-block yield distribution would shift the queue
     ///      obligation while the buffer balance held still, opening a sandwich window
     ///      against the `WouldStrandQueue` check.
@@ -498,7 +511,7 @@ contract LitePSM is
         uint256 amount
     )
         external
-        whenYieldNotDistributing
+        whenNoOverrideThisBlock
         onlyRole(Roles.PSM_BUFFER_WITHDRAWER)
     {
         if (to == address(0)) revert Errors.ZeroAddress();

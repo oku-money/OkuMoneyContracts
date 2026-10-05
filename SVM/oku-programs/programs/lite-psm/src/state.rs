@@ -71,7 +71,7 @@ pub struct PsmConfig {
     /// The multiplier advances continuously, so there is no discrete jump to
     /// sandwich; this fires ONLY on the explicit override path and is NOT
     /// stamped by the routine display sync. Mirrors EVM's
-    /// `YieldSandwichGuard`, which keys on
+    /// `OverrideBlockGuard`, which keys on
     /// `OkuMoney.lastYieldDistributionBlock` — written only by
     /// `setOkuMMultiplier`.
     pub last_yield_distribution_slot: u64,

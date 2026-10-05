@@ -93,7 +93,7 @@ contract OkuMoney is
         uint256 maxSupply; // supply cap in raw token units
         mapping(address => bool) isBlacklisted;
         // Block number of the last discrete multiplier override. Read by
-        // YieldSandwichGuard consumers (OkuDollar, LitePSM) to block PSM/vault operations
+        // OverrideBlockGuard consumers (OkuDollar, LitePSM) to block PSM/vault operations
         // in the same block as a discrete write. Continuous accrual never stamps this.
         uint256 lastYieldDistributionBlock;
     }
@@ -229,7 +229,7 @@ contract OkuMoney is
     }
 
     /// @notice Block number of the last discrete override (0 if none); read by
-    ///         YieldSandwichGuard.
+    ///         OverrideBlockGuard.
     function lastYieldDistributionBlock() external view returns (uint256) {
         return _getOkuMoneyStorage().lastYieldDistributionBlock;
     }
@@ -516,7 +516,7 @@ contract OkuMoney is
     ///      {setOkuMYieldRate} afterward to resume accrual.
     ///
     ///      This DOES create a discontinuity, so it stamps `lastYieldDistributionBlock`
-    ///      and every PSM/vault path guarded by `whenYieldNotDistributing` reverts for the
+    ///      and every PSM/vault path guarded by `whenNoOverrideThisBlock` reverts for the
     ///      rest of the block. That guard exists solely for this function.
     ///
     ///      Rejects `newMultiplier <= current` so a no-op cannot burn the sandwich-lock

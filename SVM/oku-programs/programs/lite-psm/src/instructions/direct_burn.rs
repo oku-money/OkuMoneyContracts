@@ -44,7 +44,11 @@ pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, raw_amount: u64) -> Resul
         LitePsmError::AllowanceExceeded
     );
 
-    // Effects-before-interactions: decrement allowance BEFORE the burn CPI
+    // Decrement allowance BEFORE the burn CPI. NOT a reentrancy defense — see the
+    // identical note in `instructions::psm::mint_oku_m`: Anchor only persists
+    // `Account<T>` mutations at instruction `exit()`, and Solana forbids a program
+    // from calling back into itself within one transaction, so there is no reentrant
+    // path through the CPI below for this ordering to close.
     ctx.accounts.config.direct_burner_allowance = direct_burner_allowance
         .checked_sub(raw_amount)
         .ok_or(LitePsmError::Overflow)?;

@@ -1,8 +1,8 @@
 //! # Lite-PSM constants
 //!
-//! `PRECISION`, `MAX_MULTIPLIER` and `TOKEN_DECIMALS` are authored in the
-//! workspace crate `oku-shared` and re-exported here so call sites can write
-//! `use crate::constants::*`.
+//! `PRECISION`, `MAX_MULTIPLIER`, `TOKEN_DECIMALS` and `USDC_DECIMALS` are
+//! authored in the workspace crate `oku-shared` and re-exported here so call
+//! sites can write `use crate::constants::*`.
 //!
 //! The PSM operates on a single token: **OkuM**, a Token-2022 mint with the
 //! `ScaledUiAmount` extension. The USDC ↔ OkuM multiplier is COMPUTED from the
@@ -11,13 +11,14 @@
 //! `helpers::math`.
 //!
 //! Decimals: USDC 6 on both stacks; OkuM 18 on EVM, 6 on SVM; multipliers 1e18
-//! on both (`oku_shared::PRECISION`).
+//! on both (`oku_shared::PRECISION`). `TOKEN_DECIMALS` names OkuM's count,
+//! `USDC_DECIMALS` names USDC's — see `oku_shared::constants::USDC_DECIMALS`.
 
 // ---------------------------------------------------------------------------
 // Re-exports from the shared workspace crate
 // ---------------------------------------------------------------------------
 
-pub use oku_shared::{MAX_MULTIPLIER, PRECISION, TOKEN_DECIMALS};
+pub use oku_shared::{MAX_MULTIPLIER, PRECISION, TOKEN_DECIMALS, USDC_DECIMALS};
 
 // ---------------------------------------------------------------------------
 // On-chain Token-2022 metadata identity (OkuM)

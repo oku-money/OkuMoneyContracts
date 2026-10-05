@@ -55,6 +55,12 @@ pub struct MintOkuM<'info> {
     /// property (right mint, right owner) a non-canonical token account the
     /// user happens to also own is not a protocol concern, just a UX
     /// convention — without paying for the derivation.
+    ///
+    /// Kept as `Account<'info, TokenAccount>` rather than `UncheckedAccount`
+    /// (unlike `usdc_mint` / `vault_usdc` below): this account is the one most
+    /// likely to be wrong on a client's first attempt (wrong account,
+    /// insufficient balance), and Anchor's deserialization error names it
+    /// directly instead of surfacing as a generic failure from `transfer_checked`.
     #[account(
         mut,
         token::mint = usdc_mint,

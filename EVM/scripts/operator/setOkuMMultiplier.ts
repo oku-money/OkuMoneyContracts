@@ -5,21 +5,21 @@
  * path (see contract NatSpec). Unlike `setOkuMYieldRate`, this is a discrete
  * jump: it collapses the entire rate schedule to halted (active + pending
  * rate reset to PRECISION, both windows zeroed) and stamps
- * `lastYieldDistributionBlock`, which engages `YieldSandwichGuard` on every
+ * `lastYieldDistributionBlock`, which engages `OverrideBlockGuard` on every
  * PSM/vault path for the rest of the block. An operator must call
  * `setOkuMYieldRate` afterward to resume streaming accrual.
  *
  * ============================================================================
  * MEV: THE GUARD ABOVE DOES NOT FULLY PROTECT THIS CALL — READ BEFORE RUNNING
  * ============================================================================
- * `YieldSandwichGuard` is forward-only: `lastYieldDistributionBlock` is
+ * `OverrideBlockGuard` is forward-only: `lastYieldDistributionBlock` is
  * stamped INSIDE `setOkuMMultiplier`, so it blocks the SAME block (the
  * atomic round-trip) and everything AFTER it, but a transaction already
  * ordered BEFORE this one in the same block reads the pre-stamp value and is
  * not blocked. Concretely: anyone watching the mempool can mint one block
  * ahead of this call, let it land, redeem one block after — capturing the
  * entire discrete jump for one block of capital exposure, with no fee
- * anywhere in the PSM to price it. See `YieldSandwichGuard.sol`'s NatSpec and
+ * anywhere in the PSM to price it. See `OverrideBlockGuard.sol`'s NatSpec and
  * `EVM/README.md` Accepted Risk #12.
  *
  * RECOMMENDED: pause the PSM and vault BEFORE calling this script, unpause

@@ -98,15 +98,20 @@ not learn them from the code alone:
 
 Reviewed, understood, deliberately not fixed:
 
-- `approveAmount` validation on the EVM side.
-- No paid-vs-queued return signal on the PSM redeem path, so a caller cannot
-  tell from the return value whether they were paid or enqueued.
-- `update_token_metadata` has no rent payer.
-- Token-2022 CPI errors surface opaquely.
-- Token-2022 CPI error mapping: exactly one call site (`display_sync.rs`'s
-  `update_multiplier`) wraps its CPI error; ~12 others — every hot-path
-  `transfer_checked`/`mint_to`/`burn`, both freeze/thaw, both metadata writes —
-  propagate raw SPL codes.
+- `LitePSM.processQueue`'s `approveAmount` is unvalidated (EVM side) — forwarded
+  to `RedemptionQueue` with no bound or comparison against the batch total.
+  Residual is liveness-only: `RedemptionQueue` meters the loop against
+  `min(balance, allowance)` and the approval is revoked in the same
+  transaction, so there is no over-payment or fund-loss path. See
+  `AUTHORITY-MATRIX.md` §3-G.
+- `update_token_metadata` has no rent payer (SVM) — a `name`/`symbol` rewrite
+  that grows the TLV has no account to fund the realloc.
+- Token-2022 CPI errors surface opaquely (SVM) — 1 of 18 CPI call sites wraps
+  its error (`display_sync.rs`'s `update_multiplier`, via `.map_err`); the
+  other 17 — every hot-path `transfer_checked`/`mint_to`/`burn` (6 in
+  `psm.rs`, 1 each in `direct_mint.rs`/`direct_burn.rs`), both freeze/thaw,
+  both metadata writes, and all five raw `invoke`/`invoke_signed` calls in
+  `initialize` — propagate raw SPL/Token-2022 error codes via bare `?`.
 
 ---
 

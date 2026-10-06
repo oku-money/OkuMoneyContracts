@@ -47,7 +47,7 @@ pub fn check_yield_lock(config: &PsmConfig) -> Result<()> {
 pub fn check_yield_lock_with_clock(config: &PsmConfig, clock: &Clock) -> Result<()> {
     require!(
         !yield_lock_engaged(config.last_yield_distribution_slot, clock.slot),
-        LitePsmError::YieldDistributionInProgress
+        LitePsmError::OverrideInProgress
     );
     Ok(())
 }

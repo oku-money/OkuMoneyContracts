@@ -664,7 +664,7 @@ describe("lite-psm", () => {
           .signers([orchestrator])
           .rpc();
 
-        // SAME SLOT deposit_buffer -> must revert with YieldDistributionInProgress.
+        // SAME SLOT deposit_buffer -> must revert with OverrideInProgress.
         await expectBankrunError(
           () =>
             program2.methods
@@ -679,7 +679,7 @@ describe("lite-psm", () => {
               })
               .signers([orchestrator])
               .rpc(),
-          "YieldDistributionInProgress"
+          "OverrideInProgress"
         );
 
         // Advance one slot — lock releases — deposit succeeds.
@@ -854,7 +854,7 @@ describe("lite-psm", () => {
 
     it("fails to mint zero amount", async () => {
       // `ZeroAmount`, specifically. The previous version also accepted
-      // `YieldDistributionInProgress`, justified by "if we got a fresh slot" --
+      // `OverrideInProgress`, justified by "if we got a fresh slot" --
       // but this file's harness uses the default `autoBumpSlot: true`, so every
       // `.rpc()` advances the slot and that branch is unreachable. A dead
       // alternative that weakens a test for no benefit.

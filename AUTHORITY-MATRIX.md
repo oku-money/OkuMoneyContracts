@@ -40,41 +40,46 @@ bounds stay on-chain; business policy moves to the backend.
 
 ## 1. EVM — role-gated paths (29)
 
-| # | Path | File:line | Role | Blast radius | Guards | Rev? |
+| # | Path | Contract | Role | Blast radius | Guards | Rev? |
 |---|---|---|---|---|---|---|
-| E1 | `setOkuMMultiplier` | `OkuMoney:510` | `OKUM_REBASER` | **Raise multiplier up to 1e24 — a 1,000,000× inflation of every balance, redeemable against the PSM buffer** | `whenNotPaused`, strictly-increasing, ≤ `MAX_MULTIPLIER` | **No** |
-| E2 | `setOkuMYieldRate` | `OkuMoney:324` | `OKUM_REBASER` | Stream ≤ `MAX_RATE` for ≤ 90 d (≈ 2.18× per window) | rate + window bounds; pause-gated **only** on increase vs *effective* rate | **No** |
-| E3 | `setNextOkuMYieldRate` | `OkuMoney:423` | `OKUM_REBASER` | Arm successor, same bounds | as above, successor window bounded independently | **No** |
-| E4 | `setOkuMYieldRateWithSuccessor` | `OkuMoney:482` | `OKUM_REBASER` | E2 + E3 atomically | as above | **No** |
-| E5 | `mint` | `OkuMoney:686` | `OKUM_MINTER` | Mint to `min(maxSupply − supply, minterAllowance)` | `whenNotPaused`, supply cap, per-minter allowance, recipient blacklist | **No** |
-| E6 | `burn` | `OkuMoney:702` | `OKUM_BURNER` | Burn caller's own balance only | sender blacklist; **no pause gate — works while paused, deliberately** (`test_Burn_WorksWhenPaused`) | No |
-| E7 | `configureMinterAllowance` | `OkuMoney:713` | `OKUM_ALLOWANCE_MANAGER` | Set **any** minter's allowance, incl. its own, to `type(uint256).max` | none beyond the role | Yes |
-| E8 | `setMaxSupply` | `OkuMoney:731` | `OKUM_CAP_MANAGER` | Raise/lower the global cap | `≥ totalSupply` | Yes |
-| E9 | `blacklist` | `OkuMoney:798` | `OKUM_BLACKLISTER` | Freeze an address as sender, recipient, **or approved spender** (incl. `approve`/`permit`/`transferFrom`/`mint`-as-minter — matched to Circle FiatToken's scope, see `EVM/README.md` Accepted Risk #13) | works while paused; does NOT retroactively revoke allowances already granted | Yes (E10) |
-| E10 | `unblacklist` | `OkuMoney:752` | `OKUM_UNBLACKLISTER` | Unfreeze | — | — |
-| E11 | `pause` / `unpause` | `OkuMoney:762/767` | `OKUM_PAUSER` / `OKUM_UNPAUSER` | Halt mint + transfers | — | Yes |
-| E12 | `_authorizeUpgrade` | `OkuMoney:773` | `OKUM_UPGRADER` | **Replace all token logic** | **none — no timelock, no two-step** | **No** |
-| E13 | `rescueDonation` | `OkuDollar:659` | `VAULT_RESCUER` | Withdraw OkuM held above `totalUsdShares` | `nonReentrant`, `held > totalUsdShares`; **≈1 wei/unwrap is permanently classifiable as donation** | **No** |
-| E14 | `blacklist` / `unblacklist` | `OkuDollar:774/782` | `OKUM_(UN)BLACKLISTER` | Freeze on the vault — **same role hash as E9/E10, but a separate grant per contract**; same sender/recipient/spender scope as E9 (incl. `transferFrom` and the ERC-4626 `redeem`/`withdraw` spender path) | works while paused; does NOT retroactively revoke allowances | Yes |
-| E15 | `pause` / `unpause` | `OkuDollar:712/717` | `VAULT_PAUSER` / `VAULT_UNPAUSER` | Halt wrap/unwrap/4626 | — | Yes |
-| E16 | `_authorizeUpgrade` | `OkuDollar:723` | `VAULT_UPGRADER` | **Replace all vault logic** | **none** | **No** |
-| E17 | `processQueue` | `LitePSM:392` | `PSM_QUEUE_PROCESSOR` | Spend up to caller-chosen `approveAmount` of buffer USDC | `nonReentrant`, `whenNotPaused`, yield-lock; `approveAmount` unvalidated but metered against `min(balance, allowance)` by the queue, and revoked in-tx | **No** |
-| E18 | `pause` / `unpause` | `LitePSM:415/420` | `PSM_PAUSER` / `PSM_UNPAUSER` | Halt all PSM user paths | — | Yes |
-| E19 | `withdrawUsdc` | `LitePSM:435` | `PSM_BUFFER_WITHDRAWER` | **Drain the buffer down to the *queued* obligation — circulating OkuM/UsdOku is not counted** | yield-lock + `WouldStrandQueue`; **deliberately NOT pause-gated** | **No** |
-| E20 | `depositBuffer` | `LitePSM:458` | `PSM_BUFFER_DEPOSITOR` | Add USDC (pull from caller) | **none of the three modifiers** | No |
-| E21 | `_authorizeUpgrade` | `LitePSM:467` | `PSM_UPGRADER` | **Replace all PSM logic** | **none** | **No** |
-| E22 | `enqueue` | `RedemptionQueue:163` | `QUEUE_PSM` | Add an obligation; inflates `totalQueuedOkuM` | zero-user guard | **No** |
-| E23 | `processQueue` | `RedemptionQueue:205` | `QUEUE_PSM` | Pay + burn queued entries | `nonReentrant` | **No** |
-| E24 | `rescueQueueEntry` | `RedemptionQueue:376` | `QUEUE_RESCUER` | **Send any queued user's escrowed OkuM to an arbitrary address** | `nonReentrant`, index range, `!= address(0)` — **recipient NOT checked against `entry.user`** | **No** |
-| E25 | `_authorizeUpgrade` | `RedemptionQueue:489` | `QUEUE_UPGRADER` | **Replace all queue logic** | **none** | **No** |
+| E1 | `setOkuMMultiplier` | `OkuMoney` | `OKUM_REBASER` | **Raise multiplier up to 1e24 — a 1,000,000× inflation of every balance, redeemable against the PSM buffer** | `whenNotPaused`, strictly-increasing, ≤ `MAX_MULTIPLIER` | **No** |
+| E2 | `setOkuMYieldRate` | `OkuMoney` | `OKUM_REBASER` | Stream ≤ `MAX_RATE` for ≤ 90 d (≈ 2.18× per window) | rate + window bounds; pause-gated **only** on increase vs *effective* rate | **No** |
+| E3 | `setNextOkuMYieldRate` | `OkuMoney` | `OKUM_REBASER` | Arm successor, same bounds | as above, successor window bounded independently | **No** |
+| E4 | `setOkuMYieldRateWithSuccessor` | `OkuMoney` | `OKUM_REBASER` | E2 + E3 atomically | as above | **No** |
+| E5 | `mint` | `OkuMoney` | `OKUM_MINTER` | Mint to `min(maxSupply − supply, minterAllowance)` | `whenNotPaused`, supply cap, per-minter allowance, recipient blacklist | **No** |
+| E6 | `burn` | `OkuMoney` | `OKUM_BURNER` | Burn caller's own balance only | sender blacklist; **no pause gate — works while paused, deliberately** (`test_Burn_WorksWhenPaused`) | No |
+| E7 | `configureMinterAllowance` | `OkuMoney` | `OKUM_ALLOWANCE_MANAGER` | Set **any** minter's allowance, incl. its own, to `type(uint256).max` | none beyond the role | Yes |
+| E8 | `setMaxSupply` | `OkuMoney` | `OKUM_CAP_MANAGER` | Raise/lower the global cap | `≥ totalSupply` | Yes |
+| E9 | `blacklist` | `OkuMoney` | `OKUM_BLACKLISTER` | Freeze an address as sender, recipient, **or approved spender** (incl. `approve`/`permit`/`transferFrom`/`mint`-as-minter — matched to Circle FiatToken's scope, see `EVM/README.md` Accepted Risk #13) | works while paused; does NOT retroactively revoke allowances already granted | Yes (E10) |
+| E10 | `unblacklist` | `OkuMoney` | `OKUM_UNBLACKLISTER` | Unfreeze | — | — |
+| E11 | `pause` / `unpause` | `OkuMoney` | `OKUM_PAUSER` / `OKUM_UNPAUSER` | Halt mint + transfers | — | Yes |
+| E12 | `_authorizeUpgrade` | `OkuMoney` | `OKUM_UPGRADER` | **Replace all token logic** | **none — no timelock, no two-step** | **No** |
+| E13 | `rescueDonation` | `OkuDollar` | `VAULT_RESCUER` | Withdraw OkuM held above `totalUsdShares` | `nonReentrant`, `held > totalUsdShares`; **≈1 wei/unwrap is permanently classifiable as donation** | **No** |
+| E14 | `blacklist` / `unblacklist` | `OkuDollar` | `OKUM_(UN)BLACKLISTER` | Freeze on the vault — **same role hash as E9/E10, but a separate grant per contract**; same sender/recipient/spender scope as E9 (incl. `transferFrom` and the ERC-4626 `redeem`/`withdraw` spender path) | works while paused; does NOT retroactively revoke allowances | Yes |
+| E15 | `pause` / `unpause` | `OkuDollar` | `VAULT_PAUSER` / `VAULT_UNPAUSER` | Halt wrap/unwrap/4626 | — | Yes |
+| E16 | `_authorizeUpgrade` | `OkuDollar` | `VAULT_UPGRADER` | **Replace all vault logic** | **none** | **No** |
+| E17 | `processQueue` | `LitePSM` | `PSM_QUEUE_PROCESSOR` | Spend up to caller-chosen `approveAmount` of buffer USDC | `nonReentrant`, `whenNotPaused`, yield-lock; `approveAmount` unvalidated but metered against `min(balance, allowance)` by the queue, and revoked in-tx | **No** |
+| E18 | `pause` / `unpause` | `LitePSM` | `PSM_PAUSER` / `PSM_UNPAUSER` | Halt all PSM user paths | — | Yes |
+| E19 | `withdrawUsdc` | `LitePSM` | `PSM_BUFFER_WITHDRAWER` | **Drain the buffer down to the *queued* obligation — circulating OkuM/UsdOku is not counted** | yield-lock + `WouldStrandQueue`; **deliberately NOT pause-gated** | **No** |
+| E20 | `depositBuffer` | `LitePSM` | `PSM_BUFFER_DEPOSITOR` | Add USDC (pull from caller) | **none of the three modifiers** | No |
+| E21 | `_authorizeUpgrade` | `LitePSM` | `PSM_UPGRADER` | **Replace all PSM logic** | **none** | **No** |
+| E22 | `enqueue` | `RedemptionQueue` | `QUEUE_PSM` | Add an obligation; inflates `totalQueuedOkuM` | zero-user guard | **No** |
+| E23 | `processQueue` | `RedemptionQueue` | `QUEUE_PSM` | Pay + burn queued entries | `nonReentrant` | **No** |
+| E24 | `rescueQueueEntry` | `RedemptionQueue` | `QUEUE_RESCUER` | **Send any queued user's escrowed OkuM to an arbitrary address** | `nonReentrant`, index range, `!= address(0)` — **recipient NOT checked against `entry.user`** | **No** |
+| E25 | `_authorizeUpgrade` | `RedemptionQueue` | `QUEUE_UPGRADER` | **Replace all queue logic** | **none** | **No** |
 | E26 | `grantRole` / `revokeRole` ×4 | OZ `AccessControl` | `DEFAULT_ADMIN_ROLE` | **Grant or revoke every role above, on that contract** | none — immediate, no two-step | Yes |
 | E27 | `initialize` ×4 | each contract | deployer | Grants **every** role to one `_admin`; protocol is single-key until scripts redistribute | `initializer` | — |
 
-**EVM permissionless (for completeness):** `LitePSM.mintOkuM/redeemOkuM/mintUsdOku/redeemUsdOku`
-(`:190/224/303/351`) and `OkuDollar.wrap/unwrap/redeem/withdraw` (`:371/423/600/583`) — all
-carry `nonReentrant + whenNotPaused + whenNoOverrideThisBlock`. `OkuDollar.deposit/mint`
-(`:565/571`) appear unguarded but delegate to `wrap`, inheriting its guards.
-`RedemptionQueue.advanceHead` (`:432`) is permissionless and safe — monotone, and only
+> Line numbers were deliberately removed from this table (they drifted silently
+> across multiple commits and went unnoticed until an audit pass). Every
+> function name above is unique within its contract — grep the contract file
+> for the symbol rather than trusting a citation here.
+
+**EVM permissionless (for completeness):** `LitePSM.mintOkuM`/`redeemOkuM`/`mintUsdOku`/
+`redeemUsdOku` and `OkuDollar.wrap`/`unwrap`/`redeem`/`withdraw` — all
+carry `nonReentrant + whenNotPaused + whenNoOverrideThisBlock`. `OkuDollar.deposit`/`mint`
+appear unguarded but delegate to `wrap`, inheriting its guards.
+`RedemptionQueue.advanceHead` is permissionless and safe — monotone, and only
 advances past already-cleared slots — but **only because it now carries `nonReentrant`**.
 `processQueue` transiently clears a live slot across its external transfer call (delete,
 then restore-on-failure); a reentrant `advanceHead` fired from a transfer-callback
@@ -172,22 +177,22 @@ to the BPF upgrade authority at init.
 
 **G. `approveAmount` is unvalidated — but the misdiagnosis it used to cause is fixed (E17).**
 `LitePSM.processQueue` still forwards a caller-chosen allowance with no validation
-(`LitePSM.sol:455` force-approves any value, revoking to 0 at `:457`). What changed:
-`RedemptionQueue` now meters the loop against `min(balance, allowance)`
-(`RedemptionQueue.sol:247-251`) and re-validates live before halting, so an undersized
+(it force-approves any value, revoking to 0 immediately after). What changed:
+`RedemptionQueue.processQueue` now meters the loop against `min(balance, allowance)`
+and re-validates live before halting, so an undersized
 `approveAmount` surfaces as `InsufficientFunds` rather than `TransferFailed` — the skip
 reason reserved for blacklisted recipients. Pinned by
 `test_ProcessQueue_StaleApproveAmount_ReportsInsufficientFundsNotTransferFailed`.
 
 Residual is liveness-only and role-gated: too small burns gas and halts the batch early;
 too large is harmless because the approval is revoked in the same transaction. No
-over-payment or fund-loss path. One doc/code divergence remains — `LitePSM.sol:437`
+over-payment or fund-loss path. One doc/code divergence remains — `LitePSM.processQueue`'s
 NatSpec describes `approveAmount` as the "sum of entries by backend", but the only
-in-repo caller (`scripts/operator/processQueue.ts:86`) passes the entire PSM USDC
+in-repo caller (`scripts/operator/processQueue.ts`) passes the entire PSM USDC
 balance, so the documented semantics are unexercised.
 
 **H. Pause enforcement on `OkuMoney` is split across three places, by design.**
-`_update` (`:663`) calls `_requireNotPaused()` **only when both `from` and `to` are
+`OkuMoney._update` calls `_requireNotPaused()` **only when both `from` and `to` are
 non-zero** — so it gates *transfers* only. Mint is gated by `whenNotPaused` on the function
 itself (E5); **burn is gated nowhere** and works while paused (E6), which
 `test_Burn_WorksWhenPaused` pins as intentional. `blacklist`/`unblacklist` also work while

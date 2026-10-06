@@ -15,7 +15,7 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 ## Quick Start
 
 ```bash
-forge install && forge build && forge test    # 622 unit + invariant tests
+forge install && forge build && forge test    # 632 unit + invariant tests
 npx hardhat compile && npx hardhat test       # 258 fork/integration/simulation/drill tests
 ```
 
@@ -205,7 +205,7 @@ shipped deployments.
 |---|---|
 | `npm run compile` | `hardhat compile` (regenerates typechain) |
 | `npm run typechain` | Typechain bindings only |
-| `npm run test:forge` | Foundry unit + invariant suite (622 tests) |
+| `npm run test:forge` | Foundry unit + invariant suite (632 tests) |
 | `npm run test` | Full Hardhat suite (258 tests, incl. fork + drills) |
 | `npm run test:unit` | Off-chain math + simulation + deploy/operator drills (221). Needs fork RPC |
 | `npm run test:all` | Both |
@@ -972,11 +972,17 @@ that reverts on-chain if the two disagree.
 ### Convenience Functions (usdOku ↔ USDC via Vault)
 
 ```solidity
-function mintUsdOku(uint256 usdcAmount) external;           // USDC → mint OkuM → wrap → usdOku to user
-function redeemUsdOku(uint256 usdAmount) external;          // usdOku → unwrap → redeem → USDC to user
+function mintUsdOku(uint256 usdcAmount) external;                          // USDC → mint OkuM → wrap → usdOku to user
+function redeemUsdOku(uint256 usdAmount) external returns (uint256 usdcOut); // usdOku → unwrap → redeem → USDC to user
 ```
 
-`redeemUsdOku` has two distinct failure modes: (a) vault reserves below `okuMReturned` → `unwrap` reverts with `InsufficientReserves` → entire tx reverts; (b) vault has OkuM but PSM buffer insufficient → OkuM goes to the redemption queue.
+`redeemUsdOku` (and `redeemOkuM` alongside it) return the USDC paid immediately;
+`0` means the redemption was queued rather than paid — a successful call, not a
+failure. Callers distinguishing "settled" vs. "queued" can check this return
+value directly instead of only inferring it from which event fired (see
+§ Events below).
+
+`redeemUsdOku` has two distinct failure modes: (a) vault reserves below `okuMReturned` → `unwrap` reverts with `InsufficientReserves` → entire tx reverts; (b) vault has OkuM but PSM buffer insufficient → OkuM goes to the redemption queue, and the call returns `0`.
 
 `_redeemUsdOku` reads the **post-transfer balance delta** and passes that to
 `unwrap`, rather than the caller-supplied `usdAmount`. This is required because
@@ -1000,7 +1006,10 @@ multiplier-aware `totalQueuedUsdc()`, `processQueue` for the same reason.
 Declared in [`src/lib/events/LitePSMEvents.sol`](src/lib/events/LitePSMEvents.sol).
 One non-obvious shape: `redeemUsdOku` emits **only** `UsdOkuRedeemed`, with no
 inner `OkuMRedeemed`; and a queued redemption emits `RedemptionQueued` instead
-of `OkuMRedeemed`, not in addition to it.
+of `OkuMRedeemed`, not in addition to it. The return value (paid amount or `0`
+for queued — see above) is the simpler paid-vs-queued signal; the event shape
+is a secondary confirmation for off-chain indexers that don't inspect return
+data.
 
 ---
 
@@ -1034,9 +1043,9 @@ documented once, in
 EVM-side facts that belong here:
 
 ```
-chain A                                       chain B
-LitePSM.redeemOkuM(user, n) ─► orchestrator ─► LitePSM.mintOkuM (USDC custody)
-                                              ─► OkuM credited to user on B
+chain A                                              chain B
+user calls LitePSM.redeemOkuM(n) ─► orchestrator ─► LitePSM.mintOkuM (USDC custody)
+                                                   ─► OkuM credited to user on B
 ```
 
 - LitePSM holds `OKUM_MINTER` on every chain — sole user-facing mint/burn surface.
@@ -1241,21 +1250,40 @@ layouts are compacted, not `__gap`-padded, so reintroducing one is a
 layout-affecting change. The off-chain orchestrator monitors the peg
 and pauses the PSM on a detected depeg.
 
-### 4. 1-wei share dust in `OkuDollar.transferFrom` under inflated `usdMultiplier`
+### 4. 1-wei share dust in `OkuDollar.transfer`/`transferFrom` under inflated `usdMultiplier`, and the zero-share boundary now reverts
 
 **Issue:** `OkuDollar` accounts in shares but exposes a
-dollar-denominated ERC-20 interface. `transferFrom(amount)` floors
+dollar-denominated ERC-20 interface. `transfer`/`transferFrom(amount)` floor
 the share conversion. When `usdMultiplier > 1e18`, multiple
-sequential `transferFrom` calls against a single permit-approved
+sequential calls against a single permit-approved
 allowance may under-consume shares by ~1 share per call due to floor
-truncation.
+truncation. This is unchanged by the item below — it is the `shares >= 1`
+regime, where truncation loses a sub-share residue rather than the whole
+amount.
 
 **Status:** documented in NatSpec on `OkuDollar.permit`. The 1-wei
-drift always favours the holder, never the protocol. The `Transfer`
-event's emitted `value` matches the post-rounding share-converted
-amount, preserving the ERC-20 invariant `Σ Transfer.value == Δ
-balanceOf`. Integrators planning batched `transferFrom` against a
-single permit allowance should account for the sub-call dust.
+drift always favours the holder, never the protocol. Integrators planning
+batched `transfer`/`transferFrom` against a single permit allowance should
+account for the sub-call dust.
+
+> **`Transfer.value` does NOT preserve `Σ Transfer.value == Δ balanceOf`.**
+> An earlier revision of this entry claimed it did; that was wrong, and
+> contradicted by this file's own § Events section and by the source
+> (`OkuDollar.sol`'s NatSpec on `transfer`, with a worked counterexample:
+> at `m = 1.5e18`, `transfer(bob, 2)` moves 1 share — Alice's `balanceOf`
+> falls 1 while Bob's rises 2, so no single emitted value can report both).
+> Integrators must read balances from `balanceOf()`, not from `Transfer.value`.
+
+**Related, closes the degenerate boundary case:** `transfer`/`transferFrom`
+now revert `AmountTooSmall` when `amount != 0` but the share conversion
+floors all the way to zero — previously such a call silently moved nothing,
+still emitted `Transfer(from, to, 0)`, debited the caller's allowance (for
+`transferFrom`), and returned `true`. Both functions share this guard
+(`if (amount != 0 && shares == 0) revert AmountTooSmall();`); `amount == 0`,
+the genuine EIP-20-required no-op, is unaffected. Pinned by
+`test_Transfer_RevertsOnDustAmountBelowOneShare` /
+`test_TransferFrom_RevertsOnDustAmountBelowOneShare` and the boundary case
+`test_Transfer_ExactlyOneShareSucceeds`.
 
 ### 5. `OkuDollar._update` ERC-20 tripwires
 
@@ -1785,7 +1813,11 @@ constant independent of collateral decimals. 6-decimal chains are unaffected —
 chains now get the same real floor 6-decimal collateral always had. A constant
 was chosen over a configurable storage parameter deliberately: no new storage
 slot on an already-deployed UUPS proxy, no admin lever, no SVM mirror needed (see
-below). Pinned by `test_MultiDecimal_18Dec_RedeemBelowMinRedemptionReverts` /
+below). The revert is `LitePSM.BelowMinimumRedemption(uint256 provided, uint256 minimum)`
+— a dedicated error, not the overloaded `AmountTooSmall()` used elsewhere in this
+contract, so callers can distinguish "below the dust floor" from the other four
+conditions that error covers. Pinned by
+`test_MultiDecimal_18Dec_RedeemBelowMinRedemptionReverts` /
 `test_MultiDecimal_18Dec_RedeemAtMinRedemptionSucceeds` (`test/psm/LitePSM.t.sol`).
 
 **No SVM equivalent needed.** SVM's `lite-psm` hard-requires 6-decimal USDC at
@@ -1799,7 +1831,7 @@ The attack this fix closes does not exist on that stack.
 
 ## Testing
 
-**Counts (measured):** `forge test` **622**, `npx hardhat test` **258**
+**Counts (measured):** `forge test` **632**, `npx hardhat test` **258**
 (of which `npm run test:unit` is **232**). Cross-stack:
 `packages/yield-tooling` 3,867 differential vectors; SVM 60 Rust + 124 bankrun.
 
@@ -1841,11 +1873,11 @@ Per-file coverage (`forge coverage --no-match-coverage 'test/|script/'`):
 | `src/lib/MathLib.sol` | **100 %** (48/48) | 100 % | **100 %** (10/10) | 100 % |
 | `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** (17/17) | 100 % | 100 % | 100 % |
 | `src/lib/OverrideBlockGuard.sol` | **100 %** (3/3) | 100 % | 100 % | 100 % |
-| `src/psm/LitePSM.sol` | **100 %** (137/137) | 99.40 % | 96.15 % (25/26) | 100 % |
+| `src/psm/LitePSM.sol` | **100 %** (137/137) | 99.41 % | 96.00 % (24/25) | 100 % |
 | `src/psm/RedemptionQueue.sol` | **100 %** (117/117) | 100 % | **100 %** (19/19) | 100 % |
-| `src/token/OkuDollar.sol` | **97.50 %** (195/200) | 96.41 % | 89.19 % (33/37) | 97.83 % |
+| `src/token/OkuDollar.sol` | **97.52 %** (197/202) | 96.54 % | 89.74 % (35/39) | 97.83 % |
 | `src/token/OkuMoney.sol` | **99.54 %** (217/218) | 99.61 % | **100 %** (41/41) | 100 % |
-| **Total** | **99.19 %** (734/740) | 98.86 % | **96.30 %** (130/135) | 99.31 % |
+| **Total** | **99.19 %** (736/742) | 98.87 % | **96.32 %** (131/136) | 99.31 % |
 
 Two CI gates in `.github/workflows/test.yml` fail the build on a regression:
 every `src/` file and the total must clear **95 % line coverage**, and the
@@ -1854,7 +1886,7 @@ than per-file because five branches are provably unreachable (documented
 below), which pins `OkuDollar.sol` at 89 % through no fault of the suite.
 
 **Branch coverage is gated too**, at 95 % overall, and currently sits at
-**96.30 % (130/135)**. The five uncovered branches are documented below with
+**96.32 % (131/136)**. The five uncovered branches are documented below with
 the structural reason each is unreachable.
 
 ### Uncovered lines (intentional)
@@ -1885,16 +1917,21 @@ judged not worth the maintenance cost.
 
 ### Uncovered branches (intentional)
 
-Branch coverage is **96.30% (130/135)** and gated at 95% in CI. The five
+Branch coverage is **96.32% (131/136)** and gated at 95% in CI. The five
 uncovered branches are all `revert` arms that cannot be driven from any call
 path, each for a stated structural reason — not for want of a test.
 
+Line numbers are deliberately omitted (a prior version of this table cited
+them and went stale across two commits without anyone noticing, including a
+row describing a check that had since been deleted). Every symbol below is
+unique within its function or its sibling pair.
+
 | Location | Guard | Why the revert arm is unreachable |
 |---|---|---|
-| `LitePSM.sol:332` | `usdcAmount == 0` in `_redeemOkuMShared` | The dust floor above already requires `okuMAmount >= max(decimalMultiplier, Constants.MIN_REDEMPTION_OKUM) >= decimalMultiplier`. Since `m >= PRECISION`, `dollarValue18 >= okuMAmount >= decimalMultiplier`, so `usdcAmount = dollarValue18 / decimalMultiplier >= 1`. Defence-in-depth against a future change to either floor term or the monotonicity guarantee. |
-| `OkuDollar.sol:322` | `from == address(0)` in `_transferUsdShares` | `transferFrom` spends the allowance first, and `address(0)` can never have granted one, so the allowance check always fires earlier. The `to` half of the same pair **is** reachable and is tested. |
-| `OkuDollar.sol:425`, `:426` | `UseWrapInstead` / `UseUnwrapInstead` in `_update` | Nothing in the contract invokes the inherited `_mint`/`_burn`; all supply changes go through `wrap`/`unwrap`, which manage `usdShares` directly. A tripwire for a future refactor that routes through the inherited ERC-20 hook — the one hazard in this table that is realistic, which is why it stays. |
-| `OkuDollar.sol:475` | `sharesToMint == 0` in `wrap` | `wrap` rejects `okuMAmount == 0` at entry, and `sharesToMint == actualReceived`, so reaching zero requires an asset that takes a 100% transfer fee. The asset is the typed `IOkuMoney` wired at init, which is not fee-on-transfer. Kept because the balance-delta pattern exists precisely to tolerate a fee-on-transfer asset. |
+| `LitePSM._redeemUsdOku` | `received == 0` (balance-delta check after pulling `usdAmount` of `OkuDollar`) | `OkuDollar.transferFrom` now reverts `AmountTooSmall` itself whenever the share conversion would floor to zero (see Accepted Risk #4), so a zero-value transfer can no longer complete and return control here. Since `balanceOf` converts shares back to dollars via `shares * multiplier / PRECISION` and `multiplier >= PRECISION`, any nonzero share delta already implies a nonzero dollar delta. Defence-in-depth against either guard changing independently. |
+| `OkuDollar._transferUsdShares` | `from == address(0)` | `transferFrom` spends the allowance first, and `address(0)` can never have granted one, so the allowance check always fires earlier. The `to` half of the same pair **is** reachable and is tested. |
+| `OkuDollar._update` | `UseWrapInstead` / `UseUnwrapInstead` | Nothing in the contract invokes the inherited `_mint`/`_burn`; all supply changes go through `wrap`/`unwrap`, which manage `usdShares` directly. A tripwire for a future refactor that routes through the inherited ERC-20 hook — the one hazard in this table that is realistic, which is why it stays. |
+| `OkuDollar.wrap` | `sharesToMint == 0` | `wrap` rejects `okuMAmount == 0` at entry, and `sharesToMint == actualReceived`, so reaching zero requires an asset that takes a 100% transfer fee. The asset is the typed `IOkuMoney` wired at init, which is not fee-on-transfer. Kept because the balance-delta pattern exists precisely to tolerate a fee-on-transfer asset. |
 
 The distinction worth preserving: these are guards against an **assumption about
 a collaborator that a future change could break**. That is different from the

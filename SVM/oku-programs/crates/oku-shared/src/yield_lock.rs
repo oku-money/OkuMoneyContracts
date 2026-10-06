@@ -10,7 +10,7 @@
 
 /// Return `true` when the current slot collides with the stored
 /// yield-distribution slot. A wrapping `check_yield_lock_*` should
-/// emit its program-specific `YieldDistributionInProgress` error in
+/// emit its program-specific `OverrideInProgress` error in
 /// that case.
 #[inline]
 pub const fn yield_lock_engaged(stored_slot: u64, current_slot: u64) -> bool {

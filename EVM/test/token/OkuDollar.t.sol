@@ -1361,6 +1361,74 @@ contract OkuDollarTest is BaseTest {
         assertApproxEqAbs(okuDollar.balanceOf(user2), transferAmt, 1);
     }
 
+    /// @notice `amount = 1` (dollar-wei) floors to `floor(1 * 1e18 / m) = 0` shares at
+    ///         any `m > 1e18`, which `_elevateUsdMultiplier` guarantees. Before this
+    ///         guard existed, such a call silently moved nothing, still emitted
+    ///         `Transfer(from, to, 0)`, and returned `true` — see Accepted Risk #4.
+    function test_Transfer_RevertsOnDustAmountBelowOneShare() public {
+        _mintUsdOku(user1, 100e18);
+        _elevateUsdMultiplier(PRECISION * 2);
+
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.AmountTooSmall.selector);
+        okuDollar.transfer(user2, 1);
+    }
+
+    /// @notice Same dust floor as `transfer` above, but via `transferFrom` — this is
+    ///         also the path that used to debit the caller's allowance for a transfer
+    ///         that moved zero shares.
+    function test_TransferFrom_RevertsOnDustAmountBelowOneShare() public {
+        _mintUsdOku(user1, 100e18);
+        _elevateUsdMultiplier(PRECISION * 2);
+
+        vm.prank(user1);
+        okuDollar.approve(user2, 1);
+
+        vm.prank(user2);
+        vm.expectRevert(OkuDollar.AmountTooSmall.selector);
+        okuDollar.transferFrom(user1, user2, 1);
+    }
+
+    /// @notice Boundary check for the guard above: the smallest `amount` that floors
+    ///         to exactly 1 share (nonzero) must succeed — confirms the gate is
+    ///         `shares == 0`, not merely "amount small". `_elevateUsdMultiplier` can
+    ///         overshoot its target (it compounds in discrete `MAX_RATE` windows), so
+    ///         the threshold is computed from the achieved multiplier rather than
+    ///         assumed to be exactly `PRECISION * 2`.
+    function test_Transfer_ExactlyOneShareSucceeds() public {
+        _mintUsdOku(user1, 100e18);
+        _elevateUsdMultiplier(PRECISION * 2);
+
+        uint256 m = okuDollar.usdMultiplier();
+        // Smallest `amount` with `floor(amount * PRECISION / m) >= 1`, i.e.
+        // `amount >= ceil(m / PRECISION)`.
+        uint256 amount = Math.mulDiv(m, 1, PRECISION, Math.Rounding.Ceil);
+        assertEq(
+            Math.mulDiv(amount, PRECISION, m, Math.Rounding.Floor),
+            1,
+            "fixture: amount must floor to exactly 1 share"
+        );
+
+        uint256 user1SharesBefore = okuDollar.usdSharesOf(user1);
+        uint256 user2SharesBefore = okuDollar.usdSharesOf(user2);
+
+        vm.prank(user1);
+        okuDollar.transfer(user2, amount);
+
+        assertEq(okuDollar.usdSharesOf(user1), user1SharesBefore - 1);
+        assertEq(okuDollar.usdSharesOf(user2), user2SharesBefore + 1);
+    }
+
+    /// @notice `amount == 0` is the genuine EIP-20-required no-op and must NOT trip
+    ///         the dust-floor guard (which only fires on `amount != 0 && shares == 0`).
+    function test_Transfer_ZeroAmountIsNoOpNotRevert() public {
+        _mintUsdOku(user1, 100e18);
+        _elevateUsdMultiplier(PRECISION * 2);
+
+        vm.prank(user1);
+        assertTrue(okuDollar.transfer(user2, 0));
+    }
+
     function test_BalanceOf_ReflectsMultiplier() public {
         _mintUsdOku(user1, 100e18);
 

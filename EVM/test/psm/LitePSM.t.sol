@@ -506,6 +506,38 @@ contract LitePSMTest is BaseTest {
         assertEq(okuMoney.balanceOf(address(redemptionQueue)), okuMAmount);
     }
 
+    /// @notice `redeemOkuM`'s return value is the paid-vs-queued signal (see
+    ///         `_redeemOkuMShared`'s NatSpec) — assert it directly rather than only
+    ///         via its side effects, which the other tests in this file already cover.
+    function test_Redeem_ReturnsUsdcAmountWhenBufferCovers() public {
+        uint256 okuMAmount = 100e18;
+        uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount);
+
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
+
+        vm.prank(user1);
+        uint256 usdcAmount = litePsm.redeemOkuM(okuMAmount);
+
+        assertEq(usdcAmount, expectedUsdc, "return value must equal USDC actually paid");
+        assertGt(usdcAmount, 0);
+    }
+
+    /// @notice Same signal, queued path: `redeemOkuM` must return exactly `0` — "queued,
+    ///         not paid" is a successful call, not a sentinel for failure.
+    function test_Redeem_ReturnsZeroWhenQueued() public {
+        uint256 okuMAmount = 10_000e18; // buffer only covers 5000e6 worth
+
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
+
+        vm.prank(user1);
+        uint256 usdcAmount = litePsm.redeemOkuM(okuMAmount);
+
+        assertEq(usdcAmount, 0, "queued redemption must return 0, not revert or pay");
+        assertEq(redemptionQueue.queueLength(), 1);
+    }
+
     function test_Redeem_RevertsZeroAmount() public {
         vm.prank(user1);
         vm.expectRevert(Errors.ZeroAmount.selector);
@@ -2203,6 +2235,41 @@ contract LitePSMTest is BaseTest {
 
         // User received USDC.
         assertGt(usdc.balanceOf(user1), 0);
+    }
+
+    /// @notice `redeemUsdOku`'s return value is the same paid-vs-queued signal as
+    ///         `redeemOkuM` ("same convention as {redeemOkuM}" in its NatSpec).
+    function test_RedeemUsdOku_ReturnsUsdcAmountWhenBufferCovers() public {
+        _mintUsdOku(user1, 100e18);
+        _approveOkuDollar(user1, address(litePsm), 50e18);
+
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
+
+        vm.prank(user1);
+        uint256 usdcOut = litePsm.redeemUsdOku(50e18);
+
+        assertEq(
+            usdcOut,
+            usdc.balanceOf(user1) - user1UsdcBefore,
+            "return value must equal USDC actually paid"
+        );
+        assertGt(usdcOut, 0);
+    }
+
+    /// @notice Same signal, queued path: must return exactly `0`.
+    function test_RedeemUsdOku_ReturnsZeroWhenQueued() public {
+        // Drain the buffer.
+        vm.prank(bufferWithdrawer);
+        litePsm.withdrawUsdc(bufferWithdrawer, 5000e6);
+        assertEq(usdc.balanceOf(address(litePsm)), 0);
+
+        _mintUsdOku(user1, 100e18);
+        _approveOkuDollar(user1, address(litePsm), 100e18);
+
+        vm.prank(user1);
+        uint256 usdcOut = litePsm.redeemUsdOku(100e18);
+
+        assertEq(usdcOut, 0, "queued redemption must return 0, not revert or pay");
     }
 
     /// @notice okuMAtPsm=true queued path: drained buffer routes OkuM to the

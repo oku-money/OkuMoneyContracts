@@ -60,9 +60,9 @@ pub enum LitePsmError {
     ZeroAmount,
 
     // ===== Yield Distribution Errors =====
-    /// EVM: YieldDistributionInProgress()
+    /// EVM: OverrideInProgress()
     #[msg("Cannot perform operation in same slot as yield distribution")]
-    YieldDistributionInProgress,
+    OverrideInProgress,
 
     /// New multiplier did not strictly increase. Reverts on both backward
     /// moves and no-op (equal-value) updates, so a no-op call cannot stamp

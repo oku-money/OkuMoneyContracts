@@ -165,7 +165,7 @@ crates/
   oku-shared/                # Pure-Rust workspace lib (no solana-*, no anchor-lang)
     src/
       lib.rs
-      constants.rs           # PRECISION, MAX_MULTIPLIER, TOKEN_DECIMALS
+      constants.rs           # PRECISION, MAX_MULTIPLIER, TOKEN_DECIMALS, USDC_DECIMALS
       math.rs                # mul_div_floor, mul_div_ceil + siblings, overflow-safe Option<u64>
                              # + Kani harnesses gated on #[cfg(kani)]
       yield_lock.rs          # Pure slot-comparison primitive
@@ -545,7 +545,8 @@ None can be changed without a program upgrade.
 | `PRECISION` | `1_000_000_000_000_000_000` (1e18, WAD) | Fixed-point base for multipliers and per-second rates. **Byte-identical to EVM `Constants.PRECISION`** — that equality is what makes cross-chain agreement work without messaging. |
 | `MAX_RATE` | `PRECISION + 1e11` (~2242% APY) | Sanity bound on `rpow` inputs. Mirrors EVM `Constants.MAX_RATE`. |
 | `MAX_MULTIPLIER` | `1_000_000_000_000_000_000_000_000` (1e24, = $1M/token) | Math-sanity bound. `compound_for` CLAMPS here; the emergency override REJECTS above it. Mirrors EVM `Constants.MAX_MULTIPLIER`. |
-| `TOKEN_DECIMALS` | `6` | OkuM uses 6 decimals on SVM (matches USDC). Asserted at init. **Unrelated to `PRECISION`** — token decimals govern raw balances, `PRECISION` governs multiplier/rate fixed-point. Do not conflate them. |
+| `TOKEN_DECIMALS` | `6` | OkuM's own decimal count on SVM. **Unrelated to `PRECISION`** — token decimals govern raw balances, `PRECISION` governs multiplier/rate fixed-point. Do not conflate them. |
+| `USDC_DECIMALS` | `6` (`= TOKEN_DECIMALS`) | USDC's decimal count — a separate name even though the value is currently identical, so the two constants cannot silently diverge if either token's decimals ever change. Used for the USDC leg of every `transfer_checked` CPI and asserted against the configured USDC mint at `initialize`. |
 
 ### Lite-PSM
 
@@ -626,9 +627,9 @@ Override the path with `DEVNET_AUTHORITY_PATH` if CI stages it elsewhere.
 
 ## Error codes
 
-Full list (26 variants) in `programs/lite-psm/src/errors.rs`. Key errors:
+Full list (31 variants) in `programs/lite-psm/src/errors.rs`. Key errors:
 
-- `YieldDistributionInProgress` — operation blocked during yield lock.
+- `OverrideInProgress` — operation blocked during yield lock.
 - `MultiplierCannotDecrease` — ScaledUiAmount multiplier is monotonically increasing.
 - `InsufficientUserBalance` — user balance shortfall on redeem.
 - `InsufficientBuffer` — PSM USDC vault can't cover a redeem or withdraw_buffer.
@@ -767,7 +768,7 @@ slot by 1 before submission. This handles two unrelated annoyances:
 
 - `check_yield_lock` rejects any op in the same slot as the last
   `set_okum_multiplier` — without auto-bump, any
-  test ordering that follows a yield op hits `YieldDistributionInProgress`.
+  test ordering that follows a yield op hits `OverrideInProgress`.
 - Bankrun caches identical-byte transactions and replays the prior
   result ("This transaction has already been processed") — auto-bump
   forces a fresh blockhash on every submission.

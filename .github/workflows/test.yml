@@ -230,6 +230,19 @@ jobs:
       - name: Build Anchor programs
         run: anchor build --ignore-keys
 
+      - name: Export IDLs
+        run: npm run export-idls
+
+      - name: Check exported SVM artifacts are up to date
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ -n "$(git status --porcelain artifacts/svm/)" ]; then
+            echo "::error::artifacts/svm/ is out of date. Run \`cd SVM/oku-programs && anchor build --ignore-keys && npm run export-idls\` and commit the result."
+            git status --porcelain artifacts/svm/
+            git diff artifacts/svm/ | head -200
+            exit 1
+          fi
+
       - name: Typecheck
         # The SVM suite passed `tsc` with 21 errors for a long time because
         # `tsx` transpiles without typechecking. With the backend owning most

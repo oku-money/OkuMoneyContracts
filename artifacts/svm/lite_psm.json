@@ -420,17 +420,14 @@
             "`role_admin` is the upgrade authority.",
             "",
             "Checked against the upgrade authority rather than a hardcoded",
-            "`const DEPLOY_AUTHORITY` so the binary is identical across devnet /",
-            "mainnet and there is no environment-specific constant to get wrong at",
-            "build time. Anyone who could pass this check could already replace the",
-            "whole program via `bpf_loader_upgradeable::Upgrade`, so it grants no",
-            "authority that wasn't already held — it just stops anyone ELSE",
-            "claiming the config.",
+            "`const DEPLOY_AUTHORITY`, so the binary is identical across devnet and",
+            "mainnet. Anyone passing this check could already replace the whole",
+            "program via `bpf_loader_upgradeable::Upgrade`, so it grants no new",
+            "authority — it just stops anyone ELSE claiming the config.",
             "",
             "`Account<'info, ProgramData>` enforces `owner == BPFLoaderUpgradeable`",
-            "and the `ProgramData` discriminant; the `address =` constraint pins it",
-            "to THIS program's ProgramData PDA, so an unrelated program's account",
-            "can't be substituted."
+            "and the discriminant; `address =` pins it to THIS program's ProgramData",
+            "PDA, so another program's account cannot be substituted."
           ],
           "address": "ChPL9fhREtCc8WQSBkBmqd6ESjfv5JHyENwXkj2JWV8D"
         },
@@ -462,11 +459,9 @@
           "docs": [
             "USDC mint (standard SPL).",
             "",
-            "Must have exactly `TOKEN_DECIMALS` (= 6) decimals on Solana —",
-            "this matches the `OkuM` decimal model. EVM resolves",
-            "a runtime `usdcDecimalMultiplier` from `IERC20Metadata.decimals()`;",
-            "SVM hardcodes the value via the shared constant and asserts at",
-            "init."
+            "Must have exactly `USDC_DECIMALS` (= 6, the canonical USDC mint) decimals.",
+            "EVM resolves a runtime `usdcDecimalMultiplier` from",
+            "`IERC20Metadata.decimals()`; SVM hardcodes it and asserts at init."
           ]
         },
         {
@@ -474,11 +469,10 @@
           "docs": [
             "Fresh keypair for the OkuM mint (Token-2022).",
             "",
-            "The instruction creates this mint via manual CPIs with",
-            "ScaledUiAmount + MetadataPointer + TokenMetadata extensions.",
-            "The PsmConfig PDA is set as mint authority, freeze authority,",
-            "and ScaledUiAmount authority. Passed as a `Signer` because",
-            "`CreateAccount` requires the new account to sign."
+            "Created via manual CPIs with ScaledUiAmount + MetadataPointer +",
+            "TokenMetadata extensions; the PsmConfig PDA becomes mint, freeze, and",
+            "ScaledUiAmount authority. A `Signer` because `CreateAccount` requires",
+            "the new account to sign."
           ],
           "writable": true,
           "signer": true
@@ -623,7 +617,14 @@
         {
           "name": "usdc_mint",
           "docs": [
-            "USDC mint"
+            "USDC mint. Only ever passed through to `transfer_checked` as an",
+            "`AccountInfo` (`instructions/psm.rs::mint_oku_m`), never read in Rust —",
+            "`UncheckedAccount` skips the SPL `Mint` deserialization entirely, and",
+            "`transfer_checked` itself validates mint + decimals on-chain, so no",
+            "security property is lost. `address = config.usdc_mint` is the whole",
+            "check this account needs.",
+            "",
+            "forwarded as an `AccountInfo` to `transfer_checked`, which validates it."
           ]
         },
         {
@@ -640,67 +641,31 @@
         {
           "name": "user_usdc_ata",
           "docs": [
-            "User's USDC account"
+            "User's USDC account. `token::` rather than `associated_token::`:",
+            "the latter also derives the canonical ATA address",
+            "(`find_program_address`, ~1.5k CU on SBF) purely to assert the passed",
+            "account matches it. That derivation buys nothing here — this account",
+            "is never created (no `init_if_needed`) and is only ever forwarded as",
+            "an `AccountInfo` to `transfer_checked`, which validates mint and",
+            "decimals itself. `token::mint`/`token::authority` keep the economic",
+            "property (right mint, right owner) a non-canonical token account the",
+            "user happens to also own is not a protocol concern, just a UX",
+            "convention — without paying for the derivation.",
+            "",
+            "Kept as `Account<'info, TokenAccount>` rather than `UncheckedAccount`",
+            "(unlike `usdc_mint` / `vault_usdc` below): this account is the one most",
+            "likely to be wrong on a client's first attempt (wrong account,",
+            "insufficient balance), and Anchor's deserialization error names it",
+            "directly instead of surfacing as a generic failure from `transfer_checked`."
           ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "user"
-              },
-              {
-                "kind": "account",
-                "path": "token_program"
-              },
-              {
-                "kind": "account",
-                "path": "usdc_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
+          "writable": true
         },
         {
           "name": "user_oku_m_ata",
           "docs": [
-            "User's OkuM account"
+            "User's OkuM account. Keeps `associated_token::` (vs. `user_usdc_ata`",
+            "above) because `init_if_needed` NEEDS the canonical ATA address to",
+            "create the account at — the derivation is not avoidable here."
           ],
           "writable": true,
           "pda": {
@@ -760,7 +725,11 @@
         {
           "name": "vault_usdc",
           "docs": [
-            "PSM's USDC vault"
+            "PSM's USDC vault. Same reasoning as `usdc_mint` above: only ever",
+            "forwarded as an `AccountInfo` to `transfer_checked` (as the `to:`",
+            "destination), never read in Rust.",
+            "",
+            "forwarded as an `AccountInfo` to `transfer_checked`, which validates it."
           ],
           "writable": true
         },
@@ -2462,7 +2431,7 @@
     },
     {
       "code": 6011,
-      "name": "YieldDistributionInProgress",
+      "name": "OverrideInProgress",
       "msg": "Cannot perform operation in same slot as yield distribution"
     },
     {
@@ -2945,14 +2914,12 @@
     {
       "name": "InitializeParams",
       "docs": [
-        "Parameter bundle for [`initialize`]. Bundling the initialization",
-        "arguments into a single named struct keeps the IDL self-documenting",
-        "and the call site hard to scramble (every field is named, not",
-        "positional).",
+        "Parameter bundle for [`initialize`]. A named struct keeps the IDL",
+        "self-documenting and the call site hard to scramble (every field is named,",
+        "not positional).",
         "",
         "The pubkey fields are the granular on-chain authorities; see",
-        "`roles::AuthorityRole` for the role catalogue and `SVM/README.md`",
-        "§ \"Authority model\" for the warm-vs-cold matrix."
+        "`roles::AuthorityRole` and `SVM/README.md` § \"Authority model\"."
       ],
       "type": {
         "kind": "struct",
@@ -3076,8 +3043,7 @@
             "name": "multiplier",
             "docs": [
               "Canonical OkuM multiplier at time of mint, WAD-scaled (1e18 = $1.00).",
-              "Computed from the rate schedule, NOT read from the display mirror.",
-              "EVM equivalent: multiplier"
+              "Computed from the rate schedule, NOT read from the display mirror."
             ],
             "type": "u128"
           },
@@ -3123,9 +3089,9 @@
       "docs": [
         "Emitted by the EMERGENCY multiplier override only.",
         "",
-        "Under streaming accrual this is a rare, incident-response event — not the",
-        "routine yield mechanism it used to be. Its presence in the log means an",
-        "operator forced a discrete jump and halted the schedule.",
+        "Under streaming accrual this is a rare, incident-response event, not a",
+        "routine yield mechanism. Its presence in the log means an operator forced",
+        "a discrete jump and halted the schedule.",
         "",
         "EVM equivalent: `MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`"
       ],
@@ -3135,7 +3101,7 @@
           {
             "name": "old_multiplier",
             "docs": [
-              "WAD-scaled (1e18). Widened from `u64` with the PRECISION migration."
+              "WAD-scaled (1e18)."
             ],
             "type": "u128"
           },
@@ -3230,9 +3196,7 @@
             "name": "rate_end",
             "docs": [
               "The ACTIVE window's expiry — i.e. exactly when this successor takes",
-              "over. Carried because the handover needs no transaction, so this event",
-              "is the only on-chain record of when it will happen; cross-chain",
-              "monitoring compares this field across deployments."
+              "over."
             ],
             "type": "i64"
           },
@@ -3255,9 +3219,8 @@
       "docs": [
         "PSM configuration PDA.",
         "",
-        "Seeds: `[\"psm_config\"]`. This is the single, program-wide config",
-        "account; it holds the granular authorities, token references, limits,",
-        "and the yield-distribution slot."
+        "Seeds: `[\"psm_config\"]`. The single program-wide config account: granular",
+        "authorities, token references, limits, and the rate schedule."
       ],
       "type": {
         "kind": "struct",
@@ -3350,8 +3313,9 @@
             "name": "oku_m_mint",
             "docs": [
               "OkuM mint address (Token-2022 with ScaledUiAmount extension).",
-              "The multiplier for USDC ↔ OkuM conversion is read from the",
-              "mint's ScaledUiAmountConfig extension, not stored on PsmConfig."
+              "The multiplier for USDC ↔ OkuM conversion is computed from this",
+              "account's rate-schedule fields, never read from the mint; the",
+              "extension is a write-only display mirror."
             ],
             "type": "pubkey"
           },
@@ -3391,13 +3355,12 @@
               "(`set_okum_multiplier`), for sandwich prevention. PSM operations are",
               "blocked in the same slot.",
               "",
-              "Under streaming accrual the multiplier advances continuously, so there",
-              "is no discrete jump for a searcher to sandwich — that is the entire",
-              "point of the model. This lock therefore fires ONLY on the explicit",
-              "override path, and in particular is NOT stamped by the routine display",
-              "sync. Mirrors EVM, where `YieldSandwichGuard` keys on",
-              "`lastYieldDistributionBlock`, which only `setOkuMMultiplier` writes",
-              "(`EVM/src/token/OkuMoney.sol:107`, `EVM/src/lib/YieldSandwichGuard.sol:21-26`)."
+              "The multiplier advances continuously, so there is no discrete jump to",
+              "sandwich; this fires ONLY on the explicit override path and is NOT",
+              "stamped by the routine display sync. Mirrors EVM's",
+              "`OverrideBlockGuard`, which keys on",
+              "`OkuMoney.lastYieldDistributionBlock` — written only by",
+              "`setOkuMMultiplier`."
             ],
             "type": "u64"
           },
@@ -3458,21 +3421,20 @@
             "docs": [
               "Unix timestamp of the last `sync_display_multiplier`.",
               "",
-              "Display-only bookkeeping: drives the staleness threshold for the",
-              "opportunistic piggyback sync on PSM instructions. Has no influence on",
-              "pricing — the canonical multiplier is always computed fresh."
+              "Observability only: it tells an operator (and",
+              "`scripts/admin/sync-display.ts`) how stale the display mirror is.",
+              "Nothing on-chain reads it, so it has no influence on pricing."
             ],
             "type": "i64"
           },
           {
             "name": "pending_role_admin",
             "docs": [
-              "Pending `role_admin` rotation target — the two-step admin-transfer",
-              "model (OpenZeppelin `Ownable2Step` pattern). `set_authority(RoleAdmin,",
-              "new_admin)` writes to this slot only; the rotation does NOT take",
-              "effect until `new_admin` signs `accept_role_admin`, which moves the",
-              "value into `role_admin` and clears the slot. This protects the",
-              "protocol from a typo or stale key on the proposing side silently",
+              "Pending `role_admin` rotation target — two-step admin transfer",
+              "(OpenZeppelin `Ownable2Step`). `set_authority(RoleAdmin, new_admin)`",
+              "writes here only; the rotation takes effect when `new_admin` signs",
+              "`accept_role_admin`, which moves the value into `role_admin` and clears",
+              "this slot. Protects against a typo or stale key on the proposing side",
               "locking out the meta-role.",
               "",
               "`Pubkey::default()` means \"no pending rotation\"."
@@ -3512,6 +3474,25 @@
               "reset by `allowance_manager` via `set_direct_burner_allowance`."
             ],
             "type": "u64"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Space for future fields, appended at the tail.",
+              "",
+              "The account is a singleton PDA and the program has no `realloc`",
+              "instruction, so without this any new field requires closing and",
+              "re-initialising the config — losing every role assignment and the",
+              "accrual anchor. 128 bytes covers 4 more pubkeys or 16 more u64s at a",
+              "rent cost of ~0.0009 SOL. Consume from the FRONT when adding a field",
+              "and shrink the array to match, keeping `LEN` constant."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                128
+              ]
+            }
           }
         ]
       }
@@ -3557,8 +3538,7 @@
             "name": "multiplier",
             "docs": [
               "Canonical OkuM multiplier at time of redeem, WAD-scaled (1e18 = $1.00).",
-              "Computed from the rate schedule, NOT read from the display mirror.",
-              "EVM equivalent: multiplier"
+              "Computed from the rate schedule, NOT read from the display mirror."
             ],
             "type": "u128"
           },
@@ -3700,9 +3680,9 @@
       "docs": [
         "Emitted when the ACTIVE per-second rate or its window changes.",
         "",
-        "Replaces `YieldDistributed`. There is no longer a dollar-denominated",
-        "distribution event because there is no dollar-denominated instruction —",
-        "the operator publishes a rate, and the yield follows from it continuously.",
+        "There is no dollar-denominated distribution event because there is no",
+        "dollar-denominated instruction — the operator publishes a rate, and the",
+        "yield follows from it continuously.",
         "",
         "EVM equivalent: `OkuMYieldRateUpdated`."
       ],

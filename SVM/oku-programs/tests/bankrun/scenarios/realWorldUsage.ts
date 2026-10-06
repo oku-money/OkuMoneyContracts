@@ -667,14 +667,14 @@ describe("realWorldUsage (SVM) edge cases", () => {
         .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: configPda, okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
         .signers([psmOrchestrator]).rpc();
 
-      // Attempt mint in SAME slot -> should revert with YieldDistributionInProgress
+      // Attempt mint in SAME slot -> should revert with OverrideInProgress
       await expectBankrunError(
         () => mintOkuMViaProgram(
           psm, user, new BN(10_000_000),
           configPda, usdcMint, okuMMint,
           userUsdcAta, userOkuMAta, setup.vaultUsdcAta
         ),
-        "YieldDistributionInProgress"
+        "OverrideInProgress"
       );
 
       // Next slot succeeds

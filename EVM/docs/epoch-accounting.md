@@ -7,7 +7,8 @@
 >
 > Contract-side entry points: `OkuMoney.setOkuMYieldRate`,
 > `setNextOkuMYieldRate`, `setOkuMYieldRateWithSuccessor`.
-> Operator scripts: `EVM/scripts/operator/`. Math: `packages/yield-tooling`.
+> Operator scripts: `EVM/scripts/operator/`. Math: `packages/yield-tooling/src`
+> (re-exported through the `EVM/scripts/utils/` shims that the paths below name).
 
 ---
 
@@ -71,7 +72,8 @@ Y_dist = ∫ S(t) dm(t) = rate · V̄ · W
 where `S(t)` is global raw OkuM supply, `m(t)` the multiplier, `V̄` the
 TIME-WEIGHTED AVERAGE dollar value over the epoch (`S(t)·m(t)` integrated), and
 `W` the epoch length. `rate` is fixed at epoch start (that's what makes it
-pre-committable and cross-chain deterministic — see § Streaming Accrual). `S(t)`
+pre-committable and cross-chain deterministic — see `EVM/README.md` § Streaming
+Accrual & Cross-Chain Determinism). `S(t)`
 is a free variable: anyone can mint or redeem through the permissionless PSM.
 Two different supply paths under the identical rate produce two different
 `Y_dist`. **No rate chosen in advance can guarantee a nominal dollar amount**,
@@ -84,7 +86,7 @@ Four ways out exist, and three of them cost something significant:
 |---|---|---|
 | Publish a rate, accept `Y_dist` varies with AUM | No | None — this is the adopted model |
 | Adjust the rate mid-epoch via feedback | Yes | **Breaks cross-chain determinism** — every adjustment is an N-chain simultaneity event again, and it goes singular as `t → W` |
-| Fix the amount, divide by supply (`distributeYield`) | Yes | **Reintroduces dilution** — this is exactly the mechanism removed in the single-multiplier refactor; a late entrant dilutes every existing holder's per-token yield |
+| Fix the amount, divide by supply (a discrete `distributeYield`-style tick) | Yes | **Reintroduces dilution** — the protocol has no such mechanism; a late entrant dilutes every existing holder's per-token yield |
 | Per-holder equalisation (fund-industry standard for exact fixed payout) | Yes | Requires per-investor cost basis — **fundamentally incompatible with a fungible ERC-20**, where two OkuM with different entitlements would not be the same token |
 
 Money-market funds — the closest traditional analogue — accrue at a **declared
@@ -108,8 +110,9 @@ conflating them is the single most common way to implement this wrong:
    realized yield is being converted into a rate. This must be time-weighted,
    not a spot value at epoch start: if supply changes mid-epoch, a spot
    denominator mis-measures the realized rate by exactly the factor supply
-   moved (a 25% AUM change mid-epoch mis-measures the rate by ~25%; see the
-   "spot vs time-weighted" test in `test/hardhat/unit/yieldRate.test.ts`).
+    moved (a 25% AUM change mid-epoch mis-measures the rate by ~25%; see the
+    "spot denominator vs time-weighted denominator" tests in
+    `test/hardhat/unit/epochDistribution.test.ts`).
 2. **The paying epoch's average value** — unknown at the time the rate is
    published, because it depends on future mint/redeem activity. This is NOT
    an input to the rate derivation; the rate accrues per-token, uniformly,
@@ -198,7 +201,8 @@ with the epoch, so the split is expressed once and holds at any grid.
 `r_settle` is derived and staged in the SAME atomic transaction that
 re-anchors `r_base` (see `setOkuMYieldRateWithSuccessor` below), and activates
 at the base-window boundary with **no transaction** (preserving cross-chain
-simultaneity — see § Streaming Accrual). This turns the accounting error
+simultaneity — see `EVM/README.md` § Streaming Accrual & Cross-Chain
+Determinism). This turns the accounting error
 second-order (a short-window residual, rather than the whole epoch) at the
 cost of two transactions per epoch per chain.
 
@@ -235,11 +239,13 @@ land or neither does.
 
 ## Simulation results
 
-`test/hardhat/simulation/epochAccounting.simulation.ts` runs 25 scenarios
-against a real deployed `OkuMoney`, each measuring dollars ACTUALLY
-distributed (computed exactly from the scripted mint/burn event history and
-the true rate segments — independent of the periodic-sampling approximation
-the settlement derivation itself uses) against the raw target `Y*`.
+Measured against `test/hardhat/simulation/epochAccounting.simulation.ts` at the
+commit that last touched this file; rerun to refresh.
+
+The simulation runs each scenario against a real deployed `OkuMoney`, measuring
+dollars ACTUALLY distributed (computed exactly from the scripted mint/burn event
+history and the true rate segments — independent of the periodic-sampling
+approximation the settlement derivation itself uses) against the raw target `Y*`.
 **On-chain/off-chain model parity held to ~1e-7% across every normal-range
 scenario** (looser, ~1e-5%, at the deliberately-extreme `MAX_RATE`-clamping
 scenario — see below) — the pure-TS math in
@@ -248,28 +254,24 @@ accrual essentially exactly, so the off-chain derivation can be trusted
 without re-deploying to verify each decision.
 
 `test/hardhat/unit/epochDistribution.test.ts`'s "CORE VALIDATION" test is the
-load-bearing one: it proves flat supply with **no** buffer
-(`conservativeFactor = 1.0`) lands within 0.1% of `Y*`. It exists as a
-regression guard because two compounding defects — `deriveSettlementRate` not
-projecting the base window's own remaining distribution after the staging
-instant, and `distributedUsdOverWindow` dropping the gap between the last
-sample and the window end — once produced a ~3.5% systematic
-over-distribution that a 3% buffer nearly cancelled, making the mechanism look
-accurate (~0.5% reported error) while running hot underneath.
+load-bearing regression guard: with **no** buffer (`conservativeFactor = 1.0`)
+and flat supply, the pipeline must land within rounding of `Y*`. Without it, a
+systematic over-distribution could hide behind a deliberate buffer that happens
+to cancel it.
 
 **Baseline**: 1,000,000 OkuM global supply, 3.2% realized on-chain APY (after
 off-chain spread from a ~3.5% RWA return), **24-hour epoch**, 1.6-hour (1/15)
 settlement window, `baseWindowFraction = 0.9`.
 
-**The adopted `conservativeFactor` is `1.0`** — no buffer, pure rear-facing
-The scenario tables below were nonetheless *run*
-with a `0.97` buffer engaged, because the buffer was the variable under study
-at the time; that is why they report a ≈`-3%` floor rather than `0`. Read them
-as *relative* comparisons between settings, not as the accuracy of the shipped
-configuration. Where a table reports error "vs. ADJUSTED target" it has already
-divided that `-3%` out; where it reports "vs. raw `Y*`" the `-3%` is still in
-the number and ≈`-3.00%` is that table's no-shock baseline. Under the adopted
-`1.0` both collapse to the same thing and the no-shock baseline is `0`.
+**The adopted `conservativeFactor` is `1.0`** — no buffer, pure rear-facing.
+The scenario tables below were nonetheless *run* with a `0.97` buffer engaged,
+because the buffer was the variable under study; that is why they report a
+≈`-3%` floor rather than `0`. Read them as *relative* comparisons between
+settings, not as the accuracy of the shipped configuration. Where a table
+reports error "vs. ADJUSTED target" it has already divided that `-3%` out; where
+it reports "vs. raw `Y*`" the `-3%` is still in the number and ≈`-3.00%` is that
+table's no-shock baseline. Under the adopted `1.0` both collapse to the same
+thing and the no-shock baseline is `0`.
 
 **Yield level** (fixed epoch/buffer/split, moderate +20% mid-epoch volatility,
 error vs. ADJUSTED target, so the buffer is divided out):
@@ -302,9 +304,8 @@ the mechanism says so.
 The non-unity rows land almost exactly on `-(1-conservativeFactor)`,
 confirming the mechanism does precisely what it is designed to do.
 
-**`1.0` is the decision.** A `0.97` setting was at
-one point recommended as protection against the early-shock overshoot; that
-does not hold up, because a 3% margin is not meaningful mitigation against a
+**`1.0` is the decision.** A `0.97` setting does not protect against the
+early-shock overshoot, because a 3% margin is not meaningful mitigation against a
 ~28% overshoot. `conservativeFactor` smooths ordinary epoch-to-epoch variance;
 it does not bound a shock. Holding permanent float for that benefit is not
 worth it — variance is absorbed by the carry ledger and by PSM liquidity
@@ -320,23 +321,20 @@ applied, so compare against the ≈-3% baseline, not zero):
 | `0.9` (recommended) | +7.58% | Materially better than the true feed-forward control under IDENTICAL volatility |
 | `0.3` | −3.00% | Numerically fine here — but this table alone does NOT justify preferring 0.9. See the experiment below, which does. |
 
-**Experiment: does `0.3` actually carry more risk than `0.9`, or was the table
-above just not testing the right thing?** The mid-base-window shock above
-lands *before* settlement is staged, so a *smaller* base commitment (0.3)
-means *less* exposure to that particular disruption — it doesn't test the
-claim that 0.3 concentrates risk in the settlement window. Constructing the
-scenario that actually does — an identical +50% shock landing **inside the
-settlement window itself**, after its rate is already staged against a
-forecast that could not see the shock coming:
+**Shock inside the settlement window.** The mid-base-window shock above lands
+*before* settlement is staged, so a *smaller* base commitment (0.3) means *less*
+exposure to that particular disruption — it does not test whether 0.3
+concentrates risk in the settlement window. The scenario that does is an
+identical +50% shock landing **inside the settlement window itself**, after its
+rate is already staged against a forecast that could not see the shock coming:
 
 | Setting | Error vs raw `Y*` | Base-window exposure to the disrupted period |
 |---|---|---|
 | `0.3` | **+13.99%** | 70% of target committed to the settlement window |
 | `0.9` | **−0.57%** | 10% of target committed to the settlement window |
 
-**`0.9` is confirmed materially better** — the claimed risk is real and this
-is the scenario that demonstrates it (`test/hardhat/simulation/epochAccounting.simulation.ts`,
-"EXPERIMENT" test). The general principle: `baseWindowFraction` trades off
+**`0.9` is materially better** — this is the scenario that demonstrates the
+risk (the "EXPERIMENT" test in the simulation file). The general principle: `baseWindowFraction` trades off
 which window absorbs a shock's risk — a lower value shifts more target weight
 onto the settlement window, which is unavoidably short and forecast-only.
 `0.9` keeps that exposure small (10%) at the cost of slightly worse accuracy
@@ -364,27 +362,24 @@ across five orders of magnitude of epoch length — none of them is a live
 candidate, and the "error" column is not a valid accuracy comparison between
 rows (see the limitation note below).
 
-Adopting 24h required **no contract or program changes**. The on-chain guards
+The epoch length is purely an off-chain parameter. The on-chain guards
 constrain only the maximum rate (`MAX_RATE`) and the maximum window
 (`MAX_RATE_WINDOW = 90 days`); there is no minimum window on either stack, and
-86,400s sits far inside the maximum. What the shorter epoch does change is
+86,400s sits far inside the maximum. What epoch length does change is
 `MAX_RATE` *headroom*: the ceiling permits ~0.8677% growth per 24h versus
 ~29.6% per 30 days. A realistic daily figure (5% APY ≈ 0.0137% of AUM) leaves
 roughly 63x margin, but a **monthly-sized dollar target pushed through a daily
-window sits at only ~2x** — the specific regression the
-`MAX_RATE headroom at a 24h epoch` tests in
-`test/hardhat/unit/yieldRate.test.ts` now pin.
+window sits at only ~2x** — the regression the `MAX_RATE headroom at a 24h epoch`
+tests in `test/hardhat/unit/yieldRate.test.ts` pin.
 
-**Known test-design limitation, not chased down (see `TRACKER.md`):** the
-measured "error vs `Y*`" figure came out nearly identical (~2.27-2.29%) across
-all five lengths in this suite, even after fixing an earlier version's
-staging-lead/sample-cadence self-similarity bug. This is very likely because
-the mid-epoch shock's position is still specified as a *fraction* of the
-epoch (`atFraction: 0.4`), so its relationship to the now-absolute staging
-lead still scales with epoch length — meaning this axis has not yet
-demonstrated a genuine, independent accuracy-vs-length relationship either
-way. Do not read the flatness as "epoch length doesn't affect accuracy"; read
-it as "this specific test isn't isolated enough to say."
+**Known test-design limitation (unresolved):** the measured "error vs `Y*`"
+figure comes out nearly identical (~2.27-2.29%) across all five lengths in this
+suite. This is very likely because the mid-epoch shock's position is specified as
+a *fraction* of the epoch (`atFraction: 0.4`), so its relationship to the
+absolute staging lead still scales with epoch length — meaning this axis has not
+demonstrated a genuine, independent accuracy-vs-length relationship either way.
+Do not read the flatness as "epoch length doesn't affect accuracy"; read it as
+"this specific test isn't isolated enough to say."
 
 **The decisive constraint for epoch length is operational feasibility, not
 accuracy**, regardless of the above: a 1-hour epoch leaves a 4-minute
@@ -439,8 +434,8 @@ instant. If `distributedSoFarUsd` (computable live from
 target well before the scheduled staging time, the operator should re-anchor
 to `PRECISION` (halt) immediately via `setOkuMYieldRateWithSuccessor`, rather
 than waiting. This bounds the early-shock failure mode to **detection
-latency**, not epoch length. Not yet implemented as an automated alert — see
-`TRACKER.md`.
+latency**, not epoch length. No automated alert exists: it belongs to the
+backend and is out of scope for this repo (`TRACKER.md` § Early-shock detection).
 
 ## Steady state (conservativeFactor < 1, if ever used)
 
@@ -475,8 +470,8 @@ the adverse move as a fraction of the 500 bp base rate:
 | 50 bp | ~$137 | ~10% |
 | 100 bp (stress) | ~$274 | ~20% |
 
-The shorter grid shrinks the absolute residual roughly 30x versus a monthly
-epoch, *and* makes each row less likely: the measurement→paying lag is now two
+The daily grid shrinks the absolute residual roughly 30x versus a monthly
+epoch, *and* makes each row less likely: the measurement→paying lag is two
 **days**, so a 100 bp T-bill move inside it is a far more extreme stress than
 the same move across two months.
 
@@ -512,25 +507,24 @@ boundary.
   neither is currently stored or exposed on-chain.
   `scripts/utils/carryLedger.ts` and `scripts/utils/globalValue.ts` /
   `scripts/operator/sampleGlobalValue.ts` are REFERENCE implementations (local
-  JSON stores) — see `TRACKER.md` for the requirement to move these to a
-  durable, shared, ideally signed store before relying on them operationally.
+  JSON stores). A durable, shared, ideally signed store is the backend's job and
+  out of scope for this repo (`TRACKER.md` § Out of scope: epoch management).
 - `conservativeFactor` (if used) is an off-chain operator decision, not a
   contract parameter — there is no on-chain enforcement that a published rate
   is in fact conservative relative to any particular realized figure.
 - `checkMultiplierDrift.ts` reports the cumulative-conservation identity on
-  every run once ledger entries exist, and now treats an EXPIRED rate window
-  as a failure (not just a warning) — see § Rear-Facing Epoch Accounting above
-  for why this is a recurring, scheduled deadline under a fixed-epoch model,
-  not an edge case.
+  every run once ledger entries exist, and treats an EXPIRED rate window as a
+  failure (not just a warning): under a fixed-epoch model the window ends on a
+  recurring, scheduled deadline, not as an edge case.
 - **Two transactions per epoch per chain**, both non-time-critical within
   their window: the base-window re-anchor at epoch start, and the
   `setOkuMYieldRateWithSuccessor` re-anchor+stage call at the settlement
-  staging instant (≈85% through the epoch, ahead of the base-window boundary).
-- **No automated early-halt monitoring yet** for the "early sustained shock"
+  staging instant, ahead of the base-window boundary.
+- **No automated early-halt monitoring** exists for the "early sustained shock"
   failure mode identified in the simulation results above — an operator alert
   that watches `distributedSoFarUsd` continuously and triggers an emergency
-  re-anchor to `PRECISION` before the scheduled staging time is a documented
-  gap, not yet implemented. See `TRACKER.md`.
+  re-anchor to `PRECISION` before the scheduled staging time. Out of scope for
+  this repo (`TRACKER.md` § Early-shock detection).
 - Before adopting a non-default `baseWindowFraction` / `conservativeFactor` /
   epoch length, re-run
   `test/hardhat/simulation/epochAccounting.simulation.ts` with those values —

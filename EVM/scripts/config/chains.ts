@@ -12,6 +12,8 @@
 // Chain Addresses
 // ============================================================================
 
+import { rpcUrl } from "./rpc";
+
 export interface ChainAddresses {
   tokens: {
     usdc: string;
@@ -265,61 +267,61 @@ export const CHAIN_METADATA: Record<string, ChainMetadata> = {
   mainnet: {
     name: "Ethereum Mainnet",
     chainId: 1,
-    rpcUrl: process.env.MAINNET_RPC_URL || "https://ethereum-rpc.publicnode.com",
+    rpcUrl: rpcUrl("mainnet"),
     explorer: "https://etherscan.io",
   },
   optimism: {
     name: "Optimism",
     chainId: 10,
-    rpcUrl: process.env.OPTIMISM_RPC_URL || "https://mainnet.optimism.io",
+    rpcUrl: rpcUrl("optimism"),
     explorer: "https://optimistic.etherscan.io",
   },
   arbitrum: {
     name: "Arbitrum One",
     chainId: 42161,
-    rpcUrl: process.env.ARBITRUM_RPC_URL || "https://arb1.arbitrum.io/rpc",
+    rpcUrl: rpcUrl("arbitrum"),
     explorer: "https://arbiscan.io",
   },
   base: {
     name: "Base",
     chainId: 8453,
-    rpcUrl: process.env.BASE_RPC_URL || "https://mainnet.base.org",
+    rpcUrl: rpcUrl("base"),
     explorer: "https://basescan.org",
   },
   bsc: {
     name: "BNB Smart Chain",
     chainId: 56,
-    rpcUrl: process.env.BSC_RPC_URL || "https://bsc-dataseed.binance.org",
+    rpcUrl: rpcUrl("bsc"),
     explorer: "https://bscscan.com",
   },
   opSepolia: {
     name: "OP Sepolia",
     chainId: 11155420,
-    rpcUrl: process.env.OP_SEPOLIA_RPC_URL || "https://sepolia.optimism.io",
+    rpcUrl: rpcUrl("opSepolia"),
     explorer: "https://sepolia-optimistic.etherscan.io",
   },
   sepolia: {
     name: "Eth Sepolia",
     chainId: 11155111,
-    rpcUrl: process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com",
+    rpcUrl: rpcUrl("sepolia"),
     explorer: "https://sepolia.etherscan.io",
   },
   baseSepolia: {
     name: "Base Sepolia",
     chainId: 84532,
-    rpcUrl: process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org",
+    rpcUrl: rpcUrl("baseSepolia"),
     explorer: "https://sepolia.basescan.org",
   },
   arbSepolia: {
     name: "Arbitrum Sepolia",
     chainId: 421614,
-    rpcUrl: process.env.ARB_SEPOLIA_RPC_URL || "https://sepolia-rollup.arbitrum.io/rpc",
+    rpcUrl: rpcUrl("arbSepolia"),
     explorer: "https://sepolia.arbiscan.io",
   },
   bscTestnet: {
     name: "BNB Smart Chain Testnet",
     chainId: 97,
-    rpcUrl: process.env.BSC_TESTNET_RPC_URL || "https://bsc-testnet-rpc.publicnode.com",
+    rpcUrl: rpcUrl("bscTestnet"),
     explorer: "https://testnet.bscscan.com",
   },
   localhost: {

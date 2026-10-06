@@ -68,7 +68,7 @@ export async function runDepositBuffer(
   await approveTx.wait(1);
   logger.success(`Approved ${Number(amount) / 1e6} USDC to PSM`);
 
-  const depositTx = await (psm as any).depositBuffer(amount);
+  const depositTx = await (psm as any).depositBuffer(amount, false, 0, 0, 0);
   const receipt = await depositTx.wait(1);
   logger.success(`depositBuffer tx: ${receipt.hash}`);
 

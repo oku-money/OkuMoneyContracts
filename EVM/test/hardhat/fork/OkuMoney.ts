@@ -11,6 +11,7 @@ import {
 } from "../../../typechain-types"
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, network, upgrades } from "hardhat"
+import { resetMainnetFork } from "../helpers/fork"
 import { expect } from "chai"
 import { getTokenAddress, getWhaleAddress } from "../../../scripts/config/chains"
 
@@ -78,15 +79,7 @@ describe("OkuMoney Scenarios", () => {
 
     before(async () => {
         // Reset network to initial fork state for test isolation
-        // No blockNumber pin: non-archival public nodes prune old state
-        await network.provider.request({
-            method: "hardhat_reset",
-            params: [{
-                forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL || "https://ethereum-rpc.publicnode.com"
-                }
-            }]
-        })
+        await resetMainnetFork()
 
         const signers = await ethers.getSigners()
         Frank = signers[0]
@@ -166,7 +159,6 @@ describe("OkuMoney Scenarios", () => {
             parseEther("1000000000")
         )
         await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
-        await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await queue.getAddress())
         await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 

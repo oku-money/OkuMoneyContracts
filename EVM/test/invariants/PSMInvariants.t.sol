@@ -31,7 +31,8 @@ contract PSMInvariantsTest is BaseTest {
             usdc,
             redemptionQueue,
             rebaser,
-            minter
+            minter,
+            [blacklister, unblacklister, pauser, unpauser]
         );
 
         // Grant operator roles to the handler so it can drive the full PSM surface.
@@ -64,14 +65,79 @@ contract PSMInvariantsTest is BaseTest {
         assertLe(psmOkuMBalance, 1, "PSM should hold no OkuMoney (allow 1 wei dust)");
     }
 
-    /// @notice The OkuMoney sitting in the queue must equal the queue's
-    ///         declared totalQueuedOkuM at all times.
+    /// @notice Queue OkuMoney == live + frozen escrow + donations not yet swept (exact).
     function invariant_QueueBackedByOkuMoney() public view {
         assertEq(
             okuMoney.balanceOf(address(redemptionQueue)),
-            redemptionQueue.totalQueuedOkuM(),
-            "Queue OkuMoney balance must equal totalQueuedOkuM"
+            redemptionQueue.totalQueuedOkuM() + redemptionQueue.totalFrozenOkuM()
+                + handler.ghostDonatedToQueue() - handler.ghostSweptFromQueue(),
+            "Queue OkuMoney balance must equal live + frozen + unswept donations"
         );
+    }
+
+    /// @notice `totalQueuedOkuM` is exactly the sum of live entries in [head, tail).
+    function invariant_TotalQueuedEqualsSumOfLiveEntries() public view {
+        uint256 sum;
+        for (uint256 i = redemptionQueue.queueHead(); i < redemptionQueue.queueTail(); i++) {
+            sum += redemptionQueue.getQueueEntry(i).okuMAmount;
+        }
+        assertEq(sum, redemptionQueue.totalQueuedOkuM(), "totalQueuedOkuM drifted from entries");
+    }
+
+    /// @notice A blacklisted user is never paid USDC by a redeem or queue payout.
+    function invariant_BlacklistedNeverPaid() public view {
+        assertEq(handler.ghostBlacklistedPaid(), 0, "blacklisted user received USDC");
+    }
+
+    /// @notice No USDC leaves the PSM through a payout path while it is paused.
+    function invariant_NoOutflowWhilePaused() public view {
+        assertEq(handler.ghostOutflowWhilePaused(), 0, "USDC left a paused PSM");
+    }
+
+    /// @notice PSM USDC balance == seed + every inflow - every outflow (exact, no tolerance).
+    function invariant_PsmUsdcBalanceIsExact() public view {
+        assertEq(
+            usdc.balanceOf(address(litePsm)),
+            seededBuffer + handler.ghostUsdcDeposited() - handler.ghostUsdcWithdrawn(),
+            "PSM USDC accounting drifted"
+        );
+    }
+
+    /// @notice No handler action may revert on every call. A handler whose bounds drift out
+    ///         of sync with the contracts passes every other invariant while exercising
+    ///         nothing (the yield-rate handler once did exactly that).
+    function invariant_NoHandlerActionAlwaysReverts() public view {
+        _assertSometimesSucceeds(
+            handler.ghostSetUsdYieldRateCalls(), handler.ghostSetUsdYieldRateReverts(), "yield rate"
+        );
+        _assertSometimesSucceeds(
+            handler.ghostMintOkuMCalls(), handler.ghostMintOkuMReverts(), "mintOkuM"
+        );
+        _assertSometimesSucceeds(
+            handler.ghostRedeemOkuMCalls(), handler.ghostRedeemOkuMReverts(), "redeemOkuM"
+        );
+        _assertSometimesSucceeds(
+            handler.ghostMintOkuDollarCalls(), handler.ghostMintOkuDollarReverts(), "mintUsdOku"
+        );
+        _assertSometimesSucceeds(
+            handler.ghostRedeemOkuDollarCalls(),
+            handler.ghostRedeemOkuDollarReverts(),
+            "redeemUsdOku"
+        );
+        _assertSometimesSucceeds(
+            handler.ghostDepositBufferCalls(), handler.ghostDepositBufferReverts(), "depositBuffer"
+        );
+    }
+
+    function _assertSometimesSucceeds(
+        uint256 calls,
+        uint256 reverts,
+        string memory name
+    )
+        internal
+        pure
+    {
+        if (calls >= 100) assertLt(reverts, calls, string.concat(name, " handler never succeeds"));
     }
 
     /// @notice The OkuMoney multiplier never decreases between observations.
@@ -89,19 +155,5 @@ contract PSMInvariantsTest is BaseTest {
     ///         `invariant_MultiplierNeverDecreases` can compare against the prior run.
     function afterInvariant() public {
         handler.recordMultiplierObservation();
-    }
-
-    /// @notice The handler can never withdraw more USDC than was made available to
-    ///         the PSM (seeded buffer + tracked deposits). Equality is too brittle
-    ///         given the multiple payout paths (instant redemption, queue
-    ///         processing, admin withdraw) and rounding inside multiplier math —
-    ///         this directional bound catches gross accounting errors without
-    ///         requiring a perfect handler-side simulator.
-    function invariant_NetUsdcOutflowBoundedByInflow() public view {
-        uint256 deposited = handler.ghostUsdcDeposited();
-        uint256 withdrawn = handler.ghostUsdcWithdrawn();
-        // Allow up to 1 wei of rounding per redemption (queue or instant).
-        uint256 tolerance = 2 * (handler.ghostQueuedCount() + 1);
-        assertLe(withdrawn, seededBuffer + deposited + tolerance, "USDC outflow exceeds inflow");
     }
 }

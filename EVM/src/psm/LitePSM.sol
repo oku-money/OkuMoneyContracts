@@ -23,13 +23,17 @@ import {MathLib} from "../lib/MathLib.sol";
 import {OverrideBlockGuard} from "../lib/OverrideBlockGuard.sol";
 import {LitePSMEvents} from "../lib/events/LitePSMEvents.sol";
 
+/// @dev Minimal view onto OZ `Pausable` for the OkuMoney instance (not part of IOkuMoney).
+interface IPausableView {
+    function paused() external view returns (bool);
+}
+
 /**
  * @title LitePSM
  * @notice Multiplier-aware Peg Stability Module for USDC <-> OkuMoney/OkuDollar swaps
- * @dev Lifecycle (deposit -> buffer -> queued redemption -> processQueue -> withdraw)
- *      mirrors MakerDAO's `DssLitePsm`: buffer-backed mints with a redemption queue when
- *      the buffer is depleted.
- *      Taken from https://github.com/makerdao/dss-lite-psm/blob/main/src/DssLitePsm.sol
+ * @dev Only the zero-fee swap and the decimal conversion factor come from MakerDAO's
+ *      DssLitePsm. The redemption flow is original: OkuM is minted on demand (bounded by the
+ *      minter allowance), and redemptions the USDC buffer can't cover go to {RedemptionQueue}.
  *
  *      OkuMoney is non-rebasing — okuMMultiplier() tracks appreciation separately. The
  *      PSM converts at dollar value via okuMMultiplier(): depositing 100 USDC at
@@ -114,6 +118,8 @@ contract LitePSM is
     /// @dev Reverted by the redeem path's dust floor. See
     ///      `Constants.MIN_REDEMPTION_OKUM` and {_redeemOkuMShared}.
     error BelowMinimumRedemption(uint256 provided, uint256 minimum);
+    error UserBlacklisted(address user);
+    error OkuMoneyPaused();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -341,10 +347,13 @@ contract LitePSM is
         // `usdcAmount >= 1` always. See the error declarations above re: not reintroducing
         // dead checks.
 
-        // If buffer covers the redemption: burn OkuM (pulled or held), pay USDC.
-        // Otherwise: route OkuM to the queue. Pull OkuM from user only when not held.
+        // The UsdOku path never touches the user's OkuMoney balance, so check here.
+        if ($.okuMoney.isBlacklisted(user)) revert UserBlacklisted(user);
+
+        // Instant only from USDC above what the queue is already owed, so the public
+        // can't overtake queued claims. The backend still controls order via processQueue.
         uint256 usdcBalance = $.usdc.balanceOf(address(this));
-        if (usdcBalance >= usdcAmount) {
+        if (usdcBalance >= usdcAmount + $.redemptionQueue.totalQueuedUsdc()) {
             if (!okuMAtPsm) {
                 IERC20(address($.okuMoney)).safeTransferFrom(user, address(this), okuMAmount);
             }
@@ -394,6 +403,8 @@ contract LitePSM is
         uint256 okuMMult = $.okuMoney.okuMMultiplier();
         uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, okuMMult);
         if (okuMAmount == 0) revert AmountTooSmall();
+        // OkuM is minted to the PSM, so OkuMoney's own check never sees the user.
+        if ($.okuMoney.isBlacklisted(msg.sender)) revert UserBlacklisted(msg.sender);
 
         // Expected wrap output, using the same truncation `wrap` performs — the tightest
         // possible slippage floor. It can only diverge if the vault multiplier moves
@@ -435,6 +446,8 @@ contract LitePSM is
         if (usdAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
+        // Fail before pulling UsdOku.
+        if ($.okuMoney.isBlacklisted(user)) revert UserBlacklisted(user);
 
         // Measure actual UsdOku received. `OkuDollar.transferFrom(amount)` floors the
         // share conversion while `OkuDollar.unwrap(amount)` ceils the share burn, so at
@@ -474,13 +487,32 @@ contract LitePSM is
         whenNoOverrideThisBlock
         onlyRole(Roles.PSM_QUEUE_PROCESSOR)
     {
+        _processQueue(startIndex, endIndex, approveAmount);
+    }
+
+    /// @dev Callers handle role, PSM pause, reentrancy and override-block checks.
+    ///      OkuMoney's pause is checked here because `burn` isn't pause-gated.
+    function _processQueue(uint256 startIndex, uint256 endIndex, uint256 approveAmount) internal {
         LitePSMStorage storage $ = _getLitePSMStorage();
+        if (IPausableView(address($.okuMoney)).paused()) revert OkuMoneyPaused();
 
         $.usdc.forceApprove(address($.redemptionQueue), approveAmount);
         $.redemptionQueue.processQueue(startIndex, endIndex);
         $.usdc.forceApprove(address($.redemptionQueue), 0);
 
-        emit BufferRefilled($.usdc.balanceOf(address(this)), startIndex, endIndex);
+        emit QueueProcessed($.usdc.balanceOf(address(this)), startIndex, endIndex);
+    }
+
+    /// @dev `_processQueue` behind the override guard (a modifier can't be conditional).
+    function _processQueueGuarded(
+        uint256 startIndex,
+        uint256 endIndex,
+        uint256 approveAmount
+    )
+        internal
+        whenNoOverrideThisBlock
+    {
+        _processQueue(startIndex, endIndex, approveAmount);
     }
 
     // ============ Admin Functions ============
@@ -498,9 +530,7 @@ contract LitePSM is
     /// @notice Withdraw USDC from the PSM buffer.
     /// @param to Recipient of the USDC.
     /// @param amount Amount of USDC to withdraw (native decimals).
-    /// @dev Not pause-gated by design: incident response may need to move USDC to safety
-    ///      while the PSM is paused. Pause blocks user-facing mint/redeem; buffer
-    ///      operations are privileged and gated by `PSM_BUFFER_WITHDRAWER`.
+    /// @dev Pause-gated: while paused, no USDC leaves the PSM by any path.
     ///
     ///      `whenNoOverrideThisBlock` guards the multiplier-aware `totalQueuedUsdc()`
     ///      read: without it a same-block yield distribution would shift the queue
@@ -511,6 +541,7 @@ contract LitePSM is
         uint256 amount
     )
         external
+        whenNotPaused
         whenNoOverrideThisBlock
         onlyRole(Roles.PSM_BUFFER_WITHDRAWER)
     {
@@ -529,11 +560,33 @@ contract LitePSM is
 
     /// @notice Deposit USDC into the PSM buffer for redemptions.
     /// @param amount Amount of USDC to deposit (native decimals).
-    function depositBuffer(uint256 amount) external onlyRole(Roles.PSM_BUFFER_DEPOSITOR) {
+    /// @param processQueue_ Also process `[startIndex, endIndex)` in the same tx. Requires
+    ///        `PSM_QUEUE_PROCESSOR` and the same pause/override conditions as {processQueue}.
+    ///        The remaining arguments are ignored when false.
+    function depositBuffer(
+        uint256 amount,
+        bool processQueue_,
+        uint256 startIndex,
+        uint256 endIndex,
+        uint256 approveAmount
+    )
+        external
+        nonReentrant
+        onlyRole(Roles.PSM_BUFFER_DEPOSITOR)
+    {
         if (amount == 0) revert Errors.ZeroAmount();
+        if (processQueue_) {
+            _checkRole(Roles.PSM_QUEUE_PROCESSOR);
+            _requireNotPaused();
+        }
+
         LitePSMStorage storage $ = _getLitePSMStorage();
         $.usdc.safeTransferFrom(msg.sender, address(this), amount);
         emit BufferDeposited(msg.sender, amount, $.usdc.balanceOf(address(this)));
+
+        if (processQueue_) {
+            _processQueueGuarded(startIndex, endIndex, approveAmount);
+        }
     }
 
     // ============ Upgradeability ============

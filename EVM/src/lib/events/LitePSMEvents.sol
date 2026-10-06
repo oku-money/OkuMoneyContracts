@@ -31,8 +31,8 @@ abstract contract LitePSMEvents {
         address indexed user, uint256 usdIn, uint256 usdcOut, uint256 okuMMultiplier
     );
 
-    /// @notice Emitted after queue processing completes
-    event BufferRefilled(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);
+    /// @notice Emitted after a processQueue call, with the PSM USDC balance afterwards
+    event QueueProcessed(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);
 
     /// @notice Emitted when admin deposits USDC to buffer
     event BufferDeposited(address indexed depositor, uint256 amount, uint256 newBufferBalance);

@@ -554,7 +554,7 @@ async function ensureBufferFunded(ctx: TestCtx, minBuffer: bigint) {
 
   await waitForTx(await ctx.usdc.approve(psmAddr, short), "usdc.approve(LitePSM) [buffer]");
   await waitForTx(
-    await ctx.litePSM.depositBuffer(short),
+    await ctx.litePSM.depositBuffer(short, false, 0, 0, 0),
     `LitePSM.depositBuffer(${ethers.formatUnits(short, 6)} USDC)`
   );
 }
@@ -697,7 +697,7 @@ async function stepQueueRedeem(ctx: TestCtx) {
           "usdc.approve(LitePSM) [buffer restore]"
         );
         await waitForTx(
-          await ctx.litePSM.depositBuffer(restore),
+          await ctx.litePSM.depositBuffer(restore, false, 0, 0, 0),
           `LitePSM.depositBuffer(${ethers.formatUnits(restore, 6)} USDC) [restore drained buffer]`
         );
         logger.success(`Restored PSM buffer to its pre-test level (${ethers.formatUnits(buf, 6)} USDC)`);
@@ -760,7 +760,7 @@ async function runQueueDrain(
   await ensureUsdc(ctx, refill);
   await waitForTx(await ctx.usdc.approve(psmAddr, refill), "usdc.approve(LitePSM) [refill]");
   await waitForTx(
-    await ctx.litePSM.depositBuffer(refill),
+    await ctx.litePSM.depositBuffer(refill, false, 0, 0, 0),
     `LitePSM.depositBuffer(${ethers.formatUnits(refill, 6)} USDC)`
   );
 

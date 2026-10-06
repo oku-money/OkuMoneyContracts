@@ -8,6 +8,7 @@ import "hardhat-deploy-ethers";
 import "@typechain/hardhat";
 import * as path from "path";
 import { sync as globSync } from "glob";
+import { rpcUrl, forkBlock, RpcChain } from "./scripts/config/rpc";
 
 // Load environment variables
 import * as dotenv from "dotenv";
@@ -26,33 +27,6 @@ subtask(TASK_COMPILE_SOLIDITY_GET_SOURCE_PATHS).setAction(
 
 // Suppress "Potentially unsafe deployment" warnings for unsafeAllow options
 silenceWarnings();
-
-// ============================================================================
-// Dynamic RPC URL construction using Alchemy API key
-// ============================================================================
-
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY || "";
-
-// Helper to construct Alchemy RPC URLs
-function alchemyUrl(network: string): string {
-  if (!ALCHEMY_API_KEY) {
-    // Fallback to public RPCs if no Alchemy key
-    const publicRpcs: Record<string, string> = {
-      "eth-mainnet":  "https://ethereum-rpc.publicnode.com",
-      "eth-sepolia":  "https://ethereum-sepolia-rpc.publicnode.com",
-      "opt-mainnet":  "https://mainnet.optimism.io",
-      "opt-sepolia":  "https://sepolia.optimism.io",
-      "arb-mainnet":  "https://arb1.arbitrum.io/rpc",
-      "arb-sepolia":  "https://sepolia-rollup.arbitrum.io/rpc",
-      "base-mainnet": "https://mainnet.base.org",
-      "base-sepolia": "https://sepolia.base.org",
-      "bnb-mainnet":  "https://bsc-dataseed.binance.org",
-      "bnb-testnet":  "https://bsc-testnet-rpc.publicnode.com",
-    };
-    return publicRpcs[network] || "";
-  }
-  return `https://${network}.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
-}
 
 // Dev wallet address for local fork testing (impersonated with funded ETH)
 const DEV_WALLET_ADDRESS = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
@@ -75,31 +49,27 @@ const DEV_WALLET_ADDRESS = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
 // Then in another terminal:
 //   NETWORK=base npx hardhat run scripts/deploy/index.ts --network localhost
 
-interface ForkTarget {
-  alchemySubdomain: string;
-  chainId: number;
-}
-
-const FORK_TARGETS: Record<string, ForkTarget> = {
-  sepolia:     { alchemySubdomain: "eth-sepolia",   chainId: 11155111 },
-  mainnet:     { alchemySubdomain: "eth-mainnet",   chainId: 1 },
-  optimism:    { alchemySubdomain: "opt-mainnet",   chainId: 10 },
-  opSepolia:   { alchemySubdomain: "opt-sepolia",   chainId: 11155420 },
-  arbitrum:    { alchemySubdomain: "arb-mainnet",   chainId: 42161 },
-  arbSepolia:  { alchemySubdomain: "arb-sepolia",   chainId: 421614 },
-  base:        { alchemySubdomain: "base-mainnet",  chainId: 8453 },
-  baseSepolia: { alchemySubdomain: "base-sepolia",  chainId: 84532 },
-  bsc:         { alchemySubdomain: "bnb-mainnet",   chainId: 56 },
-  bscTestnet:  { alchemySubdomain: "bnb-testnet",   chainId: 97 },
+const FORK_TARGETS: Record<RpcChain, { chainId: number }> = {
+  sepolia:     { chainId: 11155111 },
+  mainnet:     { chainId: 1 },
+  optimism:    { chainId: 10 },
+  opSepolia:   { chainId: 11155420 },
+  arbitrum:    { chainId: 42161 },
+  arbSepolia:  { chainId: 421614 },
+  base:        { chainId: 8453 },
+  baseSepolia: { chainId: 84532 },
+  bsc:         { chainId: 56 },
+  bscTestnet:  { chainId: 97 },
 };
 
-const FORK_NETWORK = (process.env.FORK_NETWORK || "sepolia").trim();
-const _forkTarget: ForkTarget = FORK_TARGETS[FORK_NETWORK] ?? FORK_TARGETS.sepolia;
-if (!FORK_TARGETS[FORK_NETWORK]) {
-  console.warn(`[hardhat.config] Unknown FORK_NETWORK="${FORK_NETWORK}", falling back to sepolia. Known: ${Object.keys(FORK_TARGETS).join(", ")}`);
+const requestedFork = (process.env.FORK_NETWORK || "sepolia").trim();
+const FORK_NETWORK: RpcChain = requestedFork in FORK_TARGETS ? (requestedFork as RpcChain) : "sepolia";
+if (FORK_NETWORK !== requestedFork) {
+  console.warn(`[hardhat.config] Unknown FORK_NETWORK="${requestedFork}", falling back to sepolia. Known: ${Object.keys(FORK_TARGETS).join(", ")}`);
 }
+const _forkTarget = FORK_TARGETS[FORK_NETWORK];
 
-const DEFAULT_FORK_URL = process.env.FORK_URL || alchemyUrl(_forkTarget.alchemySubdomain);
+const DEFAULT_FORK_URL = rpcUrl(FORK_NETWORK, "fork");
 const DEFAULT_FORK_CHAIN_ID = process.env.HARDHAT_CHAIN_ID
   ? parseInt(process.env.HARDHAT_CHAIN_ID)
   : _forkTarget.chainId;
@@ -141,7 +111,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
       chainId: DEFAULT_FORK_CHAIN_ID,
       forking: {
         url: DEFAULT_FORK_URL,
-        blockNumber: process.env.FORK_BLOCK_NUMBER ? parseInt(process.env.FORK_BLOCK_NUMBER) : undefined,
+        blockNumber: forkBlock(FORK_NETWORK),
         enabled: true,
       },
       allowUnlimitedContractSize: false,
@@ -181,7 +151,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
     // Testnets
     sepolia: {
       // Prefer Alchemy if API key is set (more reliable than public RPC)
-      url: ALCHEMY_API_KEY ? alchemyUrl("eth-sepolia") : (process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com"),
+      url: rpcUrl("sepolia"),
       chainId: 11155111,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -193,7 +163,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
     },
 
     opSepolia: {
-      url: process.env.OP_SEPOLIA_RPC_URL || alchemyUrl("opt-sepolia"),
+      url: rpcUrl("opSepolia"),
       chainId: 11155420,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -205,7 +175,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
     },
 
     baseSepolia: {
-      url: process.env.BASE_SEPOLIA_RPC_URL || alchemyUrl("base-sepolia"),
+      url: rpcUrl("baseSepolia"),
       chainId: 84532,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -217,7 +187,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
     },
 
     arbSepolia: {
-      url: process.env.ARB_SEPOLIA_RPC_URL || alchemyUrl("arb-sepolia"),
+      url: rpcUrl("arbSepolia"),
       chainId: 421614,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -229,7 +199,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
     },
 
     bscTestnet: {
-      url: process.env.BSC_TESTNET_RPC_URL || alchemyUrl("bnb-testnet"),
+      url: rpcUrl("bscTestnet"),
       chainId: 97,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -242,7 +212,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
 
     // Mainnets
     mainnet: {
-      url: process.env.MAINNET_RPC_URL || alchemyUrl("eth-mainnet"),
+      url: rpcUrl("mainnet"),
       chainId: 1,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -254,7 +224,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
     },
 
     arbitrum: {
-      url: process.env.ARBITRUM_RPC_URL || alchemyUrl("arb-mainnet"),
+      url: rpcUrl("arbitrum"),
       chainId: 42161,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -266,7 +236,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
     },
 
     base: {
-      url: process.env.BASE_RPC_URL || alchemyUrl("base-mainnet"),
+      url: rpcUrl("base"),
       chainId: 8453,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -278,7 +248,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
     },
 
     bsc: {
-      url: process.env.BSC_RPC_URL || alchemyUrl("bnb-mainnet"),
+      url: rpcUrl("bsc"),
       chainId: 56,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -290,7 +260,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
     },
 
     optimism: {
-      url: process.env.OPTIMISM_RPC_URL || alchemyUrl("opt-mainnet"),
+      url: rpcUrl("optimism"),
       chainId: 10,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {

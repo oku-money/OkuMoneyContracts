@@ -50,10 +50,11 @@ contract RedemptionQueue is
 
     // ============ ERC-7201 Namespaced Storage ============
 
+    /// @dev Two slots: `user` and `timestamp` share one.
     struct QueueEntry {
         address user;
+        uint96 timestamp;
         uint256 okuMAmount; // Raw OkuM token amount (non-rebasing, appreciates via okuMMultiplier)
-        uint256 timestamp;
     }
 
     /// @custom:storage-location erc7201:okumoney.storage.RedemptionQueue
@@ -67,6 +68,10 @@ contract RedemptionQueue is
         // IERC20Metadata(usdc).decimals(). For Circle USDC (6 decimals) the multiplier is 1e12.
         IERC20 usdc;
         uint256 usdcDecimalMultiplier;
+        // Appended fields. Frozen entries are keyed by original queue index; their OkuM
+        // stays escrowed but is excluded from `totalQueuedOkuM`.
+        uint256 totalFrozenOkuM;
+        mapping(uint256 => QueueEntry) frozen;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.RedemptionQueue")) - 1)) & ~bytes32(uint256(0xff))
@@ -86,6 +91,10 @@ contract RedemptionQueue is
     error EndAboveTail();
     error InvalidIndex();
     error EntryAlreadyCleared();
+    error NotEntryOwner();
+    error NoFrozenEntry();
+    error NothingToRescue();
+    error UserBlacklisted(address user);
     /// @dev USDC reports more decimals than supported (>18).
     error UsdcDecimalsTooLarge(uint8 reported);
 
@@ -144,6 +153,16 @@ contract RedemptionQueue is
         return _getRedemptionQueueStorage().usdcDecimalMultiplier;
     }
 
+    /// @notice OkuMoney escrowed for frozen entries (not owed in USDC).
+    function totalFrozenOkuM() external view returns (uint256) {
+        return _getRedemptionQueueStorage().totalFrozenOkuM;
+    }
+
+    /// @notice Frozen entry at its original queue index (zeroed if none).
+    function getFrozenEntry(uint256 index) external view returns (QueueEntry memory) {
+        return _getRedemptionQueueStorage().frozen[index];
+    }
+
     /// @notice Index of the first potentially-live slot in the queue.
     function queueHead() external view returns (uint256) {
         return _getRedemptionQueueStorage().queueHead;
@@ -176,9 +195,11 @@ contract RedemptionQueue is
         if (user == address(0)) revert Errors.ZeroAddress();
 
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        if ($.okuMoney.isBlacklisted(user)) revert UserBlacklisted(user);
         uint256 position = $.queueTail;
-        $.queue[position] =
-            QueueEntry({user: user, okuMAmount: okuMTokenAmount, timestamp: block.timestamp});
+        $.queue[position] = QueueEntry({
+            user: user, timestamp: uint96(block.timestamp), okuMAmount: okuMTokenAmount
+        });
         $.queueTail = position + 1;
         $.totalQueuedOkuM += okuMTokenAmount;
 
@@ -261,6 +282,19 @@ contract RedemptionQueue is
             if (entry.user == address(0)) {
                 // Slot was processed in an earlier batch or rescued out.
                 emit RedemptionSkipped(i, RedemptionSkipReason.AlreadyCleared);
+                continue;
+            }
+
+            // Blacklisted after queueing: freeze (no payout, no burn, doesn't block the
+            // batch). Resolved later by `releaseFrozenEntry`.
+            if ($.okuMoney.isBlacklisted(entry.user)) {
+                delete $.queue[i];
+                $.frozen[i] = entry;
+                // Storage update here: the loop is at the stack limit.
+                $.totalQueuedOkuM -= entry.okuMAmount;
+                $.totalFrozenOkuM += entry.okuMAmount;
+                emit RedemptionSkipped(i, RedemptionSkipReason.Blacklisted);
+                emit RedemptionFrozen(i, entry.user, entry.okuMAmount);
                 continue;
             }
 
@@ -355,12 +389,9 @@ contract RedemptionQueue is
     }
 
     /// @notice Return OkuMoney for a stuck queue entry without burning it.
-    /// @dev Used when an entry is permanently unprocessable because `entry.user` is
-    ///      OkuM-blacklisted — NOT USDC-blacklisted. A USDC-blacklisted user can still
-    ///      receive OkuM back via `alternateRecipient == entry.user`; it's only when
-    ///      `OkuMoney._update` would itself revert `RecipientBlacklisted` on a
-    ///      self-return that a genuinely different recipient is required. An earlier
-    ///      version of this doc (and the README) named the wrong blacklist.
+    /// @dev For entries stuck on a USDC-side failure (`TransferFailed`) and for
+    ///      backend cancellation. OkuM-blacklisted users' entries are frozen by
+    ///      `processQueue` instead (see `releaseFrozenEntry`).
     ///      Operator flow: identify stuck entry -> rescueQueueEntry(index, recipient) -> processQueue.
     ///
     ///      `alternateRecipient` is intentionally NOT required to equal `entry.user` —
@@ -404,6 +435,65 @@ contract RedemptionQueue is
         // Transfer OkuMoney back without burning — the user is reclaiming their tokens.
         // queueHead is NOT auto-advanced here; see {advanceHead}.
         IERC20(address($.okuMoney)).safeTransfer(alternateRecipient, entry.okuMAmount);
+    }
+
+    /// @notice Cancel your own queued entry and reclaim the escrowed OkuM.
+    /// @dev Returns OkuM only (never USDC), so it isn't PSM-pause-gated; OkuMoney's own
+    ///      pause/blacklist rules apply. The backend can cancel for a user with
+    ///      `rescueQueueEntry(index, entry.user)`.
+    function cancelQueueEntry(uint256 index) external nonReentrant {
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        if (index < $.queueHead || index >= $.queueTail) revert InvalidIndex();
+
+        QueueEntry memory entry = $.queue[index];
+        if (entry.user == address(0)) revert EntryAlreadyCleared();
+        if (entry.user != msg.sender) revert NotEntryOwner();
+
+        // CEI: all state before the external transfer.
+        $.totalQueuedOkuM -= entry.okuMAmount;
+        delete $.queue[index];
+        emit RedemptionCancelled(index, msg.sender, entry.okuMAmount);
+
+        IERC20(address($.okuMoney)).safeTransfer(msg.sender, entry.okuMAmount);
+    }
+
+    /// @notice Send a frozen entry's escrowed OkuM to `recipient` (QUEUE_RESCUER; recipient
+    ///         unconstrained, same trust model as `rescueQueueEntry`).
+    function releaseFrozenEntry(
+        uint256 index,
+        address recipient
+    )
+        external
+        nonReentrant
+        onlyRole(Roles.QUEUE_RESCUER)
+    {
+        if (recipient == address(0)) revert Errors.ZeroAddress();
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+
+        QueueEntry memory entry = $.frozen[index];
+        if (entry.user == address(0)) revert NoFrozenEntry();
+
+        $.totalFrozenOkuM -= entry.okuMAmount;
+        delete $.frozen[index];
+        emit FrozenRedemptionReleased(index, entry.user, recipient, entry.okuMAmount);
+
+        IERC20(address($.okuMoney)).safeTransfer(recipient, entry.okuMAmount);
+    }
+
+    /// @notice Sweep OkuM sent to this contract by mistake: only the balance above live
+    ///         plus frozen escrow, so no queued user's OkuM can be touched.
+    function rescueExcessOkuM(address to) external nonReentrant onlyRole(Roles.QUEUE_RESCUER) {
+        if (to == address(0)) revert Errors.ZeroAddress();
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+
+        IERC20 token = IERC20(address($.okuMoney));
+        uint256 balance = token.balanceOf(address(this));
+        uint256 escrowed = $.totalQueuedOkuM + $.totalFrozenOkuM;
+        if (balance <= escrowed) revert NothingToRescue();
+
+        uint256 excess = balance - escrowed;
+        emit ExcessOkuMRescued(to, excess);
+        token.safeTransfer(to, excess);
     }
 
     /// @notice Advance `queueHead` past contiguous cleared entries at the front.

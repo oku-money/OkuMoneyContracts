@@ -11,6 +11,7 @@ import {
 } from "../../../typechain-types"
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, network, upgrades } from "hardhat"
+import { resetMainnetFork } from "../helpers/fork"
 import { expect } from "chai"
 import { getTokenAddress, getWhaleAddress } from "../../../scripts/config/chains"
 
@@ -45,16 +46,16 @@ describe("Happy Path Testing", () => {
     const DEPOSIT_AMOUNT = parseUnits("10000", 6) // 10,000 USDC (6 decimals)
     const DECIMAL_MULTIPLIER = 10n ** 12n // Convert USDC (6 decimals) to OkuMoney (18 decimals)
 
+    // Fund the PSM buffer through the operator entry point (depositBuffer), not a raw transfer.
+    async function fundBuffer(whale: Signer, amount: bigint) {
+        await usdc.connect(whale).transfer(await Frank.getAddress(), amount)
+        await usdc.connect(Frank).approve(await psm.getAddress(), amount)
+        await psm.connect(Frank).depositBuffer(amount, false, 0, 0, 0)
+    }
+
     before(async () => {
         // Reset network to initial fork state for test isolation
-        await network.provider.request({
-            method: "hardhat_reset",
-            params: [{
-                forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL || "https://ethereum-rpc.publicnode.com"
-                }
-            }]
-        })
+        await resetMainnetFork()
 
         const signers = await ethers.getSigners()
         Frank = signers[0]
@@ -133,8 +134,6 @@ describe("Happy Path Testing", () => {
         // Grant PSM to PSM on RedemptionQueue
         await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
 
-        // Grant MINTER to queue so it can burn OkuMoney when processing
-        await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await queue.getAddress())
         await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 
@@ -285,7 +284,6 @@ describe("Happy Path Testing", () => {
         const charlieAddr = await Charlie.getAddress()
         const bobAddr = await Bob.getAddress()
         const daveAddr = await Dave.getAddress()
-        const psmAddr = await psm.getAddress()
 
         // Get all users' USDC balances before
         const aliceUsdcBefore = await usdc.balanceOf(aliceAddr)
@@ -303,7 +301,7 @@ describe("Happy Path Testing", () => {
         // Transfer USDC to PSM - need enough for all 4 users' queued redemptions
         // Each user queued half their balance (~5,250 USDC after 5% rebase), so ~21,000 total
         const replenishAmount = parseUnits("50000", 6)
-        await usdc.connect(whale).transfer(psmAddr, replenishAmount)
+        await fundBuffer(whale, replenishAmount)
 
         await network.provider.request({
             method: "hardhat_stopImpersonatingAccount",
@@ -334,10 +332,10 @@ describe("Happy Path Testing", () => {
         const bobReceived = bobUsdcAfter - bobUsdcBefore
         const daveReceived = daveUsdcAfter - daveUsdcBefore
 
-        expect(aliceReceived).to.be.closeTo(expectedPayout, parseUnits("1", 6))
-        expect(charlieReceived).to.be.closeTo(expectedPayout, parseUnits("1", 6))
-        expect(bobReceived).to.be.closeTo(expectedPayout, parseUnits("1", 6))
-        expect(daveReceived).to.be.closeTo(expectedPayout, parseUnits("1", 6))
+        expect(aliceReceived).to.equal(expectedPayout)
+        expect(charlieReceived).to.equal(expectedPayout)
+        expect(bobReceived).to.equal(expectedPayout)
+        expect(daveReceived).to.equal(expectedPayout)
     })
 
     it("Partial buffer redemption (mixed instant + queued)", async () => {
@@ -361,7 +359,7 @@ describe("Happy Path Testing", () => {
             params: [USDC_WHALE]
         })
         const whale = await ethers.getSigner(USDC_WHALE)
-        await usdc.connect(whale).transfer(psmAddr, partialBuffer)
+        await fundBuffer(whale, partialBuffer)
         await network.provider.request({
             method: "hardhat_stopImpersonatingAccount",
             params: [USDC_WHALE]
@@ -403,9 +401,9 @@ describe("Happy Path Testing", () => {
         const aliceUsdcAfterInstant = await usdc.balanceOf(aliceAddr)
         const charlieUsdcAfterInstant = await usdc.balanceOf(charlieAddr)
         expect(aliceUsdcAfterInstant - aliceUsdcBefore, "Alice paid instantly")
-            .to.be.closeTo(expectedPayout, parseUnits("1", 6))
+            .to.equal(expectedPayout)
         expect(charlieUsdcAfterInstant - charlieUsdcBefore, "Charlie paid instantly")
-            .to.be.closeTo(expectedPayout, parseUnits("1", 6))
+            .to.equal(expectedPayout)
         expect(await usdc.balanceOf(psmAddr), "the two instant redeems drain the buffer")
             .to.be.lt(parseUnits("1", 6))
         expect(await queue.queueLength()).to.equal(0)
@@ -427,7 +425,7 @@ describe("Happy Path Testing", () => {
             params: [USDC_WHALE]
         })
         const whale2 = await ethers.getSigner(USDC_WHALE)
-        await usdc.connect(whale2).transfer(psmAddr, parseUnits("10000", 6))
+        await fundBuffer(whale2, parseUnits("10000", 6))
         await network.provider.request({
             method: "hardhat_stopImpersonatingAccount",
             params: [USDC_WHALE]
@@ -452,14 +450,14 @@ describe("Happy Path Testing", () => {
         const bobReceived = bobUsdcAfter - bobUsdcBefore
         const daveReceived = daveUsdcAfter - daveUsdcBefore
 
-        expect(bobReceived, "Bob paid from the queue").to.be.closeTo(expectedPayout, parseUnits("1", 6))
-        expect(daveReceived, "Dave paid from the queue").to.be.closeTo(expectedPayout, parseUnits("1", 6))
+        expect(bobReceived, "Bob paid from the queue").to.equal(expectedPayout)
+        expect(daveReceived, "Dave paid from the queue").to.equal(expectedPayout)
 
         // THE PROPERTY THAT MATTERS: the queued path pays the same as the
         // instant path. Equal treatment regardless of which side of the buffer
         // boundary a redemption landed on.
-        expect(aliceReceived, "instant and queued pay equally").to.be.closeTo(bobReceived, parseUnits("1", 6))
-        expect(charlieReceived, "instant and queued pay equally").to.be.closeTo(daveReceived, parseUnits("1", 6))
+        expect(aliceReceived, "instant and queued pay equally").to.equal(bobReceived)
+        expect(charlieReceived, "instant and queued pay equally").to.equal(daveReceived)
     })
 
     it("Withdraw", async () => {
@@ -475,7 +473,7 @@ describe("Happy Path Testing", () => {
             params: [USDC_WHALE]
         })
         const whale = await ethers.getSigner(USDC_WHALE)
-        await usdc.connect(whale).transfer(psmAddr, parseUnits("20000", 6))
+        await fundBuffer(whale, parseUnits("20000", 6))
         await network.provider.request({
             method: "hardhat_stopImpersonatingAccount",
             params: [USDC_WHALE]
@@ -524,9 +522,9 @@ describe("Happy Path Testing", () => {
         const bobReceived = bobUsdcAfter - bobUsdcBefore
         const daveReceived = daveUsdcAfter - daveUsdcBefore
 
-        expect(aliceReceived).to.be.closeTo(expectedSecondPayout, parseUnits("1", 6))
-        expect(charlieReceived).to.be.closeTo(expectedSecondPayout, parseUnits("1", 6))
-        expect(bobReceived).to.be.closeTo(expectedSecondPayout, parseUnits("1", 6))
-        expect(daveReceived).to.be.closeTo(expectedSecondPayout, parseUnits("1", 6))
+        expect(aliceReceived).to.equal(expectedSecondPayout)
+        expect(charlieReceived).to.equal(expectedSecondPayout)
+        expect(bobReceived).to.equal(expectedSecondPayout)
+        expect(daveReceived).to.equal(expectedSecondPayout)
     })
 })

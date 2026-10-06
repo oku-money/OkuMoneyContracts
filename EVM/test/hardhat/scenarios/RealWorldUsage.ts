@@ -115,14 +115,12 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     // Roles
     await okuMoney.connect(admin).grantRole(OKUM_MINTER, await psm.getAddress())
     await okuMoney.connect(admin).grantRole(OKUM_BURNER, await psm.getAddress())
-    await okuMoney.connect(admin).grantRole(OKUM_MINTER, await queue.getAddress())
     await okuMoney.connect(admin).grantRole(OKUM_BURNER, await queue.getAddress())
     await okuMoney.connect(admin).grantRole(OKUM_REBASER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_ALLOWANCE_MANAGER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_BLACKLISTER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_UNBLACKLISTER, adminAddr)
     await okuMoney.connect(admin).configureMinterAllowance(await psm.getAddress(), MINTER_ALLOWANCE)
-    await okuMoney.connect(admin).configureMinterAllowance(await queue.getAddress(), MINTER_ALLOWANCE)
     await queue.connect(admin).grantRole(QUEUE_PSM, await psm.getAddress())
     await psm.connect(admin).grantRole(PSM_BUFFER_DEPOSITOR, adminAddr)
     await psm.connect(admin).grantRole(PSM_BUFFER_WITHDRAWER, adminAddr)
@@ -151,7 +149,7 @@ async function seedBuffer(chain: Chain, admin: Signer, usdcAmount: bigint) {
     const adminAddr = await admin.getAddress()
     await chain.usdc.mint(adminAddr, usdcAmount)
     await chain.usdc.connect(admin).approve(await chain.psm.getAddress(), usdcAmount)
-    await chain.psm.connect(admin).depositBuffer(usdcAmount)
+    await chain.psm.connect(admin).depositBuffer(usdcAmount, false, 0, 0, 0)
 }
 
 const WAD = 10n ** 18n

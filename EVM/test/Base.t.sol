@@ -152,9 +152,7 @@ abstract contract BaseTest is Test, Actors {
         redemptionQueue.grantRole(QUEUE_PSM, address(litePsm));
         redemptionQueue.grantRole(QUEUE_RESCUER, queueRescuer);
 
-        // Grant RedemptionQueue burn role on OkuMoney (self-burn in
-        // processQueue). Cycle 4: only OKUM_BURNER is required for the
-        // burn path now — minting is not needed.
+        // Queue burns its own escrow in processQueue; it holds no mint role (as in production).
         okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         vm.stopPrank();
@@ -165,7 +163,6 @@ abstract contract BaseTest is Test, Actors {
         vm.startPrank(allowanceManager);
         okuMoney.configureMinterAllowance(minter, MAX_SUPPLY);
         okuMoney.configureMinterAllowance(address(litePsm), MAX_SUPPLY);
-        okuMoney.configureMinterAllowance(address(redemptionQueue), MAX_SUPPLY);
         vm.stopPrank();
     }
 

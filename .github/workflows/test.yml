@@ -79,11 +79,11 @@ jobs:
           ' coverage.txt
 
           # Gate 2: overall BRANCH coverage. Per-file would be the stronger
-          # shape, but five branches in src/ are provably unreachable (see
-          # README "Uncovered branches (intentional)"), which pins OkuDollar at
-          # 89% through no fault of the suite. A total-line gate catches the
-          # regression that matters -- someone adding an untested conditional --
-          # without encoding that permanent floor as a per-file exception.
+          # shape, but a few branches in src/ are provably unreachable (see
+          # README "Uncovered branches (intentional)"), which caps OkuDollar's
+          # per-file figure through no fault of the suite. A total gate catches
+          # the regression that matters -- someone adding an untested
+          # conditional -- without encoding that cap as a per-file exception.
           awk -F'|' '
             /^\| Total/ {
               for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
@@ -120,10 +120,19 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: npm run build --workspace @okumoney/yield-tooling
 
+      # The fork block is pinned when ANKR_FREEMIUM_API_KEY (archive RPC) is available,
+      # which also makes Hardhat's on-disk fork cache effective.
+      - name: Cache Hardhat fork state
+        uses: actions/cache@v4
+        with:
+          path: EVM/cache_hardhat/hardhat-network-fork
+          key: hardhat-fork-${{ hashFiles('EVM/scripts/config/rpc.ts') }}
+
       - name: Run Hardhat tests
         run: npx hardhat test
         env:
           FORK_NETWORK: mainnet
+          ANKR_FREEMIUM_API_KEY: ${{ secrets.ANKR_FREEMIUM_API_KEY }}
 
       - name: Export ABIs
         run: npm run export-abis

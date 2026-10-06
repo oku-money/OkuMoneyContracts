@@ -53,7 +53,9 @@ Because OkuDollar has no rate of its own, OkuM and usdOku necessarily
 earn identical yield and collateralization is exactly 1.0 by
 construction. On SVM there is no wrapper token at all — "usdOku" is a
 presentation-layer label for the scaled display of the single OkuM
-mint (`4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN`).
+mint. (Program and mint addresses:
+[`SVM/oku-programs/deployments/devnet.json`](SVM/oku-programs/deployments/devnet.json),
+`tokens.okuM` and `programs.litePsm`.)
 
 ---
 
@@ -83,8 +85,8 @@ mint (`4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN`).
 | **OkuDollar** | EVM | Rebasing $1-pegged stablecoin wrapping OkuMoney 1:1 at the same multiplier. No rate state of its own. |
 | **LitePSM** | EVM | Peg Stability Module — multiplier-aware USDC ↔ OkuM, plus `mintUsdOku` / `redeemUsdOku` flows that route through the vault. Sole user-facing mint/burn surface. |
 | **RedemptionQueue** | EVM | FIFO escrow when the PSM USDC buffer is insufficient. |
-| **lite-psm** | SVM | One program: PSM (buffer-only — no queue), the rate schedule, compliance (freeze/thaw), and direct mint/burn for bridging. Holds mint, freeze and ScaledUiAmount authority via PDA. PDA seed `psm_config`. |
-| **OkuM mint** | SVM | Token-2022 mint (`4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN`), 6 decimals. Its `ScaledUiAmount` extension is a **write-only display mirror**, not the pricing source. |
+| **lite-psm** | SVM | One program (ID: `declare_id!` in `programs/lite-psm/src/lib.rs`, `Anchor.toml`, `deployments/devnet.json` → `programs.litePsm`): PSM (buffer-only — no queue), the rate schedule, compliance (freeze/thaw), and direct mint/burn for bridging. Holds mint, freeze and ScaledUiAmount authority via PDA. PDA seed `psm_config`. |
+| **OkuM mint** | SVM | Token-2022 mint (address: `deployments/<network>.json` → `tokens.okuM`), 6 decimals. Its `ScaledUiAmount` extension is a **write-only display mirror**, not the pricing source. |
 
 Both stacks: `PRECISION = 1e18`, `MAX_MULTIPLIER = 1e24`, `MAX_RATE = PRECISION + 1e11`.
 
@@ -142,8 +144,10 @@ the published rate is internally consistent and that the multiplier
 follows from it; nobody outside Oku Money can confirm the rate was the
 *right* one for the yield actually earned.
 
-**The decision, and the trade.** These records are kept as a signed,
-versioned, append-only off-chain ledger. We considered anchoring a hash
+**The decision, and the trade.** These records belong in a signed,
+versioned, append-only off-chain ledger. (This repo ships only a reference
+implementation — local JSON files, see `TRACKER.md` § Out of scope; the
+signed store is the backend's.) We considered anchoring a hash
 of each epoch's derivation on-chain, which would make the record
 tamper-evident and let a third party verify our arithmetic without
 trusting us. We chose not to.
@@ -169,7 +173,7 @@ The change is additive and needs no modification to any deployed
 contract: a standalone attestation contract, one hash per epoch. Decided
 against for now — anchoring a hash proves the file was not edited after the
 fact, but proves nothing about whether its inputs were honest, which is the
-property that actually matters. See `TRACKER.md` § carry ledger.
+property that actually matters.
 
 Separately, and regardless of that choice: because the carry ledger and
 V̄ history have no on-chain representation, **losing them means the
@@ -235,7 +239,8 @@ The upper bound is the accumulated truncation: up to one collateral unit from
 `dollarsToUsdc`'s floor on the source, plus up to one OkuM wei from
 `dollarsToOkuM`'s floor on the destination.
 
-Tested by `EVM/test/hardhat/scenarios/RealWorldUsage.ts` (E1, E3) and
+Tested by `EVM/test/hardhat/scenarios/RealWorldUsage.ts` (round-trip and
+multiplier-divergence scenarios) and
 `SVM/oku-programs/tests/bankrun/crossChainBridging.ts`.
 
 ### Future bridging
@@ -281,8 +286,8 @@ EVM:  queue.queueHead() < queue.queueTail()  → entries pending
 The orchestrator can accelerate payment by calling `depositBuffer`
 to fund the queue, then `processQueue`.
 
-> **Note:** SVM has no redemption queue at all (deliberately removed
-> — see [`SVM/README.md` § Why no redemption queue](SVM/README.md)).
+> **Note:** SVM has no redemption queue at all (see
+> [`SVM/README.md` § Why no redemption queue](SVM/README.md#why-no-redemption-queue)).
 > `redeem_oku_m` on SVM is buffer-only: it reverts with
 > `InsufficientBuffer` if the vault can't cover it — there is nothing
 > to drain or poll. SVM-to-SVM bridges additionally bypass the USDC
@@ -299,7 +304,7 @@ to fund the queue, then `processQueue`.
 
 #### Schedule broadcast across chains
 
-The multiplier is no longer "ticked" anywhere. `OKUM_REBASER`
+The multiplier is never "ticked". `OKUM_REBASER`
 publishes a per-second rate and a bounded window, and every chain
 computes the same multiplier from it. The operational rules follow
 from that:
@@ -323,9 +328,9 @@ from that:
 4. Divergence is **one-way**: the multiplier is monotonic, so a chain
    that ran hot cannot be corrected downward. The only remedy is to run
    the laggards hot until they catch up.
-5. The "wait one slot/block after a price tick before bridging" rule is
-   **retired** — there is no tick. It applies only around the emergency
-   override, which still stamps the sandwich lock.
+5. There is no price tick, so no "wait a slot/block before bridging" rule
+   in normal operation. It applies only around the emergency override,
+   which stamps the sandwich lock.
 
 #### Minter allowance rotation policy
 
@@ -333,14 +338,14 @@ from that:
 (SVM) bounds how many raw OkuM tokens the PSM can mint on each chain
 before an explicit refresh.
 
-- **Testnet:** `minterAllowance == maxSupply == 1B` — effectively uncapped for dev.
-- **Production:** ~ **1 % of weekly bridging volume**, rotated on a **weekly cadence** by `OKUM_ALLOWANCE_MANAGER` (cold multisig). Bounds a single-week worst-case mint by a compromised PSM contract or orchestrator USDC custody.
+- **Production policy:** ~ **1 % of weekly bridging volume**, rotated on a **weekly cadence** by `OKUM_ALLOWANCE_MANAGER` (cold multisig). Bounds a single-week worst-case mint by a compromised PSM contract or orchestrator USDC custody.
+- **Testnet** defaults are effectively uncapped; they are set in the deploy scripts (see § Initial deploy parameters).
 
-EVM rotation:
+EVM rotation (env vars, not flags — see `TRACKER.md` § Standing traps):
 
 ```bash
-NETWORK=base npx hardhat run scripts/operator/configureMinterAllowance.ts \
-  --network base --minter <psm-address> --allowance 10000000000000000000000000 --yes-mainnet
+NETWORK=base MINTER=<psm-address> ALLOWANCE=10000000000000000000000000 YES_MAINNET=1 \
+  npx hardhat run scripts/operator/configureMinterAllowance.ts --network base
 ```
 
 SVM rotation:
@@ -379,16 +384,18 @@ All metrics on a 1-min cadence. PagerDuty for "token float" and
   roles for cross-chain bridge operations (direct OkuM mint/burn).
 - **EVM roles:** `OKUM_REBASER` (governs both OkuM and UsdOku — the
   vault has no rate of its own), `PSM_QUEUE_PROCESSOR`,
-  `PSM_BUFFER_DEPOSITOR`.
+  `PSM_BUFFER_DEPOSITOR` (the latter two together enable
+  `depositBuffer(..., processQueue_ = true)`).
 - **SVM roles:** `rebaser`, `buffer_depositor`, `direct_minter`,
   `direct_burner`. (No queue-processor equivalent on SVM — no
   redemption queue.)
-- Compromise allows multiplier manipulation and buffer drain —
-  material but bounded. On EVM, compromise also allows skipping
-  ahead in the redemption queue. On SVM, compromise allows direct
-  OkuM mint/burn up to `minterAllowance` (no queue to skip — SVM has
-  none). Cold multisig controls `*_UNPAUSER` and
-  `*_BUFFER_WITHDRAWER` (more dangerous).
+- Compromise allows multiplier manipulation — material but bounded by
+  `MAX_RATE` / `MAX_MULTIPLIER` (see `AUTHORITY-MATRIX.md` §3-A). On EVM,
+  compromise also allows choosing which queue range `processQueue` pays. On
+  SVM, compromise allows direct OkuM mint/burn up to
+  `direct_minter_allowance` / `direct_burner_allowance` (there is no queue).
+  Neither stack's orchestrator can withdraw the buffer: cold multisig controls
+  `*_UNPAUSER` and `*_BUFFER_WITHDRAWER` (more dangerous).
 - Rotate the orchestrator key immediately on suspected compromise.
   Pausing both PSMs (warm multisig) is the emergency lever.
 - **No two concurrent orchestrator instances** should process the
@@ -399,20 +406,23 @@ All metrics on a 1-min cadence. PagerDuty for "token float" and
 
 ## RBAC (role-based access control)
 
-One role per action. No role performs more than one function.
+Roles are scoped to one action family each: separate roles for minting,
+burning, pausing, unpausing, upgrading and so on, so one key's compromise
+reaches only what its roles reach. The full list is `EVM/src/lib/Roles.sol`
+and `SVM/oku-programs/programs/lite-psm/src/roles.rs`.
 
 | Entity | EVM Roles | SVM Roles |
 |---|---|---|
-| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, VAULT_RESCUER | role_admin, unpauser, unfreezer, cap_manager, allowance_manager, buffer_withdrawer |
-| Warm Multisig | all PAUSER, all BLACKLISTER | pauser, freezer |
-| Orchestrator | OKUM_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR | rebaser, buffer_depositor, direct_minter, direct_burner |
-| LitePSM | OKUM_MINTER, OKUM_BURNER (cycle 4: split on EVM) | Mint authority on OkuM Token-2022 mint |
-| RedemptionQueue | OKUM_BURNER (cycle 4) | no SVM equivalent — redemption queue removed entirely, buffer-only PSM |
+| Cold Multisig | DEFAULT_ADMIN_ROLE, all `*_UNPAUSER`, all `*_UNBLACKLISTER`, OKUM_CAP_MANAGER, OKUM_ALLOWANCE_MANAGER, all `*_UPGRADER`, PSM_BUFFER_WITHDRAWER, VAULT_RESCUER, QUEUE_RESCUER | role_admin, unpauser, unfreezer, cap_manager, allowance_manager, buffer_withdrawer |
+| Warm Multisig | all `*_PAUSER`, all `*_BLACKLISTER` | pauser, freezer |
+| Orchestrator | OKUM_REBASER, PSM_QUEUE_PROCESSOR, PSM_BUFFER_DEPOSITOR | rebaser, buffer_depositor, direct_minter, direct_burner |
+| LitePSM | OKUM_MINTER, OKUM_BURNER, QUEUE_PSM (on `RedemptionQueue`) | Mint authority on OkuM Token-2022 mint |
+| RedemptionQueue | OKUM_BURNER (never `OKUM_MINTER`) | no SVM equivalent — buffer-only PSM |
 
-`EVM/src/lib/Roles.sol` defines exactly the roles in the table above —
-there are no reserved bridge/router/NTT role constants. `unfreezer` on
+There are no reserved bridge/router/NTT role constants. `unfreezer` on
 SVM is the counterpart of EVM's `OKUM_UNBLACKLISTER` (`roles.rs`
-`AuthorityRole::Unfreezer`) and is cold on both stacks.
+`AuthorityRole::Unfreezer`) and is cold on both stacks. The EVM mainnet
+split above is encoded in `EVM/scripts/operator/grantRolesMainnet.ts`.
 
 **Devnet/testnet delegation.** The table above is the mainnet target
 model, implemented by `EVM/scripts/operator/grantRolesMainnet.ts` and (on
@@ -424,8 +434,8 @@ a **deliberate testnet-only divergence** from the threat model below, safe
 only because testnet OkuM is backed by MockUSDC and has no value:
 
 - **EVM** — `grantRoles.ts` gives one operator EOA everything needed to
-  operate the protocol (20 roles) and leaves the deployer exactly two
-  things: the ability to **upgrade**, and literal **ownership**
+  operate the protocol (its role list is in the script header) and leaves
+  the deployer exactly two things: the ability to **upgrade**, and literal **ownership**
   (`DEFAULT_ADMIN_ROLE`, the role-admin for every granted role), which is
   what lets it revoke the lot unilaterally. Consequences stated plainly:
   holding `OKUM_MINTER` + `OKUM_ALLOWANCE_MANAGER` + `OKUM_CAP_MANAGER`
@@ -467,16 +477,16 @@ On-chain RBAC enforces *separation of duties within the company*, not
 protection *against* the company. Read every "cannot" below in that light.
 
 **Per-path blast radius, guards and reversibility:
-[`AUTHORITY-MATRIX.md`](AUTHORITY-MATRIX.md).** That file is canonical and is
-verified against the contract source. The tiering below is the organisational
-model it assumes.
+[`AUTHORITY-MATRIX.md`](AUTHORITY-MATRIX.md).** That file is canonical; where it
+and this README disagree, the contract source wins. The tiering below is the
+organisational model it assumes (role names per the RBAC table above).
 
-| Tier | Key material | Holds | Shape of the worst case |
-|---|---|---|---|
-| **Cold Multisig** | Squads / Safe, hardware-backed quorum | Upgrade authority, all `UNPAUSER`/`UNBLACKLISTER`, `CAP_MANAGER`, `ALLOWANCE_MANAGER`, `BUFFER_WITHDRAWER`, `VAULT_RESCUER`, `DEFAULT_ADMIN_ROLE` / `role_admin` | Total. Upgrade replaces all logic with no timelock. **Do not read `maxSupply` or `minterAllowance` as a bound on this tier** — it sets both. |
-| **Warm Multisig** | Lower quorum, faster to sign | All `PAUSER`, all `BLACKLISTER` / `freezer` | Denial of service only. Pause is a **one-way door** — unpausing needs cold. No access to funds or parameters. |
-| **Orchestrator** | KMS-backed, automated | `OKUM_REBASER`, `QUEUE_PROCESSOR`, `BUFFER_DEPOSITOR`, plus SVM `direct_minter`/`direct_burner` | Can ratchet the multiplier toward `MAX_MULTIPLIER`, inflating dollar value beyond actual backing. Cannot mint on EVM (`OKUM_MINTER` is held by contracts), cannot drain the buffer, cannot touch roles or upgrades. |
-| **Protocol contracts** | n/a | `OKUM_MINTER` / `OKUM_BURNER` (EVM); mint authority on the Token-2022 mint (SVM) | Mint only from inside `mintOkuM` / `processQueue`, bounded by `minterAllowance` and `maxSupply` — bounds that the cold tier can raise. |
+| Tier | Key material | Shape of the worst case |
+|---|---|---|
+| **Cold Multisig** | Squads / Safe, hardware-backed quorum | Total. Upgrade replaces all logic with no timelock. **Do not read `maxSupply` or `minterAllowance` as a bound on this tier** — it sets both. |
+| **Warm Multisig** | Lower quorum, faster to sign | Denial of service only. Pause is a **one-way door** — unpausing needs cold. No access to funds or parameters. |
+| **Orchestrator** | KMS-backed, automated | Can ratchet the multiplier toward `MAX_MULTIPLIER`, inflating dollar value beyond actual backing. Cannot mint on EVM (`OKUM_MINTER` is held by contracts), cannot drain the buffer, cannot touch roles or upgrades. |
+| **Protocol contracts** | n/a | Mint only from inside `mintOkuM` / `mintUsdOku` (LitePSM); burn only from the redeem and queue-payout paths — bounded by `minterAllowance` and `maxSupply`, which the cold tier can raise. |
 
 **The one bound that is structural rather than administrative:** the multiplier
 is monotonically non-decreasing on both stacks. No key, at any quorum, can move
@@ -500,13 +510,15 @@ approval model, event shapes — lives in
 [`SVM/README.md` § EVM vs SVM — divergence catalogue](SVM/README.md#evm-vs-svm--divergence-catalogue).
 Role and authority asymmetries are in
 [`AUTHORITY-MATRIX.md`](AUTHORITY-MATRIX.md) § 4; constants are in each stack's
-constants file and must agree.
+constants file (`EVM/src/lib/Constants.sol`,
+`SVM/oku-programs/crates/oku-shared/src/constants.rs`) and must agree.
 
-The three differences that are pure toolchain rather than design:
+The three differences that are pure toolchain rather than design (versions:
+`EVM/foundry.toml` / `hardhat.config.ts`, `SVM/oku-programs/Anchor.toml`):
 
 | | EVM | SVM |
 |---|---|---|
-| Language | Solidity 0.8.28 | Rust (Anchor 1.0.2) |
+| Language | Solidity | Rust (Anchor) |
 | Yield lock primitive | `block.number` | `Clock::slot` |
 | Upgrade mechanism | UUPS proxy (all four contracts) | Solana BPF program upgrade (Squads authority) |
 
@@ -525,7 +537,8 @@ contracts/
 │       └── epoch-accounting.md   # off-chain epoch/yield model
 ├── SVM/                       # Anchor programs (Rust)
 │   └── README.md              # programs, design, divergence catalogue
-├── packages/yield-tooling/    # shared multiplier math (TS) + differential corpus
+├── packages/yield-tooling/    # shared multiplier + epoch math (TS); differential test
+│                              #   (corpus: EVM/test/differential/vectors.jsonl)
 ├── artifacts/                 # curated ABIs + IDLs for downstream consumers
 └── testnet-addresses.json     # live deployment registry (auto-generated)
 ```
@@ -575,7 +588,7 @@ estimation issues.
 cd EVM
 
 # Terminal 1 — fork target chain (default: sepolia)
-FORK_NETWORK=base hh node            # =sepolia, =opSepolia, =mainnet, =optimism, =arbitrum, =base, =bsc
+FORK_NETWORK=base hh node            # supported values: see EVM/hardhat.config.ts
 
 # Terminal 2 — deploy + integration test against the fork
 hh run scripts/deploy/index.ts --network localhost
@@ -583,8 +596,9 @@ hh run scripts/test/test-onchain.ts --network localhost
 ```
 
 Deploys MockUSDC, OkuMoney, OkuDollar, RedemptionQueue, LitePSM;
-configures all roles + minter allowances (LitePSM + RedemptionQueue
-hold `OKUM_MINTER` / `OKUM_BURNER`); verifies deployment state.
+configures all roles + minter allowances (LitePSM holds `OKUM_MINTER` /
+`OKUM_BURNER` / `QUEUE_PSM`; RedemptionQueue holds `OKUM_BURNER` only);
+verifies deployment state.
 Fork-deployed addresses land under `fork:<chain>` in the gitignored
 `addresses.local.json`, so they never collide with live entries or
 dirty the tracked address book.
@@ -607,13 +621,8 @@ NETWORK=devnet-fork npm run test:onchain:fork
 ```bash
 cd EVM
 
-# Per-network shortcuts (defined in package.json):
-npm run deploy:sepolia        # Eth Sepolia
-npm run deploy:opSepolia      # OP Sepolia
-npm run deploy:baseSepolia    # Base Sepolia
-npm run deploy:bscTestnet     # BSC testnet (Chapel)
-npm run deploy:base           # Base mainnet
-npm run deploy:bsc            # BSC mainnet
+# Per-network shortcuts: the `deploy:<chain>` scripts in EVM/package.json
+npm run deploy:sepolia        # e.g. Eth Sepolia
 
 # Chains without a pre-baked alias:
 hh run scripts/deploy/index.ts --network <chain>
@@ -688,9 +697,7 @@ NETWORK=sepolia npm run test:onchain:sepolia  # live round-trip + balance check
 ```bash
 cd SVM/oku-programs
 NETWORK=devnet npm run test:onchain           # ~30 s end-to-end smoke
-NETWORK=devnet npm run test:onchain -- --step=redeem   # single step (mint/transfer/redeem/
-                                                        # streamingAccrual/pause/setAuthority also available —
-                                                        # `distributeYield` was removed with the discrete-yield model)
+NETWORK=devnet npm run test:onchain -- --step=redeem   # single step; an unknown name prints the available steps
 ```
 
 ### Phase 4 — cross-chain bridge test (noBridge / PSM-mediated)
@@ -723,29 +730,20 @@ non-generic ones:
   `hh node` with `FORK_NETWORK=Y`, or unset `NETWORK` and let the script
   auto-detect from the live chainId.
 
-### Initial deploy parameters (testnet defaults)
+### Initial deploy parameters
 
-**EVM (`EVM/scripts/deploy/index.ts`):**
-
-| Parameter | Value | Notes |
-|---|---|---|
-| `maxSupply` | 1 B OkuM (1e27 raw) | 1 B token cap. |
-| `minterAllowance` | 1 B OkuM | Matches `maxSupply` (effectively uncapped on testnet). **Production**: 1 % of weekly bridging volume, weekly rotation. |
-
-**SVM (`SVM/oku-programs/scripts/config/constants.ts`):**
-
-| Parameter | Value | Notes |
-|---|---|---|
-| `MAX_SUPPLY` | 1 B OkuM (6 dec = 1e15 raw) | 1 B token cap. |
-| `MINTER_ALLOWANCE` | 1 B OkuM | Matches EVM. **Production**: rotate weekly via `set-minter-allowance.ts`. |
+Testnet supply cap and minter allowance are set in `EVM/scripts/deploy/index.ts`
+and `SVM/oku-programs/scripts/config/constants.ts`; they are effectively
+uncapped for dev and must be replaced by the production policy (§ Minter
+allowance rotation policy) before real value is at stake.
 
 ### Mainnet ceremony
 
 **EVM RBAC routing** — after live deploy, run `grantRolesMainnet.ts`:
 
 ```bash
-MAINNET_COLD_MULTISIG=0x... MAINNET_WARM_MULTISIG=0x... MAINNET_ORCHESTRATOR=0x... \
-  npx hardhat run scripts/operator/grantRolesMainnet.ts --network base --yes-mainnet
+MAINNET_COLD_MULTISIG=0x... MAINNET_WARM_MULTISIG=0x... MAINNET_ORCHESTRATOR=0x... YES_MAINNET=1 \
+  npx hardhat run scripts/operator/grantRolesMainnet.ts --network base
 ```
 
 **SVM upgrade authority transfer** — after live deploy:
@@ -764,13 +762,11 @@ See `SVM/oku-programs/scripts/admin/set-upgrade-authority.ts`.
 4. **No on-chain bridge in v1.** Cross-chain replay/refund protection is the orchestrator's responsibility — the protocol surface is just PSM mint/burn.
 5. **EVM collateral token (USDC) must not carry a transfer callback.** `RedemptionQueue`'s and `LitePSM`'s `nonReentrant` guards assume the configured collateral has no transfer hook; `initialize` validates only `decimals() <= 18` and cannot verify this on-chain. A callback-bearing token could reenter `advanceHead` during `processQueue`'s transient slot-clear window, permanently stranding an entry — see `EVM/README.md` Accepted Risk #6. Circle USDC and its canonical bridged variants have no such callback; confirm this holds for whatever token is configured on any new chain before deploying, particularly a non-Circle or custom-bridged USDC variant.
 
-### Chain ID reference
+### Chain IDs
 
-EVM chain IDs follow EIP-155 and are listed per-network in
+EVM chain IDs are listed per-network in
 [`EVM/scripts/config/chains.ts`](EVM/scripts/config/chains.ts), which is the
-source of truth. The only identifiers worth repeating are the Solana ones,
-because they are an Ankr convention rather than a standard and appear only in
-deployment-registry metadata: **mainnet 101, devnet 103.**
+source of truth.
 
 ---
 

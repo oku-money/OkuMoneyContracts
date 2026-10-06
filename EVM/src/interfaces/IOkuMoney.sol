@@ -18,6 +18,8 @@ interface IOkuMoney is IERC20 {
     function mint(address to, uint256 amount) external;
     /// @notice Burn raw tokens from the caller's balance.
     function burn(uint256 amount) external;
+    /// @notice Whether `account` is blacklisted on OkuMoney.
+    function isBlacklisted(address account) external view returns (bool);
     /// @notice Current OkuM multiplier (dollar value per token, 1e18 = $1.00).
     /// @dev Computed continuously from the rate schedule; not a stored value.
     function okuMMultiplier() external view returns (uint256);

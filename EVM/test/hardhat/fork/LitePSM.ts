@@ -11,8 +11,10 @@ import {
 } from "../../../typechain-types"
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, network, upgrades } from "hardhat"
+import { resetMainnetFork } from "../helpers/fork"
 import { expect } from "chai"
 import { getTokenAddress, getWhaleAddress } from "../../../scripts/config/chains"
+import { computeMultiplier, PRECISION } from "@okumoney/yield-tooling"
 
 const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
 const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
@@ -55,14 +57,16 @@ describe("LitePSM Scenarios", () => {
         })
     }
 
-    // Helper to fund PSM directly
+    // Helper to fund the PSM buffer the way the operator does (depositBuffer)
     async function fundPSM(amount: bigint) {
         await network.provider.request({
             method: "hardhat_impersonateAccount",
             params: [USDC_WHALE]
         })
         const whale = await ethers.getSigner(USDC_WHALE)
-        await usdc.connect(whale).transfer(await psm.getAddress(), amount)
+        await usdc.connect(whale).transfer(await Frank.getAddress(), amount)
+        await usdc.connect(Frank).approve(await psm.getAddress(), amount)
+        await psm.connect(Frank).depositBuffer(amount, false, 0, 0, 0)
         await network.provider.request({
             method: "hardhat_stopImpersonatingAccount",
             params: [USDC_WHALE]
@@ -93,14 +97,7 @@ describe("LitePSM Scenarios", () => {
 
     before(async () => {
         // Reset network to initial fork state for test isolation
-        await network.provider.request({
-            method: "hardhat_reset",
-            params: [{
-                forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL || "https://ethereum-rpc.publicnode.com"
-                }
-            }]
-        })
+        await resetMainnetFork()
 
         const signers = await ethers.getSigners()
         Frank = signers[0]
@@ -176,7 +173,6 @@ describe("LitePSM Scenarios", () => {
             parseEther("1000000000")
         )
         await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
-        await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await queue.getAddress())
         await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 
@@ -237,7 +233,6 @@ describe("LitePSM Scenarios", () => {
             const charlieAddr = await Charlie.getAddress()
             const daveAddr = await Dave.getAddress()
             const psmAddr = await psm.getAddress()
-            const queueAddr = await queue.getAddress()
 
             // Ensure clean state
             await clearQueue()
@@ -269,19 +264,15 @@ describe("LitePSM Scenarios", () => {
             const redeemAmount = parseEther("5000")
 
             await okuMoney.connect(Alice).approve(psmAddr, redeemAmount)
-            await okuMoney.connect(Alice).approve(queueAddr, redeemAmount)
             await psm.connect(Alice).redeemOkuM(redeemAmount)
 
             await okuMoney.connect(Bob).approve(psmAddr, redeemAmount)
-            await okuMoney.connect(Bob).approve(queueAddr, redeemAmount)
             await psm.connect(Bob).redeemOkuM(redeemAmount)
 
             await okuMoney.connect(Charlie).approve(psmAddr, redeemAmount)
-            await okuMoney.connect(Charlie).approve(queueAddr, redeemAmount)
             await psm.connect(Charlie).redeemOkuM(redeemAmount)
 
             await okuMoney.connect(Dave).approve(psmAddr, redeemAmount)
-            await okuMoney.connect(Dave).approve(queueAddr, redeemAmount)
             await psm.connect(Dave).redeemOkuM(redeemAmount)
 
             // All 4 should be queued (5000 each = 20000 total)
@@ -305,10 +296,10 @@ describe("LitePSM Scenarios", () => {
             // Should have processed Alice + Bob, leaving Charlie + Dave
             expect(await queue.queueLength()).to.equal(2)
 
-            // Alice and Bob received ~5,000 USDC each
+            // Alice and Bob received exactly 5,000 USDC each
             const expectedUsdc = parseUnits("5000", 6)
-            expect((await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore).to.be.closeTo(expectedUsdc, parseUnits("1", 6))
-            expect((await usdc.balanceOf(bobAddr)) - bobUsdcBefore).to.be.closeTo(expectedUsdc, parseUnits("1", 6))
+            expect((await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore).to.equal(expectedUsdc)
+            expect((await usdc.balanceOf(bobAddr)) - bobUsdcBefore).to.equal(expectedUsdc)
 
             // Charlie and Dave did NOT receive USDC yet
             expect(await usdc.balanceOf(charlieAddr)).to.equal(charlieUsdcBefore)
@@ -331,7 +322,6 @@ describe("LitePSM Scenarios", () => {
             const charlieAddr = await Charlie.getAddress()
             const daveAddr = await Dave.getAddress()
             const psmAddr = await psm.getAddress()
-            const queueAddr = await queue.getAddress()
 
             // Ensure clean state
             await clearQueue()
@@ -394,7 +384,6 @@ describe("LitePSM Scenarios", () => {
 
             // Charlie redeems 5,000 OkuMoney - QUEUED (buffer: 0)
             await okuMoney.connect(Charlie).approve(psmAddr, redeemOkuM)
-            await okuMoney.connect(Charlie).approve(queueAddr, redeemOkuM)
             await psm.connect(Charlie).redeemOkuM(redeemOkuM)
 
             expect(await queue.queueLength()).to.equal(1)
@@ -402,7 +391,6 @@ describe("LitePSM Scenarios", () => {
 
             // Dave redeems 5,000 OkuMoney - QUEUED
             await okuMoney.connect(Dave).approve(psmAddr, redeemOkuM)
-            await okuMoney.connect(Dave).approve(queueAddr, redeemOkuM)
             await psm.connect(Dave).redeemOkuM(redeemOkuM)
 
             expect(await queue.queueLength()).to.equal(2)
@@ -423,7 +411,6 @@ describe("LitePSM Scenarios", () => {
             const aliceAddr = await Alice.getAddress()
             const bobAddr = await Bob.getAddress()
             const psmAddr = await psm.getAddress()
-            const queueAddr = await queue.getAddress()
 
             // Ensure clean state
             await clearQueue()
@@ -449,11 +436,9 @@ describe("LitePSM Scenarios", () => {
 
             // Queue full balances
             await okuMoney.connect(Alice).approve(psmAddr, aliceOkuM)
-            await okuMoney.connect(Alice).approve(queueAddr, aliceOkuM)
             await psm.connect(Alice).redeemOkuM(aliceOkuM)
 
             await okuMoney.connect(Bob).approve(psmAddr, bobOkuM)
-            await okuMoney.connect(Bob).approve(queueAddr, bobOkuM)
             await psm.connect(Bob).redeemOkuM(bobOkuM)
 
             expect(await queue.queueLength()).to.equal(2)
@@ -488,12 +473,68 @@ describe("LitePSM Scenarios", () => {
             expect(aliceReceived).to.be.gt(aliceQueuedUSDC)
             expect(bobReceived).to.be.gt(bobQueuedUSDC)
 
-            // Verify approximately 10% more (allow 1 USDC tolerance for rounding)
+            // Exactly 10% more: the multiplier is set to 1.10e18 and the amounts divide evenly
             const expectedAlice = aliceQueuedUSDC * 110n / 100n
             const expectedBob = bobQueuedUSDC * 110n / 100n
 
-            expect(aliceReceived).to.be.closeTo(expectedAlice, parseUnits("1", 6))
-            expect(bobReceived).to.be.closeTo(expectedBob, parseUnits("1", 6))
+            expect(aliceReceived).to.equal(expectedAlice)
+            expect(bobReceived).to.equal(expectedBob)
+        })
+
+        it("Pays the processing-time value under streaming accrual (60 days queued)", async () => {
+            const psmAddr = await psm.getAddress()
+            const aliceAddr = await Alice.getAddress()
+            await clearQueue()
+            await drainPSM()
+
+            const amount = parseUnits("10000", 6)
+            await fundWithUSDC(Alice, amount)
+            await usdc.connect(Alice).approve(psmAddr, amount)
+            await psm.connect(Alice).mintOkuM(amount)
+            await drainPSM()
+            const aliceOkuM = await okuMoney.balanceOf(aliceAddr)
+
+            // ~5% APY, armed as the epoch model does: one bounded window, no discrete override.
+            const rate = 1_000_000_001_547_125_958n
+            const base = await okuMoney.okuMMultiplier()
+            const rateEnd = BigInt((await ethers.provider.getBlock("latest"))!.timestamp) + 90n * 86400n
+            const setTx = await okuMoney.connect(Frank).setOkuMYieldRate(rate, rateEnd)
+            const t0 = BigInt((await ethers.provider.getBlock((await setTx.wait())!.blockNumber))!.timestamp)
+
+            await okuMoney.connect(Alice).approve(psmAddr, aliceOkuM)
+            await psm.connect(Alice).redeemOkuM(aliceOkuM)
+            expect(await queue.queueLength()).to.equal(1)
+
+            await fundPSM(parseUnits("20000", 6))
+            const usdcBefore = await usdc.balanceOf(aliceAddr)
+
+            // Process in a block pinned 60 days after the window opened, so the expected
+            // multiplier is exact, computed by the TypeScript mirror (differential-tested
+            // against the Solidity), not by the contract under test.
+            const t1 = t0 + 60n * 86400n
+            await network.provider.send("evm_setNextBlockTimestamp", [Number(t1)])
+            const h = await queue.queueHead()
+            const t = await queue.queueTail()
+            await psm.connect(Frank).processQueue(h, t, parseUnits("20000", 6))
+            await queue.advanceHead(t - h)
+
+            const mult = computeMultiplier(
+                {
+                    baseMultiplier: base,
+                    ratePerSecond: rate,
+                    lastAccrualTime: t0,
+                    rateEnd,
+                    pendingRatePerSecond: PRECISION,
+                    pendingRateEnd: 0n
+                },
+                t1
+            )
+            const expectedUsdc = (aliceOkuM * mult) / PRECISION / DECIMAL_MULTIPLIER
+            expect(expectedUsdc).to.be.gt(aliceOkuM / DECIMAL_MULTIPLIER) // yield did accrue
+            expect((await usdc.balanceOf(aliceAddr)) - usdcBefore).to.equal(expectedUsdc)
+
+            // Halt accrual so later suites see a static multiplier.
+            await okuMoney.connect(Frank).setOkuMYieldRate(PRECISION, 0)
         })
     })
 })

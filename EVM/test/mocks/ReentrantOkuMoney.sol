@@ -16,6 +16,8 @@ contract ReentrantOkuMoney is ERC20 {
     uint256 public okuMMultiplier = 1e18;
     uint256 public lastYieldDistributionBlock;
     mapping(address => uint256) public minterAllowance;
+    mapping(address => bool) public isBlacklisted;
+    bool public paused;
 
     address public reentrantTarget;
     bytes public reentrantCalldata;

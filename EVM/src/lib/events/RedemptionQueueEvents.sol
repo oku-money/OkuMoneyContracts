@@ -11,7 +11,8 @@ abstract contract RedemptionQueueEvents {
     enum RedemptionSkipReason {
         AlreadyCleared, // Entry already processed or rescued
         InsufficientFunds, // Not enough USDC to process this entry
-        TransferFailed // USDC transfer to recipient reverted (e.g., blacklisted ATA); use rescueQueueEntry
+        TransferFailed, // USDC transfer to recipient reverted (e.g., USDC-blacklisted); use rescueQueueEntry
+        Blacklisted // entry.user is OkuMoney-blacklisted; entry frozen
     }
 
     /// @notice Emitted when a redemption is added to the queue
@@ -43,6 +44,20 @@ abstract contract RedemptionQueueEvents {
         uint256 okuMAmount,
         uint256 dollarValue
     );
+
+    /// @notice processQueue moved a blacklisted user's entry out of the live queue.
+    event RedemptionFrozen(uint256 indexed index, address indexed user, uint256 okuMAmount);
+
+    event FrozenRedemptionReleased(
+        uint256 indexed index,
+        address indexed originalUser,
+        address indexed recipient,
+        uint256 okuMAmount
+    );
+
+    event ExcessOkuMRescued(address indexed to, uint256 amount);
+
+    event RedemptionCancelled(uint256 indexed index, address indexed user, uint256 okuMAmount);
 
     /// @notice Emitted when `advanceHead` skips one or more cleared slots.
     /// @param newHead New value of `queueHead` after the advance.

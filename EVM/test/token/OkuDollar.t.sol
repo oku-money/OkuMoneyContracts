@@ -2227,6 +2227,83 @@ contract OkuDollarTest is BaseTest {
         assertFalse(okuDollar.isBlacklisted(user1));
     }
 
+    // ---- OkuMoney's blacklist applies to OkuDollar too ----
+
+    function _blacklistOnOkuMoneyOnly(address account) internal {
+        vm.prank(blacklister);
+        okuMoney.blacklist(account);
+        assertFalse(_ownListContains(account), "fixture: OkuDollar's own list untouched");
+    }
+
+    /// @dev OkuDollar's own mapping is only reachable through its `blacklist`, so probe it
+    ///      by checking that un-blacklisting there reverts NotBlacklisted.
+    function _ownListContains(address account) internal returns (bool) {
+        vm.prank(unblacklister);
+        try okuDollar.unblacklist(account) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function test_OkuMBlacklist_BlocksTransferBothWays() public {
+        _mintUsdOku(user1, 100e18);
+        _mintUsdOku(user2, 100e18);
+        _blacklistOnOkuMoneyOnly(user1);
+
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        okuDollar.transfer(user3, 10e18);
+
+        vm.prank(user2);
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        okuDollar.transfer(user1, 10e18);
+    }
+
+    function test_OkuMBlacklist_BlocksUnwrapToCleanAddress() public {
+        _mintUsdOku(user1, 100e18);
+        _blacklistOnOkuMoneyOnly(user1);
+
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        okuDollar.unwrap(50e18, user3);
+    }
+
+    function test_OkuMBlacklist_BlocksWrapAndApprove() public {
+        _mintOkuMoney(user2, 100e18);
+        _approveOkuMoney(user2, address(okuDollar), 100e18);
+        _blacklistOnOkuMoneyOnly(user1);
+
+        vm.prank(user2);
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        okuDollar.wrap(100e18, user1, 0);
+
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        okuDollar.approve(user2, 1);
+    }
+
+    function test_OkuMBlacklist_ViewsAndLimitsReflectIt() public {
+        _mintUsdOku(user1, 100e18);
+        _blacklistOnOkuMoneyOnly(user1);
+
+        assertTrue(okuDollar.isBlacklisted(user1));
+        assertEq(okuDollar.maxDeposit(user1), 0);
+        assertEq(okuDollar.maxWithdraw(user1), 0);
+        assertEq(okuDollar.maxRedeem(user1), 0);
+    }
+
+    function test_OkuMBlacklist_UnblacklistOnOkuMoneyRestoresAccess() public {
+        _mintUsdOku(user1, 100e18);
+        _blacklistOnOkuMoneyOnly(user1);
+        vm.prank(unblacklister);
+        okuMoney.unblacklist(user1);
+
+        assertFalse(okuDollar.isBlacklisted(user1));
+        vm.prank(user1);
+        okuDollar.transfer(user2, 10e18);
+    }
+
     function test_Blacklist_RevertAlreadyBlacklisted() public {
         vm.prank(blacklister);
         okuDollar.blacklist(user1);

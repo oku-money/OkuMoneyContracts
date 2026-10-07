@@ -69,6 +69,14 @@ import {
 // which is deliberately hardhat-free.
 export { EpochScheduleArtifact, saveArtifact, loadArtifact, saveArtifactInPlace, artifactPath, artifactKey, EpochPhase };
 
+/**
+ * Mainnet epoch scope needs YES_MAINNET — except on a local fork, which is a
+ * throwaway rehearsal of that chain (same exemption as the deploy script).
+ */
+function forkOrYes(ctx: NetworkContext): boolean {
+  return ctx.isFork || isYesMainnet();
+}
+
 async function readSchedule(okuM: any) {
   const [rateBn, anchorBn, rateEndBn, baseMultBn, multiplierBn, pendingBn, pendingEndBn, effectiveBn] = await Promise.all([
     okuM.okuMRatePerSecond(),
@@ -133,7 +141,7 @@ function buildBinding(
   preState: OnChainSchedule,
   chains: string[] | undefined
 ): Pick<EpochScheduleArtifact, "targetChains" | "targets" | "expectedPreState" | "expiresAtSec"> {
-  const targetChains = canonicalChainSet(participatingChains({ requested: chains, yesMainnet: isYesMainnet() }));
+  const targetChains = canonicalChainSet(participatingChains({ requested: chains, yesMainnet: forkOrYes(ctx) }));
   const targets: Record<string, ArtifactTarget> = {};
   for (const name of targetChains) {
     if (name === SVM_CHAIN_KEY) {
@@ -209,7 +217,7 @@ export async function deriveStageSettlement(
   // used must cover exactly the current expected chain set, the window start
   // must be covered, and no gap may exceed the default max (see
   // `samplesInWindow`).
-  const scope = { requested: opts.chains, yesMainnet: isYesMainnet() };
+  const scope = { requested: opts.chains, yesMainnet: forkOrYes(ctx) };
   const valueChains = expectedValueChains(scope);
   warnIfSvmExcluded(participatingChains(scope), valueChains);
   const samples = samplesInWindow(schedule.anchorSec, now, valueChains);
@@ -317,7 +325,7 @@ export async function deriveRollEpoch(
   // sample set than the broadcast reaches would inflate V̄ with chains that
   // never receive this rate. `sampleGlobalValueUsd` throws unless EVERY
   // expected chain was read.
-  const chains = participatingChains({ requested: opts.chains, yesMainnet: isYesMainnet() });
+  const chains = participatingChains({ requested: opts.chains, yesMainnet: forkOrYes(ctx) });
   const globalNow =
     opts.globalValueUsdOverride !== undefined
       ? { valueUsd: opts.globalValueUsdOverride, timestampSec: 0, perChain: {} }

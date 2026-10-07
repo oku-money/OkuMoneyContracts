@@ -300,7 +300,8 @@ export async function runGrantRolesMainnet(): Promise<void> {
   logger.info(`  Orchestrator  : ${orch}`);
   logger.info(`  Dry-run       : ${DRY_RUN}`);
 
-  await confirmIfMainnet(networkName);
+  // Forks are throwaway rehearsals of the chain (same exemption as deploy).
+  if (!ctx.isFork) await confirmIfMainnet(networkName);
 
   const [deployer] = await ethers.getSigners();
   const deployerAddress = await deployer.getAddress();

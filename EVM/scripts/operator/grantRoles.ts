@@ -53,6 +53,7 @@ import { DEV_WALLET_ADDRESS, MASTER_OPERATOR_EOA } from "../config/chains";
 import { isMainnetNetwork } from "../utils/mainnetGuard";
 import { runConfigureMinterAllowance } from "./configureMinterAllowance";
 import { recordRoleGrant, roleGrantsPath } from "../utils/roleRegistry";
+import { isDryRun } from "../utils/cli";
 
 // ============================================================================
 // Configuration
@@ -95,7 +96,7 @@ const LIVE_CONFIRMATIONS = Number(process.env.CONFIRMATIONS ?? 2);
 const LIVE_SETTLE_MS = Number(process.env.SETTLE_MS ?? 1500);
 
 /** DRY_RUN=true prints planned grants without broadcasting. */
-const DRY_RUN = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
+const DRY_RUN = isDryRun();
 
 /**
  * Mainnet gate: testnet-only by design (see module doc), with no opt-in

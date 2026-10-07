@@ -12,7 +12,9 @@
  *   npx hardhat run scripts/deploy/index.ts --network sepolia
  *
  * Options (via env vars):
- *   SKIP_MOCK_USDC=true   - Skip MockUSDC deployment (use existing USDC)
+ *   SKIP_MOCK_USDC=true   - Skip MockUSDC; wire LitePSM to the chain's real USDC
+ *                           (`chains.ts`). Implied on mainnet networks, where
+ *                           deploying MockUSDC is refused.
  *   RESET_FORK=true       - Reset hardhat fork to clean state before deploying
  *   VERIFY=true           - Verify contracts on Etherscan after deployment
  */
@@ -27,7 +29,7 @@ import {
 } from "../config/chains";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { ROLES, getRoleName } from "../config/roles";
-import { mainnetGuard } from "../utils/mainnetGuard";
+import { mainnetGuard, isMainnetNetwork } from "../utils/mainnetGuard";
 import { isYesMainnet } from "../utils/cli";
 import { recordRoleGrant } from "../utils/roleRegistry";
 import { logger } from "../utils/logger";
@@ -286,16 +288,34 @@ async function deployUUPSProxy(
           `at ${proxyAddress} (CREATE2)`
       );
 
-      // 3. Register with the OZ manifest (off-chain, idempotent) so the upgrade
-      //    script's storage-layout validation works.
+      // 3. Register with the OZ manifest (off-chain, idempotent). The upgrade
+      //    script validates storage layout against this record and refuses to
+      //    run without it, so a failure here is fatal: recovering later would
+      //    mean importing whatever source is checked out then, which need not
+      //    be what is deployed. `Factory` IS the deployed code at this point —
+      //    the impl was just deployed (or CREATE2-reused, i.e. byte-identical).
+      if (proxyReused) {
+        // A reused proxy may point at an implementation from an earlier
+        // source tree; importing the current factory would attribute today's
+        // layout to it. Only safe when the slot points at the impl just
+        // deployed/reused from this exact build.
+        const slotImpl = await upgrades.erc1967.getImplementationAddress(proxyAddress);
+        if (slotImpl.toLowerCase() !== implAddress.toLowerCase()) {
+          throw new Error(
+            `${contractName} proxy ${proxyAddress} already exists and points at ${slotImpl}, ` +
+              `not this build's implementation ${implAddress}. Refusing to register the current ` +
+              `source as its layout. Use the upgrade script, or bump DEPLOYMENT_VERSION.`
+          );
+        }
+      }
       try {
         await upgrades.forceImport(proxyAddress, Factory, { kind: "uups" });
       } catch (e: any) {
-        // Non-fatal: the upgrade script can re-import on demand.
         const msg = (e?.message ?? String(e)).toString();
         if (!/already/i.test(msg)) {
-          logger.warning(
-            `  forceImport of ${contractName} into OZ manifest failed (non-fatal): ${msg.slice(0, 120)}`
+          throw new Error(
+            `forceImport of ${contractName} into the OZ manifest failed: ${msg}. ` +
+              `The upgrade script cannot validate storage layout without it.`
           );
         }
       }
@@ -393,6 +413,9 @@ async function verifyAllContracts(networkName: string): Promise<void> {
 
     if (proxyContracts.includes(contractName)) {
       await verifyProxy(address, contractName);
+    } else if (contractName === "USDC") {
+      // The chain's own USDC; not ours to verify.
+      continue;
     } else {
       // Non-proxy contracts (like MockUSDC)
       await verifyContract(address);
@@ -574,7 +597,13 @@ export function expectedRoleGrants(): ExpectedRoleGrant[] {
     { label: "OkuMoney.OKUM_MINTER -> LitePSM", contract: "okuMoney", role: ROLES.OKUM_MINTER, holder: "litePSM", via: "script" },
     { label: "OkuMoney.OKUM_BURNER -> LitePSM", contract: "okuMoney", role: ROLES.OKUM_BURNER, holder: "litePSM", via: "script" },
 
-    // Granted to the admin by each contract's `initialize`.
+    // Granted to the admin by each contract's `initialize` — the COMPLETE set,
+    // including DEFAULT_ADMIN_ROLE and the upgraders. A fresh deploy that cannot
+    // be upgraded (or administered) must fail here, not at the first upgrade.
+    init("okuMoney", "OkuMoney", "DEFAULT_ADMIN_ROLE"),
+    init("okuMoney", "OkuMoney", "OKUM_UPGRADER"),
+    init("okuMoney", "OkuMoney", "OKUM_MINTER"),
+    init("okuMoney", "OkuMoney", "OKUM_BURNER"),
     init("okuMoney", "OkuMoney", "OKUM_REBASER"),
     init("okuMoney", "OkuMoney", "OKUM_ALLOWANCE_MANAGER"),
     init("okuMoney", "OkuMoney", "OKUM_PAUSER"),
@@ -583,9 +612,15 @@ export function expectedRoleGrants(): ExpectedRoleGrant[] {
     init("okuMoney", "OkuMoney", "OKUM_UNBLACKLISTER"),
     init("okuMoney", "OkuMoney", "OKUM_CAP_MANAGER"),
 
+    init("litePSM", "LitePSM", "DEFAULT_ADMIN_ROLE"),
+    init("litePSM", "LitePSM", "PSM_UPGRADER"),
+    init("litePSM", "LitePSM", "PSM_PAUSER"),
+    init("litePSM", "LitePSM", "PSM_UNPAUSER"),
     init("litePSM", "LitePSM", "PSM_BUFFER_DEPOSITOR"),
     init("litePSM", "LitePSM", "PSM_BUFFER_WITHDRAWER"),
 
+    init("okuDollar", "OkuDollar", "DEFAULT_ADMIN_ROLE"),
+    init("okuDollar", "OkuDollar", "VAULT_UPGRADER"),
     init("okuDollar", "OkuDollar", "VAULT_PAUSER"),
     init("okuDollar", "OkuDollar", "VAULT_UNPAUSER"),
     init("okuDollar", "OkuDollar", "VAULT_RESCUER"),
@@ -671,11 +706,18 @@ async function verifyDeployment(
   if (psmAllowance === 0n) missingRoles.push("LitePSM minter allowance is zero");
   logger.info(`  LitePSM minter allowance: ${psmAllowance}`);
 
-  // Verify all addresses saved
+  // Verify all addresses saved. Exactly one USDC entry: MockUSDC (testnets) or
+  // USDC (real token, SKIP_MOCK_USDC / mainnet) — and it must be what LitePSM uses.
   const book = loadAddressBook();
   const bookContracts = book[bookKey] || {};
-  const expectedContracts = ["MockUSDC", "OkuMoney", "OkuDollar", "LitePSM"];
+  const expectedContracts = ["OkuMoney", "OkuDollar", "LitePSM"];
   const missingContracts = expectedContracts.filter(c => !bookContracts[c]);
+  const usdcEntry = bookContracts.MockUSDC ?? bookContracts.USDC;
+  if (!usdcEntry) {
+    missingContracts.push("MockUSDC or USDC");
+  } else if (usdcEntry.toLowerCase() !== (await litePSM.usdc()).toLowerCase()) {
+    missingRoles.push(`address-book USDC ${usdcEntry} != LitePSM.usdc() ${await litePSM.usdc()}`);
+  }
 
   if (missingRoles.length > 0 || missingContracts.length > 0) {
     const parts: string[] = [];
@@ -717,6 +759,13 @@ export interface RunDeployOptions {
    * fork deploy grants every role to `DEV_WALLET`.
    */
   deployer?: Signer;
+  /**
+   * Wire LitePSM to this existing USDC instead of deploying MockUSDC — the
+   * `SKIP_MOCK_USDC` path with an explicit address instead of `chains.ts`.
+   * Lets the drill exercise the real-token path on a chain where the
+   * configured USDC does not exist.
+   */
+  usdc?: string;
 }
 
 /**
@@ -800,11 +849,28 @@ export async function runDeploy(
 
   console.log(); // spacing
 
-  // Step 1: Deploy MockUSDC (skip if SKIP_MOCK_USDC=true)
+  // Step 1: Deploy MockUSDC, or wire the chain's real USDC. Mainnet always
+  // uses the real token: a MockUSDC-backed PSM on mainnet mints OkuM against
+  // a token anyone holding its mint role can print.
+  const onMainnet = !isFork && isMainnetNetwork(networkName);
+  const useRealUsdc = !!opts.usdc || process.env.SKIP_MOCK_USDC === "true" || onMainnet;
+  if (onMainnet && process.env.SKIP_MOCK_USDC === "false") {
+    throw new Error(`Refusing to deploy MockUSDC on mainnet network ${networkName}`);
+  }
   let usdcAddress: string;
-  if (process.env.SKIP_MOCK_USDC === "true") {
+  if (useRealUsdc) {
     logger.step(1, "Using existing USDC");
-    usdcAddress = chainConfig.usdc;
+    usdcAddress = opts.usdc ?? chainConfig.usdc;
+    if (!usdcAddress || !ethers.isAddress(usdcAddress)) {
+      throw new Error(`No USDC configured for ${networkName} in scripts/config/chains.ts`);
+    }
+    const code = await ethers.provider.getCode(usdcAddress);
+    if (!code || code === "0x") {
+      throw new Error(`Configured USDC ${usdcAddress} has no code on ${networkName}`);
+    }
+    // Recorded under "USDC" so operator scripts (resolveUsdcAddress) and
+    // verifyDeployment find it; MockUSDC is never written on this path.
+    saveAddress(bookKey, "USDC", usdcAddress);
     logger.info(`  USDC: ${usdcAddress}`);
   } else {
     usdcAddress = await deployMockUSDC(bookKey, deployer);
@@ -865,7 +931,8 @@ export async function runDeploy(
           okuMoney: addresses.OkuMoney,
           okuDollar: addresses.OkuDollar,
           litePSM: addresses.LitePSM,
-          mockUSDC: addresses.MockUSDC,
+          ...(addresses.MockUSDC ? { mockUSDC: addresses.MockUSDC } : {}),
+          ...(addresses.USDC ? { usdc: addresses.USDC } : {}),
         },
         deployer: deployerAddress,
       });

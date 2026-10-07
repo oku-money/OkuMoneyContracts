@@ -49,7 +49,7 @@
 
 import { ethers, network as hhNetwork } from "hardhat";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
-import { loadAddress, hasAddress } from "../utils/addressBook";
+import { loadAddress, hasAddress, resolveUsdcAddress } from "../utils/addressBook";
 import { getDeployedContract, waitForTx } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
@@ -61,6 +61,7 @@ import {
   EPOCH_ANCHOR_UNIX,
   EPOCH_LENGTH_SECONDS,
 } from "../config/epoch";
+import { isDryRun } from "../utils/cli";
 
 /** Seconds to observe real accrual in step 7 (override: ACCRUAL_OBSERVE_SEC). */
 const ACCRUAL_OBSERVE_SEC = Number(process.env.ACCRUAL_OBSERVE_SEC ?? "20");
@@ -101,7 +102,7 @@ function parseArg(name: string): string | undefined {
 
 const STEP = parseArg("step") ?? process.env.STEP;
 const YES_MAINNET = process.argv.includes("--yes-mainnet");
-const DRY_RUN = process.env.DRY_RUN === "true";
+const DRY_RUN = isDryRun();
 
 const DEFAULT_USDC_AMOUNT = process.env.USDC_AMOUNT ?? "100"; // 100 USDC (6 decimals)
 
@@ -136,9 +137,7 @@ async function setupCtx(): Promise<TestCtx> {
     );
   }
 
-  const usdcAddr = hasAddress(netCtx.bookKey, "MockUSDC")
-    ? loadAddress(netCtx.bookKey, "MockUSDC")
-    : loadAddress(netCtx.bookKey, "USDC");
+  const usdcAddr = resolveUsdcAddress(netCtx.bookKey);
   const okuMoneyAddr = loadAddress(netCtx.bookKey, "OkuMoney");
   const okuDollarAddr = loadAddress(netCtx.bookKey, "OkuDollar");
   const litePSMAddr = loadAddress(netCtx.bookKey, "LitePSM");

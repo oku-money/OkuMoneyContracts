@@ -70,8 +70,22 @@ export interface UpgradeRecord {
   txHash: string;
   /** ISO-8601 UTC timestamp. */
   timestamp: string;
-  /** Signer that broadcast the upgrade tx (dev wallet on testnets). */
+  /** Signer that broadcast the upgrade tx (dev wallet on testnets), or the
+   *  multisig that executed a proposed upgrade. */
   deployer: string;
+  /** EIP-155 chain id the upgrade landed on. */
+  chainId?: number;
+  /** Block the upgrade tx was mined in. */
+  blockNumber?: number;
+  /** `keccak256` of the new implementation's runtime code. */
+  newImplCodeHash?: string;
+  /** `git rev-parse HEAD` of the tree the new implementation was built from. */
+  gitCommit?: string;
+  /** "direct" (script signer broadcast) or "multisig" (proposed, then verified). */
+  mode?: "direct" | "multisig";
+  /** Pre/post state snapshots, as rendered by `scripts/upgrade/preState.ts`. */
+  preState?: Record<string, string>;
+  postState?: Record<string, string>;
 }
 
 /**
@@ -140,7 +154,11 @@ function writeBookFile(filePath: string, book: AddressBook): void {
   }
   // No trailing newline — matches the committed file's existing formatting,
   // so an unchanged book rewrites byte-identically and produces no git diff.
-  fs.writeFileSync(filePath, JSON.stringify(book, null, 2), "utf8");
+  // Write-then-rename so a crash mid-write cannot leave a truncated book
+  // (rename is atomic on the same filesystem).
+  const tmp = `${filePath}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(book, null, 2), "utf8");
+  fs.renameSync(tmp, filePath);
 }
 
 /**
@@ -231,6 +249,21 @@ export function hasAddress(network: string, contractName: string): boolean {
   return !!(book[network] && book[network][contractName]);
 }
 
+/**
+ * The USDC this deployment's LitePSM is wired to: `MockUSDC` on testnets
+ * (deployed by the deploy script), `USDC` where the deploy used the chain's
+ * real token (`SKIP_MOCK_USDC=true`, and always on mainnet). Throws if neither
+ * is recorded — `loadAddress` throws on absence, so a `?? loadAddress(..)`
+ * fallback chain never reaches its second operand.
+ */
+export function resolveUsdcAddress(network: string): string {
+  if (hasAddress(network, "MockUSDC")) return loadAddress(network, "MockUSDC");
+  if (hasAddress(network, "USDC")) return loadAddress(network, "USDC");
+  throw new Error(
+    `No USDC recorded for "${network}": expected "MockUSDC" or "USDC" in the address book`
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Upgrade audit trail
 // ---------------------------------------------------------------------------
@@ -265,7 +298,7 @@ function writeUpgradesIndex(book: AddressBook, idx: UpgradesIndex): void {
  *   }
  *
  * Append-only: prior entries are never mutated or removed. Safe to call from
- * any script — uses the same atomic-write helper as the rest of the book.
+ * any script — goes through the same write-then-rename helper as the rest of the book.
  */
 export function appendUpgradeRecord(bookKey: string, record: UpgradeRecord): void {
   const book = loadAddressBook();

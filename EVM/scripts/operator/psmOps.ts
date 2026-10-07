@@ -28,7 +28,7 @@
 import { ethers } from "hardhat";
 import { Signer } from "ethers";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
-import { loadAddress } from "../utils/addressBook";
+import { loadAddress, resolveUsdcAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
@@ -52,7 +52,7 @@ export async function runPsmOp(
 
   const psmAddr = loadAddress(ctx.bookKey, "LitePSM");
   const okuMoneyAddr = loadAddress(ctx.bookKey, "OkuMoney");
-  const usdcAddr = loadAddress(ctx.bookKey, "MockUSDC") ?? loadAddress(ctx.bookKey, "USDC");
+  const usdcAddr = resolveUsdcAddress(ctx.bookKey);
   if (!psmAddr || !okuMoneyAddr || !usdcAddr) {
     throw new Error(`Missing LitePSM/OkuMoney/USDC in address book for ${ctx.bookKey}`);
   }

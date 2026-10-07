@@ -23,7 +23,7 @@ import { ethers, network } from "hardhat";
 import fs from "fs";
 import path from "path";
 import { runDeploy, expectedRoleGrants, DeployResult } from "../../../scripts/deploy/index";
-import { loadAddressBook } from "../../../scripts/utils/addressBook";
+import { loadAddressBook, resolveUsdcAddress } from "../../../scripts/utils/addressBook";
 import { ROLES } from "../../../scripts/config/roles";
 
 const ADDRESS_BOOK_PATH = path.join(__dirname, "../../../scripts/config/addresses.json");
@@ -133,10 +133,10 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         const deployerAddr = result.deployerAddress.toLowerCase();
 
         const matrix = expectedRoleGrants();
-        // The full matrix is 16 roles: 2 sent by configureRoles (OKUM_MINTER and
-        // OKUM_BURNER to LitePSM) + 14 that `initialize` gives the admin.
+        // The full matrix is 26 roles: 2 sent by configureRoles (OKUM_MINTER and
+        // OKUM_BURNER to LitePSM) + 24 that `initialize` gives the admin.
         // An emptied matrix would make the check below vacuous.
-        expect(matrix.length, "expectedRoleGrants() must not be gutted").to.equal(16);
+        expect(matrix.length, "expectedRoleGrants() must not be gutted").to.equal(26);
         const scriptGrants = matrix.filter((g) => g.via === "script");
         expect(scriptGrants.length, "script-sent grants").to.equal(2);
         for (const g of matrix.filter((g) => g.via === "initialize")) {
@@ -176,6 +176,32 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         // a run that recorded none means the harness broke, not that it passed.
         expect(contractToContractGrants, "no contract-to-contract grants were observed").to.be.greaterThan(0);
         expect(undeclared, `undeclared live role grants:\n  ${undeclared.join("\n  ")}`).to.be.empty;
+    });
+
+    it("declares exactly the roles initialize granted the admin", async () => {
+        // The other direction: every RoleGranted to the deployer must be an
+        // "initialize" entry, and every "initialize" entry must have been
+        // granted. A role added to an `initialize` without a matrix entry would
+        // otherwise go unverified (and unrevoked at the mainnet handover).
+        const contracts: Record<string, any> = {
+            okuMoney: result.okuMoney,
+            okuDollar: result.okuDollar,
+            litePSM: result.litePSM,
+        };
+        const deployerAddr = result.deployerAddress.toLowerCase();
+        const declared = new Set(
+            expectedRoleGrants()
+                .filter((g) => g.via === "initialize")
+                .map((g) => `${g.contract}:${g.role}`)
+        );
+        const granted = new Set<string>();
+        for (const [name, c] of Object.entries(contracts)) {
+            for (const ev of await c.queryFilter(c.filters.RoleGranted(), 0, "latest")) {
+                if (ev.args.account.toLowerCase() === deployerAddr) granted.add(`${name}:${ev.args.role}`);
+            }
+        }
+        expect([...granted].filter((k) => !declared.has(k)), "granted but undeclared").to.be.empty;
+        expect([...declared].filter((k) => !granted.has(k)), "declared but never granted").to.be.empty;
     });
 
     it("sets a non-zero minter allowance for LitePSM, the only minting contract", async () => {
@@ -245,5 +271,43 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         const after = await result.okuMoney.balanceOf(deployerAddr);
 
         expect(after).to.be.greaterThan(before);
+    });
+});
+
+describe("Deploy drill: real-USDC path (SKIP_MOCK_USDC)", function () {
+    this.timeout(600_000);
+
+    let addressBookBackup: string | null = null;
+
+    before(() => {
+        addressBookBackup = fs.existsSync(ADDRESS_BOOK_PATH)
+            ? fs.readFileSync(ADDRESS_BOOK_PATH, "utf-8")
+            : null;
+    });
+
+    after(async () => {
+        if (addressBookBackup !== null) fs.writeFileSync(ADDRESS_BOOK_PATH, addressBookBackup);
+        delete process.env.NETWORK;
+        await network.provider.request({ method: "hardhat_reset", params: [] });
+    });
+
+    it("records USDC (not MockUSDC), verifies, and operator scripts resolve it", async () => {
+        delete process.env.NETWORK;
+        await network.provider.request({ method: "hardhat_reset", params: [{}] });
+        const [deployer] = await ethers.getSigners();
+
+        // Stand-in for the chain's real token: any ERC-20 at a known address.
+        const token = await (await ethers.getContractFactory("MockUSDC", deployer)).deploy();
+        await token.waitForDeployment();
+        const usdc = await token.getAddress();
+
+        const result = await runDeploy({ deployer, usdc });
+
+        expect((await result.litePSM.usdc()).toLowerCase()).to.equal(usdc.toLowerCase());
+        const entry = loadAddressBook()[result.bookKey];
+        expect(entry.USDC, "USDC not recorded").to.equal(usdc);
+        expect(entry.MockUSDC, "MockUSDC must not be recorded on the real-USDC path").to.be.undefined;
+        // The `?? loadAddress(.., "USDC")` fallback this replaced threw instead.
+        expect(resolveUsdcAddress(result.bookKey)).to.equal(usdc);
     });
 });

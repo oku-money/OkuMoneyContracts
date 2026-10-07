@@ -80,9 +80,13 @@ export function isYesMainnet(): boolean {
   );
 }
 
-/** `true` if `DRY_RUN=true` is set. */
+/**
+ * `true` if `DRY_RUN=1` or `DRY_RUN=true` is set. Same accepted values as
+ * {@link isYesMainnet}: a dry-run flag that silently ignores one spelling sends
+ * real transactions, so every script must read it through here.
+ */
 export function isDryRun(): boolean {
-  return process.env.DRY_RUN === "true";
+  return process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
 }
 
 /**

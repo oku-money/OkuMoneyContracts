@@ -102,11 +102,19 @@ describe("scripts/utils/cli", () => {
             expect(isYesMainnet()).to.be.false;
         });
 
-        it("isDryRun reflects DRY_RUN=true", () => {
+        it("isDryRun accepts DRY_RUN=1 and DRY_RUN=true, nothing else", () => {
             delete process.env.DRY_RUN;
             expect(isDryRun()).to.be.false;
             process.env.DRY_RUN = "true";
             expect(isDryRun()).to.be.true;
+            // README documents `DRY_RUN=1`; ignoring it would broadcast for real.
+            process.env.DRY_RUN = "1";
+            expect(isDryRun()).to.be.true;
+            for (const v of ["0", "false", "yes", ""]) {
+                process.env.DRY_RUN = v;
+                expect(isDryRun(), `DRY_RUN=${JSON.stringify(v)}`).to.be.false;
+            }
+            delete process.env.DRY_RUN;
         });
     });
 });

@@ -718,22 +718,20 @@ step on-chain before the next. Dry-run first (`DRY_RUN=1` on EVM,
 1. Run `grantRolesMainnet.ts`. It checks LitePSM holds `OKUM_MINTER` /
    `OKUM_BURNER`, grants the cold / warm / orchestrator sets from the RBAC
    table, refuses to continue unless the cold multisig holds
-   `DEFAULT_ADMIN_ROLE` on all three contracts, then revokes the deployer's
-   `DEFAULT_ADMIN_ROLE`. Every grant and revoke is ledgered.
+   `DEFAULT_ADMIN_ROLE` on all three contracts, has the deployer
+   `renounceRole` every granular role `initialize` gave it (all `*_UPGRADER`,
+   `OKUM_MINTER` / `OKUM_BURNER`, `OKUM_REBASER`, `PSM_BUFFER_WITHDRAWER`, ...),
+   revokes the deployer's `DEFAULT_ADMIN_ROLE` last, and finally asserts with
+   `hasRole` that the deployer holds nothing. Every grant, renounce and revoke
+   is ledgered. Re-running is idempotent.
 
    ```bash
    MAINNET_COLD_MULTISIG=0x... MAINNET_WARM_MULTISIG=0x... MAINNET_ORCHESTRATOR=0x... YES_MAINNET=1 \
      npx hardhat run scripts/operator/grantRolesMainnet.ts --network base
    ```
 
-2. **Strip the deployer's remaining roles — no script does this.** The script
-   revokes only `DEFAULT_ADMIN_ROLE`; the deployer still holds every granular
-   role `initialize` gave it (including all `*_UPGRADER`, `OKUM_REBASER`,
-   `PSM_BUFFER_WITHDRAWER`, and `OKUM_MINTER` / `OKUM_BURNER` on OkuMoney).
-   Each must be removed by the deployer calling `renounceRole(role, deployer)`
-   (self-service, still works after step 1) or by the cold multisig calling
-   `revokeRole`. Confirm with `hasRole` that the deployer holds nothing on
-   any of the three contracts (open item in `TRACKER.md`).
+2. Upgrades from here on are proposed to the cold multisig, not signed by
+   the deployer: [`EVM/README.md`](EVM/README.md) § Upgrades.
 
 **SVM.** The deploy's `initialize` assigns the 9 granular roles directly to
 their final holders (`MAINNET_*` env vars via `authorities.ts`), but forces

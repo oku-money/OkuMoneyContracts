@@ -120,15 +120,6 @@ regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pic
 - Once an audited deployment exists, add an OpenZeppelin `validateUpgrade` check against
   that deployed implementation. Layouts are pinned only by storage-slot tests.
 
-### Open: mainnet handover gaps `[EVM]`
-
-`grantRolesMainnet.ts` revokes only the deployer's `DEFAULT_ADMIN_ROLE`. The granular
-roles `initialize` gave the deployer (all `*_UPGRADER`, `OKUM_REBASER`,
-`PSM_BUFFER_WITHDRAWER`, `OKUM_MINTER` / `OKUM_BURNER` on OkuMoney, ...) are left in
-place and no script removes them; `README.md` § Mainnet ceremony documents the manual
-`renounceRole` / `revokeRole` step. Fix: add a renounce-or-revoke pass (with a
-`hasRole` assertion that the deployer holds nothing) to the script, with a drill test.
-
 ### Open: tooling and CI `[EVM]`
 
 - CI needs an `ANKR_FREEMIUM_API_KEY` repo secret for the pinned, cached mainnet fork.
@@ -154,7 +145,7 @@ Reviewed, understood, deliberately not fixed:
 ## Standing traps — deploy and operations
 
 - **`verifyDeployment()` must throw, never warn.** It asserts the complete
-  role-grant matrix (`expectedRoleGrants()`: 16 entries — 14 granted to the admin by
+  role-grant matrix (`expectedRoleGrants()`: 26 entries — 24 granted to the admin by
   `initialize`, 2 sent by the script), the LitePSM minter allowance, and address-book
   completeness.
   Roles and allowances are checked separately on purpose: `OkuMoney.mint` gates

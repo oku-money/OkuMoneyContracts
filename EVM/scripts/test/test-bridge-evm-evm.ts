@@ -42,6 +42,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { ethers } from "ethers";
 import { MAINNET_NETWORKS } from "../utils/mainnetGuard";
+import { isDryRun } from "../utils/cli";
 
 // Load .env from EVM root
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
@@ -63,7 +64,7 @@ const DIRECTION = (parseArg("direction") ?? "a-to-b") as
   | "b-to-a"
   | "roundtrip";
 const RUN_PERMUTATIONS = process.argv.includes("--permutations");
-const DRY_RUN = process.env.DRY_RUN === "true";
+const DRY_RUN = isDryRun();
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) {

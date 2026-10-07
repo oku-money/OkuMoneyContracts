@@ -7,9 +7,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  FOUNDRY_PROFILE: ci
-
 jobs:
   # ---------------------------------------------------------------------------
   # EVM: forge test + hardhat compile/test + ABI drift check
@@ -28,8 +25,14 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
+      # Pinned: forge-lint gains new lints between releases, and an unpinned
+      # toolchain turned CI red on unchanged source. The inline
+      # `forge-lint: disable-next-item(...)` ids in src/ need >= 1.8. Bump
+      # deliberately, re-running `forge lint src/ --deny warnings` locally.
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
 
       - name: Show Forge version
         run: forge --version
@@ -259,6 +262,11 @@ jobs:
         # not less — so this is gated rather than advisory.
         run: npm run typecheck
 
+      # The bankrun harness overrides the Token-2022 program with a mainnet
+      # dump (ScaledUiAmount support); it is not committed, so fetch it.
+      - name: Fetch Token-2022 program
+        run: make fetch-token-2022
+
       - name: Run bankrun test suite
         run: npm run test:bankrun
 
@@ -433,6 +441,8 @@ jobs:
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
 
       - name: Install workspace dependencies
         run: npm ci

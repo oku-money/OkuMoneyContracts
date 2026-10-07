@@ -106,6 +106,8 @@ abstract contract OkuMoneyRateSchedule is
     /// @dev The pending rate once `okuMRateEnd` has elapsed with a successor armed;
     ///      `PRECISION` once `okuMPendingRateEnd` has also elapsed; else the stored rate.
     ///      Basis for the rate setters' pause gate.
+    // forge-lint: disable-next-item(block-timestamp)
+    // Reason: the schedule is defined in wall-clock seconds by design; strict `>` matches Rust/TS.
     function okuMEffectiveRatePerSecond() public view returns (uint256) {
         RateScheduleStorage storage $ = _getRateScheduleStorage();
         uint256 rateEnd = $.okuMRateEnd;
@@ -213,6 +215,8 @@ abstract contract OkuMoneyRateSchedule is
     ///      `lastYieldDistributionBlock` and `whenNoOverrideThisBlock` paths revert for the
     ///      rest of the block. Rejects `newMultiplier <= current` so a no-op cannot burn that
     ///      stamp. Pause-gated: a discrete value move freezes alongside transfers.
+    // forge-lint: disable-next-item(reentrancy-events)
+    // Reason: no untrusted external call: MathLib/rate reads are internal; false positive.
     function setOkuMMultiplier(uint256 newMultiplier)
         external
         onlyRole(Roles.OKUM_REBASER)
@@ -260,6 +264,8 @@ abstract contract OkuMoneyRateSchedule is
     // ============ Internals ============
 
     /// @dev Shared body for {setOkuMYieldRate} and {setOkuMYieldRateWithSuccessor}.
+    // forge-lint: disable-next-item(block-timestamp,reentrancy-events,unsafe-typecast)
+    // Reason: the schedule is defined in wall-clock seconds by design; validator skew (~seconds) is negligible against hour-scale windows. No untrusted external call precedes any emit; uint64(PRECISION) is a compile-time constant that fits.
     function _setOkuMYieldRate(uint256 newRate, uint256 endTimestamp) private {
         _requireRateInRange(newRate);
         if (newRate == Constants.PRECISION) {
@@ -292,6 +298,8 @@ abstract contract OkuMoneyRateSchedule is
     }
 
     /// @dev Shared body for {setNextOkuMYieldRate} and {setOkuMYieldRateWithSuccessor}.
+    // forge-lint: disable-next-item(block-timestamp,reentrancy-events)
+    // Reason: the schedule is defined in wall-clock seconds by design; validator skew (~seconds) is negligible against hour-scale windows. No untrusted external call precedes any emit.
     function _setNextOkuMYieldRate(uint256 newRate, uint256 pendingEndTimestamp) private {
         _requireRateInRange(newRate);
 
@@ -331,6 +339,8 @@ abstract contract OkuMoneyRateSchedule is
     /// @dev A successor is staged and the active window has not yet closed. After
     ///      `okuMRateEnd` the successor is already live ({MathLib.computeMultiplier}
     ///      branch 2), so re-anchoring is not a cancellation.
+    // forge-lint: disable-next-item(block-timestamp)
+    // Reason: wall-clock schedule by design.
     function _successorArmed(RateScheduleStorage storage $) private view returns (bool) {
         uint256 rateEnd = $.okuMRateEnd;
         return rateEnd != 0 && block.timestamp < rateEnd
@@ -353,12 +363,16 @@ abstract contract OkuMoneyRateSchedule is
 
     /// @dev Emits {IScaledUIAmount-UIMultiplierUpdateCancelled} for a staged, not yet active
     ///      successor. Call BEFORE the caller mutates the schedule.
+    // forge-lint: disable-next-item(reentrancy-events)
+    // Reason: no untrusted external call: MathLib/rate reads are internal; false positive.
     function _emitPendingRateCancelledIfArmed(RateScheduleStorage storage $) private {
         if (!_successorArmed($)) return;
         emit UIMultiplierUpdateCancelled(_projectedAtRateEnd($), $.okuMRateEnd);
     }
 
     /// @dev Collapse to a flat, halted schedule anchored at `base` and now.
+    // forge-lint: disable-next-item(unsafe-typecast)
+    // Reason: uint64(PRECISION) is a compile-time constant that fits.
     function _haltSchedule(RateScheduleStorage storage $, uint256 base) private {
         $.okuMBaseMultiplier = SafeCast.toUint96(base);
         $.okuMLastAccrualTime = SafeCast.toUint48(block.timestamp);

@@ -30,6 +30,9 @@ library MathLib {
      * @param b Precision base (typically 1e18)
      * @return z Result of x^n / b^(n-1)
      */
+    // forge-lint: disable-next-item(require-revert-in-loop)
+    // Reason: overflow reverts inside the squaring loop are the verbatim MakerDAO rpow; the
+    // loop is O(log n) and the revert aborts the whole call, so there is no partial state.
     function rpow(uint256 x, uint256 n, uint256 b) internal pure returns (uint256 z) {
         assembly {
             switch x

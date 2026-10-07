@@ -134,9 +134,10 @@ place and no script removes them; `README.md` § Mainnet ceremony documents the 
 - CI needs an `ANKR_FREEMIUM_API_KEY` repo secret for the pinned, cached mainnet fork.
   Without it fork suites run at latest and warn. The key is rejected for Optimism
   (403), so Optimism stays on Alchemy/public.
-- `forge lint src/ --deny warnings` fails on a clean compile with nightly Foundry
-  because of OpenZeppelin's "Unreachable code" warning, which comes from OkuDollar's
-  deliberate pure-revert `_update`. CI uses the stable toolchain; confirm it is green there.
+- CI pins Foundry to `v1.8.5`. Its `forge lint` flags `reentrancy-events`,
+  `block-timestamp`, `unsafe-typecast` and `require-revert-in-loop` in `src/`; each site
+  carries a `forge-lint: disable-next-item(...)` with a reason. Foundry < 1.8 rejects those
+  ids as unknown, so run the lint locally with the pinned version (`foundryup -i v1.8.5`).
 
 ### OPEN: deferred audit items `[both]`
 

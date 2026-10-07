@@ -146,6 +146,8 @@ contract LitePSM is
     /// @dev `okuMAmount = usdcValue18 * PRECISION / okuMMultiplier`, floored (the caller
     ///      forfeits at most one raw OkuM unit).
     /// @param usdcAmount USDC to deposit (native decimals).
+    // forge-lint: disable-next-item(reentrancy-events)
+    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function mintOkuM(uint256 usdcAmount)
         external
         nonReentrant
@@ -165,6 +167,8 @@ contract LitePSM is
     /// @dev `usdcAmount = okuMAmount * okuMMultiplier / PRECISION`, scaled to USDC decimals.
     /// @param okuMAmount OkuMoney to redeem (18 decimals).
     /// @return usdcAmount USDC paid to the caller.
+    // forge-lint: disable-next-item(reentrancy-events)
+    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function redeemOkuM(uint256 okuMAmount)
         external
         nonReentrant
@@ -190,6 +194,8 @@ contract LitePSM is
     /// @dev `minAmountOut` passed to {OkuDollar.wrap} is the exact share-formula output,
     ///      guarding the wrap leg (e.g. against a fee-on-transfer OkuM).
     /// @param usdcAmount USDC to deposit (native decimals).
+    // forge-lint: disable-next-item(reentrancy-events)
+    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function mintUsdOku(uint256 usdcAmount)
         external
         nonReentrant
@@ -218,6 +224,8 @@ contract LitePSM is
     /// @dev Reverts if the vault is undercollateralized (unwrap fails).
     /// @param usdAmount OkuDollar to redeem (dollar terms, 18 decimals).
     /// @return usdcOut USDC paid to the caller.
+    // forge-lint: disable-next-item(reentrancy-events)
+    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function redeemUsdOku(uint256 usdAmount)
         external
         nonReentrant
@@ -298,6 +306,8 @@ contract LitePSM is
     }
 
     /// @notice Withdraw USDC from the buffer. No USDC leaves while paused.
+    // forge-lint: disable-next-item(reentrancy-events)
+    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function withdrawUsdc(
         address to,
         uint256 amount
@@ -316,6 +326,8 @@ contract LitePSM is
     }
 
     /// @notice Deposit USDC into the redemption buffer.
+    // forge-lint: disable-next-item(reentrancy-events)
+    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function depositBuffer(uint256 amount)
         external
         nonReentrant

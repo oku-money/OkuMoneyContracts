@@ -148,3 +148,6 @@ EVM/scripts/README.md
 
 # Claude Code local settings (machine-specific)
 **/.claude/
+
+# Local notes / reports (e.g. external audit drafts). No .txt file is tracked.
+*.txt

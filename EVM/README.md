@@ -263,7 +263,7 @@ every mode against the real deploy script with V2 fixtures from
 | `npm run upgrade:base` / `:bsc` | Live upgrade on the named mainnet |
 | `npm run test:onchain:*` | `scripts/test/test-onchain.ts` against the named live testnet |
 | `npm run verify:<chain>` | Explorer verification of a deployed chain (`scripts/deploy/verify.ts`); aliases exist for the chains listed in `package.json` |
-| `npm run operator:*` | One alias per operator script below (`package.json` lists them all) |
+| `npm run operator:*` | One alias per operator script below (`package.json` lists them all). They carry no `--network`: append `-- --network <chain>`, or they run against the in-process fork |
 | `npm run test:gas` | Hardhat suite with the gas reporter on |
 | `npm run typecheck` / `npm run export-abis` | `tsc --noEmit` / regenerate the ABI artifacts CI checks for drift |
 
@@ -1240,7 +1240,7 @@ Why:
 ### `npm audit` posture
 
 `npm audit` reports vulnerabilities in transitive dev dependencies pulled in by
-`hardhat-deploy` and `@nomicfoundation/hardhat-toolbox`. They are JavaScript dev
+`@nomicfoundation/hardhat-toolbox` and the OpenZeppelin upgrades plugin. They are JavaScript dev
 tooling only: they do not enter production bytecode.
 
 ---

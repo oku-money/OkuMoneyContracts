@@ -25,13 +25,14 @@
  */
 
 import { ethers } from "hardhat";
-import { isAddress, Contract, Signer } from "ethers";
+import { isAddress, Signer } from "ethers";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
-import { getDeployedContract } from "../utils/deploy";
+import { getDeployedContract, waitMined } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
+import type { OkuMoney, OkuDollar } from "../../typechain-types";
 
 export type BlacklistAction = "blacklist" | "unblacklist";
 
@@ -42,7 +43,7 @@ export interface BlacklistBothResult {
 
 async function applyOne(
   label: string,
-  contract: Contract,
+  contract: OkuMoney | OkuDollar,
   account: string,
   action: BlacklistAction,
   dryRun: boolean
@@ -51,7 +52,7 @@ async function applyOne(
   // NotBlacklisted on duplicate calls. Skip-with-log instead of letting the
   // tx revert mid-pair (which would leave the other side in a desynced state
   // depending on order).
-  const isBlacklisted: boolean = await (contract as any).isBlacklisted(account);
+  const isBlacklisted: boolean = await contract.isBlacklisted(account);
   if (action === "blacklist" && isBlacklisted) {
     logger.info(`  [${label}] already blacklisted — skipping`);
     return;
@@ -65,9 +66,9 @@ async function applyOne(
     return;
   }
   const tx = action === "blacklist"
-    ? await (contract as any).blacklist(account)
-    : await (contract as any).unblacklist(account);
-  const receipt = await tx.wait(1);
+    ? await contract.blacklist(account)
+    : await contract.unblacklist(account);
+  const receipt = await waitMined(tx);
   logger.success(`  [${label}] ${action} tx: ${receipt.hash}`);
 }
 
@@ -86,8 +87,8 @@ export async function runBlacklistBoth(
   if (!okuDollarAddr) throw new Error(`Missing OkuDollar in address book for ${ctx.bookKey}`);
 
   const signerAddr = await signer.getAddress();
-  const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer) as Contract;
-  const okuDollar = (await getDeployedContract("OkuDollar", okuDollarAddr)).connect(signer) as Contract;
+  const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer);
+  const okuDollar = (await getDeployedContract("OkuDollar", okuDollarAddr)).connect(signer);
 
   logger.info(`Signer:    ${signerAddr}`);
   logger.info(`Account:   ${account}`);
@@ -98,8 +99,8 @@ export async function runBlacklistBoth(
   await applyOne("OkuMoney", okuMoney, account, action, dryRun);
   await applyOne("OkuDollar", okuDollar, account, action, dryRun);
 
-  const okuMoneyState: boolean = await (okuMoney as any).isBlacklisted(account);
-  const okuDollarState: boolean = await (okuDollar as any).isBlacklisted(account);
+  const okuMoneyState: boolean = await okuMoney.isBlacklisted(account);
+  const okuDollarState: boolean = await okuDollar.isBlacklisted(account);
   const expected = action === "blacklist";
   logger.info(`Post-state OkuMoney.isBlacklisted:  ${okuMoneyState}`);
   logger.info(`Post-state OkuDollar.isBlacklisted: ${okuDollarState}`);

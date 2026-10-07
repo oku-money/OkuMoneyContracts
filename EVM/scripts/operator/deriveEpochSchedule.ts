@@ -81,7 +81,7 @@ async function readSchedule(okuM: any) {
 async function referenceOkuM(ctx: NetworkContext, signer: Signer) {
   const addr = loadAddress(ctx.bookKey, "OkuMoney");
   if (!addr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
-  return (await getDeployedContract("OkuMoney", addr)).connect(signer) as any;
+  return (await getDeployedContract("OkuMoney", addr)).connect(signer);
 }
 
 export interface DeriveStageSettlementOpts {

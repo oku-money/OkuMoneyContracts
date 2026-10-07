@@ -1,5 +1,7 @@
 /**
- * Standalone verification script for already-deployed contracts
+ * Standalone verification script for already-deployed contracts: each proxy's
+ * implementation, the proxy itself (linked to its implementation), and
+ * MockUSDC where deployed. The chain's own USDC (`USDC` in the book) is skipped.
  * 
  * Usage:
  *   npx hardhat run scripts/deploy/verify.ts --network sepolia
@@ -39,6 +41,16 @@ async function verifyImplementation(proxyAddress: string, contractName: string):
     } else {
       logger.warning(`  ${contractName} verification failed: ${error.message}`);
     }
+  }
+  // The proxy itself (ERC1967Proxy, CREATE2-deployed). `@openzeppelin/hardhat-upgrades`
+  // extends `verify:verify` to verify the proxy and link it to its implementation
+  // on the explorer, so readers see the implementation's ABI at the proxy address.
+  try {
+    await run("verify:verify", { address: proxyAddress });
+    logger.success(`  ${contractName} proxy verified and linked`);
+  } catch (error: any) {
+    if (/already verified/i.test(error.message)) logger.info(`  ${contractName} proxy already verified`);
+    else logger.warning(`  ${contractName} proxy verification failed: ${error.message}`);
   }
 }
 

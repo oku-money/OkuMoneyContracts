@@ -19,10 +19,10 @@
  */
 
 import { ethers } from "hardhat";
-import { Contract, Signer } from "ethers";
+import { Signer } from "ethers";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
-import { getDeployedContract } from "../utils/deploy";
+import { getDeployedContract, waitMined } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
@@ -44,10 +44,10 @@ export async function runSetMaxSupply(
   const okuMoneyAddr = loadAddress(ctx.bookKey, "OkuMoney");
   if (!okuMoneyAddr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
 
-  const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer) as Contract;
+  const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer);
 
-  const currentMax = await (okuMoney as any).maxSupply();
-  const currentSupply = await (okuMoney as any).totalSupply();
+  const currentMax = await okuMoney.maxSupply();
+  const currentSupply = await okuMoney.totalSupply();
 
   logger.info(`Signer (capManager): ${await signer.getAddress()}`);
   logger.info(`Current maxSupply:   ${ethers.formatEther(currentMax)} OkuM`);
@@ -64,11 +64,11 @@ export async function runSetMaxSupply(
     return { previousMax: currentMax, newMax: currentMax };
   }
 
-  const tx = await (okuMoney as any).setMaxSupply(newMaxSupply);
-  const receipt = await tx.wait(1);
+  const tx = await okuMoney.setMaxSupply(newMaxSupply);
+  const receipt = await waitMined(tx);
   logger.success(`setMaxSupply tx: ${receipt.hash}`);
 
-  const confirmed = await (okuMoney as any).maxSupply();
+  const confirmed = await okuMoney.maxSupply();
   logger.success(`Confirmed maxSupply: ${ethers.formatEther(confirmed)} OkuM`);
   return { previousMax: currentMax, newMax: confirmed, txHash: receipt.hash };
 }

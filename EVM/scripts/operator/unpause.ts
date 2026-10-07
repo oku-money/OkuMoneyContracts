@@ -23,7 +23,7 @@ import { ethers } from "hardhat";
 import { Signer } from "ethers";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
-import { getDeployedContract } from "../utils/deploy";
+import { getDeployedContract, waitMined } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
@@ -46,7 +46,7 @@ export async function runUnpause(
   if (!addr) throw new Error(`Missing ${sel.bookKey} in address book for ${ctx.bookKey}`);
 
   const c = (await getDeployedContract(sel.name, addr)).connect(signer);
-  const pausedBefore: boolean = await (c as any).paused();
+  const pausedBefore: boolean = await c.paused();
   logger.info(`Target: ${target} (${sel.name} @ ${addr})`);
   logger.info(`Signer: ${await signer.getAddress()}`);
   logger.info(`paused() before: ${pausedBefore}`);
@@ -60,11 +60,11 @@ export async function runUnpause(
     return { pausedBefore, pausedAfter: pausedBefore };
   }
 
-  const tx = await (c as any).unpause();
-  const receipt = await tx.wait(1);
+  const tx = await c.unpause();
+  const receipt = await waitMined(tx);
   logger.success(`unpause tx: ${receipt.hash}`);
 
-  const pausedAfter: boolean = await (c as any).paused();
+  const pausedAfter: boolean = await c.paused();
   logger.success(`paused() after: ${pausedAfter}`);
   return { pausedBefore, pausedAfter, txHash: receipt.hash };
 }

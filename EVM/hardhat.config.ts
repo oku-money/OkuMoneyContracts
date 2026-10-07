@@ -3,8 +3,6 @@ import { TASK_COMPILE_SOLIDITY_GET_SOURCE_PATHS } from "hardhat/builtin-tasks/ta
 import "@nomicfoundation/hardhat-toolbox";
 import "@openzeppelin/hardhat-upgrades";
 import { silenceWarnings } from "@openzeppelin/upgrades-core";
-import "hardhat-deploy";
-import "hardhat-deploy-ethers";
 import "@typechain/hardhat";
 import * as path from "path";
 import { sync as globSync } from "glob";
@@ -100,8 +98,6 @@ const config: HardhatUserConfig & { typechain?: any } = {
     tests: "./test/hardhat",
     cache: "./cache_hardhat",
     artifacts: "./artifacts",
-    deploy: "./deploy",
-    deployments: "./deployments",
   },
 
   networks: {
@@ -154,60 +150,30 @@ const config: HardhatUserConfig & { typechain?: any } = {
       url: rpcUrl("sepolia"),
       chainId: 11155111,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      verify: {
-        etherscan: {
-          apiUrl: "https://api-sepolia.etherscan.io",
-          apiKey: process.env.ETHERSCAN_API_KEY || "",
-        },
-      },
     },
 
     opSepolia: {
       url: rpcUrl("opSepolia"),
       chainId: 11155420,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      verify: {
-        etherscan: {
-          apiUrl: "https://api-sepolia-optimistic.etherscan.io",
-          apiKey: process.env.OPTIMISTIC_ETHERSCAN_API_KEY || "",
-        },
-      },
     },
 
     baseSepolia: {
       url: rpcUrl("baseSepolia"),
       chainId: 84532,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      verify: {
-        etherscan: {
-          apiUrl: "https://api-sepolia.basescan.org",
-          apiKey: process.env.BASESCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
-        },
-      },
     },
 
     arbSepolia: {
       url: rpcUrl("arbSepolia"),
       chainId: 421614,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      verify: {
-        etherscan: {
-          apiUrl: "https://api-sepolia.arbiscan.io",
-          apiKey: process.env.ARBISCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
-        },
-      },
     },
 
     bscTestnet: {
       url: rpcUrl("bscTestnet"),
       chainId: 97,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      verify: {
-        etherscan: {
-          apiUrl: "https://api-testnet.bscscan.com",
-          apiKey: process.env.BSCSCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
-        },
-      },
     },
 
     // Mainnets
@@ -215,60 +181,30 @@ const config: HardhatUserConfig & { typechain?: any } = {
       url: rpcUrl("mainnet"),
       chainId: 1,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      verify: {
-        etherscan: {
-          apiUrl: "https://api.etherscan.io",
-          apiKey: process.env.ETHERSCAN_API_KEY || "",
-        },
-      },
     },
 
     arbitrum: {
       url: rpcUrl("arbitrum"),
       chainId: 42161,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      verify: {
-        etherscan: {
-          apiUrl: "https://api.arbiscan.io",
-          apiKey: process.env.ARBISCAN_API_KEY || "",
-        },
-      },
     },
 
     base: {
       url: rpcUrl("base"),
       chainId: 8453,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      verify: {
-        etherscan: {
-          apiUrl: "https://api.basescan.org",
-          apiKey: process.env.BASESCAN_API_KEY || "",
-        },
-      },
     },
 
     bsc: {
       url: rpcUrl("bsc"),
       chainId: 56,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      verify: {
-        etherscan: {
-          apiUrl: "https://api.bscscan.com",
-          apiKey: process.env.BSCSCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
-        },
-      },
     },
 
     optimism: {
       url: rpcUrl("optimism"),
       chainId: 10,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      verify: {
-        etherscan: {
-          apiUrl: "https://api-optimistic.etherscan.io",
-          apiKey: process.env.OPTIMISTIC_ETHERSCAN_API_KEY || "",
-        },
-      },
     },
   },
 
@@ -278,22 +214,6 @@ const config: HardhatUserConfig & { typechain?: any } = {
     target: "ethers-v6",
     alwaysGenerateOverloads: false,
     dontOverrideCompile: false,
-  },
-
-  // Hardhat Deploy configuration
-  namedAccounts: {
-    deployer: {
-      default: 0, // First account
-    },
-    admin: {
-      default: 1, // Second account (for admin role)
-    },
-    operator: {
-      default: 2, // Third account (for operator role)
-    },
-    user: {
-      default: 3, // Test user
-    },
   },
 
   // Gas reporter configuration

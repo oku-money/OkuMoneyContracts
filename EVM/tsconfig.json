@@ -29,7 +29,6 @@
   },
   "include": [
     "hardhat.config.ts",
-    "deploy/**/*.ts",
     "scripts/**/*.ts",
     "test/hardhat/**/*.ts",
     "typechain-types/**/*.ts"

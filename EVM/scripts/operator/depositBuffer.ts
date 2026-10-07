@@ -22,7 +22,7 @@ import { ethers } from "hardhat";
 import { Signer } from "ethers";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress, resolveUsdcAddress } from "../utils/addressBook";
-import { getDeployedContract } from "../utils/deploy";
+import { getDeployedContract, waitMined } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
@@ -60,6 +60,11 @@ export async function runDepositBuffer(
   if (signerBalance < amount) {
     throw new Error(`Insufficient USDC: have ${Number(signerBalance) / 1e6}, need ${Number(amount) / 1e6}`);
   }
+  // Buffer deposit/withdraw are pause-gated (and blocked in an override
+  // block): fail with the reason instead of a raw EnforcedPause revert.
+  if (await psm.paused()) {
+    throw new Error("LitePSM is paused: buffer deposit/withdraw are pause-gated. Unpause first (operator/unpause.ts).");
+  }
   if (dryRun) {
     logger.success("DRY_RUN=true — not submitting");
     return { bufferBefore, bufferAfter: bufferBefore };
@@ -69,8 +74,8 @@ export async function runDepositBuffer(
   await approveTx.wait(1);
   logger.success(`Approved ${Number(amount) / 1e6} USDC to PSM`);
 
-  const depositTx = await (psm as any).depositBuffer(amount);
-  const receipt = await depositTx.wait(1);
+  const depositTx = await psm.depositBuffer(amount);
+  const receipt = await waitMined(depositTx);
   logger.success(`depositBuffer tx: ${receipt.hash}`);
 
   const bufferAfter = await usdc.balanceOf(psmAddr);

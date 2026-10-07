@@ -537,7 +537,7 @@ async function main() {
       // that helper always submits (correct for its standalone use as a
       // deliberate rotation tool), which would make every re-run of THIS
       // script send a redundant tx even when nothing changed.
-      const currentAllowance: bigint = await (okuMoneyContract as any).minterAllowance(MASTER_EOA);
+      const currentAllowance: bigint = await okuMoneyContract.minterAllowance(MASTER_EOA);
       if (currentAllowance === MINTER_ALLOWANCE) {
         logger.info(
           `  minter_allowance already ${ethers.formatEther(MINTER_ALLOWANCE)} OkuM — skipping`

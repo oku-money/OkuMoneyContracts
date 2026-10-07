@@ -59,7 +59,7 @@ import { ethers } from "hardhat";
 import { Signer } from "ethers";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
-import { getDeployedContract } from "../utils/deploy";
+import { getDeployedContract, waitMined } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
@@ -80,7 +80,7 @@ export async function runSetOkuMMultiplier(
   if (!okuMoneyAddr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
 
   const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer);
-  const currentMultiplier = await (okuMoney as any).okuMMultiplier();
+  const currentMultiplier = await okuMoney.okuMMultiplier();
 
   logger.info(`Signer (rebaser):    ${await signer.getAddress()}`);
   logger.info(`Current multiplier:  ${ethers.formatEther(currentMultiplier)}`);
@@ -108,11 +108,11 @@ export async function runSetOkuMMultiplier(
     return { previousMultiplier: currentMultiplier, newMultiplier: currentMultiplier };
   }
 
-  const tx = await (okuMoney as any).setOkuMMultiplier(newMultiplier);
-  const receipt = await tx.wait(1);
+  const tx = await okuMoney.setOkuMMultiplier(newMultiplier);
+  const receipt = await waitMined(tx);
   logger.success(`setOkuMMultiplier tx: ${receipt.hash}`);
 
-  const confirmed = await (okuMoney as any).okuMMultiplier();
+  const confirmed = await okuMoney.okuMMultiplier();
   logger.success(`Confirmed multiplier: ${ethers.formatEther(confirmed)}`);
   return { previousMultiplier: currentMultiplier, newMultiplier: confirmed, txHash: receipt.hash };
 }

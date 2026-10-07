@@ -32,7 +32,7 @@ import { ethers } from "hardhat";
 import { isAddress, Signer } from "ethers";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
-import { getDeployedContract } from "../utils/deploy";
+import { getDeployedContract, waitMined } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
@@ -84,32 +84,32 @@ export async function runVaultOp(
   }
 
   if (action === "wrap") {
-    const balance = await (okuMoney as any).balanceOf(signerAddr);
+    const balance = await okuMoney.balanceOf(signerAddr);
     if (balance < amount) throw new Error(`Insufficient OkuM: have ${ethers.formatEther(balance)}, need ${ethers.formatEther(amount)}`);
-    const approveTx = await (okuMoney as any).approve(okuDollarAddr, amount);
+    const approveTx = await okuMoney.approve(okuDollarAddr, amount);
     await approveTx.wait(1);
-    const tx = await (okuDollar as any).wrap(amount, receiver, opts.minAmountOut ?? 0n);
-    const receipt = await tx.wait(1);
+    const tx = await okuDollar.wrap(amount, receiver, opts.minAmountOut ?? 0n);
+    const receipt = await waitMined(tx);
     logger.success(`wrap tx: ${receipt.hash}`);
     return { txHash: receipt.hash };
   }
 
   if (action === "unwrap") {
-    const balance = await (okuDollar as any).balanceOf(signerAddr);
+    const balance = await okuDollar.balanceOf(signerAddr);
     if (balance < amount) throw new Error(`Insufficient UsdOku: have ${ethers.formatEther(balance)}, need ${ethers.formatEther(amount)}`);
-    const tx = await (okuDollar as any).unwrap(amount, receiver);
-    const receipt = await tx.wait(1);
+    const tx = await okuDollar.unwrap(amount, receiver);
+    const receipt = await waitMined(tx);
     logger.success(`unwrap tx: ${receipt.hash}`);
     return { txHash: receipt.hash };
   }
 
   if (action === "deposit") {
-    const balance = await (okuMoney as any).balanceOf(signerAddr);
+    const balance = await okuMoney.balanceOf(signerAddr);
     if (balance < amount) throw new Error(`Insufficient OkuM: have ${ethers.formatEther(balance)}, need ${ethers.formatEther(amount)}`);
-    const approveTx = await (okuMoney as any).approve(okuDollarAddr, amount);
+    const approveTx = await okuMoney.approve(okuDollarAddr, amount);
     await approveTx.wait(1);
-    const tx = await (okuDollar as any).deposit(amount, receiver);
-    const receipt = await tx.wait(1);
+    const tx = await okuDollar.deposit(amount, receiver);
+    const receipt = await waitMined(tx);
     logger.success(`deposit tx: ${receipt.hash}`);
     return { txHash: receipt.hash };
   }
@@ -117,36 +117,36 @@ export async function runVaultOp(
   if (action === "mint") {
     // ERC-4626 mint(shares): amount here is the SHARE target; the vault derives
     // and spends the required OkuM assets via previewMint (ceil-rounded).
-    const requiredAssets: bigint = await (okuDollar as any).previewMint(amount);
-    const balance = await (okuMoney as any).balanceOf(signerAddr);
+    const requiredAssets: bigint = await okuDollar.previewMint(amount);
+    const balance = await okuMoney.balanceOf(signerAddr);
     if (balance < requiredAssets) {
       throw new Error(`Insufficient OkuM: have ${ethers.formatEther(balance)}, need ${ethers.formatEther(requiredAssets)} (previewMint)`);
     }
-    const approveTx = await (okuMoney as any).approve(okuDollarAddr, requiredAssets);
+    const approveTx = await okuMoney.approve(okuDollarAddr, requiredAssets);
     await approveTx.wait(1);
-    const tx = await (okuDollar as any).mint(amount, receiver);
-    const receipt = await tx.wait(1);
+    const tx = await okuDollar.mint(amount, receiver);
+    const receipt = await waitMined(tx);
     logger.success(`mint tx: ${receipt.hash}`);
     return { txHash: receipt.hash };
   }
 
   if (action === "withdraw") {
-    const tx = await (okuDollar as any).withdraw(amount, receiver, owner);
-    const receipt = await tx.wait(1);
+    const tx = await okuDollar.withdraw(amount, receiver, owner);
+    const receipt = await waitMined(tx);
     logger.success(`withdraw tx: ${receipt.hash}`);
     return { txHash: receipt.hash };
   }
 
   if (action === "redeem") {
-    const tx = await (okuDollar as any).redeem(amount, receiver, owner);
-    const receipt = await tx.wait(1);
+    const tx = await okuDollar.redeem(amount, receiver, owner);
+    const receipt = await waitMined(tx);
     logger.success(`redeem tx: ${receipt.hash}`);
     return { txHash: receipt.hash };
   }
 
   // action === "rescueDonation"
-  const tx = await (okuDollar as any).rescueDonation(amount, receiver);
-  const receipt = await tx.wait(1);
+  const tx = await okuDollar.rescueDonation(amount, receiver);
+  const receipt = await waitMined(tx);
   logger.success(`rescueDonation tx: ${receipt.hash}`);
   return { txHash: receipt.hash };
 }

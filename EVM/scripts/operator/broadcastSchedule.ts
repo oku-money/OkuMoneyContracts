@@ -127,6 +127,9 @@ function applyToSvm(epochId: string, phase: EpochPhase, dryRun: boolean, run: Su
     `--next-rate=${artifact.schedule.nextRate}`,
     `--next-end=${artifact.schedule.nextRateEnd}`,
   ];
+  // The SVM script's mainnet opt-in is argv-only; forward YES_MAINNET so a
+  // confirmed EVM broadcast does not stall on (or abort at) the SVM prompt.
+  if (isYesMainnet()) args.push("--yes-i-mean-it-on-mainnet");
   // SVM's set-yield-rate.ts parses argv ONLY (its own local parseArg, not
   // cli.ts's) — hence flags above rather than env vars here.
   const env = {

@@ -25,7 +25,7 @@ import { ethers } from "hardhat";
 import { isAddress, Signer } from "ethers";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
-import { getDeployedContract } from "../utils/deploy";
+import { getDeployedContract, waitMined } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
@@ -51,8 +51,8 @@ export async function runConfigureMinterAllowance(
 
   const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer);
 
-  const currentAllowance = await (okuMoney as any).minterAllowance(minter);
-  const maxSupply = await (okuMoney as any).maxSupply();
+  const currentAllowance = await okuMoney.minterAllowance(minter);
+  const maxSupply = await okuMoney.maxSupply();
 
   logger.info(`Signer (allowanceManager): ${await signer.getAddress()}`);
   logger.info(`Minter:                    ${minter}`);
@@ -68,11 +68,11 @@ export async function runConfigureMinterAllowance(
     return { previousAllowance: currentAllowance, newAllowance: currentAllowance };
   }
 
-  const tx = await (okuMoney as any).configureMinterAllowance(minter, allowance);
-  const receipt = await tx.wait(1);
+  const tx = await okuMoney.configureMinterAllowance(minter, allowance);
+  const receipt = await waitMined(tx);
   logger.success(`configureMinterAllowance tx: ${receipt.hash}`);
 
-  const newAllowance = await (okuMoney as any).minterAllowance(minter);
+  const newAllowance = await okuMoney.minterAllowance(minter);
   logger.success(`Confirmed new allowance: ${ethers.formatEther(newAllowance)} OkuM`);
   return { previousAllowance: currentAllowance, newAllowance, txHash: receipt.hash };
 }

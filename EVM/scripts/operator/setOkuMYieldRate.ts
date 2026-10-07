@@ -62,7 +62,7 @@ import { ethers } from "hardhat";
 import { Signer } from "ethers";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
-import { getDeployedContract } from "../utils/deploy";
+import { getDeployedContract, waitMined } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { apyToRatePerSecond, describeRate, PRECISION, MAX_RATE } from "../utils/yieldRate";
@@ -96,7 +96,7 @@ export async function runSetOkuMYieldRate(
 
   const okuMAddr = loadAddress(ctx.bookKey, "OkuMoney");
   if (!okuMAddr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
-  const okuM = (await getDeployedContract("OkuMoney", okuMAddr)).connect(signer) as any;
+  const okuM = (await getDeployedContract("OkuMoney", okuMAddr)).connect(signer);
 
   const [curMult, curRate, curEnd, curPending] = await Promise.all([
     okuM.okuMMultiplier(),
@@ -135,7 +135,7 @@ export async function runSetOkuMYieldRate(
     if (endTimestamp === undefined) throw new Error("mode=direct requires endTimestamp");
     tx = await okuM.setOkuMYieldRate(rate, endTimestamp);
   }
-  const receipt = await tx.wait(1);
+  const receipt = await waitMined(tx);
   logger.success(`tx: ${receipt.hash}`);
 
   const confirmedRate = await okuM.okuMRatePerSecond();

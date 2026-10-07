@@ -29,7 +29,7 @@ import { ethers } from "hardhat";
 import { Signer } from "ethers";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { loadAddress, resolveUsdcAddress } from "../utils/addressBook";
-import { getDeployedContract } from "../utils/deploy";
+import { getDeployedContract, waitMined } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
@@ -74,24 +74,24 @@ export async function runPsmOp(
     }
     const approveTx = await usdc.approve(psmAddr, amount);
     await approveTx.wait(1);
-    const tx = await (psm as any)[action](amount);
-    const receipt = await tx.wait(1);
+    const tx = action === "mintOkuM" ? await psm.mintOkuM(amount) : await psm.mintUsdOku(amount);
+    const receipt = await waitMined(tx);
     logger.success(`${action} tx: ${receipt.hash}`);
     return { txHash: receipt.hash };
   }
 
   if (action === "redeemOkuM") {
-    const balance = await (okuMoney as any).balanceOf(signerAddr);
+    const balance = await okuMoney.balanceOf(signerAddr);
     logger.info(`OkuM balance: ${ethers.formatEther(balance)}, redeeming: ${ethers.formatEther(amount)}`);
     if (balance < amount) throw new Error(`Insufficient OkuM: have ${ethers.formatEther(balance)}, need ${ethers.formatEther(amount)}`);
     if (dryRun) {
       logger.success("DRY_RUN=true — not submitting");
       return {};
     }
-    const approveTx = await (okuMoney as any).approve(psmAddr, amount);
+    const approveTx = await okuMoney.approve(psmAddr, amount);
     await approveTx.wait(1);
-    const tx = await (psm as any).redeemOkuM(amount);
-    const receipt = await tx.wait(1);
+    const tx = await psm.redeemOkuM(amount);
+    const receipt = await waitMined(tx);
     logger.success(`redeemOkuM tx: ${receipt.hash}`);
     return { txHash: receipt.hash };
   }
@@ -100,31 +100,31 @@ export async function runPsmOp(
     const okuDollarAddr = loadAddress(ctx.bookKey, "OkuDollar");
     if (!okuDollarAddr) throw new Error(`Missing OkuDollar in address book for ${ctx.bookKey}`);
     const okuDollar = await getDeployedContract("OkuDollar", okuDollarAddr);
-    const balance = await (okuDollar.connect(signer) as any).balanceOf(signerAddr);
+    const balance = await okuDollar.connect(signer).balanceOf(signerAddr);
     logger.info(`UsdOku balance: ${ethers.formatEther(balance)}, redeeming: ${ethers.formatEther(amount)}`);
     if (balance < amount) throw new Error(`Insufficient UsdOku: have ${ethers.formatEther(balance)}, need ${ethers.formatEther(amount)}`);
     if (dryRun) {
       logger.success("DRY_RUN=true — not submitting");
       return {};
     }
-    const approveTx = await (okuDollar.connect(signer) as any).approve(psmAddr, amount);
+    const approveTx = await okuDollar.connect(signer).approve(psmAddr, amount);
     await approveTx.wait(1);
-    const tx = await (psm as any).redeemUsdOku(amount);
-    const receipt = await tx.wait(1);
+    const tx = await psm.redeemUsdOku(amount);
+    const receipt = await waitMined(tx);
     logger.success(`redeemUsdOku tx: ${receipt.hash}`);
     return { txHash: receipt.hash };
   }
 
   // action === "burn"
-  const balance = await (okuMoney as any).balanceOf(signerAddr);
+  const balance = await okuMoney.balanceOf(signerAddr);
   logger.info(`OkuM balance: ${ethers.formatEther(balance)}, burning: ${ethers.formatEther(amount)}`);
   if (balance < amount) throw new Error(`Insufficient OkuM: have ${ethers.formatEther(balance)}, need ${ethers.formatEther(amount)}`);
   if (dryRun) {
     logger.success("DRY_RUN=true — not submitting");
     return {};
   }
-  const tx = await (okuMoney as any).burn(amount);
-  const receipt = await tx.wait(1);
+  const tx = await okuMoney.burn(amount);
+  const receipt = await waitMined(tx);
   logger.success(`burn tx: ${receipt.hash}`);
   return { txHash: receipt.hash };
 }

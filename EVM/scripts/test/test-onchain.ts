@@ -258,7 +258,7 @@ async function ensureRole(ctx: TestCtx, role: string, label: string) {
   await funder.sendTransaction({ to: DEV_WALLET_ADDRESS, value: ethers.parseEther("0.5") });
   const admin = await ethers.getSigner(DEV_WALLET_ADDRESS);
   await waitForTx(
-    await (ctx.okuMoney.connect(admin) as any).grantRole(role, ctx.user.address),
+    await ctx.okuMoney.connect(admin).grantRole(role, ctx.user.address),
     `grantRole(${label}, signer)`
   );
   await hhNetwork.provider.request({
@@ -285,7 +285,7 @@ async function ensurePsmRole(ctx: TestCtx, role: string, label: string) {
   await funder.sendTransaction({ to: DEV_WALLET_ADDRESS, value: ethers.parseEther("0.5") });
   const admin = await ethers.getSigner(DEV_WALLET_ADDRESS);
   await waitForTx(
-    await (ctx.litePSM.connect(admin) as any).grantRole(role, ctx.user.address),
+    await ctx.litePSM.connect(admin).grantRole(role, ctx.user.address),
     `LitePSM.grantRole(${label}, signer)`
   );
   await hhNetwork.provider.request({

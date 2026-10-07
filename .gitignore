@@ -156,3 +156,9 @@ EVM/scripts/README.md
 # (live-chain baselines and proposals ARE tracked — see EVM/scripts/upgrade/index.ts).
 EVM/scripts/config/upgradeBaselines.local.json
 EVM/upgrade-proposals/fork-*/
+
+# SVM upgrade tooling: buffer keypairs (control funded buffers; never commit)
+# and localnet-only IDL snapshots / proposals written by the localnet drill.
+SVM/oku-programs/.upgrade-buffers/
+SVM/oku-programs/deployments/idl/localnet-*
+SVM/oku-programs/deployments/proposals/localnet-*

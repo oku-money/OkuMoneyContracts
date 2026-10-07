@@ -9,13 +9,14 @@
  */
 
 import * as fs from 'fs';
+import { createHash } from 'crypto';
 import * as path from 'path';
 import { PublicKey } from '@solana/web3.js';
 import { NetworkName } from '../config/networks';
 
 /**
  * Per-upgrade audit record appended to `deployments/<network>.json::upgrades`
- * (mirrors the EVM `UpgradeRecord`). `idlSnapshot` lets the next upgrade diff
+ * (mirrors the EVM `UpgradeRecord`). `idlSnapshotFile` lets the next upgrade diff
  * account layouts to detect storage-layout breaks.
  */
 export interface UpgradeRecord {
@@ -38,15 +39,32 @@ export interface UpgradeRecord {
    */
   txSignature: string;
   timestamp: string;
-  /** Deployer wallet pubkey (base58). */
+  /** Wallet that sent the upgrade (direct), or the multisig vault (multisig). */
   deployer: string;
-  /** Account-type fields at upgrade time (real upgrades only, not skips). */
-  idlSnapshot?: {
-    /** SHA-256 of the entire IDL JSON file (for quick-change detection). */
-    sha256: string;
-    /** Struct name (e.g. "PsmConfig") -> `types[].type.fields` subset. */
-    accountTypes: Record<string, Array<{ name: string; type: unknown }>>;
-  };
+  /**
+   * "deploy" = baseline written by deploy-programs.ts (no upgrade happened);
+   * "direct" = this script's wallet upgraded; "multisig" = proposed buffer,
+   * executed by the vault, closed with MODE=verify.
+   */
+  mode?: 'deploy' | 'direct' | 'multisig';
+  /** Cluster genesis hash, so a record cannot be confused across clusters. */
+  genesisHash?: string;
+  slot?: number;
+  buffer?: string;
+  programDataCapacityBefore?: number;
+  programDataCapacityAfter?: number;
+  extendLamports?: number;
+  gitCommit?: string;
+  solanaCli?: string;
+  /**
+   * Full IDL of the program as deployed by this record, stored next to the
+   * deployment file (`deployments/idl/<file>`), and its sha256. The next
+   * upgrade diffs against it — it is the record of the DEPLOYED layout.
+   */
+  idlSnapshotFile?: string;
+  idlSha256?: string;
+  preState?: Record<string, string>;
+  postState?: Record<string, string>;
 }
 
 export interface DeploymentAddresses {
@@ -69,7 +87,7 @@ export interface DeploymentAddresses {
     warmMultisig?: string;
     orchestrator?: string;
   };
-  /** Per-upgrade audit trail appended by `scripts/upgrade/index.ts` (includes skips). */
+  /** Deploy baseline + upgrade audit trail (`scripts/upgrade/index.ts`). */
   upgrades?: UpgradeRecord[];
 }
 
@@ -262,7 +280,7 @@ export function saveDeployment(
     authorities: { ...existing.authorities, ...addresses.authorities },
   };
 
-  fs.writeFileSync(filepath, JSON.stringify(updated, null, 2));
+  writeAtomic(filepath, JSON.stringify(updated, null, 2));
 }
 
 /**
@@ -366,7 +384,34 @@ export function appendUpgradeRecord(
   upgrades.push(record);
 
   const updated: DeploymentAddresses = { ...existing, upgrades };
-  fs.writeFileSync(filepath, JSON.stringify(updated, null, 2));
+  writeAtomic(filepath, JSON.stringify(updated, null, 2));
+}
+
+/** Write-then-rename: a crash mid-write cannot truncate the deployment file. */
+function writeAtomic(filepath: string, content: string): void {
+  const tmp = `${filepath}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, content);
+  fs.renameSync(tmp, filepath);
+}
+
+const IDL_SNAPSHOT_DIR = path.join(DEPLOYMENTS_DIR, 'idl');
+
+/**
+ * Store `idlJson` (raw file text) as the IDL of a deployed ELF; returns the
+ * file name relative to `deployments/idl/`. Content-addressed, so re-recording
+ * the same IDL is a no-op.
+ */
+export function saveIdlSnapshot(network: NetworkName, programKey: string, idlJson: string): { file: string; sha256: string } {
+  const sha256 = createHash('sha256').update(idlJson).digest('hex');
+  const file = `${network}-${programKey}-${sha256.slice(0, 16)}.json`;
+  fs.mkdirSync(IDL_SNAPSHOT_DIR, { recursive: true });
+  const p = path.join(IDL_SNAPSHOT_DIR, file);
+  if (!fs.existsSync(p)) writeAtomic(p, idlJson);
+  return { file, sha256 };
+}
+
+export function loadIdlSnapshot(file: string): any {
+  return JSON.parse(fs.readFileSync(path.join(IDL_SNAPSHOT_DIR, file), 'utf-8'));
 }
 
 /** All upgrade records for a network (no Anchor.toml alignment check). */
@@ -392,13 +437,13 @@ export function getLastUpgradeRecord(
 }
 
 /**
- * Most recent UpgradeRecord for the program that carries an `idlSnapshot`
- * (skips `<bytecode-unchanged>` records so the IDL-diff guard survives no-op runs).
+ * Most recent record for the program that carries an IDL snapshot — the
+ * deploy baseline or the last real upgrade.
  */
-export function getLastUpgradeRecordWithIdlSnapshot(
+export function getLastRecordWithIdl(
   network: NetworkName,
   programName: string
 ): UpgradeRecord | undefined {
   const all = getUpgradeRecords(network);
-  return [...all].reverse().find((r) => r.program === programName && r.idlSnapshot);
+  return [...all].reverse().find((r) => r.program === programName && r.idlSnapshotFile);
 }

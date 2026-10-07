@@ -334,6 +334,8 @@ From `SVM/oku-programs`; `npm test` runs both suites.
 | Rust (`cargo test --workspace`) | `npm run test:rust` | 62 (lite-psm 10, oku-shared 51, differential 1) |
 | Bankrun (in-process BPF on litesvm via `anchor-bankrun`) | `npm run test:bankrun` | 130 |
 | Cross-language `compute_multiplier` (Solidity corpus replayed in Rust and TS; `EVM/test/differential/GenerateVectors.t.sol`) | `npm run test:differential` (repo root) | 3,867 vectors |
+| Upgrade-tooling helpers (identity binding, IDL layout diff, state snapshots) | `npm run test:scripts` | 15 |
+| Upgrade drill (real validator: deploy-init, direct, propose → execute → verify, refusals) | `npm run drill:upgrade` | — |
 | Live devnet / fork smoke | `npm run test:onchain[:fork]` | — |
 
 Bankrun suites are in `tests/bankrun/` (+ `scenarios/`), harness in `tests/shared/`. Of note:
@@ -393,6 +395,45 @@ separate two-step rotation (ceremony order: [`../README.md` § Mainnet ceremony]
 
 Afterwards the deployer holds nothing on the PSM; further `set-authority` calls go through Squads.
 
+### Program upgrades
+
+`npm run upgrade[:devnet|:mainnet|:localnet|:devnet-fork|:mainnet-fork]` with `TARGETS=LitePsm`
+(`scripts/upgrade/index.ts`; its header is the full reference).
+
+| `MODE` | Upgrade authority | What happens |
+|---|---|---|
+| `direct` (default) | the wallet (`WALLET_PATH`) | buffer upload → buffer verified → `program extend` if the ELF outgrew ProgramData → `program upgrade` → checks → record |
+| `propose` | `SQUADS_VAULT` | buffer upload → verified → buffer authority handed to the vault → `deployments/proposals/<network>-<stamp>.json`; the vault executes in Squads (Developers → Programs → upgrade with that buffer; spill = the wallet) |
+| `verify` | — | `PROPOSAL=<file>` after the vault executed: on-chain ELF, liveness, state → record |
+
+Before anything is uploaded the script refuses unless:
+
+1. the deployment file, `declare_id!`, the ELF's embedded id, the IDL address, `Anchor.toml` and
+   `target/deploy/lite_psm-keypair.json` all name the same program (the CLI then gets the id in
+   base58 plus explicit `--keypair` / `--upgrade-authority`, never its config.yml defaults);
+2. the RPC's genesis hash matches the cluster;
+3. the IDL recorded for the **deployed** ELF (the deploy baseline written by `deploy:programs`, or the
+   last upgrade record — bound by ELF hash; `IDL_BASELINE=<file>` otherwise) shows no account-layout
+   break against the new IDL (byte offsets, discriminator, size; consuming `reserved` is fine), and
+   any client-visible change (instructions, errors) is accepted with `ACCEPT_IDL_CHANGES=1` or a `yes`;
+4. the live `PsmConfig` is 754 bytes, program-owned, and decodes identically under both IDLs.
+
+Afterwards it requires the on-chain ELF to equal the build, **simulates `sync_display_multiplier`**
+(an ELF compiled for another `declare_id!` uploads and hashes fine but executes nothing), diffs state
+(mint/vault wiring and the config PDA's authorities must not move) and records
+`deployments/<network>.json → upgrades[]` plus `deployments/idl/<network>-lite_psm-<sha>.json`.
+`--dry-run` runs every check and uploads nothing. Fork networks rehearse the parent's program and
+record nothing.
+
+- **Buffers.** Keys live in `.upgrade-buffers/` (gitignored, 0600, outside `target/` so `anchor clean`
+  cannot strand a funded buffer). A re-run resumes the upload; on failure the script prints the
+  `solana program close <buffer>` command that recovers the rent.
+- **Size growth.** A fresh deploy allocates exactly the ELF size. A larger ELF needs
+  `ProgramData` extended (rent not refundable); the script prints the cost, extends in `direct`
+  mode, and in `propose` mode says the vault must extend first.
+- **Verifiable builds.** `npm run build:verifiable` (`anchor build --verifiable`, needs Docker),
+  then `SO_PATH=target/verifiable/lite_psm.so`.
+
 ### Delegated operation vs. retained ownership (devnet/testnet)
 
 Mainnet roles follow the Squads tiers in
@@ -441,7 +482,7 @@ All under `scripts/admin/`. Each prints a summary before any state change, honou
 | `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |
 | `admin:deposit-buffer` / `admin:withdraw-buffer` | `deposit_buffer` / `withdraw_buffer` | `buffer_depositor` / `buffer_withdrawer` |
 | `admin:update-metadata[:devnet]` | `update_token_metadata` | `role_admin` |
-| `admin:set-upgrade-authority` / `admin:close-programs` | `solana program set-upgrade-authority` (`--new-authority` / `--disable`) / `solana program close` (recover rent) | BPF upgrade authority |
+| `admin:set-upgrade-authority` / `admin:close-programs` | `solana program set-upgrade-authority` (`--new-authority=<vault> --confirm=<vault>` / `--disable`; verifies the result on-chain) / `solana program close` (recover rent) | BPF upgrade authority |
 
 No CLI exists for `burn_oku_m_direct`, `accept_role_admin` or `cancel_role_admin_transfer`; call them
 from the IDL.

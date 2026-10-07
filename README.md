@@ -756,8 +756,13 @@ authorities, not on-chain state.
    recovery path until the cold tier has proven it can sign:
 
    ```bash
-   solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
+   NETWORK=mainnet-beta npm run admin:set-upgrade-authority -- --program=<LITE_PSM_PROGRAM> \
+     --new-authority=<SQUADS_COLD_VAULT> --confirm=<SQUADS_COLD_VAULT> --yes-i-mean-it-on-mainnet
    ```
+
+   (The raw CLI form needs `--skip-new-upgrade-authority-signer-check`, since a
+   vault PDA cannot co-sign; the script adds it and verifies the result.)
+   Program upgrades from here on use `MODE=propose`: [`SVM/README.md` § Program upgrades](SVM/README.md#program-upgrades).
 
 The deployer then holds nothing on SVM. Mechanics and the SVM README
 pre-mainnet checklist: [`SVM/README.md`](SVM/README.md). Final state per role:

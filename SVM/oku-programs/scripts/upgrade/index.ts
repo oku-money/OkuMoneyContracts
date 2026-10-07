@@ -1,682 +1,574 @@
 #!/usr/bin/env tsx
 /**
- * SVM program upgrade: deploys the `target/deploy/*.so` artifacts over
- * BPFLoaderUpgradeable programs (mirrors EVM/scripts/upgrade/index.ts).
+ * Upgrade the lite_psm program (BPFLoaderUpgradeable) to the local build.
  *
- * Steps: resolve IDs from `deployments/<network>.json`; verify upgrade
- * authority; snapshot pre-state; ELF-equality short-circuit (record
- * `<bytecode-unchanged>`); IDL account-struct diff guard; SOL balance check;
- * deploy (skipped on `--dry-run`); verify on-chain ELF SHA-256; post-state
- * invariant diff; append UpgradeRecord to `deployments/<network>.json::upgrades`.
+ * MODES (env MODE, default "direct")
+ *   direct   The wallet (WALLET_PATH) is the program's upgrade authority
+ *            (devnet). Uploads a buffer, verifies it, extends ProgramData if
+ *            needed, upgrades, then verifies.
+ *   propose  The upgrade authority is a Squads vault (mainnet):
+ *            SQUADS_VAULT=<vault>. Uploads and verifies the buffer, hands the
+ *            buffer's authority to the vault, and writes
+ *            `deployments/proposals/<network>-<stamp>.json` with everything the
+ *            signers need (buffer, ELF hash, spill address, extension needed).
+ *            Nothing changes on the program until the vault executes it.
+ *   verify   After the vault executed: PROPOSAL=<file>. Checks the on-chain ELF,
+ *            liveness, and state, then records the upgrade.
+ *   --dry-run / DRY_RUN=true: every check, nothing sent (no buffer either).
  *
- * A per-program buffer keypair in `target/upgrade-buffers/` lets an
- * interrupted upload resume.
+ * CHECKS BEFORE ANYTHING IS UPLOADED (fail closed)
+ *   1. Identity (lib/identity.ts): deployments/<net>.json, declare_id!, the
+ *      ELF's embedded id, the IDL address, Anchor.toml and the local program
+ *      keypair all name the same program. The CLI is then given that id in
+ *      base58 — never a keypair file — plus explicit --keypair/--upgrade-authority.
+ *   2. Cluster: genesis hash (devnet / mainnet-beta).
+ *   3. Upgrade authority: the wallet (direct) or SQUADS_VAULT (propose).
+ *   4. Baseline: the IDL recorded for the DEPLOYED ELF (deploy baseline or last
+ *      upgrade record, bound by ELF hash; or IDL_BASELINE=<file>). The diff
+ *      (lib/idlDiff.ts) refuses account-layout breaks and requires
+ *      ACCEPT_IDL_CHANGES=1 (or an interactive "yes") for client-visible changes.
+ *   5. The live PsmConfig: owner, 754 bytes, discriminator, and identical
+ *      decoding under the deployed and new IDLs (preState.ts).
+ * AFTER: on-chain ELF == local, a simulated instruction executes
+ * (lib/liveness.ts), state diff (invariant fields must not move), invariants.
+ * The record (deployments/<net>.json -> upgrades[]) and the IDL snapshot are
+ * written before any post-check failure is raised.
  *
- * Usage:
- *   TARGETS=LitePsm npm run upgrade:devnet [-- --dry-run]
- *   TARGETS=LitePsm SKIP_BYTECODE_CHECK=true npm run upgrade:devnet   (force deploy)
- *   SKIP_IDL_CHECK=true                                               (skip IDL diff guard)
+ * FORKS (devnet-fork / mainnet-fork): rehearse the PARENT network's program
+ * (its deployments file and IDs); nothing is recorded. Direct mode needs the
+ * wallet to be the upgrade authority on the fork.
+ *
+ * ENV: TARGETS=LitePsm, MODE, SQUADS_VAULT, PROPOSAL, SO_PATH (e.g. a
+ * verifiable build), IDL_PATH, IDL_BASELINE, ACCEPT_IDL_CHANGES,
+ * SKIP_IDL_CHECK (layout breaks become warnings — never on mainnet),
+ * SKIP_BYTECODE_CHECK, WALLET_PATH, NETWORK, SOLANA_RPC_URL / HELIUS_RPC,
+ * PRIORITY_FEE, MAX_RETRIES, RETRY_DELAY_MS, DEPLOY_TIMEOUT_MS.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
+import { execSync } from 'child_process';
 import { createHash } from 'crypto';
-import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
-import { Program, AnchorProvider } from '@anchor-lang/core';
+import { PublicKey } from '@solana/web3.js';
+import { AnchorProvider } from '@anchor-lang/core';
 
-import { detectNetwork, createProvider, isForkNetwork } from '../utils/network';
-import { NetworkName, NETWORK_CONFIGS, DEPLOYMENT_CONFIG } from '../config/networks';
+import {
+  detectNetwork,
+  createProviderWithClusterCheck,
+  isForkNetwork,
+  getParentNetwork,
+  walletPath,
+} from '../utils/network';
+import { NetworkName, DEPLOYMENT_CONFIG } from '../config/networks';
 import { logger } from '../utils/logger';
 import {
-  loadDeployment,
+  loadDeploymentStrict,
   appendUpgradeRecord,
-  getLastUpgradeRecordWithIdlSnapshot,
+  getLastRecordWithIdl,
+  saveIdlSnapshot,
+  loadIdlSnapshot,
   UpgradeRecord,
 } from '../utils/addressBook';
 import { isDryRun, confirmIfMainnet, summaryBlock } from '../admin/_lib/confirm';
+import { readOnChainElf, getUpgradeAuthority } from './lib/elfCompare';
 import {
-  compareElf,
-  readLocalElf,
-  readOnChainElf,
-  getUpgradeAuthority,
-} from './lib/elfCompare';
-import {
-  deployUpgrade,
+  CliContext,
+  bufferKeypairPath,
+  writeBuffer,
+  verifyBuffer,
+  extensionNeeded,
+  extendProgram,
+  upgradeFromBuffer,
+  setBufferAuthority,
+  programDataInfo,
+  findUpgradeSignature,
+  recoveryHint,
+  formatSol,
+  BUFFER_HEADER_SIZE,
 } from './lib/deployUpgrade';
+import { gatherIdentity, checkProgramIdentity } from './lib/identity';
+import { diffIdl } from './lib/idlDiff';
+import { assertProgramLive } from './lib/liveness';
 import {
-  STATE_READERS,
-  ProgramSet,
-  StateSnapshot,
+  readLitePsmState,
+  assertConfigCompatible,
   diffSnapshots,
-  hasUncheckedFields,
+  checkInvariants,
   printStateTable,
+  flatten,
+  unflatten,
+  StateSnapshot,
 } from './preState';
 
-// ============================================================================
-// Upgrade target registry
-// ============================================================================
+const ROOT = process.cwd();
 
-interface UpgradeTarget {
-  /** Filesystem key (matches target/deploy/<programKey>.so and *-keypair.json). */
-  programKey: string;
-  /** Key in deployments/<network>.json::programs. */
-  bookKey: 'litePsm';
-  /** Key in STATE_READERS. */
-  stateKey: string;
-  /** Human-readable display name. */
-  idlFile: string;
+interface Target {
+  programKey: string; // target/deploy/<programKey>.so
+  bookKey: 'litePsm'; // deployments/<net>.json programs.<bookKey>
+  crateDir: string; // programs/<crateDir>/src/lib.rs
 }
-
-const UPGRADE_TARGETS: Record<string, UpgradeTarget> = {
-  LitePsm: {
-    programKey: 'lite_psm',
-    bookKey:    'litePsm',
-    stateKey:   'LitePsm',
-    idlFile:    'lite_psm.json',
-  },
+const UPGRADE_TARGETS: Record<string, Target> = {
+  LitePsm: { programKey: 'lite_psm', bookKey: 'litePsm', crateDir: 'lite-psm' },
 };
 
-// ============================================================================
-// Helpers
-// ============================================================================
+type Mode = 'direct' | 'propose' | 'verify';
 
-function formatSol(lamports: number | bigint): string {
-  return (Number(lamports) / LAMPORTS_PER_SOL).toFixed(6);
-}
-
-/** `--url` for `solana program deploy`: the provider's full RPC endpoint (custom endpoints honoured). */
-function solanaUrlFor(network: NetworkName, rpcEndpoint: string): string {
-  if (network === 'localnet') return 'localhost';
-  return rpcEndpoint;
-}
-
-// ============================================================================
-// IDL snapshot utilities
-// ============================================================================
-
-interface IdlSnapshot {
-  sha256: string;
-  accountTypes: Record<string, Array<{ name: string; type: unknown }>>;
-}
-
-/** Build an IdlSnapshot (account-struct fields) from `target/idl/<idlFile>`. */
-function buildIdlSnapshot(idlPath: string): IdlSnapshot | null {
-  try {
-    const raw = fs.readFileSync(idlPath, 'utf-8');
-    const sha256 = createHash('sha256').update(raw).digest('hex');
-    const idl = JSON.parse(raw);
-
-    // Account names from the `accounts` section.
-    const accountNames = new Set<string>(
-      (idl.accounts ?? []).map((a: any) => a.name as string)
-    );
-
-    // Struct definitions live in `types`; keep those named in `accounts`.
-    const accountTypes: Record<string, Array<{ name: string; type: unknown }>> = {};
-    for (const t of idl.types ?? []) {
-      if (accountNames.has(t.name) && t.type?.kind === 'struct') {
-        accountTypes[t.name] = (t.type.fields ?? []).map((f: any) => ({
-          name: f.name,
-          type: f.type,
-        }));
-      }
-    }
-
-    return { sha256, accountTypes };
-  } catch {
-    return null;
-  }
-}
-
-/** Describe account-type changes between two snapshots, or null if none. */
-function describeIdlDiff(
-  prior: IdlSnapshot,
-  current: IdlSnapshot
-): string | null {
-  if (prior.sha256 === current.sha256) return null;
-
-  const lines: string[] = ['IDL changed since last upgrade:'];
-
-  const allTypeNames = new Set([
-    ...Object.keys(prior.accountTypes),
-    ...Object.keys(current.accountTypes),
-  ]);
-
-  for (const typeName of [...allTypeNames].sort()) {
-    const priorFields = prior.accountTypes[typeName];
-    const curFields   = current.accountTypes[typeName];
-
-    if (!priorFields && curFields) {
-      lines.push(`  [+] new account type: ${typeName}`);
-      continue;
-    }
-    if (priorFields && !curFields) {
-      lines.push(`  [-] removed account type: ${typeName}`);
-      continue;
-    }
-    if (!priorFields || !curFields) continue;
-
-    // Compare field by field.
-    const priorByName = new Map(priorFields.map((f) => [f.name, f.type]));
-    const curByName   = new Map(curFields.map((f) => [f.name, f.type]));
-    const allFieldNames = new Set([...priorByName.keys(), ...curByName.keys()]);
-
-    const fieldLines: string[] = [];
-    for (const fn of allFieldNames) {
-      const pType = priorByName.get(fn);
-      const cType = curByName.get(fn);
-      if (pType === undefined) {
-        fieldLines.push(`      [+] ${fn}: ${JSON.stringify(cType)}`);
-      } else if (cType === undefined) {
-        fieldLines.push(`      [-] ${fn}: ${JSON.stringify(pType)}`);
-      } else if (JSON.stringify(pType) !== JSON.stringify(cType)) {
-        fieldLines.push(
-          `      [~] ${fn}: ${JSON.stringify(pType)} → ${JSON.stringify(cType)}`
-        );
-      }
-    }
-
-    if (fieldLines.length > 0) {
-      lines.push(`  ${typeName}:`);
-      lines.push(...fieldLines);
-    }
-  }
-
-  return lines.length > 1 ? lines.join('\n') : null;
-}
-
-// ============================================================================
-// Interactive confirmation (IDL diff)
-// ============================================================================
-
-async function promptContinue(message: string): Promise<boolean> {
-  if (!process.stdin.isTTY) {
-    // Non-interactive (CI / piped): auto-proceed with a warning.
-    logger.warning(
-      `${message}\n  ` +
-        `stdin is not a TTY — auto-proceeding. ` +
-        `Pass SKIP_IDL_CHECK=true to suppress this warning.`
-    );
-    return true;
-  }
-
-  console.log('');
-  console.log('='.repeat(60));
-  console.log(message);
-  console.log('='.repeat(60));
-  console.log('');
-  console.log('Type "yes" to proceed with the upgrade, anything else to abort:');
-
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer: string = await new Promise((resolve) => {
-    rl.question('> ', (a) => { rl.close(); resolve(a.trim().toLowerCase()); });
-  });
-
-  if (answer !== 'yes') {
-    logger.warning('Aborted by operator.');
-    return false;
-  }
-  return true;
-}
-
-// ============================================================================
-// Per-target upgrade
-// ============================================================================
-
-interface UpgradeOutcome {
-  name: string;
+interface Proposal {
+  kind: 'okumoney-svm-upgrade-proposal';
+  network: NetworkName;
+  genesisHash: string;
+  program: string;
   programId: string;
+  buffer: string;
+  vault: string;
+  spill: string;
+  elfSha256: string;
+  elfSize: number;
   oldElfSha256: string;
-  newElfSha256: string;
   oldElfSize: number;
-  newElfSize: number;
-  txSignature: string;
+  extendBytes: number;
+  preSlot: number;
+  preState: Record<string, string>;
+  idlSnapshotFile: string;
+  idlSha256: string;
+  gitCommit?: string;
+  createdAt: string;
+  createdBy: string;
 }
 
-async function upgradeOne(
+// ---------------------------------------------------------------------------
+
+const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
+
+function gitCommit(): string | undefined {
+  try {
+    return execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function solanaCliVersion(): string | undefined {
+  try {
+    return execSync('solana --version', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    return undefined;
+  }
+}
+
+const truthy = (v?: string) => v === '1' || v === 'true';
+
+async function ask(question: string): Promise<boolean> {
+  if (!process.stdin.isTTY) return false;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const a: string = await new Promise((r) => rl.question(`${question}\nType "yes" to proceed: `, (x) => { rl.close(); r(x); }));
+  return a.trim().toLowerCase() === 'yes';
+}
+
+/** `--url` for the CLI: the provider's endpoint (custom RPCs honoured). */
+const cliUrl = (network: NetworkName, endpoint: string) => (network === 'localnet' ? 'localhost' : endpoint);
+
+function cliContext(network: NetworkName, provider: AnchorProvider): CliContext {
+  return {
+    walletPath: walletPath(),
+    rpcUrl: cliUrl(network, provider.connection.rpcEndpoint),
+    priorityFee: DEPLOYMENT_CONFIG.priorityFee,
+    maxRetries: DEPLOYMENT_CONFIG.maxRetries,
+    retryDelayMs: DEPLOYMENT_CONFIG.retryDelayMs,
+    timeoutMs: DEPLOYMENT_CONFIG.deployTimeoutMs,
+    log: logger,
+  };
+}
+
+/** The IDL recorded for the ELF currently deployed (fail closed). */
+async function deployedIdl(
+  provider: AnchorProvider,
+  bookNetwork: NetworkName,
   name: string,
-  target: UpgradeTarget,
-  provider: AnchorProvider,
-  programs: ProgramSet,
-  networkName: NetworkName,
-  rpcUrl: string
-): Promise<UpgradeOutcome> {
-  logger.section(`Upgrading ${name}`);
-
-  const connection = provider.connection;
-  const walletPubkey = provider.wallet.publicKey;
-
-  // ── 1. Resolve program ID from deployment ─────────────────────────────────
-  const deployment = loadDeployment(networkName);
-  if (!deployment?.programs?.[target.bookKey]) {
+  programId: PublicKey
+): Promise<any> {
+  if (process.env.IDL_BASELINE) {
+    logger.warning(`  Baseline IDL from IDL_BASELINE=${process.env.IDL_BASELINE} (operator-supplied)`);
+    return JSON.parse(fs.readFileSync(process.env.IDL_BASELINE, 'utf-8'));
+  }
+  const rec = getLastRecordWithIdl(bookNetwork, name);
+  if (!rec?.idlSnapshotFile) {
     throw new Error(
-      `No program ID for "${name}" in deployments/${networkName}.json (key: programs.${target.bookKey}). ` +
-        `Run \`npm run deploy:programs\` first.`
+      `No IDL baseline for ${name} in deployments/${bookNetwork}.json (deploy-programs.ts writes ` +
+        `one; so does every upgrade). Supply the deployed program's IDL with IDL_BASELINE=<file> ` +
+        `(e.g. artifacts/svm/lite_psm.json from the commit that was deployed).`
     );
   }
-  const programId = new PublicKey(deployment.programs[target.bookKey]!);
-  logger.info(`  Program ID: ${programId.toBase58()}`);
-
-  // ── 2. Resolve file paths ─────────────────────────────────────────────────
-  const keypairPath = path.join(process.cwd(), 'target', 'deploy', `${target.programKey}-keypair.json`);
-  const soPath      = path.join(process.cwd(), 'target', 'deploy', `${target.programKey}.so`);
-  const idlPath     = path.join(process.cwd(), 'target', 'idl', target.idlFile);
-
-  for (const [label, p] of [['keypair', keypairPath], ['ELF (.so)', soPath]] as const) {
-    if (!fs.existsSync(p)) {
-      throw new Error(
-        `${name} ${label} not found at ${p}. Run \`anchor build\` first.`
-      );
-    }
-  }
-
-  // ── 3. Verify upgrade authority ───────────────────────────────────────────
-  logger.info(`  Checking upgrade authority...`);
-  const authority = await getUpgradeAuthority(connection, programId);
-  if (!authority) {
+  const onChain = await readOnChainElf(provider.connection, programId, rec.newElfSize);
+  if (onChain.sha256 !== rec.newElfSha256) {
     throw new Error(
-      `${name} (${programId.toBase58()}) has no upgrade authority — ` +
-        `the program is immutable and cannot be upgraded.`
+      `The deployed ELF (${onChain.sha256.slice(0, 16)}…) is not the one the last record ` +
+        `describes (${rec.newElfSha256.slice(0, 16)}…): the program was changed outside this ` +
+        `script, or a multisig upgrade was never closed with MODE=verify. Supply IDL_BASELINE.`
     );
   }
-  if (!authority.equals(walletPubkey)) {
-    throw new Error(
-      `${name}: upgrade authority is ${authority.toBase58()} but ` +
-        `our wallet is ${walletPubkey.toBase58()}. Cannot upgrade.`
-    );
-  }
-  logger.success(`  Upgrade authority verified (${walletPubkey.toBase58().slice(0, 8)}...)`);
+  logger.info(`  Baseline IDL: deployments/idl/${rec.idlSnapshotFile} (${rec.mode ?? 'upgrade'} record ${rec.timestamp})`);
+  return loadIdlSnapshot(rec.idlSnapshotFile);
+}
 
-  // ── 4. Pre-upgrade state snapshot ─────────────────────────────────────────
-  const reader = STATE_READERS[target.stateKey];
-  if (!reader) {
-    throw new Error(`No state reader registered for "${target.stateKey}".`);
-  }
-  logger.info(`  Reading pre-upgrade state...`);
-  const preState = await reader(programs, programId);
-
-  // ── 5. ELF-equality short-circuit ─────────────────────────────────────────
-  logger.info(`  Comparing local .so to on-chain ELF...`);
-  const localElf = readLocalElf(soPath);
-  const skipBytecodeCheck = process.env.SKIP_BYTECODE_CHECK === 'true';
-
-  if (!skipBytecodeCheck) {
-    const { unchanged, onChain } = await compareElf(
-      connection, programId, soPath, logger
-    );
-    if (unchanged && onChain) {
-      logger.success(
-        `  ${name}: local ELF matches on-chain (sha256: ${onChain.sha256.slice(0, 16)}…) ` +
-          `— skipping upgrade.`
-      );
-      // Still snapshot post-state for the table (will be identical).
-      const postState = await reader(programs, programId);
-      printStateTable(preState, postState);
-
-      // Dry-runs must not mutate the audit log.
-      if (!isDryRun()) {
-        const skipRecord: UpgradeRecord = {
-          program:      name,
-          programId:    programId.toBase58(),
-          oldElfSize:   onChain.size,
-          newElfSize:   onChain.size,
-          oldElfSha256: onChain.sha256,
-          newElfSha256: onChain.sha256,
-          txSignature:  '<bytecode-unchanged>',
-          timestamp:    new Date().toISOString(),
-          deployer:     walletPubkey.toBase58(),
-          idlSnapshot:  buildIdlSnapshot(idlPath) ?? undefined,
-        };
-        appendUpgradeRecord(networkName, skipRecord);
-        logger.info(`  Recorded skip in deployments/${networkName}.json`);
-      } else {
-        logger.info(`  --dry-run set — not recording skip in deployments/${networkName}.json`);
-      }
-
-      return {
-        name,
-        programId: programId.toBase58(),
-        oldElfSha256: onChain.sha256,
-        newElfSha256: onChain.sha256,
-        oldElfSize:   onChain.size,
-        newElfSize:   onChain.size,
-        txSignature: '<bytecode-unchanged>',
-      };
-    }
+async function postChecks(args: {
+  provider: AnchorProvider;
+  idl: any;
+  programId: PublicKey;
+  elf: Buffer;
+  pre: StateSnapshot;
+}): Promise<{ post: StateSnapshot; failures: string[] }> {
+  const failures: string[] = [];
+  const conn = args.provider.connection;
+  const onChain = await readOnChainElf(conn, args.programId, args.elf.length);
+  if (onChain.sha256 !== sha256(args.elf)) {
+    failures.push(`on-chain ELF ${onChain.sha256} != local ${sha256(args.elf)}`);
   } else {
-    logger.warning(`  SKIP_BYTECODE_CHECK=true — forcing upgrade even if ELF matches.`);
+    logger.success(`  On-chain ELF matches the local build`);
   }
-
-  // Read on-chain ELF info now (we know it differs or check was skipped).
-  let onChainElf = { size: 0, sha256: '<unknown>' };
   try {
-    onChainElf = await readOnChainElf(connection, programId);
-    logger.info(
-      `  On-chain ELF: ${onChainElf.size} bytes (sha256: ${onChainElf.sha256.slice(0, 16)}…)`
-    );
-  } catch { /* non-fatal; we already checked authority */ }
-  logger.info(
-    `  Local ELF:    ${localElf.size} bytes (sha256: ${localElf.sha256.slice(0, 16)}…)`
-  );
-
-  // ── 6. IDL diff guard ─────────────────────────────────────────────────────
-  if (process.env.SKIP_IDL_CHECK !== 'true') {
-    const currentIdlSnap = buildIdlSnapshot(idlPath);
-    // Skips snapshot-less records (e.g. `<bytecode-unchanged>`).
-    const priorRecord = getLastUpgradeRecordWithIdlSnapshot(networkName, name);
-
-    if (currentIdlSnap && priorRecord?.idlSnapshot) {
-      const diff = describeIdlDiff(priorRecord.idlSnapshot, currentIdlSnap);
-      if (diff) {
-        logger.warning(`  ${diff}`);
-        if (!isDryRun()) {
-          const proceed = await promptContinue(
-            `${name}: IDL account-struct fields changed since last upgrade.\n` +
-              diff +
-              `\n\nThis may indicate a storage-layout change. ` +
-              `Ensure existing accounts can still be deserialized before proceeding.`
-          );
-          if (!proceed) {
-            throw new Error(`${name}: operator aborted due to IDL diff.`);
-          }
-        }
-      } else {
-        logger.success(`  IDL account types unchanged since last upgrade.`);
-      }
-    } else if (!priorRecord) {
-      logger.info(`  No prior upgrade record with an IDL snapshot — diff skipped (first upgrade, or no snapshot has ever been recorded for this program).`);
-    } else {
-      // buildIdlSnapshot failed on the local IDL: the guard did NOT run; say so.
-      logger.warning(
-        `  Could not read the local IDL to compare against the prior snapshot — ` +
-          `IDL diff guard did NOT run this upgrade. Check target/idl/${name}.json.`
-      );
-    }
+    const okuMMint = new PublicKey(args.pre['okuMMint'].value);
+    logger.success(`  ${await assertProgramLive(args.provider, args.idl, args.programId, okuMMint)}`);
+  } catch (e: any) {
+    failures.push(e.message);
   }
-
-  // ── 7. SOL balance check ──────────────────────────────────────────────────
-  const balanceLamports = await connection.getBalance(walletPubkey);
-  logger.info(`  Wallet balance: ${formatSol(balanceLamports)} SOL`);
-  // Rough cost estimate: buffer rent (~5–8 SOL for 800 KB) + tx fees.
-  const estimatedCostSol = Math.ceil(localElf.size / 1_048_576) * 7 + 0.1;
-  if (balanceLamports / LAMPORTS_PER_SOL < estimatedCostSol) {
-    logger.warning(
-      `  Wallet balance (${formatSol(balanceLamports)} SOL) may be ` +
-        `insufficient for this upgrade (~${estimatedCostSol.toFixed(1)} SOL estimated). ` +
-        `Top up before proceeding to avoid partial uploads.`
-    );
+  const post = await readLitePsmState(conn, args.idl, args.programId);
+  printStateTable(args.pre, post);
+  for (const d of diffSnapshots(args.pre, post)) {
+    if (d.kind === 'invariant') failures.push(`${d.field}: ${d.before} -> ${d.after}`);
+    else logger.warning(`  ${d.field} changed (${d.kind}; an admin tx landed meanwhile): ${d.before} -> ${d.after}`);
   }
-
-  // ── 8. Dry-run exit ───────────────────────────────────────────────────────
-  if (isDryRun()) {
-    logger.info(
-      `  --dry-run set — would deploy ${localElf.size} bytes (sha256: ${localElf.sha256.slice(0, 16)}…)`
-    );
-    return {
-      name,
-      programId: programId.toBase58(),
-      oldElfSha256: onChainElf.sha256,
-      newElfSha256: localElf.sha256,
-      oldElfSize:   onChainElf.size,
-      newElfSize:   localElf.size,
-      txSignature: '<dry-run>',
-    };
-  }
-
-  // ── 9. Mainnet confirmation ───────────────────────────────────────────────
-  await confirmIfMainnet(
-    networkName,
-    summaryBlock(`upgrade ${name} on ${networkName}`, {
-      'programId':        programId.toBase58(),
-      'old ELF (bytes)':  String(onChainElf.size),
-      'new ELF (bytes)':  String(localElf.size),
-      'old sha256':       onChainElf.sha256.slice(0, 32) + '…',
-      'new sha256':       localElf.sha256.slice(0, 32) + '…',
-      'deployer':         walletPubkey.toBase58(),
-    })
-  );
-
-  // ── 10. Deploy ────────────────────────────────────────────────────────────
-  const { txSignature } = await deployUpgrade({
-    programName:      name,
-    programKey:       target.programKey,
-    programId,
-    keypairPath,
-    soPath,
-    walletPubkey,
-    localElfSha256:   localElf.sha256,
-    localElfSize:     localElf.size,
-    connection,
-    rpcUrl,
-    priorityFee:      DEPLOYMENT_CONFIG.priorityFee,
-    maxRetries:       DEPLOYMENT_CONFIG.maxRetries,
-    retryDelayMs:     DEPLOYMENT_CONFIG.retryDelayMs,
-    deployTimeoutMs:  DEPLOYMENT_CONFIG.deployTimeoutMs,
-    logger,
-  });
-
-  // ── 11. Post-upgrade ELF verification ────────────────────────────────────
-  // `expectedSize` truncates the hash to the new ELF: ProgramData does not
-  // shrink when a smaller ELF replaces a larger one.
-  logger.info(`  Verifying on-chain ELF after upgrade...`);
-  let verifiedSha256 = localElf.sha256;
-  try {
-    const postElf = await readOnChainElf(connection, programId, localElf.size);
-    if (postElf.sha256 !== localElf.sha256) {
-      throw new Error(
-        `Post-upgrade ELF mismatch: on-chain sha256 ${postElf.sha256} ` +
-          `differs from local ${localElf.sha256}. Upgrade may not have landed correctly.`
-      );
-    }
-    logger.success(
-      `  On-chain ELF verified (sha256: ${postElf.sha256.slice(0, 16)}… — matches local)`
-    );
-    verifiedSha256 = postElf.sha256;
-  } catch (err: any) {
-    if (err.message?.includes('Post-upgrade ELF mismatch')) throw err;
-    // ELF read error is non-fatal if we have a confirmed signature.
-    logger.warning(
-      `  ELF re-read failed (non-fatal if signature confirmed): ` +
-        `${err.message?.slice(0, 80) ?? err}`
-    );
-  }
-
-  // ── 12. Post-upgrade state snapshot + invariant diff ─────────────────────
-  logger.info(`  Reading post-upgrade state...`);
-  const postState = await reader(programs, programId);
-  const diffs = diffSnapshots(preState, postState);
-  printStateTable(preState, postState);
-
-  // Check BEFORE trusting an empty `diffs`: a read that fails the same way
-  // pre- and post-upgrade yields an empty diff over zero real fields.
-  if (hasUncheckedFields(postState)) {
-    logger.error(`  Post-upgrade state read for ${name} did not return any checkable fields:`);
-    printStateTable(preState, postState);
-    throw new Error(
-      `Post-upgrade state read for ${name} failed or returned no real fields — ` +
-        `cannot assert storage invariants were preserved. Investigate before proceeding ` +
-        `(this is NOT the same as "invariants preserved").`
-    );
-  }
-
-  if (diffs.length > 0) {
-    logger.error(`  Storage invariants changed during upgrade on ${name}:`);
-    for (const d of diffs) {
-      logger.error(`    ${d.field}: "${d.before}" → "${d.after}"`);
-    }
-    throw new Error(
-      `Post-upgrade state diff for ${name} is non-empty. ` +
-        `This should not happen for a pure code upgrade (no reinitializer called). ` +
-        `Investigate before proceeding.`
-    );
-  }
-  logger.success(`  All state invariants preserved.`);
-
-  // ── 13. Append audit record ───────────────────────────────────────────────
-  const idlSnap = buildIdlSnapshot(idlPath) ?? undefined;
-  const record: UpgradeRecord = {
-    program:      name,
-    programId:    programId.toBase58(),
-    oldElfSize:   onChainElf.size,
-    newElfSize:   localElf.size,
-    oldElfSha256: onChainElf.sha256,
-    newElfSha256: verifiedSha256,
-    txSignature,
-    timestamp:    new Date().toISOString(),
-    deployer:     walletPubkey.toBase58(),
-    idlSnapshot:  idlSnap ?? undefined,
-  };
-  appendUpgradeRecord(networkName, record);
-  logger.success(`  Recorded upgrade in deployments/${networkName}.json`);
-
-  return {
-    name,
-    programId:    programId.toBase58(),
-    oldElfSha256: onChainElf.sha256,
-    newElfSha256: verifiedSha256,
-    oldElfSize:   onChainElf.size,
-    newElfSize:   localElf.size,
-    txSignature,
-  };
+  const now = BigInt((await conn.getBlockTime(await conn.getSlot('confirmed'))) ?? Math.floor(Date.now() / 1000));
+  failures.push(...checkInvariants(post, now));
+  return { post, failures };
 }
 
-// ============================================================================
-// Target parsing
-// ============================================================================
+// ---------------------------------------------------------------------------
 
-function parseTargets(): string[] {
-  const raw = (process.env.TARGETS ?? '').trim();
-  if (!raw) {
-    throw new Error(
-      `TARGETS env var is not set. Specify one or more programs to upgrade, e.g.\n` +
-        `  TARGETS=LitePsm npm run upgrade -- --network=devnet\n` +
-        `Known targets: ${Object.keys(UPGRADE_TARGETS).join(', ')}.`
-    );
-  }
-  const list = Array.from(
-    new Set(
-      raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
-    )
-  );
-  const unknown = list.filter((n) => !UPGRADE_TARGETS[n]);
-  if (unknown.length > 0) {
-    throw new Error(
-      `Unknown TARGETS entries: ${unknown.join(', ')}.\n` +
-        `Known targets: ${Object.keys(UPGRADE_TARGETS).join(', ')}.`
-    );
-  }
-  return list;
-}
-
-// ============================================================================
-// Load Anchor programs
-// ============================================================================
-
-function loadPrograms(
+async function upgradeTarget(
+  name: string,
+  t: Target,
+  mode: Mode,
+  network: NetworkName,
+  bookNetwork: NetworkName,
+  record: boolean,
   provider: AnchorProvider,
-  deployment: ReturnType<typeof loadDeployment>
-): ProgramSet {
-  if (!deployment) throw new Error('Deployment not found — cannot load Anchor programs.');
+  genesisHash: string
+): Promise<void> {
+  logger.section(`${name} (${mode}${isDryRun() ? ', dry run' : ''})`);
+  const conn = provider.connection;
+  const wallet = provider.wallet.publicKey;
+  const ctx = cliContext(network, provider);
 
-  function loadProgram(idlFile: string, programIdStr: string | undefined): Program {
-    if (!programIdStr) {
-      throw new Error(
-        `Program ID for ${idlFile} not found in deployment. ` +
-          `Run \`npm run deploy:programs\` first.`
-      );
-    }
-    const idlPath = path.join(process.cwd(), 'target', 'idl', idlFile);
-    if (!fs.existsSync(idlPath)) {
-      throw new Error(`IDL not found at ${idlPath}. Run \`anchor build\` first.`);
-    }
-    const idl = JSON.parse(fs.readFileSync(idlPath, 'utf-8'));
-    idl.address = programIdStr;
-    return new Program(idl, provider);
+  const deployment = loadDeploymentStrict(bookNetwork);
+  const idStr = deployment.programs?.[t.bookKey];
+  if (!idStr) throw new Error(`No programs.${t.bookKey} in deployments/${bookNetwork}.json`);
+  const programId = new PublicKey(idStr);
+  logger.info(`  Program: ${programId.toBase58()}`);
+
+  const soPath = process.env.SO_PATH ?? path.join(ROOT, 'target', 'deploy', `${t.programKey}.so`);
+  const idlPath = process.env.IDL_PATH ?? path.join(ROOT, 'target', 'idl', `${t.programKey}.json`);
+  const elf = fs.readFileSync(soPath);
+  const idlRaw = fs.readFileSync(idlPath, 'utf-8');
+  const idl = JSON.parse(idlRaw);
+  logger.info(`  ELF: ${soPath} (${elf.length} bytes, sha256 ${sha256(elf).slice(0, 16)}…)`);
+
+  // 1. Identity
+  const mismatches = checkProgramIdentity(
+    gatherIdentity({ root: ROOT, network, programKey: t.programKey, crateDir: t.crateDir, expected: programId, idl, elf })
+  );
+  if (mismatches.length) {
+    throw new Error(`Program identity is not consistent — refusing to upload:\n  ${mismatches.join('\n  ')}`);
+  }
+  logger.success(`  Identity bound: deployments, declare_id!, ELF, IDL, Anchor.toml, keypair agree`);
+
+  // 3. Authority
+  const authority = await getUpgradeAuthority(conn, programId);
+  if (!authority) throw new Error(`${name} is immutable (no upgrade authority)`);
+  let vault: PublicKey | undefined;
+  if (mode === 'propose') {
+    if (!process.env.SQUADS_VAULT) throw new Error('MODE=propose requires SQUADS_VAULT=<vault address>');
+    vault = new PublicKey(process.env.SQUADS_VAULT);
+    if (!authority.equals(vault)) throw new Error(`Upgrade authority is ${authority.toBase58()}, not SQUADS_VAULT ${vault.toBase58()}`);
+  } else if (!authority.equals(wallet)) {
+    throw new Error(
+      `Upgrade authority is ${authority.toBase58()}, not the wallet ${wallet.toBase58()}. ` +
+        `If it is a Squads vault use MODE=propose SQUADS_VAULT=<vault>.`
+    );
+  }
+  logger.success(`  Upgrade authority: ${authority.toBase58()}`);
+
+  // State before anything else touches the chain (fail if unreadable).
+  const pre = await readLitePsmState(conn, idl, programId);
+
+  // Unchanged?
+  const onChain = await readOnChainElf(conn, programId, elf.length).catch(() => null);
+  if (onChain?.sha256 === sha256(elf) && !truthy(process.env.SKIP_BYTECODE_CHECK)) {
+    logger.success(`  On-chain ELF already equals the local build — nothing to do (not recorded)`);
+    return;
   }
 
-  return {
-    psm:    loadProgram('lite_psm.json',   deployment.programs.litePsm),
-  };
+  // 4. IDL vs the deployed baseline
+  const baseline = await deployedIdl(provider, bookNetwork, name, programId);
+  const diff = diffIdl(baseline, idl);
+  for (const c of diff.clientChanges) logger.warning(`  IDL: ${c}`);
+  if (diff.layoutBreaks.length) {
+    const msg = `Account-layout breaks vs the deployed IDL:\n  ${diff.layoutBreaks.join('\n  ')}`;
+    if (truthy(process.env.SKIP_IDL_CHECK) && !network.startsWith('mainnet')) logger.error(`  ${msg}\n  (SKIP_IDL_CHECK set — continuing)`);
+    else throw new Error(msg);
+  }
+  if (diff.clientChanges.length && !isDryRun() && !truthy(process.env.ACCEPT_IDL_CHANGES)) {
+    if (!(await ask(`${diff.clientChanges.length} client-visible IDL change(s) (listed above).`))) {
+      throw new Error('Client-visible IDL changes not accepted (set ACCEPT_IDL_CHANGES=1 after reviewing them)');
+    }
+  }
+
+  // 5. Live account vs both IDLs
+  await assertConfigCompatible(conn, programId, baseline, idl);
+  logger.success(`  Live PsmConfig decodes identically under the deployed and new IDLs`);
+
+  // Cost
+  const ext = await extensionNeeded(conn, programId, elf.length);
+  const bufferRent = await conn.getMinimumBalanceForRentExemption(BUFFER_HEADER_SIZE + elf.length);
+  const balance = await conn.getBalance(wallet);
+  logger.info(
+    `  Cost: buffer rent ${formatSol(bufferRent)} (returned on upgrade)` +
+      (ext.bytes ? `, ProgramData +${ext.bytes} bytes = ${formatSol(ext.lamports)} (not refundable)` : '') +
+      `; wallet ${formatSol(balance)}`
+  );
+  if (balance < bufferRent + (mode === 'direct' ? ext.lamports : 0) + 10_000_000) {
+    throw new Error('Wallet balance too low for the buffer (+ extension) and fees');
+  }
+
+  if (isDryRun()) {
+    logger.success(`  DRY RUN: all checks passed; nothing uploaded`);
+    return;
+  }
+
+  await confirmIfMainnet(
+    network,
+    summaryBlock(`${mode} upgrade of ${name} on ${network}`, {
+      program: programId.toBase58(),
+      'new ELF sha256': sha256(elf),
+      'new ELF bytes': String(elf.length),
+      'extend bytes': String(ext.bytes),
+      wallet: wallet.toBase58(),
+      ...(vault ? { 'squads vault': vault.toBase58() } : {}),
+    }),
+    conn
+  );
+
+  const preSlot = await conn.getSlot('confirmed');
+  const bufferFile = bufferKeypairPath(ROOT, network, t.programKey);
+  let buffer: PublicKey | undefined;
+  try {
+    buffer = await writeBuffer(ctx, soPath, bufferFile);
+    await verifyBuffer(conn, buffer, elf);
+    logger.success(`  Buffer ${buffer.toBase58()} holds exactly the local ELF`);
+  } catch (e) {
+    if (buffer || fs.existsSync(bufferFile)) logger.error(recoveryHint(buffer?.toBase58() ?? `<pubkey of ${bufferFile}>`, ctx));
+    throw e;
+  }
+
+  const idlSnap = saveIdlSnapshot(bookNetwork, t.programKey, idlRaw);
+
+  if (mode === 'propose') {
+    await setBufferAuthority(ctx, buffer, vault!);
+    const b = await verifyBuffer(conn, buffer, elf);
+    if (!b.authority?.equals(vault!)) throw new Error(`buffer authority is ${b.authority?.toBase58()}, expected the vault`);
+    fs.rmSync(bufferFile); // the key no longer controls the buffer
+    const proposal: Proposal = {
+      kind: 'okumoney-svm-upgrade-proposal',
+      network,
+      genesisHash,
+      program: name,
+      programId: programId.toBase58(),
+      buffer: buffer.toBase58(),
+      vault: vault!.toBase58(),
+      spill: wallet.toBase58(),
+      elfSha256: sha256(elf),
+      elfSize: elf.length,
+      oldElfSha256: onChain?.sha256 ?? '<unknown>',
+      oldElfSize: onChain?.size ?? 0,
+      extendBytes: ext.bytes,
+      preSlot,
+      preState: flatten(pre),
+      idlSnapshotFile: idlSnap.file,
+      idlSha256: idlSnap.sha256,
+      gitCommit: gitCommit(),
+      createdAt: new Date().toISOString(),
+      createdBy: wallet.toBase58(),
+    };
+    const dir = path.join(ROOT, 'deployments', 'proposals');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${network}-${proposal.createdAt.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}.json`);
+    fs.writeFileSync(file, JSON.stringify(proposal, null, 2) + '\n');
+    logger.header('Proposal ready');
+    logger.info(`  ${path.relative(ROOT, file)}`);
+    logger.info(`  Squads: Developers -> Programs -> ${programId.toBase58()} -> Add upgrade:`);
+    logger.info(`    buffer  ${buffer.toBase58()}`);
+    logger.info(`    spill   ${wallet.toBase58()}  (receives the buffer rent)`);
+    logger.info(`  Signers: the buffer must hash to ${sha256(elf)} (sha256 of the ELF bytes).`);
+    if (ext.bytes) {
+      logger.warning(`  ProgramData must first grow by ${ext.bytes} bytes (ExtendProgram, signed by the vault).`);
+    }
+    logger.info(`  Then: MODE=verify PROPOSAL=${path.relative(ROOT, file)} npm run upgrade -- --network=${network}`);
+    return;
+  }
+
+  // ---- direct ----
+  const capacityBefore = (await programDataInfo(conn, programId)).capacity;
+  if (ext.bytes) {
+    logger.info(`  Extending ProgramData by ${ext.bytes} bytes`);
+    await extendProgram(ctx, programId, ext.bytes);
+  }
+  let signature: string;
+  try {
+    signature = await upgradeFromBuffer(ctx, buffer, programId);
+  } catch (e) {
+    logger.error(recoveryHint(buffer.toBase58(), ctx));
+    throw e;
+  }
+  if (signature === '<unknown-signature>') {
+    signature = await findUpgradeSignature(conn, (await programDataInfo(conn, programId)).address, preSlot);
+  }
+  fs.rmSync(bufferFile, { force: true }); // the loader closed the buffer
+  logger.success(`  Upgraded: ${signature}`);
+
+  const { post, failures } = await postChecks({ provider, idl, programId, elf, pre });
+  if (record) {
+    const rec: UpgradeRecord = {
+      program: name,
+      programId: programId.toBase58(),
+      oldElfSize: onChain?.size ?? 0,
+      newElfSize: elf.length,
+      oldElfSha256: onChain?.sha256 ?? '<unknown>',
+      newElfSha256: sha256(elf),
+      txSignature: signature,
+      timestamp: new Date().toISOString(),
+      deployer: wallet.toBase58(),
+      mode: 'direct',
+      genesisHash,
+      slot: await conn.getSlot('confirmed'),
+      buffer: buffer.toBase58(),
+      programDataCapacityBefore: capacityBefore,
+      programDataCapacityAfter: (await programDataInfo(conn, programId)).capacity,
+      extendLamports: ext.lamports,
+      gitCommit: gitCommit(),
+      solanaCli: solanaCliVersion(),
+      idlSnapshotFile: idlSnap.file,
+      idlSha256: idlSnap.sha256,
+      preState: flatten(pre),
+      postState: flatten(post),
+    };
+    appendUpgradeRecord(bookNetwork, rec);
+    logger.success(`  Recorded in deployments/${bookNetwork}.json`);
+  }
+  if (failures.length) throw new Error(`Upgrade landed but post-checks failed:\n  ${failures.join('\n  ')}`);
 }
 
-// ============================================================================
-// Main
-// ============================================================================
+async function verifyProposal(
+  file: string,
+  network: NetworkName,
+  record: boolean,
+  provider: AnchorProvider,
+  genesisHash: string
+): Promise<void> {
+  const p: Proposal = JSON.parse(fs.readFileSync(file, 'utf-8'));
+  if (p.kind !== 'okumoney-svm-upgrade-proposal') throw new Error(`${file} is not an SVM upgrade proposal`);
+  if (p.network !== network) throw new Error(`Proposal is for ${p.network}, not ${network}`);
+  if (p.genesisHash !== genesisHash) throw new Error(`Proposal was made on another cluster (genesis ${p.genesisHash})`);
+  const conn = provider.connection;
+  const programId = new PublicKey(p.programId);
+  const onChain = await readOnChainElf(conn, programId, p.elfSize);
+  if (onChain.sha256 !== p.elfSha256) throw new Error(`Not executed yet: on-chain ELF is not the proposed one`);
+  const idl = loadIdlSnapshot(p.idlSnapshotFile);
+
+  const shape = await readLitePsmState(conn, idl, programId);
+  const pre = unflatten(p.preState, shape);
+  const failures: string[] = [];
+  try {
+    logger.success(`  ${await assertProgramLive(provider, idl, programId, new PublicKey(p.preState['okuMMint']))}`);
+  } catch (e: any) {
+    failures.push(e.message);
+  }
+  printStateTable(pre, shape);
+  for (const d of diffSnapshots(pre, shape)) {
+    if (d.kind === 'invariant') failures.push(`${d.field}: ${d.before} -> ${d.after}`);
+    else logger.warning(`  ${d.field} changed (${d.kind}): ${d.before} -> ${d.after}`);
+  }
+  const now = BigInt((await conn.getBlockTime(await conn.getSlot('confirmed'))) ?? Math.floor(Date.now() / 1000));
+  failures.push(...checkInvariants(shape, now));
+
+  const pd = await programDataInfo(conn, programId);
+  const signature = await findUpgradeSignature(conn, pd.address, p.preSlot);
+  logger.success(`  Executed: ${signature}`);
+  if (record) {
+    appendUpgradeRecord(network, {
+      program: p.program,
+      programId: p.programId,
+      oldElfSize: p.oldElfSize,
+      newElfSize: p.elfSize,
+      oldElfSha256: p.oldElfSha256,
+      newElfSha256: p.elfSha256,
+      txSignature: signature,
+      timestamp: new Date().toISOString(),
+      deployer: p.vault,
+      mode: 'multisig',
+      genesisHash,
+      slot: await conn.getSlot('confirmed'),
+      buffer: p.buffer,
+      programDataCapacityAfter: pd.capacity,
+      gitCommit: p.gitCommit,
+      solanaCli: solanaCliVersion(),
+      idlSnapshotFile: p.idlSnapshotFile,
+      idlSha256: p.idlSha256,
+      preState: p.preState,
+      postState: flatten(shape),
+    });
+    logger.success(`  Recorded in deployments/${network}.json`);
+  }
+  if (failures.length) throw new Error(`Post-upgrade checks failed:\n  ${failures.join('\n  ')}`);
+}
+
+// ---------------------------------------------------------------------------
 
 async function main() {
   const network = detectNetwork();
-  const networkConfig = NETWORK_CONFIGS[network];
+  const fork = isForkNetwork(network);
+  const bookNetwork = fork ? getParentNetwork(network) : network;
+  const record = !fork;
+  const mode = (process.env.MODE ?? 'direct') as Mode;
+  if (!['direct', 'propose', 'verify'].includes(mode)) throw new Error(`MODE must be direct, propose or verify`);
 
-  logger.header(`OkuMoney SVM Upgrade — ${network}`);
-  logger.info(`Network: ${network} (${networkConfig.cluster})`);
+  logger.header(`OkuMoney SVM upgrade — ${network} — ${mode}`);
+  if (fork) logger.warning(`Fork rehearsal of ${bookNetwork}'s program: nothing is recorded`);
 
-  if (isForkNetwork(network)) {
-    logger.warning(
-      `Running against a fork (${network}). ` +
-        `Upgrades will NOT persist past the fork session. ` +
-        `This is useful for smoke-testing upgrade paths before live execution.`
-    );
+  // 2. Cluster identity (genesis hash) before anything else.
+  const provider = await createProviderWithClusterCheck(network);
+  const genesisHash = await provider.connection.getGenesisHash();
+  logger.info(`Wallet: ${provider.wallet.publicKey.toBase58()} (${walletPath()})`);
+  logger.info(`Cluster genesis: ${genesisHash}`);
+
+  if (mode === 'verify') {
+    if (!process.env.PROPOSAL) throw new Error('MODE=verify requires PROPOSAL=<file>');
+    if (isDryRun()) throw new Error('--dry-run does not apply to MODE=verify (it sends nothing)');
+    return verifyProposal(process.env.PROPOSAL, network, record, provider, genesisHash);
   }
 
-  const targets = parseTargets();
-  logger.info(`Targets: ${targets.join(', ')}`);
-  if (isDryRun()) logger.warning(`--dry-run set — no transactions will be broadcast.`);
-
-  // Resolve provider + signer.
-  const provider = createProvider(network);
-  const walletPubkey = provider.wallet.publicKey;
-  const connection   = provider.connection;
-  const rpcUrl       = solanaUrlFor(network, connection.rpcEndpoint);
-
-  const balanceLamports = await connection.getBalance(walletPubkey);
-  logger.info(`Deployer: ${walletPubkey.toBase58()}`);
-  logger.info(`Balance:  ${formatSol(balanceLamports)} SOL`);
-  logger.log('');
-
-  // Load deployment and Anchor programs once for all targets.
-  const deployment = loadDeployment(network);
-  if (!deployment) {
-    throw new Error(
-      `No deployments/${network}.json found. Run \`npm run deploy:programs\` first.`
-    );
+  const raw = (process.env.TARGETS ?? '').trim();
+  if (!raw) throw new Error(`TARGETS not set. Known: ${Object.keys(UPGRADE_TARGETS).join(', ')}`);
+  for (const name of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const t = UPGRADE_TARGETS[name];
+    if (!t) throw new Error(`Unknown target ${name}. Known: ${Object.keys(UPGRADE_TARGETS).join(', ')}`);
+    await upgradeTarget(name, t, mode, network, bookNetwork, record, provider, genesisHash);
   }
-  const programs = loadPrograms(provider, deployment);
-
-  // Execute upgrades sequentially (fail-fast: a failure on target N halts the
-  // run, but every target that succeeded before N has its audit record saved).
-  const outcomes: UpgradeOutcome[] = [];
-  for (const name of targets) {
-    const target = UPGRADE_TARGETS[name];
-    const outcome = await upgradeOne(
-      name, target, provider, programs, network, rpcUrl
-    );
-    outcomes.push(outcome);
-    logger.log('');
-  }
-
-  // ── Summary ───────────────────────────────────────────────────────────────
-  logger.header('Upgrade Complete');
-  console.log(`Upgraded programs (network: ${network}):`);
-  for (const o of outcomes) {
-    const changed = o.txSignature !== '<bytecode-unchanged>' && o.txSignature !== '<dry-run>';
-    console.log(`  ${o.name}`);
-    console.log(`    programId:   ${o.programId}`);
-    console.log(`    oldElfSha256: ${o.oldElfSha256.slice(0, 16)}…`);
-    console.log(`    newElfSha256: ${o.newElfSha256.slice(0, 16)}…`);
-    if (changed) {
-      console.log(`    sizeDelta:   ${o.newElfSize - o.oldElfSize > 0 ? '+' : ''}${o.newElfSize - o.oldElfSize} bytes`);
-    }
-    console.log(`    txSignature: ${o.txSignature}`);
-  }
-  console.log('');
-  logger.info(`Audit trail: deployments/${network}.json → upgrades[]`);
 }
 
 main()
   .then(() => process.exit(0))
   .catch((err) => {
-    logger.error(`Upgrade failed: ${err.message ?? String(err)}`);
-    console.error(err);
+    logger.error(`Upgrade failed: ${err?.message ?? err}`);
     process.exit(1);
   });

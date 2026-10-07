@@ -20,14 +20,11 @@ import { detectNetwork, createProvider,
   createProviderWithClusterCheck, getNetworkConfig, isForkNetwork, getParentNetwork } from '../utils/network';
 import { confirmIfMainnet } from '../admin/_lib/confirm';
 import { logger } from '../utils/logger';
+import * as path from 'path';
 import { saveDeployment } from '../utils/addressBook';
+import { recordDeployBaseline } from '../upgrade/lib/baseline';
 import { NETWORK_CONFIGS, getActiveRpcInfo } from '../config/networks';
-import {
-  buildPrograms,
-  restoreOriginalKeypairs,
-  deployPrograms,
-  verifyPrograms,
-} from './lib';
+import { withProgramsBuilt, deployPrograms, verifyPrograms } from './lib';
 
 function formatSol(lamports: number): string {
   return (lamports / LAMPORTS_PER_SOL).toFixed(6);
@@ -86,19 +83,10 @@ async function main() {
   }
   logger.log('');
 
-  // Build programs
-  const { originalKeypairs } = await buildPrograms(isFork);
-  logger.log('');
-
-  // Deploy programs
-  let programIds;
-  try {
-    programIds = await deployPrograms(provider, isFork);
-  } finally {
-    if (isFork) {
-      restoreOriginalKeypairs(originalKeypairs);
-    }
-  }
+  // Build + deploy. A fork build swaps fork keypairs into the live workspace;
+  // withProgramsBuilt restores them on every exit path, including a failed
+  // build or `anchor keys sync`.
+  const programIds = await withProgramsBuilt(isFork, () => deployPrograms(provider, isFork));
   logger.log('');
 
   // Verify programs are on-chain
@@ -114,6 +102,25 @@ async function main() {
       litePsm: programIds.litePsm.toBase58(),
     },
   });
+
+  // Upgrade baseline: the IDL of the ELF that is now on-chain, bound by its
+  // hash. The upgrade script diffs the next build against this.
+  const baseline = await recordDeployBaseline({
+    network,
+    connection: provider.connection,
+    programId: programIds.litePsm,
+    deployer: deployerPubkey,
+    soPath: path.join(process.cwd(), 'target/deploy/lite_psm.so'),
+    idlPath: path.join(process.cwd(), 'target/idl/lite_psm.json'),
+  });
+  if (baseline.recorded) {
+    logger.success(`Upgrade baseline recorded (deployments/idl/${baseline.file})`);
+  } else {
+    logger.warning(
+      'On-chain ELF differs from target/deploy/lite_psm.so (program reused from an earlier build?); ' +
+        'no upgrade baseline recorded. The first upgrade will need IDL_BASELINE=<deployed IDL>.'
+    );
+  }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
   logger.log('');

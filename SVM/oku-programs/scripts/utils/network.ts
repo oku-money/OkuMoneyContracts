@@ -135,20 +135,26 @@ export async function verifyCluster(connection: Connection, network: NetworkName
  * Does NOT verify the genesis hash — use createProviderWithClusterCheck for
  * scripts that must guard against wrong-cluster RPC misconfigurations.
  */
+/**
+ * Path of the wallet keypair every script signs with: `WALLET_PATH` (`~`
+ * allowed), else `~/.config/solana/id.json`. Scripts that shell out to the
+ * Solana CLI must pass this explicitly (`--keypair`), or the CLI signs with
+ * whatever its own config.yml names.
+ */
+export function walletPath(): string {
+  return expandHome(process.env.WALLET_PATH || path.join(os.homedir(), '.config/solana/id.json'));
+}
+
 export function createProvider(network?: NetworkName): AnchorProvider {
   const config = getNetworkConfig(network);
+  const walletPath_ = walletPath();
 
-  // Load wallet — accept ~ in WALLET_PATH and fall back to ~/.config/solana/id.json.
-  const walletPath = expandHome(
-    process.env.WALLET_PATH || path.join(os.homedir(), '.config/solana/id.json')
-  );
-
-  if (!fs.existsSync(walletPath)) {
-    throw new Error(`Wallet not found at ${walletPath}`);
+  if (!fs.existsSync(walletPath_)) {
+    throw new Error(`Wallet not found at ${walletPath_}`);
   }
 
   const walletKeypair = Keypair.fromSecretKey(
-    new Uint8Array(JSON.parse(fs.readFileSync(walletPath, 'utf-8')))
+    new Uint8Array(JSON.parse(fs.readFileSync(walletPath_, 'utf-8')))
   );
 
   const wallet = new Wallet(walletKeypair);

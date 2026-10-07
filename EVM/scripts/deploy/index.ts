@@ -32,6 +32,7 @@ import { ROLES, getRoleName } from "../config/roles";
 import { mainnetGuard, isMainnetNetwork } from "../utils/mainnetGuard";
 import { isYesMainnet } from "../utils/cli";
 import { recordRoleGrant } from "../utils/roleRegistry";
+import { recordBaseline } from "../utils/upgradeBaseline";
 import { logger } from "../utils/logger";
 import {
   CREATE2_FACTORY,
@@ -321,6 +322,12 @@ async function deployUUPSProxy(
       }
 
       saveAddress(bookKey, contractName, proxyAddress);
+      // Independent record of the deployed layout, bound to the impl's code
+      // hash; the upgrade script validates against it (upgradeBaseline.ts).
+      await recordBaseline({
+        bookKey, contract: contractName, factoryName: contractName, factory: Factory,
+        proxy: proxyAddress, impl: implAddress, recordedBy: "deploy",
+      });
       return Factory.attach(proxyAddress).connect(deployer) as Contract;
     });
   }
@@ -335,6 +342,11 @@ async function deployUUPSProxy(
     await proxy.waitForDeployment();
     const address = await proxy.getAddress();
     saveAddress(bookKey, contractName, address);
+    await recordBaseline({
+      bookKey, contract: contractName, factoryName: contractName, factory: Factory,
+      proxy: address, impl: await upgrades.erc1967.getImplementationAddress(address),
+      recordedBy: "deploy",
+    });
     return proxy as unknown as Contract;
   });
 }

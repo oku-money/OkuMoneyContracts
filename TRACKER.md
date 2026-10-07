@@ -117,8 +117,9 @@ regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pic
   `EVM/scripts/config/addresses.pre-streaming.json` describe the retired queue-era
   deployments, and `artifacts/evm/MockUSDC.json` is not written by `export-abis`.
   Kept until the next deploy; delete them (and regenerate `artifacts/`) as part of it.
-- Once an audited deployment exists, add an OpenZeppelin `validateUpgrade` check against
-  that deployed implementation. Layouts are pinned only by storage-slot tests.
+- The deploy writes `EVM/scripts/config/upgradeBaselines.json` (layout baseline per proxy)
+  and fresh `.openzeppelin/<chain>.json` manifests. **Commit both**: the upgrade script
+  refuses to run without them (it never `forceImport`s).
 
 ### Open: tooling and CI `[EVM]`
 

@@ -151,3 +151,8 @@ EVM/scripts/README.md
 
 # Local notes / reports (e.g. external audit drafts). No .txt file is tracked.
 *.txt
+
+# Upgrade tooling: fork-key layout baselines and fork-run proposals are ephemeral
+# (live-chain baselines and proposals ARE tracked — see EVM/scripts/upgrade/index.ts).
+EVM/scripts/config/upgradeBaselines.local.json
+EVM/upgrade-proposals/fork-*/

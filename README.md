@@ -731,7 +731,7 @@ step on-chain before the next. Dry-run first (`DRY_RUN=1` on EVM,
    ```
 
 2. Upgrades from here on are proposed to the cold multisig, not signed by
-   the deployer: [`EVM/README.md`](EVM/README.md) § Upgrades.
+   the deployer: [`EVM/README.md`](EVM/README.md#upgrading-deployed-proxies) § Upgrading deployed proxies.
 
 **SVM.** The deploy's `initialize` assigns the 9 granular roles directly to
 their final holders (`MAINNET_*` env vars via `authorities.ts`), but forces

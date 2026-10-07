@@ -92,7 +92,9 @@ Caveats:
 | [`scripts/config/addresses.json`](scripts/config/addresses.json) | **Tracked** per-network address book consumed by deploy / test scripts. Keyed `<chain>` — live deploys only. | Live deploys. |
 | `scripts/config/addresses.local.json` | **Gitignored** half of the same book, keyed `fork:<chain>`. Local-fork deployments are ephemeral (the chain is discarded after the run), so they're split out and never committed. `loadAddressBook()` merges both files, so scripts see one book and need no knowledge of the split. | Every fork run. |
 | [`../testnet-addresses.json`](../testnet-addresses.json) | Canonical, auto-synced multi-chain registry consumed by the SDK / backend / orchestrator. Includes `chainId`, `rpcUrl`, `explorer`, `contracts{}`, `deployer`. | Live deploys only — fork runs never write here. |
-| `.openzeppelin/<network>.json` | OZ upgrades plugin's per-chain proxy/impl manifest. Required for `upgradeProxy` to work. | OZ upgrades plugin. |
+| `.openzeppelin/<network>.json` | OZ upgrades plugin's per-chain proxy/impl manifest. The upgrade script validates against it and **refuses to run** if a proxy is missing (it never `forceImport`s). | Deploy script, upgrade script. |
+| [`scripts/config/upgradeBaselines.json`](scripts/config/upgradeBaselines.json) | **Tracked** storage-layout baseline of the implementation behind each proxy, bound to its runtime code hash; `fork:*` keys go to the gitignored `upgradeBaselines.local.json`. An independent check on the manifest. | Deploy script, upgrade script (direct and `MODE=verify`). |
+| `upgrade-proposals/<chain>/` | **Tracked** multisig upgrade proposals (`<stamp>.json`) and their Safe Transaction Builder batches (`<stamp>.safe.json`). | Upgrade script, `MODE=propose`. |
 
 `DEPLOYMENT_VERSION` is `v0.4`. The address book, registry, and role-grant
 ledger are empty until the clean-slate deploy of that version.
@@ -144,9 +146,10 @@ The script also **verifies itself before reporting success**. Each contract's
 `configureRoles` sends only grants to other holders: `OKUM_MINTER` and
 `OKUM_BURNER` to `LitePSM` (the only contract that ever holds them), then
 `LitePSM`'s minter allowance. `verifyDeployment` then re-reads the chain and
-asserts the complete matrix: all 16 entries of `expectedRoleGrants()` (each
+asserts the complete matrix: all 26 entries of `expectedRoleGrants()` (each
 tagged `initialize` or `script`) via `hasRole`, the LitePSM minter allowance, and
-every contract's presence in the address book, failing the run with an explicit
+every contract's presence in the address book (with exactly one of `MockUSDC` /
+`USDC`, matching `LitePSM.usdc()`), failing the run with an explicit
 list of anything missing. The allowance is checked separately because
 `OkuMoney.mint` gates on *both* `onlyRole(OKUM_MINTER)` and `minterAllowance`.
 
@@ -162,55 +165,85 @@ list of anything missing. The allowance is checked separately because
 
 ### Upgrading deployed proxies
 
-`scripts/upgrade/index.ts` is a generic UUPS-proxy upgrade dispatcher. It
-re-uses the deploy script's network resolution, signer wiring (impersonates
-the dev wallet on a fork), and retry helpers, and adds:
+`scripts/upgrade/index.ts` upgrades one or more UUPS proxies (`OkuMoney`,
+`OkuDollar`, `LitePSM`; always in that order) to the compiled `./src`. Header of
+the script = full reference; this is the runbook.
 
-- **Permission check** — verifies the signer holds the contract-specific
-  `*_UPGRADER` role before broadcasting (auto-grants from the impersonated
-  DEFAULT_ADMIN on a fork; aborts on live with a clear error).
-- **Storage-layout safety** — runs OZ's `prepareUpgrade` so any layout-breaking
-  change aborts the run before any upgrade tx is broadcast.
-- **Pre/post state diff** — snapshots invariant fields per target (see
-  `scripts/upgrade/preState.ts`) and fails the run if anything diverges.
-- **Audit trail** — appends each upgrade to `addresses.json -> upgrades.<bookKey>`
-  with old/new impl, tx hash, signer, and ISO timestamp.
+**Modes.**
 
-Always rehearse against a fork before touching a live deployment:
+| `MODE` | Who calls `upgradeToAndCall` | Use |
+|---|---|---|
+| `direct` (default) | the script's signer, which must hold the `*_UPGRADER` role | testnets, where the deployer keeps its roles |
+| `propose` | nobody yet: writes `upgrade-proposals/<chain>/<stamp>.json` + `<stamp>.safe.json` for `UPGRADE_SAFE` | mainnet, after `grantRolesMainnet.ts` moved the upgraders to the cold Safe |
+| `verify` | — (reads the chain after the Safe executed `PROPOSAL=<stamp>.json`) | closes a `propose` run: records the upgrade and the new layout baseline |
+
+`DRY_RUN=1` runs every pre-broadcast check and sends **nothing** (no
+implementation deploy either), so it needs no `YES_MAINNET`.
+
+**Checks, all before any upgrade transaction.** A target whose runtime code
+(metadata and immutables normalised) already matches the deployed
+implementation is skipped and nothing is recorded. Otherwise:
+
+1. the storage layout is compared against the **recorded baseline** of the
+   deployed implementation (`scripts/utils/upgradeBaseline.ts`), which must
+   describe exactly the implementation behind the proxy (address + code hash);
+2. OpenZeppelin's `validateUpgrade` runs against `.openzeppelin/<chain>.json`. A
+   proxy missing from the manifest is an **error**: re-importing current source
+   would record the new layout as the deployed one and make check 1/2 vacuous
+   (audit U-01). Restore the manifest from git;
+3. the new implementation must be initializer-locked, return the ERC-1967 slot
+   from `proxiableUUID()`, compile from local source, and differ from the
+   current implementation.
+
+**After the upgrade** (direct, or `MODE=verify`): the `Upgraded` event, the
+proxy slot, a block-pinned diff of `preState.ts` snapshots — every wiring,
+config, schedule and role field must be unchanged unless an event that changes
+it was emitted in between — and cross-contract invariants (live multiplier ==
+closed form over the stored schedule, `usdMultiplier == okuMMultiplier`,
+reserves >= shares, LitePSM keeps `OKUM_MINTER`/`OKUM_BURNER`). The audit
+record (`addresses.json -> upgrades.<chain>`: impls, tx, block, chainId, code
+hash, git commit, mode, pre/post state) and the new baseline are written
+before any failure is raised, so an upgrade that landed is always recorded.
 
 ```bash
-# Terminal 1: fork the target chain
-FORK_NETWORK=sepolia hh node
+# Rehearse on a fork of the target chain (uses the live book key; records nothing).
+# Impersonates UPGRADE_SAFE / ledger role holders if the dev wallet lacks the role.
+FORK_NETWORK=base npm run node                                   # terminal 1
+TARGETS=OkuMoney UPGRADE_SAFE=0x... npm run upgrade               # terminal 2
 
-# Terminal 2: rehearse against the live address book key (e.g. "sepolia");
-# the fork:<chain> namespace is skipped (no fork-only proxies to upgrade)
-TARGETS=LitePSM,OkuDollar npm run upgrade
+# Testnet (deployer holds the roles)
+TARGETS=LitePSM npm run upgrade:sepolia
 
-# When the diff is clean, run for real:
-TARGETS=LitePSM,OkuDollar npm run upgrade:sepolia
+# Mainnet (cold Safe holds the roles)
+DRY_RUN=1 MODE=propose UPGRADE_SAFE=0x... TARGETS=OkuMoney npm run upgrade:base
+MODE=propose UPGRADE_SAFE=0x... TARGETS=OkuMoney YES_MAINNET=1 npm run upgrade:base
+#   -> Safe UI: Transaction Builder -> import upgrade-proposals/base/<stamp>.safe.json,
+#      check `to` (proxy) and the impl in `data` against <stamp>.json, sign, execute
+MODE=verify PROPOSAL=upgrade-proposals/base/<stamp>.json npm run upgrade:base
 ```
-
-Supported targets are the keys of `UPGRADE_TARGETS` in
-`scripts/upgrade/index.ts` (one per upgradeable contract). Extend by adding a
-row there and a state reader in `scripts/upgrade/preState.ts`. A target whose
-locally compiled runtime bytecode (metadata-stripped) already matches the
-on-chain implementation is skipped as a no-op.
 
 Env vars:
 
 | Var | Purpose |
 |---|---|
-| `TARGETS` | Comma-separated contract names to upgrade (required). |
-| `NETWORK` | Override chain for live runs; auto-detected on a fork from the running node's chainId. |
-| `PROXY_<Name>` | Per-target proxy address override; defaults to `addresses.json` lookup. |
-| `SKIP_VERIFY` | Skip Etherscan verification of the new implementation. |
-| `SKIP_BYTECODE_CHECK` | Upgrade even when the bytecode already matches the on-chain implementation. |
-| `DRY_RUN` / `YES_MAINNET` | Simulate without broadcasting / required to broadcast on a mainnet network. |
+| `TARGETS` | Comma-separated contract names (required, except `MODE=verify`). |
+| `MODE` | `direct` (default), `propose`, `verify`. |
+| `UPGRADE_SAFE` | Multisig holding the upgrader roles (`propose`; fork impersonation). |
+| `PROPOSAL` | Proposal file to close (`verify`). |
+| `DRY_RUN` | `1`/`true`: all checks, nothing sent. |
+| `YES_MAINNET` | `1`/`true`: required to deploy/upgrade on a mainnet network. |
+| `PROXY_<Name>` | Proxy address override (default: the address book). |
+| `SKIP_VERIFY` | Skip explorer verification of the new implementation. |
+| `SKIP_BYTECODE_CHECK` | Upgrade even if the runtime code is unchanged. |
+| `LOG_CHUNK` | `eth_getLogs` block range per request (default 2000). |
+| `PRIVATE_KEY` / `ETHERSCAN_API_KEY` | Signer / explorer key (Etherscan V2: one key for every chain). |
+| `NETWORK`, `FORK_NETWORK`, `FORK_URL` | Chain selection (see § Quick Start). |
 
-Each contract's `initialize()` grants `DEFAULT_ADMIN_ROLE` and its
-`*_UPGRADER` role to the `_admin` it is given, which the deploy script sets to
-the deployer. A deployer-signed upgrade therefore needs no out-of-band role
-grants unless that role was later moved (see § Role Grants Policy).
+A migration that needs a reinitializer is not supported yet: the script always
+calls `upgradeToAndCall(newImpl, "0x")`. Add a per-target calldata field when
+the first one is needed. `test/hardhat/drill/upgradeDrill.test.ts` exercises
+every mode against the real deploy script with V2 fixtures from
+`test/mocks/UpgradeDrillMocks.sol`.
 
 ### npm scripts
 

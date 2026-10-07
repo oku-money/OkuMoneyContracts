@@ -262,6 +262,9 @@ jobs:
         # not less — so this is gated rather than advisory.
         run: npm run typecheck
 
+      - name: Upgrade-tooling unit tests
+        run: npm run test:scripts
+
       # The bankrun harness overrides the Token-2022 program with a mainnet
       # dump (ScaledUiAmount support); it is not committed, so fetch it.
       - name: Fetch Token-2022 program

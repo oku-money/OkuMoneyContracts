@@ -89,7 +89,6 @@ interface Ctx {
   okuMMint: PublicKey;
   configPda: PublicKey;
   vaultUsdcAta: PublicKey;
-  vaultOkuMAta: PublicKey;
 }
 
 async function buildCtx(): Promise<Ctx & {

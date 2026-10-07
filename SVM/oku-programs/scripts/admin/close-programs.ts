@@ -284,8 +284,9 @@ async function main() {
   await confirmIfMainnet(
     network,
     `close-programs on mainnet — recovers ${fmtSol(totalToRecover)} SOL ` +
-      `across ${toClose.length} program(s)`
-  );
+      `across ${toClose.length} program(s)`,
+      provider.connection
+    );
 
   // 5. Record pre-close wallet balance for end-of-run reconciliation.
   const balBefore = await getBalance(provider.connection, wallet);

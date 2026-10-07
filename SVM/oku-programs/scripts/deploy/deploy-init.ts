@@ -13,13 +13,16 @@
  *   pnpm run deploy:init
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { decodePsmConfig } from '../upgrade/preState';
 
 import { detectNetwork, createProvider,
   createProviderWithClusterCheck, getNetworkConfig } from '../utils/network';
 import { confirmIfMainnet } from '../admin/_lib/confirm';
 import { logger } from '../utils/logger';
-import { loadDeployment, saveDeployment, DeploymentAddresses } from '../utils/addressBook';
+import { loadDeployment, loadDeploymentStrict, saveDeployment, DeploymentAddresses } from '../utils/addressBook';
 import { syncSvmRegistry } from '../utils/testnetRegistry';
 import { loadAuthorities } from '../config/authorities';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
@@ -44,6 +47,21 @@ function formatSol(lamports: number): string {
 // Main
 // ============================================================================
 
+async function onChainAuthorities(
+  provider: Awaited<ReturnType<typeof createProviderWithClusterCheck>>,
+  psmConfig: PublicKey
+): Promise<{ coldMultisig: string; warmMultisig: string; orchestrator: string }> {
+  const info = await provider.connection.getAccountInfo(psmConfig, 'confirmed');
+  if (!info) throw new Error(`PsmConfig ${psmConfig.toBase58()} not found after initialize`);
+  const idl = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'target/idl/lite_psm.json'), 'utf-8'));
+  const cfg = decodePsmConfig(idl, info.data);
+  return {
+    coldMultisig: cfg.roleAdmin.toBase58(),
+    warmMultisig: cfg.pauser.toBase58(),
+    orchestrator: cfg.rebaser.toBase58(),
+  };
+}
+
 async function main() {
   const startTime = Date.now();
 
@@ -58,7 +76,7 @@ async function main() {
   logger.log('');
 
   // Load existing deployment (must have program IDs from deploy-programs)
-  const existingDeployment = loadDeployment(network);
+  const existingDeployment = loadDeploymentStrict(network);
   if (!existingDeployment?.programs?.litePsm) {
     throw new Error(
       `No program deployment found for ${network}. Run 'pnpm run deploy:programs' first.`
@@ -115,7 +133,6 @@ async function main() {
     psmConfig,
     okuMMint,
     vaultUsdc: psmVaultUsdc,
-    vaultOkuM: psmOkuMEscrow,
   } = await initializePsm(
     provider,
     programIds.litePsm,
@@ -138,13 +155,11 @@ async function main() {
     pdas: {
       psmConfig: psmConfig.toBase58(),
       psmVaultUsdc: psmVaultUsdc.toBase58(),
-      psmOkuMEscrow: psmOkuMEscrow.toBase58(),
     },
-    authorities: {
-      coldMultisig: authorities.psm.roleAdmin.toBase58(),
-      warmMultisig: authorities.psm.pauser.toBase58(),
-      orchestrator: authorities.psm.rebaser.toBase58(),
-    },
+    // Read back from chain, not from the intended config: `initialize` forces
+    // role_admin = the deployer whatever MAINNET_COLD_MULTISIG says, and the
+    // record must say who actually holds it (README § Mainnet ceremony).
+    authorities: await onChainAuthorities(provider, psmConfig),
   };
 
   saveDeployment(network, deployment);

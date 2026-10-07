@@ -21,7 +21,7 @@ import {
 } from '@solana/spl-token';
 import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork } from '../utils/network';
-import { loadDeployment } from '../utils/addressBook';
+import { loadDeploymentStrict } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
 import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
@@ -43,7 +43,7 @@ async function main() {
 
   const provider = createProvider(network);
   anchor.setProvider(provider);
-  const deployment = loadDeployment(network);
+  const deployment = loadDeploymentStrict(network);
   if (!deployment?.programs?.litePsm || !deployment.tokens?.usdc) {
     throw new Error(`No deployment for ${network}.`);
   }
@@ -104,7 +104,8 @@ async function main() {
   if (isDryRun()) return logger.success('--dry-run set; not submitting.');
   await confirmIfMainnet(
     network,
-    `deposit_buffer(${amount.toString()}) on mainnet — moves USDC from depositor to vault`
+    `deposit_buffer(${amount.toString()}) on mainnet — moves USDC from depositor to vault`,
+    provider.connection
   );
 
   const sig = await program.methods

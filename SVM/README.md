@@ -121,8 +121,6 @@ pub struct PsmConfig {
 }
 ```
 
-The OkuM escrow ATA is derived client-side.
-
 **`reserved`.** The config is a singleton, so a new field would otherwise force close-and-reinit,
 losing every role and the accrual anchor. **Consume from the FRONT and shrink the array to keep
 `LEN` constant:** no offset moves and deployed accounts stay the right size. There is deliberately no
@@ -264,8 +262,8 @@ SVM mechanism the matrix assumes: roles are **pubkey fields on `PsmConfig`** enf
 ## Initialization
 
 `initialize(InitializeParams)` creates `PsmConfig`, the USDC vault (ATA of the config) and the `OkuM`
-mint (`ScaledUiAmount` authority, mint and freeze authority = the config PDA). The OkuM escrow ATA is
-created client-side by the deploy script.
+mint (`ScaledUiAmount` authority, mint and freeze authority = the config PDA). No other PSM-owned
+account exists: redeems burn straight from the user's OkuM account.
 
 ### Two binding authority constraints at init
 
@@ -384,14 +382,16 @@ separate two-step rotation (ceremony order: [`../README.md` § Mainnet ceremony]
    --new=<SQUADS_COLD_VAULT> --yes-i-mean-it-on-mainnet` (`set_authority(RoleAdmin, new)` writes
    `pending_role_admin`; rejects zero or the current admin). Use the Squads **vault** address (the PDA
    that signs), not the multisig account address.
-2. **Accept (cold multisig, via Squads):** a vault transaction calling `lite_psm::accept_role_admin`
-   with `new_role_admin` = the vault (signer) and `config` = the `PsmConfig` PDA. **No CLI exists**;
-   build it from the IDL (`program.methods.acceptRoleAdmin()`).
-3. **Verify:** `program.account.psmConfig.fetch(config)` shows `roleAdmin == <vault>` and
-   `pendingRoleAdmin` = the default pubkey. The deployment record's `authorities.coldMultisig` comes
-   from the env var, not the chain; do not rely on it.
-4. **Abort:** before step 2 the deployer can call `cancel_role_admin_transfer`
-   (`cancelRoleAdminTransfer()`, IDL-only); a wrong vault address just leaves the proposal pending.
+2. **Accept (cold multisig, via Squads):** `NETWORK=mainnet-beta npm run admin:accept-role-admin --
+   --emit` prints the `accept_role_admin` instruction (program, accounts with signer/writable flags,
+   data) to enter as a Squads vault transaction; `new_role_admin` = the vault. Run without `--emit`
+   when the pending admin is the local wallet (devnet).
+3. **Verify:** re-run `admin:accept-role-admin` (it reports "No transfer pending; role_admin is …")
+   or fetch the config: `roleAdmin == <vault>`, `pendingRoleAdmin` = the default pubkey.
+   `deploy:init` records `authorities.*` from the chain, so right after deploy `coldMultisig` is
+   the deployer, as `initialize` sets it.
+4. **Abort:** before step 2 the current admin runs `npm run admin:cancel-role-admin-transfer`
+   (`--emit` for Squads); a wrong vault address otherwise just leaves the proposal pending.
 
 Afterwards the deployer holds nothing on the PSM; further `set-authority` calls go through Squads.
 
@@ -483,9 +483,11 @@ All under `scripts/admin/`. Each prints a summary before any state change, honou
 | `admin:deposit-buffer` / `admin:withdraw-buffer` | `deposit_buffer` / `withdraw_buffer` | `buffer_depositor` / `buffer_withdrawer` |
 | `admin:update-metadata[:devnet]` | `update_token_metadata` | `role_admin` |
 | `admin:set-upgrade-authority` / `admin:close-programs` | `solana program set-upgrade-authority` (`--new-authority=<vault> --confirm=<vault>` / `--disable`; verifies the result on-chain) / `solana program close` (recover rent) | BPF upgrade authority |
+| `admin:accept-role-admin` / `admin:cancel-role-admin-transfer` | `accept_role_admin` / `cancel_role_admin_transfer` (`--emit` prints the instruction for a Squads vault transaction) | pending `role_admin` / `role_admin` |
 
-No CLI exists for `burn_oku_m_direct`, `accept_role_admin` or `cancel_role_admin_transfer`; call them
-from the IDL.
+Mutating scripts load `deployments/<network>.json` strictly (refusing on a mismatch with
+`Anchor.toml` or `target/idl`) and check the RPC's genesis hash before sending. No CLI exists for
+`burn_oku_m_direct`; call it from the IDL.
 
 ---
 

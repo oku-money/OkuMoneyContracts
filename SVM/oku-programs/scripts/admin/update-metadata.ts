@@ -29,7 +29,7 @@ import { PublicKey } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, getTokenMetadata } from "@solana/spl-token";
 import { LitePsm } from "../../target/types/lite_psm";
 import { createProvider, detectNetwork } from "../utils/network";
-import { loadDeployment } from "../utils/addressBook";
+import { loadDeploymentStrict } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { derivePsmConfigPDA } from "../utils/pdaHelpers";
 import { confirmIfMainnet, isDryRun, summaryBlock } from "./_lib/confirm";
@@ -40,7 +40,7 @@ async function main() {
 
   const provider = createProvider(network);
   anchor.setProvider(provider);
-  const deployment = loadDeployment(network);
+  const deployment = loadDeploymentStrict(network);
   if (!deployment?.programs?.litePsm || !deployment.tokens?.okuM) {
     throw new Error(`No deployment for ${network}.`);
   }
@@ -73,7 +73,8 @@ async function main() {
   if (isDryRun()) return logger.success("--dry-run set; not submitting.");
   await confirmIfMainnet(
     network,
-    "update_token_metadata() on mainnet — rewrites OkuM mint name/symbol to OkuMoney/OkuM"
+    "update_token_metadata() on mainnet — rewrites OkuM mint name/symbol to OkuMoney/OkuM",
+    provider.connection
   );
 
   const sig = await program.methods

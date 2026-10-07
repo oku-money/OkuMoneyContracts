@@ -7,8 +7,7 @@
  * process boot, so each test run starts with pristine authorities.
  *
  * `initializePsm` runs the PSM `initialize` instruction against the
- * supplied program, then creates the OkuM escrow ATA client-side (there
- * is no on-chain escrow-setup instruction). No memoization, no singleton,
+ * supplied program. No memoization, no singleton,
  * no cross-file cache — every bankrun cluster is fresh and the on-chain
  * PsmConfig must always be created by the calling describe's `before()`
  * hook.
@@ -35,7 +34,6 @@ import type { LitePsm } from "../../target/types/lite_psm";
 import type { BankrunHarness } from "./bankrun";
 import {
   fundKeypairs,
-  ensureAtaViaBankrun,
   seedProgramData,
   programDataAddress,
 } from "./bankrun";
@@ -81,7 +79,6 @@ export interface PsmSetupResult {
   configPda: PublicKey;
   okuMMint: PublicKey;
   vaultUsdcAta: PublicKey;
-  vaultOkuMAta: PublicKey;
 }
 
 /**
@@ -92,8 +89,6 @@ export interface PsmSetupResult {
  *   2. `initialize(...)` — creates PsmConfig + USDC vault + OkuM mint
  *      (the program creates the Token-2022 mint with ScaledUiAmount +
  *      MetadataPointer + TokenMetadata extensions)
- *   3. create the OkuM escrow ATA client-side (idempotent ATA create;
- *      no on-chain PSM instruction needed for this step)
  *
  * Authority roles use the same keypair-per-role mapping as the deploy
  * config: cold for high-security, warm for medium, psmOrchestrator for
@@ -119,12 +114,6 @@ export async function initializePsm(
     configPda,
     true,
     TOKEN_PROGRAM_ID
-  );
-  const vaultOkuMAta = getAssociatedTokenAddressSync(
-    okuMMint,
-    configPda,
-    true,
-    TOKEN_2022_PROGRAM_ID
   );
 
   // Fund the shared authorities so they can pay rent / fees when they
@@ -173,12 +162,7 @@ export async function initializePsm(
     .signers([okuMMintKeypair])
     .rpc();
 
-  // Create the OkuM escrow ATA client-side (idempotent). There is no
-  // on-chain escrow-setup instruction; this ATA is retained for tests that
-  // reference `vaultOkuMAta`.
-  await ensureAtaViaBankrun(h, configPda, okuMMint, TOKEN_2022_PROGRAM_ID);
-
-  return { configPda, okuMMint, vaultUsdcAta, vaultOkuMAta };
+  return { configPda, okuMMint, vaultUsdcAta };
 }
 
 // ---------------------------------------------------------------------------

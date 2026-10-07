@@ -18,7 +18,7 @@ import { BN, Program } from '@anchor-lang/core';
 import { PublicKey } from '@solana/web3.js';
 import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork } from '../utils/network';
-import { loadDeployment } from '../utils/addressBook';
+import { loadDeploymentStrict } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
 import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
@@ -42,7 +42,7 @@ async function main() {
 
   const provider = createProvider(network);
   anchor.setProvider(provider);
-  const deployment = loadDeployment(network);
+  const deployment = loadDeploymentStrict(network);
   if (!deployment?.programs?.litePsm) {
     throw new Error(`No deployment for ${network}.`);
   }
@@ -65,7 +65,8 @@ async function main() {
   if (isDryRun()) return logger.success('--dry-run set; not submitting.');
   await confirmIfMainnet(
     network,
-    `set_minter_allowance(${amount.toString()}) on mainnet — resets minter budget`
+    `set_minter_allowance(${amount.toString()}) on mainnet — resets minter budget`,
+    provider.connection
   );
 
   const sig = await program.methods

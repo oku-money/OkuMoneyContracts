@@ -227,13 +227,6 @@ Operator CLI entry points are covered only in-process by the drill. A
 spawn-based test asserting exit codes against a fork would have caught the
 flag-vs-env-var breakage on day one. Deferred post-audit.
 
-### Operator CLI gaps `[SVM]`
-
-`accept-role-admin.ts`, `cancel-role-admin-transfer.ts` — the second step of the
-two-step `role_admin` transfer happens once per rotation, signed by the cold
-multisig via Squads; the IDL call documented in `README.md` § Mainnet ceremony is
-sufficient. Build CLIs only if the runbook requires them.
-
 ### Audit-attention surfaces `[both]`
 
 Informational only — where reviewer time will concentrate:

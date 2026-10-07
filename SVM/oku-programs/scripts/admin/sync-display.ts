@@ -31,8 +31,8 @@ import { Program } from '@anchor-lang/core';
 import { PublicKey } from '@solana/web3.js';
 import { TOKEN_2022_PROGRAM_ID, getMint, getScaledUiAmountConfig } from '@solana/spl-token';
 import { LitePsm } from '../../target/types/lite_psm';
-import { createProvider, detectNetwork } from '../utils/network';
-import { loadDeployment } from '../utils/addressBook';
+import { createProviderWithClusterCheck, detectNetwork } from '../utils/network';
+import { loadDeploymentStrict } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
 import { isDryRun, summaryBlock } from './_lib/confirm';
@@ -112,9 +112,11 @@ async function main() {
   const network = detectNetwork();
   logger.header(`sync display multiplier (${network})`);
 
-  const provider = createProvider(network);
+  // Cluster-checked: no confirmation prompt (below), so the genesis hash is
+  // the only guard against a SOLANA_RPC_URL pointed at the wrong cluster.
+  const provider = await createProviderWithClusterCheck(network);
   anchor.setProvider(provider);
-  const deployment = loadDeployment(network);
+  const deployment = loadDeploymentStrict(network);
   if (!deployment?.programs?.litePsm || !deployment.tokens?.okuM) {
     throw new Error(`No deployment for ${network}.`);
   }
@@ -122,10 +124,18 @@ async function main() {
   const litePsmId = new PublicKey(deployment.programs.litePsm);
   const okuMMint = new PublicKey(deployment.tokens.okuM);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
+  // One program id: the workspace IDL's address must be the deployed program
+  // the PDA was derived from, or the tx would target a different program.
+  if (!program.programId.equals(litePsmId)) {
+    throw new Error(
+      `target/idl address ${program.programId.toBase58()} != deployments/${network}.json ${litePsmId.toBase58()}`
+    );
+  }
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
-  // No mainnet confirmation gate: this is permissionless, cosmetic, and
-  // cannot move value. Prompting for it would discourage running it.
+  // No mainnet confirmation prompt, deliberately: this is permissionless,
+  // cosmetic, and cannot move value, and `--loop` runs unattended. The
+  // cluster and program-id checks above still apply.
   if (!process.argv.includes('--loop')) {
     await syncOnce(program, provider as anchor.AnchorProvider, psmConfig, okuMMint);
     return;

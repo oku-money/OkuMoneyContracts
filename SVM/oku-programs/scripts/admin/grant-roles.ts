@@ -41,7 +41,7 @@ import * as os from 'os';
 import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork, loadKeypair } from '../utils/network';
 import { loadDevnetAuthority } from '../config/authorities';
-import { loadDeployment } from '../utils/addressBook';
+import { loadDeploymentStrict } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
@@ -161,7 +161,7 @@ async function main() {
   const provider = createProvider(network);
   anchor.setProvider(provider);
 
-  const deployment = loadDeployment(network);
+  const deployment = loadDeploymentStrict(network);
   if (!deployment?.programs?.litePsm) {
     throw new Error(`No lite-psm deployment for ${network}; run deploy:programs first.`);
   }
@@ -188,7 +188,7 @@ async function main() {
   );
 
   if (!dryRun) {
-    await confirmIfMainnet(network, 'grant-roles: about to send role-rotation transactions.');
+    await confirmIfMainnet(network, 'grant-roles: about to send role-rotation transactions.', provider.connection);
   }
 
   const results: GrantResult[] = [];

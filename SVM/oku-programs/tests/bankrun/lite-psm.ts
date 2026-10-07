@@ -64,7 +64,6 @@ describe("lite-psm", () => {
 
   // Token accounts
   let vaultUsdcAta: PublicKey;
-  let vaultOkuMAta: PublicKey;
   let userUsdcAta: PublicKey;
   let userOkuMAta: PublicKey;
   let user2UsdcAta: PublicKey;
@@ -103,7 +102,6 @@ describe("lite-psm", () => {
     configPda = psmSetup.configPda;
     okuMMint = psmSetup.okuMMint;
     vaultUsdcAta = psmSetup.vaultUsdcAta;
-    vaultOkuMAta = psmSetup.vaultOkuMAta;
 
     [, configBump] = PublicKey.findProgramAddressSync(
       [Buffer.from("psm_config")],

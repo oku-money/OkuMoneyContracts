@@ -23,6 +23,8 @@
     "admin:update-metadata": "tsx scripts/admin/update-metadata.ts",
     "admin:update-metadata:devnet": "NETWORK=devnet tsx scripts/admin/update-metadata.ts",
     "admin:set-upgrade-authority": "tsx scripts/admin/set-upgrade-authority.ts",
+    "admin:accept-role-admin": "tsx scripts/admin/accept-role-admin.ts",
+    "admin:cancel-role-admin-transfer": "tsx scripts/admin/cancel-role-admin-transfer.ts",
     "admin:pause-psm": "tsx scripts/admin/pause-psm.ts",
     "admin:unpause-psm": "tsx scripts/admin/unpause-psm.ts",
     "admin:set-max-supply": "tsx scripts/admin/set-max-supply.ts",

@@ -84,7 +84,6 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
     },
     pdas: {
       psmConfig: deployment.pdas?.psmConfig,
-      psmOkuMEscrow: deployment.pdas?.psmOkuMEscrow,
       psmVaultUsdc: deployment.pdas?.psmVaultUsdc,
     },
     authorities: deployment.authorities,

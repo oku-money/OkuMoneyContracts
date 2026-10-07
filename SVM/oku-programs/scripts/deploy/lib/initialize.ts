@@ -96,8 +96,6 @@ export interface PsmInitResult {
   okuMMint: PublicKey;
   /** USDC vault ATA, owned by `psmConfig`. Created by `initialize()`. */
   vaultUsdc: PublicKey;
-  /** OkuM escrow ATA, owned by `psmConfig`. Created client-side (idempotent ATA). */
-  vaultOkuM: PublicKey;
 }
 
 /**
@@ -204,34 +202,6 @@ export async function initializePsm(
     } else {
       throw error;
     }
-  }
-
-  // Setup OkuM escrow vault (ATA owned by config PDA).
-  // Created client-side via the standard ATA program (idempotent); there is
-  // no on-chain escrow-setup instruction.
-  const vaultOkuM = getAssociatedTokenAddressSync(okuMMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
-  logger.info('Setting up OkuM escrow vault...');
-
-  const existingAtaInfo = await provider.connection.getAccountInfo(
-    vaultOkuM,
-    'confirmed'
-  );
-  if (existingAtaInfo && existingAtaInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) {
-    logger.warning(
-      `OkuM escrow vault ATA ${vaultOkuM.toBase58()} already exists (Token-2022 program). Skipping setup.`
-    );
-  } else {
-    const createAtaIx = createAssociatedTokenAccountIdempotentInstruction(
-      provider.wallet.publicKey, // payer
-      vaultOkuM,                // ata
-      psmConfig,                // owner (PDA)
-      okuMMint,                 // mint
-      TOKEN_2022_PROGRAM_ID,
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    );
-    const tx = new Transaction().add(createAtaIx);
-    await provider.sendAndConfirm(tx);
-    logger.success('OkuM escrow vault initialized');
   }
 
   // ---- Step 4: Configure direct-minter role + allowance ----
@@ -374,7 +344,6 @@ export async function initializePsm(
     psmConfig,
     okuMMint,
     vaultUsdc,
-    vaultOkuM,
   };
 }
 

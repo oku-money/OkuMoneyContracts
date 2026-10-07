@@ -16,6 +16,7 @@
  *   6. V3 ELF, propose                 -> buffer handed to the vault, program untouched
  *   7. the vault executes              (solana program upgrade, as Squads would)
  *   8. verify                          -> recorded as multisig
+ *   9. role_admin CLIs                 propose, cancel, propose, accept
  *
  * V2/V3 are the real build with one byte of the embedded security.txt
  * changed: distinct ELFs, identical behaviour. Everything runs against a temp
@@ -217,6 +218,18 @@ async function main() {
     if (r.code !== 0) console.log(r.out.slice(-4000));
     check(records().at(-1)?.mode === 'multisig', 'recorded as multisig');
     fs.rmSync(path.join(ROOT, proposalRel!), { force: true });
+
+    step('9. role_admin handover CLIs: propose -> cancel -> propose -> accept (as the vault)');
+    execFileSync('solana', ['transfer', vault.publicKey.toBase58(), '2', '--allow-unfunded-recipient', '--keypair', walletFile, '--url', 'localhost'], { stdio: 'pipe' });
+    const propose = () => run('scripts/admin/set-authority.ts', env, ['--role=roleAdmin', `--new=${vault.publicKey.toBase58()}`]);
+    check(propose().code === 0, 'proposed');
+    r = run('scripts/admin/cancel-role-admin-transfer.ts', env);
+    check(r.code === 0 && /Pending transfer cleared/.test(r.out), 'cancelled by the current admin');
+    check(propose().code === 0, 'proposed again');
+    r = run('scripts/admin/accept-role-admin.ts', env);
+    check(r.code === 0 && /accept_role_admin — sign as/.test(r.out), 'non-pending wallet gets the instruction printed, nothing sent');
+    r = run('scripts/admin/accept-role-admin.ts', { ...env, WALLET_PATH: vaultFile });
+    check(r.code === 0 && /role_admin is now/.test(r.out), 'accepted by the pending admin');
   } finally {
     validator?.kill('SIGTERM');
     if (fs.existsSync(LOCALNET_JSON)) fs.unlinkSync(LOCALNET_JSON);

@@ -4,7 +4,9 @@
  *
  * `loadDeployment` cross-checks the on-disk program IDs against
  * `Anchor.toml [programs.<network>]` and warns on mismatch (stale file from a
- * previous deploy); `loadDeploymentStrict` throws instead.
+ * previous deploy); `loadDeploymentStrict` throws instead. Every script that
+ * SENDS transactions uses the strict loader (audit O-01); the warn-only one is
+ * for read-only tools and `close-programs.ts`, whose job is stale deployments.
  * Rent recovery for stale deployments: see README § Deployment.
  */
 
@@ -80,7 +82,6 @@ export interface DeploymentAddresses {
   pdas: {
     psmConfig?: string;
     psmVaultUsdc?: string;
-    psmOkuMEscrow?: string;
   };
   authorities?: {
     coldMultisig?: string;
@@ -155,6 +156,10 @@ export function diffDeploymentProgramIds(
   network: NetworkName,
   deployment: DeploymentAddresses
 ): { key: string; fromFile: string; fromAnchorToml: string }[] {
+  // Fork deployments use target/deploy-fork keypairs, whose ids are
+  // deliberately NOT in Anchor.toml (the fork build syncs them in only for the
+  // duration of the build). Nothing to compare against.
+  if (network === 'devnet-fork' || network === 'mainnet-fork') return [];
   const anchorPrograms = readAnchorTomlPrograms(anchorSectionFor(network));
   if (Object.keys(anchorPrograms).length === 0) return [];
   const map: Array<[string, keyof DeploymentAddresses['programs']]> = [
@@ -229,6 +234,19 @@ export function loadDeploymentStrict(
     throw new Error(
       `No deployments/${network}.json found. Run \`npm run deploy:init\` first.`
     );
+  }
+  // Admin scripts build transactions with `anchor.workspace.LitePsm`, whose
+  // program id is target/idl's `address`, but derive PDAs from this file. The
+  // two must be one program or a script would sign for the wrong one.
+  if (network !== 'devnet-fork' && network !== 'mainnet-fork') {
+    const idlPath = path.join(process.cwd(), 'target', 'idl', 'lite_psm.json');
+    const idlAddress = fs.existsSync(idlPath) ? JSON.parse(fs.readFileSync(idlPath, 'utf-8')).address : undefined;
+    if (idlAddress && data.programs?.litePsm && idlAddress !== data.programs.litePsm) {
+      throw new Error(
+        `target/idl/lite_psm.json address ${idlAddress} != deployments/${network}.json ` +
+          `programs.litePsm ${data.programs.litePsm}. Rebuild (anchor build) for this cluster's program.`
+      );
+    }
   }
   const diffs = diffDeploymentProgramIds(network, data);
   if (diffs.length > 0) {

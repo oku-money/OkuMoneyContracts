@@ -36,22 +36,24 @@ export function isDryRun(): boolean {
  *   - the `--yes-i-mean-it-on-mainnet` flag, OR
  *   - an interactive `yes` typed into stdin.
  *
- * On devnet/localnet, no-op.
+ * On every cluster, first verifies the RPC's genesis hash (see `connection`).
  */
 export async function confirmIfMainnet(
   network: NetworkName,
   summary: string,
-  /** Optional connection for genesis-hash cluster verification. */
-  connection?: Connection
+  /**
+   * Required: the connection the script is about to send through. Its genesis
+   * hash is checked on EVERY cluster that has a known one (devnet and
+   * mainnet-beta), so a SOLANA_RPC_URL pointing at the wrong cluster stops
+   * the script here instead of sending there.
+   */
+  connection: Connection
 ): Promise<void> {
+  await verifyCluster(connection, network);
+
   const isMainnet =
     network === 'mainnet-beta' || network === 'mainnet-fork';
   if (!isMainnet) return;
-
-  // Verify cluster genesis hash to catch wrong-cluster RPC misconfigurations.
-  if (connection) {
-    await verifyCluster(connection, network);
-  }
 
   if (process.argv.includes('--yes-i-mean-it-on-mainnet')) return;
 

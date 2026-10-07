@@ -747,8 +747,9 @@ authorities, not on-chain state.
      --role=roleAdmin --new=<SQUADS_COLD_VAULT> --yes-i-mean-it-on-mainnet
    ```
 
-2. **Accept** with `accept_role_admin`, signed by the cold Squads vault (no CLI;
-   a Squads transaction against the IDL).
+2. **Accept** with `accept_role_admin`, signed by the cold Squads vault:
+   `npm run admin:accept-role-admin -- --emit` prints the instruction for the
+   Squads vault transaction.
 3. **Verify** on-chain: `PsmConfig.role_admin` is the cold vault and
    `pending_role_admin` is the zero pubkey.
 4. **Only then** transfer the BPF upgrade authority

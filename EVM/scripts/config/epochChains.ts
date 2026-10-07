@@ -4,8 +4,8 @@
  *
  * `CHAIN_METADATA` contains all 11 known EVM chains, including `mainnet`,
  * `base`, and `bsc` mainnet — chains this protocol is not live on for the
- * internal-testing MVP (and `base`/`bsc` DO have stale pre-streaming
- * deployments in the address book; see `addresses.pre-streaming.json`).
+ * internal-testing MVP (`base`/`bsc` had pre-streaming deployments, archived
+ * in `addresses.pre-streaming.json`; the live address book has none).
  * Scoping the broadcast recipient set and V̄'s denominator independently would
  * let them diverge, which is exactly the cross-chain inconsistency the
  * streaming-yield design eliminates structurally.

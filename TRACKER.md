@@ -113,6 +113,24 @@ Things a contributor could not learn from the code alone:
   receipt instead of re-sending; without it, check on-chain state with
   `admin:read-schedule` before re-sending.
 
+### External audit triage (report of 2026-10-06, revision `06d3c8f`) `[both]`
+
+The report (kept locally, untracked) predates the queue removal and the rate-schedule
+split. Every finding was re-checked against current code; disposition:
+
+| ID | Finding | Disposition |
+|---|---|---|
+| U-01 | EVM upgrade `forceImport`s the proposed factory as the current layout | Fixed: never `forceImport`s; layout baseline bound to the deployed code hash (`upgradeBaseline.ts`); false "already upgraded" refused; `upgradeDrill.test.ts` |
+| U-02 | SVM upgrade targets the keypair file, not the validated program id | Fixed: base58 id + explicit `--keypair` / `--upgrade-authority`; identity binding (`upgrade/lib/identity.ts`) |
+| U-03 | SVM upgrade accepts an ELF compiled for another `declare_id!` | Fixed: ELF must embed the id; IDL address not overwritten; post-upgrade simulated instruction (`lib/liveness.ts`); `drill:upgrade` |
+| U-04 | Failed fork build leaves fork keypairs / ids in the live workspace | Fixed: `withProgramsBuilt` restores in `finally`, incl. originally-absent keypairs |
+| O-01 | Warn-only deployment loader in mutating SVM scripts | Fixed: `loadDeploymentStrict` everywhere that sends, also bound to `target/idl` |
+| O-02 | Optional SVM cluster check | Fixed: `confirmIfMainnet` requires the connection and checks the genesis hash on every known cluster |
+| O-03 / O-04 / O-05 | Queue blacklist settlement, queue reserve, queue pause docs | Obsolete: the queue was removed; current pause docs match the code |
+| — | SVM freeze is account-scoped | Documented: `AUTHORITY-MATRIX.md` S13 and §4 |
+| P-01 … P-07 | Epoch tooling | Fixed in the PoC scripts; see the out-of-scope section above |
+| — | Rejected candidates (expiry `>`, rounding, reentrancy, …) | Rejection confirmed; strict `>` expiry is identical in Solidity, Rust and TypeScript |
+
 ### Early-shock detection — out of scope, unimplemented `[both]`
 
 An alert that watches distributed-so-far against the epoch target and halts early
@@ -149,7 +167,7 @@ regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pic
   and fresh `.openzeppelin/<chain>.json` manifests. **Commit both**: the upgrade script
   refuses to run without them (it never `forceImport`s).
 
-### Open: tooling and CI `[EVM]`
+### Open: tooling and CI `[both]`
 
 - CI needs an `ANKR_FREEMIUM_API_KEY` repo secret for the pinned, cached mainnet fork.
   Without it fork suites run at latest and warn. The key is rejected for Optimism
@@ -158,6 +176,14 @@ regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pic
   `block-timestamp`, `unsafe-typecast` and `require-revert-in-loop` in `src/`; each site
   carries a `forge-lint: disable-next-item(...)` with a reason. Foundry < 1.8 rejects those
   ids as unknown, so run the lint locally with the pinned version (`foundryup -i v1.8.5`).
+- Upgrade tooling gaps, known and deliberate for now: EVM upgrades always call
+  `upgradeToAndCall(newImpl, "0x")` (add per-target calldata with the first reinitializer);
+  SVM `MODE=propose` only *reports* a needed ProgramData extension (the vault must sign
+  `ExtendProgram` first); SVM fork rehearsal in `direct` mode needs the wallet to be the
+  upgrade authority on the fork; `security_txt` carries no `source_revision` (provenance:
+  `gitCommit` in upgrade records, `npm run build:verifiable`).
+- `npm run drill:upgrade` (SVM, real validator) is not in CI; run it before shipping an
+  SVM upgrade. SVM `npm run lint` (prettier) is not enforced and ~70 files do not conform.
 
 ### OPEN: deferred audit items `[both]`
 

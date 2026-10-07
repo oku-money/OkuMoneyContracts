@@ -92,7 +92,7 @@ Roles are **pubkeys stored on `PsmConfig`**, enforced by Anchor `has_one`, not a
 | S10 | `set_minter_allowance` | `allowance_manager` | **Single global** PSM mint allowance (EVM's is per-address) | — | Yes |
 | S11 | `set_direct_minter_allowance` | `allowance_manager` | Bound/starve S5 — **the only off-switch for S5** | — | Yes |
 | S12 | `set_direct_burner_allowance` | `allowance_manager` | Bound S6 | — | Yes |
-| S13 | `freeze_account` | `freezer` | Freeze an ATA via Token-2022 (blocks send **and** receive) | not pause-gated, by design | Yes (S14) |
+| S13 | `freeze_account` | `freezer` | Freeze **one** OkuM token account (any, not only the ATA) via Token-2022: blocks send **and** receive on that account. The owner's other OkuM accounts are unaffected | not pause-gated, by design | Yes (S14) |
 | S14 | `thaw_account` | `unfreezer` | Unfreeze | — | — |
 | S15 | `pause` / `unpause` | `pauser` / `unpauser` | Halt user paths | — | Yes |
 | S16 | `set_authority` | `role_admin` | Rotate any other role — **commits immediately**; only `RoleAdmin` is two-step | rejects `Pubkey::default()`; forbids assigning a granular role to `role_admin` | Yes |
@@ -151,7 +151,7 @@ together, since the rule is not stated in one place.
 
 | | EVM | SVM |
 |---|---|---|
-| Compliance freeze | `isBlacklisted` mapping, one per token; OkuDollar also honours OkuMoney's list. `operator/blacklistBoth.ts` is a convenience that writes both | Token-2022 freeze authority |
+| Compliance freeze | `isBlacklisted` mapping, one per token; OkuDollar also honours OkuMoney's list. `operator/blacklistBoth.ts` is a convenience that writes both. **Address-scoped**: covers everything the address holds | Token-2022 freeze authority. **Account-scoped**: freezes one token account, not the wallet. A frozen owner can still hold and receive OkuM in any other OkuM token account (a new ATA-like account costs nothing to create), and PSM pause does not stop Token-2022 transfers. Immobilising a wallet means freezing every account it owns, found off-chain (`getTokenAccountsByOwner`), and re-checking for new ones; an owner-wide block would need a transfer hook or registry, which v1 does not have |
 | Uncollateralised mint | none (equivalent = granting `OKUM_MINTER` to an EOA) | `direct_mint` / `direct_burn` |
 | Role rotation | OZ `AccessControl`, immediate | every role immediate except `role_admin`, which is two-step |
 | Upgrade | UUPS ×3, per-contract role | BPF loader, single authority |

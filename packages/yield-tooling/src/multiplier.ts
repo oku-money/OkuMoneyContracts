@@ -155,7 +155,8 @@ export function computeMultiplier(s: Schedule, nowTs: bigint): bigint {
  * The rate actually accruing at `nowTs`, which lags the stored
  * `ratePerSecond` once the active window has closed.
  *
- * Port of `OkuMoney.sol:321-331`.
+ * Port of `OkuMoneyRateSchedule.okuMEffectiveRatePerSecond` (EVM) and
+ * `oku_shared::rate::Schedule::effective_rate` (SVM).
  */
 export function effectiveRate(s: Schedule, nowTs: bigint): bigint {
   if (s.rateEnd !== 0n && nowTs > s.rateEnd) {

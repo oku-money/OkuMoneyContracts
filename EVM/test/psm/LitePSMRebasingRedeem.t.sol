@@ -12,7 +12,7 @@ import {MathLib} from "../../src/lib/MathLib.sol";
  * @notice Regression suite for `LitePSM.redeemUsdOku` when
  *         `okuDollar.usdMultiplier() > 1e18` (i.e. yield is live and accruing).
  *
- * @dev Historical bug (Sepolia, May 2026): `_redeemUsdOku` pulled UsdOku by nominal
+ * @dev Historical bug (Sepolia, May 2026): `redeemUsdOku` pulled UsdOku by nominal
  *      amount and then called `unwrap(amount)` with the same nominal value. Because
  *      `OkuDollar.transferFrom` floors the share conversion and `OkuDollar.unwrap`
  *      ceils the share burn, the PSM ended up holding 1 share less than `unwrap`
@@ -63,8 +63,8 @@ contract LitePSMRebasingRedeemTest is BaseTest {
 
     function setUp() public override {
         super.setUp();
-        // Seed users and PSM buffer. Use a generous buffer so redeem path stays
-        // on the instant USDC payout branch (not the queue).
+        // Seed users and PSM buffer. Use a generous buffer so redemptions never
+        // hit InsufficientBuffer.
         _mintUsdc(user1, 10_000_000e6);
         _mintUsdc(user2, 10_000_000e6);
         _mintUsdc(address(litePsm), 10_000_000e6);
@@ -123,7 +123,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         //
         // Tolerance is 2 collateral units: `OkuDollar.transferFrom` floors the
         // share conversion while `unwrap` ceils the burn, so the pair can differ
-        // by a wei before the 18->6 truncation (see `LitePSM._redeemUsdOku`).
+        // by a wei before the 18->6 truncation (see `LitePSM.redeemUsdOku`).
         assertApproxEqAbs(
             usdcReceived,
             usdAmount / 1e12,

@@ -5,8 +5,6 @@ import {
     OkuMoney__factory,
     OkuDollar,
     OkuDollar__factory,
-    RedemptionQueue,
-    RedemptionQueue__factory,
     IERC20__factory
 } from "../../../typechain-types"
 import { Signer, parseEther, parseUnits } from "ethers"
@@ -29,7 +27,6 @@ describe("OkuMoney Scenarios", () => {
     let Charlie: Signer
 
     let psm: LitePSM
-    let queue: RedemptionQueue
     let okuMoney: OkuMoney
     let okuUsd: OkuDollar
 
@@ -37,7 +34,6 @@ describe("OkuMoney Scenarios", () => {
 
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
     const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
-    const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
     const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
     const OKUM_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_PAUSER"))
@@ -46,7 +42,6 @@ describe("OkuMoney Scenarios", () => {
     const OKUM_UNBLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_UNBLACKLISTER"))
     const OKUM_CAP_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_CAP_MANAGER"))
     const PSM_BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("PSM_BUFFER_WITHDRAWER"))
-    const PSM_QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("PSM_QUEUE_PROCESSOR"))
 
     async function fundWithUSDC(user: Signer, amount: bigint) {
         await network.provider.request({
@@ -61,16 +56,7 @@ describe("OkuMoney Scenarios", () => {
         })
     }
 
-    /**
-     * Mint OkuM for `user` by depositing exactly `usdcAmount`.
-     *
-     * The previous version rounded the input up to a multiple of the multiplier
-     * to dodge "the PSM slippage check". No such check exists -- `LitePSM` has
-     * no slippage parameter by design, and the two checks that once looked like
-     * one were removed as unreachable. The rounding only served to make the
-     * resulting OkuM amount divide evenly, which is what let several assertions
-     * downstream look exact while actually re-deriving the contract's formula.
-     */
+    /** Mint OkuM for `user` by depositing exactly `usdcAmount` (LitePSM has no slippage parameter). */
     async function getOkuMoney(user: Signer, usdcAmount: bigint) {
         await fundWithUSDC(user, usdcAmount)
         await usdc.connect(user).approve(await psm.getAddress(), usdcAmount)
@@ -113,30 +99,18 @@ describe("OkuMoney Scenarios", () => {
         ) as unknown as OkuDollar
         await okuUsd.waitForDeployment()
 
-        queue = await upgrades.deployProxy(
-            new RedemptionQueue__factory(Frank),
-            // initialize(_okuMoney, _usdc, admin) — see fork/LitePSM.ts for context.
-            [await okuMoney.getAddress(), USDC_MAINNET, frankAddr],
-            { kind: "uups" }
-        ) as unknown as RedemptionQueue
-        await queue.waitForDeployment()
-
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            // initialize(_okuMoney, _okuDollar, _usdc, _redemptionQueue, admin)
+            // initialize(_okuMoney, _okuDollar, _usdc, admin)
             [
                 await okuMoney.getAddress(),
                 await okuUsd.getAddress(),
                 USDC_MAINNET,
-                await queue.getAddress(),
                 frankAddr
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
-
-        // OkuBridgeRouter was removed in the noBridge refactor; previously deployed here
-        // but never exercised in this scenario suite.
 
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await psm.getAddress())
         await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await psm.getAddress())
@@ -152,14 +126,11 @@ describe("OkuMoney Scenarios", () => {
 
         // Grant PSM-specific roles to Frank
         await psm.connect(Frank).grantRole(PSM_BUFFER_WITHDRAWER, frankAddr)
-        await psm.connect(Frank).grantRole(PSM_QUEUE_PROCESSOR, frankAddr)
 
         await okuMoney.connect(Frank).configureMinterAllowance(
             await psm.getAddress(),
             parseEther("1000000000")
         )
-        await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
-        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 
     describe("User-to-User Transfers", () => {
@@ -173,20 +144,9 @@ describe("OkuMoney Scenarios", () => {
             const aliceInitialBalance = await okuMoney.balanceOf(aliceAddr)
 
             // Alice transfers 5,000 OkuMoney to Bob (OkuMoney is 18 decimals).
-            //
-            // This previously asserted a `TransferValue` event carrying the
-            // dollar value alongside the raw amount. That event was
-            // deliberately REMOVED from OkuMoney (see OkuMoney.sol:758):
-            // under streaming accrual the dollar field would require an rpow
-            // on every transfer (~5-10k gas, forever), and without that field
-            // the event duplicated ERC-20 `Transfer` exactly. Indexers now
-            // derive dollar value off-chain from the rate schedule.
-            //
-            // The original intent — "the transfer moves the right raw amount
-            // AND the right dollar value" — is preserved here by asserting
-            // the standard `Transfer` event for the raw amount, then checking
-            // dollar value through `balanceOfUI()`, the ERC-8056 surface that
-            // replaced the event's dollar field.
+            // The standard `Transfer` event carries the raw amount (there is no
+            // dollar-value event); dollar value is checked via `balanceOfUI()`,
+            // the ERC-8056 surface.
             const transferAmount = parseEther("5000")
             const priceAtTransfer = await okuMoney.okuMMultiplier()
             const PRECISION = parseEther("1")
@@ -317,20 +277,12 @@ describe("OkuMoney Scenarios", () => {
             ) as unknown as OkuDollar
             await freshOkuUsd.waitForDeployment()
 
-            const freshQueue = await upgrades.deployProxy(
-                new RedemptionQueue__factory(Frank),
-                [await freshOkuMoney.getAddress(), USDC_MAINNET, frankAddr],
-                { kind: "uups" }
-            ) as unknown as RedemptionQueue
-            await freshQueue.waitForDeployment()
-
             const freshPSM = await upgrades.deployProxy(
                 new LitePSM__factory(Frank),
                 [
                     await freshOkuMoney.getAddress(),
                     await freshOkuUsd.getAddress(),
                     USDC_MAINNET,
-                    await freshQueue.getAddress(),
                     frankAddr
                 ],
                 { kind: "uups", unsafeAllow: ["constructor"] }
@@ -349,7 +301,6 @@ describe("OkuMoney Scenarios", () => {
                 await freshPSM.getAddress(),
                 parseEther("1000000000")
             )
-            await freshQueue.connect(Frank).grantRole(QUEUE_PSM, await freshPSM.getAddress())
 
             // Alice swaps 80,000 USDC (should succeed - under 100k cap, receives 80,000 OkuMoney)
             const firstSwap = parseUnits("80000", 6) // USDC amount
@@ -445,10 +396,7 @@ describe("OkuMoney Scenarios", () => {
             // Frank unpause
             await okuMoney.connect(Frank).unpause()
 
-            // Transfer works again after unpause. Asserted as a delta for the
-            // same ordering reason documented above -- `transferAmount * 2n` was
-            // an absolute that happened to hold only because Bob started this
-            // test near zero, contradicting the comment 30 lines up.
+            // Transfer works again after unpause (asserted as a balance delta).
             await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
             expect(await okuMoney.balanceOf(bobAddr), "second transfer lands in full")
                 .to.equal(bobBeforeTransfer + transferAmount * 2n)

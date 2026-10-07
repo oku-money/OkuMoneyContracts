@@ -4,19 +4,16 @@
  * SVM-side mirror of EVM/test/hardhat/scenarios/RealWorldUsage.ts.
  *
  *   E1. Multi-slot round-trip with multiplier ticks
+ *   E2. Source redeem against an empty buffer reverts until it is reseeded
  *   E3. Multiplier tick between bridge legs (value conserved)
  *   E4. Frozen okuM ATA mid-bridge (orchestrator holds float)
  *   E5. Pause during operation
  *   E7. Yield-lock: same-slot set_multiplier + mint revert
  *   E8. Minter-allowance exhaustion and rotation
  *
- * An N-day stochastic simulation previously sat above these. It was deleted
- * rather than repaired, for the same reasons as its EVM counterpart: every
- * state-changing call was wrapped in a bare `catch {}`, `totalBridges` was
- * incremented and never asserted, nothing checked that the setup mints
- * succeeded, and its headline invariant (per-bridge USDC drift) compared a
- * value against itself. A program that rejected every instruction would have
- * passed it.
+ * Scenarios are deterministic and every state-changing call is asserted: none
+ * is wrapped in a bare `catch {}`, so a program that rejected every
+ * instruction cannot pass.
  */
 
 import * as anchor from "@anchor-lang/core";
@@ -177,10 +174,8 @@ async function userMintOkuM(
 ): Promise<void> {
   const user = ctx.users[userIndex];
   await mintUsdc(ctx.h, ctx.userUsdcAtas[userIndex], ctx.usdcMint, usdcAmount);
-  // Deliberately NOT wrapped in a catch. The deleted simulation swallowed every
-  // failure here, so a program that rejected all mints still produced a green
-  // run. In the deterministic suites below the PSM is never paused or exhausted
-  // at this point, so a throw is a real defect.
+  // Deliberately NOT wrapped in a catch: in the deterministic suites below the
+  // PSM is never paused or exhausted at this point, so a throw is a real defect.
   await mintOkuMViaProgram(
     ctx.psm, user, new BN(usdcAmount),
     ctx.configPda, ctx.usdcMint, ctx.okuMMint,
@@ -304,8 +299,7 @@ async function orchestratorBridge(
   // `transfer_checked(..., usdc_amount, ...)` (psm.rs:74), moving exactly the
   // argument it was handed. Since that argument IS `usdcOut`, the orchestrator's
   // USDC delta across the mint is identically `usdcOut` and any drift computed
-  // from it is structurally zero. The previous version did exactly that, under a
-  // comment claiming the tautology had been removed.
+  // from it is structurally zero.
   //
   // Dollar value is what can actually move. It passes through two independent
   // floors — `raw_to_dollars` on the redeem leg and `dollars_to_raw` on the mint
@@ -362,8 +356,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
 
       // Multiplier ACCRUES between legs -- with no transaction at all.
       // Publish a ~26% APY schedule, then warp 30 days: the multiplier climbs
-      // roughly 2% purely from elapsed time. The old version had to submit a
-      // `set_multiplier` here; that it is no longer needed is the point.
+      // roughly 2% purely from elapsed time, with no multiplier-setting call.
       const e1Now = Number((await getClock(ctx.h)).unixTimestamp);
       await ctx.psm.methods
         .setOkumYieldRate(new BN(ratePerSecondForApy(0.27).toString()), new BN(e1Now + 60 * DAY_SECS))
@@ -394,6 +387,119 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const expectedBack = (ab.usdcOut * multAfterWarp) / multAtMint;
       assertGte(ba.usdcOut, expectedBack - 2n, "B->A USDC must reflect the accrued multiplier");
       assertLte(ba.usdcOut, expectedBack + 2n, "B->A USDC must not exceed the accrued multiplier");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // E2: Empty source buffer blocks the orchestrator until reseeded
+  // -------------------------------------------------------------------------
+  describe("E2: empty source buffer blocks orchestrator", () => {
+    it("src redeem reverts InsufficientBuffer while buffer empty; succeeds after reseed", async function () {
+      this.timeout(60_000);
+      const ctx = await buildCtx();
+
+      const bufferAccounts = {
+        config: ctx.configPda,
+        vaultUsdc: ctx.vaultUsdcAta,
+        usdcMint: ctx.usdcMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      };
+      const depositBuffer = (amount: bigint) =>
+        ctx.psm.methods
+          .depositBuffer(new BN(amount.toString()))
+          .accountsPartial({
+            ...bufferAccounts,
+            bufferDepositor: psmOrchestrator.publicKey,
+            bufferDepositorUsdcAta: ctx.orchUsdcAta,
+          })
+          .signers([psmOrchestrator]).rpc();
+
+      // Seed the buffer the real way (deposit_buffer, from the orchestrator),
+      // then user 0 mints 100 okuM. The vault holds exactly seed + the 100 USDC
+      // that went in on mint.
+      const SEED = 100_000_000_000n; // 100,000 USDC
+      await mintUsdc(ctx.h, ctx.orchUsdcAta, ctx.usdcMint, Number(SEED));
+      await depositBuffer(SEED);
+      await userMintOkuM(ctx, 0, 100_000_000);
+      const mintUsdcIn = 100_000_000n;
+      const userOkuM = await tokenBalance(ctx.h, ctx.userOkuMAtas[0], TOKEN_2022_PROGRAM_ID);
+      assertEq(userOkuM, 100_000_000n, "100 USDC mints exactly 100 okuM at m = 1.0");
+
+      // Drain the buffer to zero through the buffer_withdrawer (cold multisig).
+      const vaultBal = await tokenBalance(ctx.h, ctx.vaultUsdcAta, TOKEN_PROGRAM_ID);
+      assertEq(vaultBal, SEED + mintUsdcIn, "fixture: buffer holds exactly the seed plus the mint");
+      const withdrawerUsdcAta = await ensureAtaViaBankrun(
+        ctx.h, coldMultisig.publicKey, ctx.usdcMint, TOKEN_PROGRAM_ID
+      );
+      await ctx.psm.methods
+        .withdrawBuffer(new BN(vaultBal.toString()))
+        .accountsPartial({
+          ...bufferAccounts,
+          bufferWithdrawer: coldMultisig.publicKey,
+          withdrawerUsdcAta,
+        })
+        .signers([coldMultisig]).rpc();
+      assertEq(await tokenBalance(ctx.h, ctx.vaultUsdcAta, TOKEN_PROGRAM_ID), 0n, "buffer drained");
+
+      // Orchestrator pulls user 0's okuM and tries to redeem: reverts, keeps the okuM.
+      await ctx.h.provider.sendAndConfirm!(
+        new Transaction().add(
+          createTransferInstruction(
+            ctx.userOkuMAtas[0], ctx.orchOkuMAta,
+            ctx.users[0].publicKey, userOkuM, [], TOKEN_2022_PROGRAM_ID
+          )
+        ),
+        [ctx.users[0]]
+      );
+      const redeemAll = () =>
+        ctx.psm.methods
+          .redeemOkuM(new BN(userOkuM.toString()), new BN(0))
+          .accountsPartial({
+            user: psmOrchestrator.publicKey,
+            config: ctx.configPda,
+            usdcMint: ctx.usdcMint,
+            okuMMint: ctx.okuMMint,
+            userUsdcAta: ctx.orchUsdcAta,
+            userOkuMAta: ctx.orchOkuMAta,
+            vaultUsdc: ctx.vaultUsdcAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([psmOrchestrator]).rpc();
+
+      assertEq(await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID), userOkuM, "fixture: orchestrator holds the okuM");
+      assertEq(await tokenBalance(ctx.h, ctx.orchUsdcAta, TOKEN_PROGRAM_ID), 0n, "fixture: orchestrator holds no USDC");
+      await expectBankrunError(redeemAll, "InsufficientBuffer");
+      assertEq(
+        await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID),
+        userOkuM,
+        "orchestrator keeps its okuM"
+      );
+      assertEq(await tokenBalance(ctx.h, ctx.orchUsdcAta, TOKEN_PROGRAM_ID), 0n, "no USDC released");
+
+      // Reseed the buffer; the same redeem now succeeds. At m = 1.0 the
+      // orchestrator receives exactly the 100 USDC user 0 put in.
+      const RESEED = 200_000_000n; // 200 USDC
+      await mintUsdc(ctx.h, ctx.orchUsdcAta, ctx.usdcMint, Number(RESEED));
+      await depositBuffer(RESEED);
+      assertEq(await tokenBalance(ctx.h, ctx.vaultUsdcAta, TOKEN_PROGRAM_ID), RESEED, "buffer reseeded");
+
+      const mult = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
+      assertEq(mult, PRECISION, "fixture: PSM must be unrebased for the literal below");
+      await redeemAll();
+      assertEq(await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID), 0n, "okuM burned");
+      assertEq(
+        await tokenBalance(ctx.h, ctx.orchUsdcAta, TOKEN_PROGRAM_ID),
+        mintUsdcIn,
+        "redeem pays the full dollar value"
+      );
+      assertEq(
+        await tokenBalance(ctx.h, ctx.vaultUsdcAta, TOKEN_PROGRAM_ID),
+        RESEED - mintUsdcIn,
+        "vault pays out exactly what the user received"
+      );
     });
   });
 
@@ -660,8 +766,8 @@ describe("realWorldUsage (SVM) edge cases", () => {
       await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 10_000_000, TOKEN_PROGRAM_ID);
 
       // Emergency override (slot N) -- the only instruction that still stamps
-      // the sandwich lock, because it is the only one producing a discrete
-      // jump. Routine yield no longer engages it.
+      // the yield lock, because it is the only one producing a discrete
+      // jump. Routine yield never engages it.
       const curMultiplierE7 = await computeCanonicalMultiplier(h, psm, configPda);
       await psm.methods.setOkumMultiplier(new BN((curMultiplierE7 + 1000n).toString()))
         .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: configPda, okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })

@@ -10,7 +10,7 @@
  * All three MUST agree bit-for-bit: the protocol's cross-chain determinism
  * rests entirely on every deployment returning the same multiplier at the same
  * wall-clock second, and no on-chain layer on either stack can detect a
- * divergence (`EVM/README.md` § Accepted Risks (10)).
+ * divergence (`EVM/README.md` § Accepted Risks (9)).
  *
  * They are held honest by the differential harness: `EVM/test/differential`
  * generates vectors from the Solidity, and both this file and the Rust replay

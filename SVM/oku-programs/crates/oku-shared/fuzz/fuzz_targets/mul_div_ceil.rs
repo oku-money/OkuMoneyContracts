@@ -1,18 +1,12 @@
-//! cargo-fuzz target: `mul_div_ceil`
+//! cargo-fuzz target: `mul_div_ceil`, cross-checked against `mul_div_floor`
+//! and a `u128` reference.
 //!
-//! Coverage for the `oku_shared::mul_div_ceil` primitive. Cross-checks
-//! against `mul_div_floor` and against an in-test u128 reference
-//! implementation.
-//!
-//! Properties verified:
-//!
-//!   1. No panic for any `(a, b, divisor)` triple.
-//!   2. `divisor == 0` → result == None (no divide-by-zero panic).
-//!   3. `ceil >= floor` always — never returns less than `mul_div_floor`.
-//!   4. `ceil - floor ∈ {0, 1}` — the rounding difference is at most one
-//!      unit (or both are None when the rest of the math overflows).
-//!   5. `ceil == floor` iff the product divides evenly.
-//!   6. Result matches the u128 reference when it fits in u64.
+//! Properties:
+//!   1. No panic for any `(a, b, divisor)`.
+//!   2. `divisor == 0` returns `None`.
+//!   3. `ceil >= floor`, and `ceil - floor` is 0 or 1.
+//!   4. `ceil == floor` iff the product divides evenly.
+//!   5. Matches the `u128` reference whenever it fits `u64`.
 //!
 //! Run: `cargo +nightly fuzz run mul_div_ceil -- -max_total_time=60`
 
@@ -27,15 +21,14 @@ fuzz_target!(|data: (u64, u64, u64)| {
     let ceil = mul_div_ceil(a, b, divisor);
     let floor = mul_div_floor(a, b, divisor);
 
-    // Property 2: divisor == 0 → None.
+    // Property 2
     if divisor == 0 {
         assert!(ceil.is_none(), "divisor=0 must return None");
         assert!(floor.is_none(), "divisor=0 must return None (floor sibling)");
         return;
     }
 
-    // Reference oracle in u128.
-    let product = (a as u128) * (b as u128); // u64×u64 always fits
+    let product = (a as u128) * (b as u128);
     let d = divisor as u128;
     let floor_128 = product / d;
     let ceil_128 = if product % d == 0 {
@@ -44,7 +37,7 @@ fuzz_target!(|data: (u64, u64, u64)| {
         floor_128 + 1
     };
 
-    // Property 6 (oracle agreement).
+    // Property 6
     match (floor, floor_128 <= u64::MAX as u128) {
         (Some(v), true) => assert_eq!(v as u128, floor_128, "floor disagrees with oracle"),
         (None, true) => panic!("floor returned None but oracle fits"),
@@ -62,7 +55,6 @@ fuzz_target!(|data: (u64, u64, u64)| {
     if let (Some(c), Some(f)) = (ceil, floor) {
         assert!(c >= f, "ceil < floor: {c} < {f}");
         assert!(c - f <= 1, "ceil-floor > 1: {c}-{f}={}", c - f);
-        // Property 5
         if product % d == 0 {
             assert_eq!(c, f, "exact division: ceil != floor");
         } else {

@@ -6,53 +6,25 @@
       "chainId": 11155111,
       "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
       "explorer": "https://sepolia.etherscan.io",
-      "contracts": {
-        "okuMoney": "0x9b2E1Ed079E1453641AFD2f91cf9E9c14Ae3c6eE",
-        "okuDollar": "0xf3245bC842EE47d4633387B15e48C97577797535",
-        "litePSM": "0xCf59df556587d9A230ba1D4b28e51864FBa64De0",
-        "redemptionQueue": "0x93C03D6544bb2B48a947960FA5E4F0EaF57832F4",
-        "mockUSDC": "0x437ABbc8d2dd04E383D557A8ea9c8451Ef9936e8"
-      },
-      "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      "contracts": {}
     },
     "bscTestnet": {
       "chainId": 97,
       "rpcUrl": "https://bsc-testnet-rpc.publicnode.com",
       "explorer": "https://testnet.bscscan.com",
-      "contracts": {
-        "okuMoney": "0x9b2E1Ed079E1453641AFD2f91cf9E9c14Ae3c6eE",
-        "okuDollar": "0xf3245bC842EE47d4633387B15e48C97577797535",
-        "litePSM": "0xCf59df556587d9A230ba1D4b28e51864FBa64De0",
-        "redemptionQueue": "0x93C03D6544bb2B48a947960FA5E4F0EaF57832F4",
-        "mockUSDC": "0x437ABbc8d2dd04E383D557A8ea9c8451Ef9936e8"
-      },
-      "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      "contracts": {}
     },
     "baseSepolia": {
       "chainId": 84532,
       "rpcUrl": "https://sepolia.base.org",
       "explorer": "https://sepolia.basescan.org",
-      "contracts": {
-        "okuMoney": "0x9b2E1Ed079E1453641AFD2f91cf9E9c14Ae3c6eE",
-        "okuDollar": "0xf3245bC842EE47d4633387B15e48C97577797535",
-        "litePSM": "0xCf59df556587d9A230ba1D4b28e51864FBa64De0",
-        "redemptionQueue": "0x93C03D6544bb2B48a947960FA5E4F0EaF57832F4",
-        "mockUSDC": "0x437ABbc8d2dd04E383D557A8ea9c8451Ef9936e8"
-      },
-      "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      "contracts": {}
     },
     "arbSepolia": {
       "chainId": 421614,
       "rpcUrl": "https://sepolia-rollup.arbitrum.io/rpc",
       "explorer": "https://sepolia.arbiscan.io",
-      "contracts": {
-        "okuMoney": "0x9b2E1Ed079E1453641AFD2f91cf9E9c14Ae3c6eE",
-        "okuDollar": "0xf3245bC842EE47d4633387B15e48C97577797535",
-        "litePSM": "0xCf59df556587d9A230ba1D4b28e51864FBa64De0",
-        "redemptionQueue": "0x93C03D6544bb2B48a947960FA5E4F0EaF57832F4",
-        "mockUSDC": "0x437ABbc8d2dd04E383D557A8ea9c8451Ef9936e8"
-      },
-      "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      "contracts": {}
     }
   },
   "svm": {

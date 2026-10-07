@@ -4,25 +4,20 @@ pragma solidity 0.8.28;
 /**
  * @title IScaledUIAmount (ERC-8056 core)
  * @notice Scaled UI Amount Extension for ERC-20 Tokens.
- * @dev See https://eips.ethereum.org/EIPS/eip-8056
+ * @dev See https://eips.ethereum.org/EIPS/eip-8056. The draft may change before Final.
  *
- *      STATUS: ERC-8056 is a **Draft**. The interface IDs below come from the current
- *      draft and MAY change before Final.
+ *      OkuMoney implements this as a derived view: `uiMultiplier()` returns
+ *      `okuMMultiplier()`, computed continuously via {MathLib.computeMultiplier}. Deviations
+ *      from the EIP's reference implementation (a stored multiplier rotated on a schedule):
  *
- *      OkuMoney implements this as a *derived view* over its streaming yield schedule:
- *      `uiMultiplier()` returns `okuMMultiplier()`, computed continuously via
- *      {MathLib.computeMultiplier}. Two deliberate deviations from the EIP's reference
- *      implementation, which stores a discrete multiplier and rotates it on a schedule:
- *
- *      - The EIP requires `UIMultiplierUpdated` "whenever the multiplier is changed".
- *        Under continuous accrual that is every second, so OkuMoney emits it on
- *        **rate-schedule changes** — the only discrete events in the system.
+ *      - `UIMultiplierUpdated` fires only on the discrete re-anchors (`setOkuMYieldRate`,
+ *        `setOkuMMultiplier`), not "whenever the multiplier changes" (every second).
+ *        Staging a successor via `setNextOkuMYieldRate` emits `NextOkuMYieldRateSet`
+ *        instead; replacing an armed one emits `UIMultiplierUpdateCancelled`.
  *      - `newUIMultiplier()` / `effectiveAt()` presume a scheduled *value*; OkuMoney
- *        schedules a pending *rate*. `newUIMultiplier()` returns the multiplier
- *        projected for `effectiveAt()` (the active rate's end timestamp) ONLY when a
- *        successor rate is armed. Otherwise `effectiveAt()` returns `0` and
- *        `newUIMultiplier()` returns the current `uiMultiplier()` — "nothing
- *        scheduled", not a fabricated projection of the current rate's continuation.
+ *        schedules a *rate*. They report the multiplier projected at the active rate's end
+ *        ONLY when a successor is armed; otherwise `effectiveAt()` is `0` and
+ *        `newUIMultiplier()` is the current `uiMultiplier()`.
  *
  *      Interface ID: 0xa60bf13d
  */

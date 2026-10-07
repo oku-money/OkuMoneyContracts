@@ -7,33 +7,19 @@
  * shows up here exactly as it would for an operator running the CLI, which a
  * hand-rolled "call the contract directly" test would not catch.
  *
- * SCOPE DECISIONS (documented, not chased further per the "don't
- * over-troubleshoot" directive):
- *   - `resolveNetworkContext()` assumes `localhost`/`hardhat` is always
- *     forking a real chain, and hardhat's `hardhat_reset` cannot actually
- *     change the configured chainId away from the fork target pinned in
- *     `hardhat.config.ts` (verified empirically). Rather than hardcoding
- *     `NETWORK=sepolia` (which broke with a chainId-mismatch error whenever
- *     the process was started with `FORK_NETWORK` set to anything else, e.g.
- *     `FORK_NETWORK=mainnet`), this drill leaves `NETWORK` unset and lets
- *     auto-detection resolve `networkName`/`bookKey` from whatever chain is
- *     actually forked. It then reuses that fork's EXISTING address-book
- *     namespace (`fork:<networkName>`) — which `tryAttach`'s `getCode` check
- *     makes safe to reuse across runs even though the underlying chain is
- *     reset each time (no code exists at any previously-recorded address on a
- *     fresh chain, so everything redeploys).
- *   - `addresses.json` is a TRACKED file; this drill backs it up and restores
- *     it in `after()` so running the drill never leaves a dirty working tree.
- *   - Contracts are stood up by calling the REAL deploy script via
- *     `runDeploy()`, not by re-implementing deployment with
- *     `upgrades.deployProxy`. This drill previously hand-wired 5 role grants
- *     while production grants 21, so every lever was being exercised against
- *     a role topology no deployed chain actually has. See `deployDrill.test.ts`
- *     for the deploy-side assertions.
- *   - `grantRolesMainnet.ts` is still NOT used here — it redistributes roles
- *     to cold/warm multisigs for production, which is a separate topology from
- *     the testnet "deployer holds the operational set" model this drill and
- *     `scripts/deploy/index.ts` target.
+ * SCOPE DECISIONS:
+ *   - NETWORK is left unset so `resolveNetworkContext()` auto-detects whichever
+ *     chain is forked (`FORK_NETWORK`), and the drill reuses that fork's
+ *     `fork:<networkName>` address-book namespace; `tryAttach`'s `getCode`
+ *     check makes that safe because the chain is reset each run.
+ *   - `addresses.json` is TRACKED; the drill backs it up and restores it in
+ *     `after()`.
+ *   - Contracts come from the REAL deploy script via `runDeploy()`, so the
+ *     operator levers run against the deployed role topology (see
+ *     `deployDrill.test.ts` for the deploy-side assertions).
+ *   - `grantRolesMainnet.ts` is NOT used: it redistributes roles to the
+ *     production multisigs, a different topology from the testnet
+ *     "deployer holds the operational set" model exercised here.
  *   - `checkMultiplierDrift.ts` is inherently multi-chain (reads via
  *     `JsonRpcProvider(rpcUrl)` per configured chain) and is not exercised —
  *     a single local chain has no cross-chain drift to detect.
@@ -53,8 +39,6 @@ import { runUnpause } from "../../../scripts/operator/unpause";
 import { runBlacklistBoth } from "../../../scripts/operator/blacklistBoth";
 import { runDepositBuffer } from "../../../scripts/operator/depositBuffer";
 import { runWithdrawBuffer } from "../../../scripts/operator/withdrawBuffer";
-import { runProcessQueue } from "../../../scripts/operator/processQueue";
-import { runRescueQueueEntry } from "../../../scripts/operator/rescueQueueEntry";
 import { runConfigureMinterAllowance } from "../../../scripts/operator/configureMinterAllowance";
 import { runSetMaxSupply } from "../../../scripts/operator/setMaxSupply";
 import { runSetOkuMMultiplier } from "../../../scripts/operator/setOkuMMultiplier";
@@ -88,7 +72,6 @@ describe("Operator drill: exercise every lever on a clean local chain", function
     let admin: any, user1: any, badActor: any;
     let okuMoney: OkuMoney;
     let okuDollar: any;
-    let queue: any;
     let psm: any;
     let usdc: any;
     let addressBookBackup: string | null = null;
@@ -143,17 +126,8 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         [admin, user1, , badActor] = await ethers.getSigners();
         const adminAddr = await admin.getAddress();
 
-        // Deploy via the REAL deploy script rather than a hand-rolled fixture.
-        //
-        // This drill previously stood up its own contracts with
-        // `upgrades.deployProxy` and wired only the 5 role grants its own
-        // tests happened to need. Production grants 21. That divergence meant
-        // every operator lever below was being validated against a role
-        // topology that does not exist on any deployed chain — precisely the
-        // fidelity gap this drill exists to close for the CLI scripts. Using
-        // `runDeploy()` means a role the deploy forgets to grant now breaks
-        // the operator drill too, instead of passing here and failing on a
-        // testnet.
+        // Real deploy script, not a hand-rolled fixture, so a role the deploy
+        // forgets to grant breaks this drill too.
         //
         // The explicit `deployer` override is required: on a fork the CLI path
         // impersonates DEV_WALLET, which would leave `admin` (signers[0])
@@ -162,12 +136,11 @@ describe("Operator drill: exercise every lever on a clean local chain", function
 
         okuMoney = deployed.okuMoney as unknown as OkuMoney;
         okuDollar = deployed.okuDollar;
-        queue = deployed.redemptionQueue;
         psm = deployed.litePSM;
         usdc = await ethers.getContractAt("MockUSDC", deployed.usdcAddress, admin);
 
-        // The deploy grants admin OKUM_MINTER but sets minter allowances only
-        // for LitePSM and RedemptionQueue — `OkuMoney.mint` checks BOTH the
+        // The deploy grants admin OKUM_MINTER but sets a minter allowance only
+        // for LitePSM — `OkuMoney.mint` checks BOTH the
         // role and a separate per-minter allowance, so admin still can't mint
         // directly without one. Grant a small allowance so fixture-level mints
         // in the tests below (e.g. the burn test) work; this is test scaffolding,
@@ -276,14 +249,9 @@ describe("Operator drill: exercise every lever on a clean local chain", function
 
     it("deriveEpochSchedule: stage-settlement derives and atomically stages the settlement rate", async function () {
         const PRECISION = 10n ** 18n;
-        // Deliberately tiny rate (~0.01% APY): by this point in the drill,
-        // prior tests have minted a substantial OkuM supply (~137k). A target
-        // must be picked relative to (rate × supply × time), not a fixed
-        // magic number — an earlier version of this test used ~172% APY
-        // against a $1000 target, which the base window alone blew past
-        // before settlement even ran (a TEST bug, not a mechanism bug: caught
-        // and fixed here rather than chased further, per the "measure before
-        // asserting" principle the simulation suite audit established).
+        // Deliberately tiny rate (~0.01% APY): prior tests have minted a
+        // substantial OkuM supply (~137k), so the target must be sized relative
+        // to (rate × supply × time), not a fixed magic number.
         const rateEnd = BigInt((await time.latest()) + 86400); // 24h production epoch
         await runSetOkuMYieldRate(ctx, admin, {
             mode: "direct",
@@ -299,8 +267,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         // 0.05% of supply per 24h epoch (~20% APY). Sized deliberately: ~56x above
         // what the tiny base rate alone distributes over the base window (so
         // settlement has real positive work), but only ~5.6% of MAX_RATE's
-        // per-24h ceiling. The previous value (1% of supply) was a 30-day-shaped
-        // target and would CLAMP at 111% of MAX_RATE in a 24h window.
+        // per-24h ceiling (a larger target would clamp at MAX_RATE in a 24h window).
         const realisedYieldUsd = supply * 0.0005;
 
         // Seed the V(t) store. `deriveStageSettlement` hard-errors on an empty
@@ -342,10 +309,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             nextRate: BigInt(artifact.schedule.nextRate),
             pendingEndTimestamp: BigInt(artifact.schedule.nextRateEnd),
         });
-        // The settlement rate must actually be armed as the successor on-chain
-        // (this was a self-comparison bug — `x > x` — in an earlier version of
-        // this assertion, which is always false and would have silently
-        // masked a real regression here).
+        // The settlement rate must actually be armed as the successor on-chain.
         expect(await okuMoney.okuMPendingRatePerSecond()).to.be.greaterThan(PRECISION);
         expect(await okuMoney.okuMPendingRateEnd()).to.equal(pendingEnd);
     });
@@ -414,18 +378,10 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const multNow = Number(await okuMoney.okuMMultiplier()) / 1e18;
         appendSample({ timestampSec: await time.latest(), valueUsd: supplyNow * multNow, perChain: {} });
 
-        // The comment that used to sit here claimed the "runEpoch: roll-epoch"
-        // test above had already appended a ledger entry. It had not —
-        // `deriveRollEpoch` explicitly does NOT touch the carry ledger, and no
-        // test called `upsertLedgerEntry`. So the ledger was EMPTY here, which
-        // made the two regression guards below degenerate: both
-        // `currentEpochCarryInUsd` and `outstandingCarryUsd` were 0, so
-        // asserting against the wrong one would have passed, and
-        // `priorEpochId` compared `undefined === undefined`.
-        //
+        // `deriveRollEpoch` does not touch the carry ledger, so it is empty here.
         // Seed a prior epoch whose carry-in DIFFERS from its carry-forward, so
-        // the two candidate values are distinguishable and defect #3's fix is
-        // actually pinned.
+        // the two candidate values are distinguishable and the guards below are
+        // not degenerate (0 === 0, undefined === undefined).
         const SEED_EPOCH = `${EPOCH_A}-seed`;
         upsertLedgerEntry(
             buildLedgerEntry({
@@ -606,7 +562,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         expect(result.newMax).to.equal(ethers.parseEther("2000000000"));
     });
 
-    it("depositBuffer / withdrawBuffer: PSM USDC buffer management", async () => {
+    it("depositBuffer / withdrawBuffer: PSM USDC buffer management (unpaused, no override block)", async () => {
         const depositResult = await runDepositBuffer(ctx, admin, 10_000_000_000n); // 10k USDC
         expect(depositResult.bufferAfter - depositResult.bufferBefore, "buffer grows by the deposit")
             .to.equal(10_000_000_000n);
@@ -636,66 +592,25 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         }
     });
 
-    it("psmOps: redeemOkuM instant path (buffered) and forced-queue path", async () => {
-        const okuMBal = await okuMoney.balanceOf(await user1.getAddress());
+    it("psmOps: redeemOkuM pays out when buffered, reverts InsufficientBuffer when not", async () => {
+        const user1Addr = await user1.getAddress();
+        const okuMBal = await okuMoney.balanceOf(user1Addr);
         const redeemAmount = okuMBal / 10n;
         await runPsmOp(ctx, user1, "redeemOkuM", redeemAmount, false);
-        expect(await okuMoney.balanceOf(await user1.getAddress())).to.be.lessThan(okuMBal);
+        expect(await okuMoney.balanceOf(user1Addr)).to.be.lessThan(okuMBal);
 
-        // Drain the PSM's USDC buffer so the NEXT redeem is forced into the queue.
+        // Drain the PSM's USDC buffer: the next redeem must revert.
         const psmUsdcBal = await usdc.balanceOf(await psm.getAddress());
         if (psmUsdcBal > 0n) {
             await runWithdrawBuffer(ctx, admin, psmUsdcBal, await admin.getAddress());
         }
-        const remainingOkuM = await okuMoney.balanceOf(await user1.getAddress());
-        await runPsmOp(ctx, user1, "redeemOkuM", remainingOkuM / 2n, false);
-        expect(await queue.queueTail()).to.be.greaterThan(0n);
-    });
+        expect(await usdc.balanceOf(await psm.getAddress())).to.equal(0n);
 
-    it("processQueue: drains queued redemptions once the buffer is refunded", async () => {
-        await runDepositBuffer(ctx, admin, 500_000_000_000n); // 500k USDC — plenty to clear the queue
-        const result = await runProcessQueue(ctx, admin, { batchSize: 50, limit: 10 });
-        expect(result.finalTail - result.finalHead).to.equal(0n);
-    });
-
-    it("rescueQueueEntry: rescues a stuck entry without processing it normally", async () => {
-        // Force a fresh queue entry deterministically: fully drain the PSM's
-        // USDC buffer so ANY redeemOkuM is guaranteed to hit the forced-queue
-        // path, then top up user1 with OkuM if needed so the redeem amount is
-        // never zero. No conditional guards — if this precondition can't be
-        // established, that's a real failure, not a skip.
-        const psmUsdcBal = await usdc.balanceOf(await psm.getAddress());
-        if (psmUsdcBal > 0n) await runWithdrawBuffer(ctx, admin, psmUsdcBal, await admin.getAddress());
-
-        let okuMBal = await okuMoney.balanceOf(await user1.getAddress());
-        if (okuMBal === 0n) {
-            await okuMoney.connect(admin).mint(await user1.getAddress(), ethers.parseEther("100"));
-            okuMBal = await okuMoney.balanceOf(await user1.getAddress());
-        }
-        expect(okuMBal).to.be.greaterThan(0n);
-
-        const tailBefore = await queue.queueTail();
-        await runPsmOp(ctx, user1, "redeemOkuM", okuMBal / 2n, false);
-        const head = await queue.queueHead();
-        const tail = await queue.queueTail();
-        expect(tail).to.be.greaterThan(tailBefore); // a new entry was actually enqueued
-        expect(tail).to.be.greaterThan(head);
-
-        const entry = await queue.getQueueEntry(head);
-        const recipient = await admin.getAddress();
-        const recipientBefore = await okuMoney.balanceOf(recipient);
-
-        const result = await runRescueQueueEntry(ctx, admin, head, recipient);
-        expect(result.txHash).to.exist;
-        // Real effect: the entry's OkuM was returned to the recipient...
-        expect(await okuMoney.balanceOf(recipient)).to.equal(recipientBefore + entry.okuMAmount);
-        // ...and the slot is cleared in place (queueHead is NOT auto-advanced
-        // by design, per RedemptionQueue.rescueQueueEntry's own comment, so
-        // `index` stays in range and reads back as the zeroed `delete` result
-        // rather than reverting).
-        const clearedEntry = await queue.getQueueEntry(head);
-        expect(clearedEntry.user).to.equal(ethers.ZeroAddress);
-        expect(clearedEntry.okuMAmount).to.equal(0n);
+        const remainingOkuM = await okuMoney.balanceOf(user1Addr);
+        await expect(runPsmOp(ctx, user1, "redeemOkuM", remainingOkuM / 2n, false))
+            .to.be.revertedWithCustomError(psm, "InsufficientBuffer");
+        // Nothing burned on the failed redeem.
+        expect(await okuMoney.balanceOf(user1Addr)).to.equal(remainingOkuM);
     });
 
     it("vaultOps: withdraw / redeem (ERC-4626) and unwrap (legacy)", async () => {
@@ -720,6 +635,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
 
     it("vaultOps: rescueDonation recovers OkuM sent directly to the vault", async () => {
         const donation = ethers.parseEther("10");
+        await okuMoney.connect(admin).mint(await admin.getAddress(), donation);
         await okuMoney.connect(admin).transfer(await okuDollar.getAddress(), donation);
         const before = await okuMoney.balanceOf(await admin.getAddress());
         await runVaultOp(ctx, admin, "rescueDonation", donation, { receiver: await admin.getAddress() });
@@ -727,11 +643,8 @@ describe("Operator drill: exercise every lever on a clean local chain", function
     });
 
     it("psmOps: burn removes OkuM from circulation directly", async () => {
-        // admin holds both OKUM_MINTER and OKUM_BURNER from initialize(), so
-        // this mint cannot revert for lack of role — guarantee the
-        // precondition unconditionally rather than swallowing a failure and
-        // skipping the assertion (a real regression here would previously
-        // have shown as a silent no-op, not a failing test).
+        // admin holds OKUM_MINTER and OKUM_BURNER from initialize(), so this
+        // mint is an unconditional precondition.
         const amount = ethers.parseEther("1");
         await okuMoney.connect(admin).mint(await admin.getAddress(), amount);
         const before = await okuMoney.totalSupply();

@@ -44,9 +44,7 @@ pub struct CapManager<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
-    /// OkuM mint -- read so `set_max_supply` can refuse a new cap below
-    /// the current circulating supply (would silently brick all future
-    /// mints). EVM `OkuM.setMaxSupply` parity.
+    /// OkuM mint, read so `set_max_supply` can refuse a cap below current supply.
     #[account(
         address = config.oku_m_mint,
         mint::token_program = token_2022_program,
@@ -71,7 +69,7 @@ pub struct AllowanceManager<'info> {
 
 #[derive(Accounts)]
 pub struct FreezeAccount<'info> {
-    /// Blacklister authority - can freeze even when PSM is paused
+    /// Works while paused.
     pub freezer: Signer<'info>,
 
     #[account(
@@ -88,7 +86,7 @@ pub struct FreezeAccount<'info> {
     )]
     pub oku_m_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// Target account to freeze
+    /// Token account to freeze
     #[account(
         mut,
         token::mint = oku_m_mint,
@@ -101,7 +99,7 @@ pub struct FreezeAccount<'info> {
 
 #[derive(Accounts)]
 pub struct ThawAccount<'info> {
-    /// Unblacklister authority - can thaw even when PSM is paused (requires deliberate review)
+    /// Works while paused.
     pub unfreezer: Signer<'info>,
 
     #[account(
@@ -131,10 +129,8 @@ pub struct ThawAccount<'info> {
 
 #[derive(Accounts)]
 pub struct SetAuthority<'info> {
-    /// Role admin - only role_admin can update authorities
     pub role_admin: Signer<'info>,
 
-    /// PSM config
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -144,19 +140,10 @@ pub struct SetAuthority<'info> {
     pub config: Account<'info, PsmConfig>,
 }
 
-/// Update the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol` in place
-/// on an already-deployed mint. Does NOT touch the ScaledUiAmount multiplier.
-///
-/// Authority model mirrors `SetAuthority`: only `role_admin` may rename the
-/// token. The Token-2022 metadata `update_authority` is the `config` PDA,
-/// which signs the CPI via `invoke_signed` in the handler.
 #[derive(Accounts)]
 pub struct UpdateTokenMetadata<'info> {
-    /// Role admin — only `role_admin` may rename the token.
     pub role_admin: Signer<'info>,
 
-    /// PSM config PDA. Holds the Token-2022 metadata `update_authority`
-    /// for the mint and CPI-signs the `update_field` calls.
     #[account(
         seeds = [PsmConfig::SEED],
         bump = config.bump,
@@ -164,9 +151,8 @@ pub struct UpdateTokenMetadata<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
-    /// OkuM mint (Token-2022). The metadata is stored on the mint itself
-    /// (metadata-pointer points to self), so this is the `mut` metadata
-    /// account passed to `update_field`.
+    /// OkuM mint (Token-2022); also the metadata account, since the pointer
+    /// targets the mint itself.
     #[account(
         mut,
         address = config.oku_m_mint,
@@ -177,15 +163,11 @@ pub struct UpdateTokenMetadata<'info> {
     pub token_2022_program: Program<'info, Token2022>,
 }
 
-/// Step 2 of the two-step `role_admin` transfer.
-///
-/// Signed by the proposed `pending_role_admin` (NOT the current
-/// `role_admin`). Anchor cannot express "signer matches a field that may
-/// be the zero pubkey" cleanly via `has_one`, so the runtime check lives
-/// in the handler (`accept_role_admin`).
+/// The signer is the proposed admin, not the current one. The match against
+/// `pending_role_admin` is checked in the handler (it may be the zero pubkey).
 #[derive(Accounts)]
 pub struct AcceptRoleAdmin<'info> {
-    /// The proposed new role admin — must match `config.pending_role_admin`.
+    /// Must match `config.pending_role_admin`.
     pub new_role_admin: Signer<'info>,
 
     #[account(

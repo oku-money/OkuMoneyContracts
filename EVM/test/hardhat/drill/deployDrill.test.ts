@@ -2,14 +2,9 @@
  * Deploy drill — runs the REAL deployment script (`scripts/deploy/index.ts`)
  * in-process against the local fork and asserts the resulting on-chain state.
  *
- * Why this exists: before this drill, `scripts/deploy/index.ts` (~900 lines,
- * 21 role grants, proxy deploys, address-book persistence, retry logic) had
- * ZERO automated coverage. Every other test in the suite — including the
- * operator drill — constructed its own fixture with `upgrades.deployProxy`,
- * which means the thing actually run against a testnet was the one thing
- * nothing verified. Role misconfiguration is the failure mode most likely to
- * brick a fresh deploy or silently leave a privilege hole, and it is invisible
- * to a fixture that grants its own roles.
+ * Every other test builds its own fixture with `upgrades.deployProxy`, so
+ * without this drill nothing verifies the script actually run against a
+ * testnet (proxy deploys, address-book writes, the role matrix).
  *
  * SCOPE DECISIONS:
  *   - Asserts against `expectedRoleGrants()` exported from the deploy script
@@ -70,11 +65,10 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         await network.provider.request({ method: "hardhat_reset", params: [] });
     });
 
-    it("deploys all five contracts to live addresses with code", async () => {
+    it("deploys all four contracts to live addresses with code", async () => {
         const deployed = {
             OkuMoney: await result.okuMoney.getAddress(),
             OkuDollar: await result.okuDollar.getAddress(),
-            RedemptionQueue: await result.redemptionQueue.getAddress(),
             LitePSM: await result.litePSM.getAddress(),
             MockUSDC: result.usdcAddress,
         };
@@ -98,7 +92,7 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         const entry = book[result.bookKey];
         expect(entry, `no address-book entry for ${result.bookKey}`).to.exist;
 
-        for (const name of ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM", "MockUSDC"]) {
+        for (const name of ["OkuMoney", "OkuDollar", "LitePSM", "MockUSDC"]) {
             expect(entry[name], `${name} missing from address book`).to.be.a("string");
             expect(ethers.isAddress(entry[name])).to.be.true;
         }
@@ -108,7 +102,6 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         // silently target the wrong contract.
         expect(entry.OkuMoney).to.equal(await result.okuMoney.getAddress());
         expect(entry.OkuDollar).to.equal(await result.okuDollar.getAddress());
-        expect(entry.RedemptionQueue).to.equal(await result.redemptionQueue.getAddress());
         expect(entry.LitePSM).to.equal(await result.litePSM.getAddress());
     });
 
@@ -127,41 +120,37 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
     });
 
     it("declares every contract-to-contract role the chain actually recorded", async () => {
-        // This REPLACES a loop that asserted `expectedRoleGrants()` against the
-        // chain. That loop could not fail: `runDeploy()` calls
-        // `verifyDeployment()`, which runs the identical loop and THROWS
-        // (`deploy/index.ts` ~:789, ~:873), so by the time `before()` returned
-        // every declared grant was already proven present.
-        //
-        // Re-running the deploy's own check also left the dangerous direction
-        // untested. `expectedRoleGrants()` is a SECOND hand-maintained list
-        // parallel to the `grantRole` calls in `configureRoles`. They agree
-        // today only by manual coincidence. A grant added to `configureRoles`
-        // and not declared here is invisible to the deploy's self-verification
-        // AND to this drill — an unverified live privilege, which is exactly
-        // the failure worth catching.
-        //
-        // So: enumerate what the chain RECORDED, and require each one to be
-        // declared. The source of truth is `RoleGranted` events, not a list.
+        // `verifyDeployment` already proves every declared grant is present, so
+        // the dangerous direction is the one tested here: a grant added to
+        // `configureRoles` but not declared in `expectedRoleGrants()` would be an
+        // unverified live privilege. Enumerate `RoleGranted` events and require
+        // each non-deployer grant to be declared.
         const contracts: Record<string, any> = {
             okuMoney: result.okuMoney,
             okuDollar: result.okuDollar,
-            redemptionQueue: result.redemptionQueue,
             litePSM: result.litePSM,
         };
         const psmAddr = (await result.litePSM.getAddress()).toLowerCase();
-        const queueAddr = (await result.redemptionQueue.getAddress()).toLowerCase();
         const deployerAddr = result.deployerAddress.toLowerCase();
 
+        const matrix = expectedRoleGrants();
+        // The full matrix is 16 roles: 2 sent by configureRoles (OKUM_MINTER and
+        // OKUM_BURNER to LitePSM) + 14 that `initialize` gives the admin.
+        // An emptied matrix would make the check below vacuous.
+        expect(matrix.length, "expectedRoleGrants() must not be gutted").to.equal(16);
+        const scriptGrants = matrix.filter((g) => g.via === "script");
+        expect(scriptGrants.length, "script-sent grants").to.equal(2);
+        for (const g of matrix.filter((g) => g.via === "initialize")) {
+            expect(g.holder, `${g.label}: initialize only grants to the admin`).to.equal("deployer");
+        }
+
+        // Only script-sent grants are declared for the non-deployer check below.
         const declared = new Set(
-            expectedRoleGrants().map((g) => {
-                const holder =
-                    g.holder === "litePSM" ? psmAddr : g.holder === "redemptionQueue" ? queueAddr : deployerAddr;
+            scriptGrants.map((g) => {
+                const holder = g.holder === "litePSM" ? psmAddr : deployerAddr;
                 return `${g.contract}:${g.role}:${holder}`;
             })
         );
-        // An emptied matrix would make the check below vacuous.
-        expect(declared.size, "expectedRoleGrants() must not be gutted").to.equal(20);
 
         const undeclared: string[] = [];
         let contractToContractGrants = 0;
@@ -172,9 +161,8 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
                 const role: string = ev.args.role;
                 const account: string = ev.args.account.toLowerCase();
 
-                // Grants to the deployer come from `initialize`, which hands the
-                // full role set to admin by design; those are covered by the
-                // separate negative checks below rather than by the matrix.
+                // Grants to the deployer come from `initialize`; the matrix's
+                // "initialize" entries are proven with `hasRole` in verifyDeployment.
                 if (account === deployerAddr) continue;
 
                 contractToContractGrants++;
@@ -202,33 +190,6 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         const psmAllowance = await result.okuMoney.minterAllowance(await result.litePSM.getAddress());
         const maxSupply = await result.okuMoney.maxSupply();
         expect(psmAllowance, "PSM allowance must cover the entire supply cap").to.equal(maxSupply);
-    });
-
-    it("grants RedemptionQueue NEITHER the minter role NOR an allowance — it only burns", async () => {
-        // RedemptionQueue previously received OKUM_MINTER plus a 1e27
-        // allowance, justified by a comment ("mints rebase deltas") describing
-        // the pre-streaming-accrual design. The current contract calls exactly
-        // two OkuMoney methods — `burn` and `okuMMultiplier` — so that was a
-        // live, unused mint-anything capability on an upgradeable contract.
-        //
-        // Asserted as an explicit NEGATIVE rather than just deleted from the
-        // positive matrix: a future re-grant, or a stale prior deployment
-        // being reused through the address book, must fail loudly rather than
-        // silently restoring the capability.
-        const queueAddr = await result.redemptionQueue.getAddress();
-        expect(
-            await result.okuMoney.hasRole(ROLES.OKUM_MINTER, queueAddr),
-            "RedemptionQueue must not hold OKUM_MINTER"
-        ).to.be.false;
-        expect(
-            await result.okuMoney.minterAllowance(queueAddr),
-            "RedemptionQueue must have zero minter allowance"
-        ).to.equal(0n);
-        // ...but it MUST still be able to burn, or processQueue reverts.
-        expect(
-            await result.okuMoney.hasRole(ROLES.OKUM_BURNER, queueAddr),
-            "RedemptionQueue still needs OKUM_BURNER"
-        ).to.be.true;
     });
 
     it("does NOT grant privileged roles to an unrelated address", async () => {
@@ -262,28 +223,10 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         // OkuDollar's underlying asset must be the OkuMoney just deployed.
         expect(await result.okuDollar.okuMoney()).to.equal(okuMAddr);
 
-        // PSM and queue must agree on USDC — a mismatch here is the exact
-        // condition configureRoles() aborts on before granting anything, and
-        // (for a fresh pair) LitePSM.initialize itself reverts on
-        // (QueueUsdcMismatch).
-        const psmUsdc = await result.litePSM.usdc();
-        const queueUsdc = await result.redemptionQueue.usdc();
-        expect(psmUsdc.toLowerCase()).to.equal(queueUsdc.toLowerCase());
-        expect(psmUsdc.toLowerCase()).to.equal(result.usdcAddress.toLowerCase());
-
-        // PSM and queue must also agree on OkuMoney — same class of check,
-        // guarding LitePSM.initialize's QueueOkuMoneyMismatch revert.
-        const psmOkuMoney = await result.litePSM.okuMoney();
-        const queueOkuMoney = await result.redemptionQueue.okuMoney();
-        expect(psmOkuMoney.toLowerCase()).to.equal(queueOkuMoney.toLowerCase());
-        expect(psmOkuMoney.toLowerCase()).to.equal(okuMAddr.toLowerCase());
-
-        // The PSM's own view of its queue must match the queue instance this
-        // drill actually deployed (guards the verifyDeployment post-hoc check
-        // added for the stale-address-book-reuse case).
-        expect(await result.litePSM.redemptionQueue()).to.equal(
-            await result.redemptionQueue.getAddress()
-        );
+        // PSM must be wired to the USDC and OkuMoney just deployed.
+        expect((await result.litePSM.usdc()).toLowerCase()).to.equal(result.usdcAddress.toLowerCase());
+        expect((await result.litePSM.okuMoney()).toLowerCase()).to.equal(okuMAddr.toLowerCase());
+        expect(await result.litePSM.okuDollar()).to.equal(await result.okuDollar.getAddress());
     });
 
     it("produces a chain where a real mint actually works end-to-end", async () => {

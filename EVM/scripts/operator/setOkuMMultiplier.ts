@@ -20,7 +20,8 @@
  * ahead of this call, let it land, redeem one block after — capturing the
  * entire discrete jump for one block of capital exposure, with no fee
  * anywhere in the PSM to price it. See `OverrideBlockGuard.sol`'s NatSpec and
- * `EVM/README.md` Accepted Risk #12.
+ * `EVM/README.md` § Accepted Risks, "Discrete-tick MEV survives only on the
+ * emergency override".
  *
  * RECOMMENDED: pause the PSM and vault BEFORE calling this script, unpause
  * AFTER — closes both the front-run and back-run legs, not just the
@@ -86,7 +87,7 @@ export async function runSetOkuMMultiplier(
   logger.info(`New multiplier:      ${ethers.formatEther(newMultiplier)}`);
   logger.warning(
     "This COLLAPSES the rate schedule to halted (active + pending rate -> PRECISION, " +
-      "both windows zeroed) and engages the yield-sandwich guard for the rest of this " +
+      "both windows zeroed) and engages the same-block override guard for the rest of this " +
       "block. Call setOkuMYieldRate afterward to resume streaming accrual."
   );
   logger.warning(
@@ -94,7 +95,7 @@ export async function runSetOkuMMultiplier(
       "landing BEFORE this tx, nor a redeem in the NEXT block. If this is not " +
       "already pause-wrapped, strongly consider: pause(psm) + pause(usdOku) " +
       "before this call, unpause after. See this script's header and " +
-      "EVM/README.md Accepted Risk #12."
+      "EVM/README.md § Accepted Risks (discrete-tick MEV)."
   );
 
   if (newMultiplier <= currentMultiplier) {

@@ -8,7 +8,7 @@ import {ReentrancyGuardUpgradeable} from "../../src/lib/ReentrancyGuardUpgradeab
 ///         {ReentrancyGuardUpgradeable}. Used by `test/lib/ReentrancyGuard.t.sol`
 ///         to assert the reentrant-revert path (line 62 of the production
 ///         contract) which is otherwise observable only indirectly through
-///         the OkuDollar / LitePSM / RedemptionQueue happy paths.
+///         the OkuDollar / LitePSM happy paths.
 /// @dev NOT FOR PRODUCTION DEPLOYMENT.
 contract ReentrancyGuardHarness is ReentrancyGuardUpgradeable {
     uint256 public counter;

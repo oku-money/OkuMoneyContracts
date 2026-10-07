@@ -3,17 +3,10 @@
  * stubbed, so the env/argv contract between this driver and the processes it
  * spawns is actually asserted rather than assumed.
  *
- * This file exists because that contract was broken and nothing caught it:
- * the driver set `EPOCH_PHASE`, while `applyScheduleSingleChain.ts`'s
- * `parseArg("phase")` reads `PHASE` — a name produced by a camelCase→
- * SCREAMING_SNAKE transform inside `cli.ts` that appears literally nowhere at
- * either end. Every EVM chain's subprocess would have aborted immediately.
- * Reading both files could not reveal it; only running the thing could.
- *
- * The prior test for this area asserted a hand-reimplementation of the
- * driver's ledger sequence inside the operator drill — it verified the test
- * author's understanding, not the code, which is exactly how the bug
- * survived a "tested" pass.
+ * The driver must set `PHASE` (what `applyScheduleSingleChain.ts`'s
+ * `parseArg("phase")` reads via the camelCase→SCREAMING_SNAKE transform in
+ * `cli.ts`), not `EPOCH_PHASE`; only running the real driver catches a
+ * mismatch between the two.
  */
 
 import { expect } from "chai";

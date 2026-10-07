@@ -4,7 +4,6 @@ pragma solidity 0.8.28;
 /**
  * @title LitePSMEvents
  * @notice Event declarations for the LitePSM contract.
- * @dev Inherited by LitePSM; see OkuMoneyEvents for the rationale.
  */
 abstract contract LitePSMEvents {
     /// @notice Emitted when user mints OkuMoney by depositing USDC
@@ -13,8 +12,6 @@ abstract contract LitePSMEvents {
     );
 
     /// @notice Emitted when OkuMoney is redeemed for USDC from the PSM buffer.
-    /// @dev Not emitted on queued redemptions — the `RedemptionQueued` event in
-    ///      `RedemptionQueue` carries that information.
     event OkuMRedeemed(
         address indexed user, uint256 okuMIn, uint256 usdcOut, uint256 okuMMultiplier
     );
@@ -30,9 +27,6 @@ abstract contract LitePSMEvents {
     event UsdOkuRedeemed(
         address indexed user, uint256 usdIn, uint256 usdcOut, uint256 okuMMultiplier
     );
-
-    /// @notice Emitted after a processQueue call, with the PSM USDC balance afterwards
-    event QueueProcessed(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);
 
     /// @notice Emitted when admin deposits USDC to buffer
     event BufferDeposited(address indexed depositor, uint256 amount, uint256 newBufferBalance);

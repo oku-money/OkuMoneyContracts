@@ -1,41 +1,17 @@
 /**
- * Recover rent from stale BPF Loader Upgradeable program deployments.
- *
- * Wraps `solana program close` (the only Solana-CLI path for reclaiming
- * the rent SOL escrowed in a program's ProgramData account — there is no
- * direct RPC instruction for this).
- *
- * Default behavior: read the program ID from
- * `deployments/<network>.json::programs.litePsm`,
- * `solana program show` each (verifying it's deployed and that the
- * deployer wallet is its upgrade authority), then close them and report
- * recovered SOL.
- *
- * Pass `--ids=<id1>,<id2>` to target a specific list instead. Programs
- * passed via `--ids` are NOT cross-checked against the deployments file.
+ * Recover rent from stale BPF Loader Upgradeable programs via
+ * `solana program close`. Default targets `deployments/<network>.json::programs.litePsm`
+ * (verifies it is deployed and the deployer is its upgrade authority); `--ids=<id1>,<id2>`
+ * targets a specific list (not cross-checked against the deployments file).
  *
  * Usage:
- *   NETWORK=devnet tsx scripts/admin/close-programs.ts
- *   NETWORK=devnet tsx scripts/admin/close-programs.ts --ids=ID1,ID2
- *   NETWORK=devnet tsx scripts/admin/close-programs.ts --dry-run
- *   NETWORK=mainnet-beta tsx scripts/admin/close-programs.ts \
- *       --yes-i-mean-it-on-mainnet
+ *   NETWORK=devnet tsx scripts/admin/close-programs.ts [--ids=ID1,ID2] [--dry-run]
+ *   NETWORK=mainnet-beta tsx scripts/admin/close-programs.ts --yes-i-mean-it-on-mainnet
  *
- * Safety:
- *   - Refuses to close a program whose upgrade authority isn't the
- *     deployer wallet (the close would fail anyway; we surface the
- *     mismatch cleanly first).
- *   - Refuses to close program IDs that are *currently* declared in
- *     Anchor.toml [programs.<network>] unless `--allow-anchor-toml-ids`
- *     is passed (those IDs are about to be used by the next
- *     `deploy:programs` run; closing them would force a keypair
- *     rotation).
- *   - --dry-run prints the plan without submitting.
- *
- * Post-run: this does NOT delete `deployments/<network>.json`, so the
- * addressBook stale-warning keeps firing until you run `deploy:init`
- * (overwrites) or `rm` the file. Intentional — deleting the file before
- * recovery would orphan the program IDs in explorer history.
+ * Safety: refuses programs whose upgrade authority is not the deployer, and
+ * IDs currently in Anchor.toml [programs.<network>] unless
+ * `--allow-anchor-toml-ids` (closing them forces a keypair rotation). Does NOT
+ * delete `deployments/<network>.json`. Runbook: README § Deployment.
  */
 
 import * as fs from 'fs';

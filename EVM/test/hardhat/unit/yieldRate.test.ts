@@ -332,10 +332,7 @@ describe("scripts/utils/yieldRate", () => {
             // Quantify. The denominator error is 12.5/10 = 1.25x, but ANNUALISING
             // amplifies it: APY is `(1 + daily)^365 - 1`, which is convex, so a
             // 25% larger daily growth becomes a ~49% larger APY.
-            //
-            // The old comment here claimed the overstatement was "proportionally
-            // similar" to the 25% denominator gap. It is not, and the assertion
-            // under it (`> 1.2`) was loose enough to hide the difference.
+            // The APY overstatement is therefore NOT proportional to the 25% gap.
             const spotApy = ratePerSecondToApy(spotResult.ratePerSecond);
             const twaApy = ratePerSecondToApy(twaResult.ratePerSecond);
 
@@ -355,13 +352,8 @@ describe("scripts/utils/yieldRate", () => {
             expect(reconcileActualPayout(40_000, 40_000)).to.equal(0);
         });
 
-        // These two scenarios previously hardcoded `publishedRatePerSecond =
-        // 1.0000000015`, a value implicitly sized for a 30-DAY window. That
-        // coupled the fixture to the epoch length invisibly: over 24h the same
-        // rate pays ~$1.4k instead of ~$42.8k, flipping the sign of the
-        // residual and breaking the test for reasons unrelated to
-        // `reconcileActualPayout`. Deriving the rate from the target makes the
-        // fixture self-consistent at ANY window.
+        // The rate is derived from the target so the fixture is self-consistent
+        // at any window length (a hardcoded rate silently ties it to one).
         const ASSUMED_AVG_VALUE_USD = 10_000_000;
         const EPOCH_WINDOW_SEC = 86400; // 24h production epoch
 

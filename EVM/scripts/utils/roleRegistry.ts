@@ -3,7 +3,7 @@
  * granted or revoked on an EVM chain — plus the address-labelling used to
  * make an audit of live chain state readable.
  *
- * `OkuMoney`, `OkuDollar`, `LitePSM` and `RedemptionQueue` all extend
+ * `OkuMoney`, `OkuDollar` and `LitePSM` all extend
  * OpenZeppelin's `AccessControlUpgradeable`, **not** `AccessControlEnumerable`:
  * `hasRole(role, account)` answers "does THIS address hold it?", but there is
  * no `getRoleMemberCount` / `getRoleMember`. The chain therefore cannot be

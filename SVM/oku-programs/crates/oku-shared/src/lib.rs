@@ -1,27 +1,7 @@
-//! # oku-shared
-//!
-//! Protocol-wide constants and pure-math primitives shared by the
-//! OkuM SVM workspace (`lite-psm` and any future program that needs
-//! to agree on a number with the rest of the protocol).
-//!
-//! This crate is the SVM-side counterpart to `EVM/src/lib/Constants.sol` +
-//! `EVM/src/lib/MathLib.sol`. Anything that has a corresponding EVM constant
-//! lives here, with a doc-comment cross-referencing the EVM source so the
-//! two stay in sync.
-//!
-//! ## Design rules
-//!
-//! 1. **No dependencies.** This crate is pure Rust — no `solana-*`, no
-//!    `anchor-lang`. That keeps it cheap to compile, free of cross-version
-//!    drift, and usable from arbitrary downstream tooling (e.g. an
-//!    integration-test harness, a back-of-envelope simulator).
-//! 2. **No `Result` types.** Math primitives return `Option<u64>` (None on
-//!    overflow / division-by-zero) so each program can map them to its own
-//!    `LitePsmError::Overflow` without coupling the crates to a single
-//!    error type.
-//! 3. **No state, no I/O.** Just constants and pure functions.
+//! Dependency-free constants and pure math shared by the SVM programs; the
+//! counterpart to `EVM/src/lib/Constants.sol` and `MathLib.sol`. Primitives
+//! return `Option` so each program maps `None` to its own overflow error.
 
-// No unsafe code anywhere in this crate.
 #![forbid(unsafe_code)]
 
 pub mod constants;
@@ -30,16 +10,10 @@ pub mod rate;
 pub mod wad;
 pub mod yield_lock;
 
-// Re-export the public surface at crate root so callers can write
-// `use oku_shared::{PRECISION, mul_div_floor};` instead of nested paths.
 pub use constants::*;
 pub use math::*;
 pub use rate::{compound_for, compute_multiplier, rpow, Schedule};
-// Only the FULL-DOMAIN primitives are re-exported flat. `wad`'s narrow
-// variant (`mul_div_floor_u128_narrow`) is deliberately excluded: it carries a
-// precondition its siblings do not, and surfacing it here alongside them is
-// exactly how a future caller would inherit that precondition silently. It
-// remains reachable as `oku_shared::wad::mul_div_floor_u128_narrow` for the
-// fuzz harness, where the longer path is a feature.
+// `wad::mul_div_floor_u128_narrow` is not re-exported: it has a precondition
+// its siblings lack. Use the full path.
 pub use wad::{mul_div_wad_floor, mul_div_wad_half_up};
 pub use yield_lock::yield_lock_engaged;

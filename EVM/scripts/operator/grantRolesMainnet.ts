@@ -7,15 +7,12 @@
  *                     ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER,
  *                     VAULT_RESCUER
  *   Warm Multisig   → all PAUSER, all BLACKLISTER
- *   Orchestrator    → OKUM_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR
+ *   Orchestrator    → OKUM_REBASER, BUFFER_DEPOSITOR
  *
- * QUEUE_PSM, OKUM_MINTER and OKUM_BURNER are intentionally NOT in this list —
- * they must remain on the LitePSM / RedemptionQueue proxy addresses, granted
- * at deploy time via configureRoles. This script verifies OKUM_MINTER/OKUM_BURNER
- * on LitePSM, OKUM_BURNER on RedemptionQueue, and QUEUE_PSM on RedemptionQueue
- * before proceeding; missing grants are fatal. (RedemptionQueue deliberately
- * does NOT hold OKUM_MINTER — it only burns — so that is not checked here; see
- * deploy/index.ts's verifyDeployment, which asserts the negative.)
+ * OKUM_MINTER and OKUM_BURNER are intentionally NOT in this list — they must
+ * remain on the LitePSM proxy address, granted at deploy time via
+ * configureRoles. This script verifies both on LitePSM before proceeding;
+ * missing grants are fatal.
  *
  * Final step: revokes DEFAULT_ADMIN_ROLE from the deployer key, making the
  * Cold Multisig the sole meta-role holder.
@@ -100,7 +97,6 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
       "DEFAULT_ADMIN_ROLE",
       "VAULT_UPGRADER",
       "VAULT_UNPAUSER",
-      // REMOVED (single-multiplier refactor): VAULT_RESERVE_MANAGER / VAULT_ADMIN.
       // VAULT_RESCUER lives on the cold key: it moves donated OkuM out of the
       // vault, so it belongs with the other asset-withdrawing roles.
       "VAULT_RESCUER",
@@ -112,18 +108,12 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
       "PSM_UNPAUSER",
       "PSM_BUFFER_WITHDRAWER",
     ]],
-    ["RedemptionQueue", [
-      "DEFAULT_ADMIN_ROLE",
-      "QUEUE_UPGRADER",
-      "QUEUE_RESCUER",
-    ]],
   ]);
 
   const warmRoles = new Map<string, RoleName[]>([
     ["OkuMoney", ["OKUM_PAUSER", "OKUM_BLACKLISTER"]],
     ["OkuDollar", ["VAULT_PAUSER", "OKUM_BLACKLISTER"]],
     ["LitePSM", ["PSM_PAUSER"]],
-    ["RedemptionQueue", []],
   ]);
 
   const orchRoles = new Map<string, RoleName[]>([
@@ -131,8 +121,7 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
     // derives its multiplier from OkuMoney, so there is no vault-side rebaser.
     ["OkuMoney", ["OKUM_REBASER"]],
     ["OkuDollar", []],
-    ["LitePSM", ["PSM_QUEUE_PROCESSOR", "PSM_BUFFER_DEPOSITOR"]],
-    ["RedemptionQueue", []],
+    ["LitePSM", ["PSM_BUFFER_DEPOSITOR"]],
   ]);
 
   return { cold: coldRoles, warm: warmRoles, orch: orchRoles };
@@ -283,7 +272,7 @@ async function main() {
   const { cold: coldMap, warm: warmMap, orch: orchMap } = buildRoleMap(cold, warm, orch);
 
   const contracts: Record<string, Contract> = {};
-  for (const name of ["OkuMoney", "OkuDollar", "LitePSM", "RedemptionQueue"]) {
+  for (const name of ["OkuMoney", "OkuDollar", "LitePSM"]) {
     let addr: string;
     try {
       addr = loadAddress(bookKey, name);
@@ -296,26 +285,14 @@ async function main() {
 
   // -------- Sanity check: deploy-time proxy grants must already exist --------
   // EVM-A1: OKUM_MINTER and OKUM_BURNER live on the LitePSM proxy (not EOAs),
-  // OKUM_BURNER also on RedemptionQueue, and QUEUE_PSM on RedemptionQueue is
-  // held by the LitePSM proxy. All are granted in scripts/deploy/index.ts and
-  // must be present before this script runs. Missing grants here mean a fresh
+  // granted in scripts/deploy/index.ts. Missing grants here mean a fresh
   // deploy is broken — fail loudly before we touch any role state.
-  //
-  // RedemptionQueue deliberately does NOT hold OKUM_MINTER (it only burns —
-  // see deploy/index.ts's OKUM_MINTER comment and verifyDeployment's negative
-  // assertion), so that combination is correctly absent from this list. An
-  // earlier version of this check required it, which meant this script threw
-  // on every correctly-deployed chain.
-  if (contracts.OkuMoney && contracts.LitePSM && contracts.RedemptionQueue) {
+  if (contracts.OkuMoney && contracts.LitePSM) {
     const okuMoney = contracts.OkuMoney;
-    const queue = contracts.RedemptionQueue;
     const psmAddr = await contracts.LitePSM.getAddress();
-    const queueAddr = await contracts.RedemptionQueue.getAddress();
     const checks: Array<[string, Contract, string, string]> = [
       ["OKUM_MINTER on LitePSM", okuMoney, ROLES.OKUM_MINTER, psmAddr],
       ["OKUM_BURNER on LitePSM", okuMoney, ROLES.OKUM_BURNER, psmAddr],
-      ["OKUM_BURNER on RedemptionQueue", okuMoney, ROLES.OKUM_BURNER, queueAddr],
-      ["QUEUE_PSM on RedemptionQueue -> LitePSM", queue, ROLES.QUEUE_PSM, psmAddr],
     ];
     for (const [label, contract, role, account] of checks) {
       const has = await contract.hasRole(role, account);

@@ -1,27 +1,13 @@
 //! cargo-fuzz target: `dollars_to_raw`
 //!
-//! Properties verified:
-//!
-//! 1. No panic for any (dollar_value, multiplier) pair.
-//! 2. multiplier == 0 returns None (division by zero).
-//! 3. At multiplier == PRECISION, raw_amount == dollar_value (identity).
-//! 4. Round-trip monotonicity: dollars_back <= dollar_value always.
-//! 5. Round-trip precision bound: loss is bounded by max(multiplier/PRECISION, 1).
-//!    Two sequential floor divisions (d->raw->d) each lose up to 1 unit
-//!    in their respective denominator's scale, so the total dollar-denominated
-//!    loss is at most ceil(multiplier / PRECISION). This means at $1 multiplier
-//!    the loss is at most 1 lamport, but at $17 multiplier the loss can be up
-//!    to 17 lamports -- which is correct behavior for floor-rounded integer math.
-//! 6. Consistency with the narrow `wad::mul_div_floor_u128_narrow` reference.
-//!    Reached via its module path, not the crate root: it is deliberately not
-//!    re-exported flat, because its precondition (the raw product `a*b` must
-//!    fit `u128`) is stricter than its full-domain siblings'. This target is
-//!    safe to use it as an oracle precisely because `dollar_value as u128 *
-//!    PRECISION` is bounded by `u64::MAX * 1e18 ≈ 1.8e37`.
-//!
-//! The multiplier is `u128` (WAD-scaled) since the 1e18 migration. Unlike
-//! `raw_to_dollars`, this direction divides BY the multiplier, so it does not
-//! need the 256-bit path — the numerator `u64 × 1e18` always fits `u128`.
+//! Properties:
+//! 1. No panic for any `(dollar_value, multiplier)`.
+//! 2. `multiplier == 0` returns `None`.
+//! 3. Identity at `PRECISION`.
+//! 4. Round trip never returns more dollars than the input.
+//! 5. Round-trip loss is at most `multiplier / PRECISION + 2` (two chained floors).
+//! 6. Agrees with `wad::mul_div_floor_u128_narrow` (valid here since
+//!    `u64 * PRECISION` fits `u128`).
 //!
 //! Run: cargo +nightly fuzz run dollars_to_raw -- -max_total_time=60
 
@@ -36,7 +22,7 @@ fuzz_target!(|data: (u64, u128)| {
 
     let result = dollars_to_raw(dollar_value, multiplier);
 
-    // Property 2: zero multiplier -> None
+    // Property 2
     if multiplier == 0 {
         assert!(
             result.is_none(),
@@ -45,7 +31,7 @@ fuzz_target!(|data: (u64, u128)| {
         return;
     }
 
-    // Property 6: consistency with reference
+    // Property 6
     let reference = mul_div_floor_u128_narrow(dollar_value as u128, PRECISION, multiplier)
         .and_then(|v| u64::try_from(v).ok());
     assert_eq!(
@@ -53,7 +39,7 @@ fuzz_target!(|data: (u64, u128)| {
         "dollars_to_raw inconsistent with mul_div_floor_u128_narrow"
     );
 
-    // Property 3: identity at PRECISION
+    // Property 3
     if multiplier == PRECISION {
         assert_eq!(
             result,
@@ -65,15 +51,13 @@ fuzz_target!(|data: (u64, u128)| {
     // Property 4 & 5: round-trip precision bound
     if let Some(raw) = result {
         if let Some(dollars_back) = raw_to_dollars(raw, multiplier) {
-            // Property 4: monotonicity -- never get more dollars back than input
+            // Property 4
             assert!(
                 dollars_back <= dollar_value,
                 "dollars_to_raw round-trip: got more dollars back than input (dollar_value={dollar_value}, multiplier={multiplier}, raw={raw}, dollars_back={dollars_back})"
             );
 
-            // Property 5: precision bound (smoke-test, intentionally loose).
-            // Saturating cast: a multiplier/PRECISION ratio beyond u64 implies
-            // an astronomically large bound, so saturation only loosens it.
+            // Property 5 (loose; the saturating cast only loosens the bound).
             let max_loss = u64::try_from(multiplier / PRECISION)
                 .unwrap_or(u64::MAX)
                 .saturating_add(2);

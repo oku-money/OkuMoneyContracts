@@ -22,7 +22,7 @@
  * driven by an external scheduler, which is why these scripts stay
  * non-interactive and exit-code-clean.
  *
- * Headroom: `MAX_RATE` (`src/lib/Constants.sol:45`) caps growth at ~0.8677%
+ * Headroom: `MAX_RATE` (`src/lib/Constants.sol`) caps growth at ~0.8677%
  * per 24h; a 5% APY target needs 5%/365 ≈ 0.0137% per day — roughly **63x
  * headroom**. The per-second rate is essentially epoch-length-invariant for a
  * fixed APY. The failure mode to watch is a *monthly-sized dollar target*

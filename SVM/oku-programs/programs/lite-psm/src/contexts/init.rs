@@ -8,41 +8,26 @@ use anchor_spl::{
 };
 use oku_shared::USDC_DECIMALS;
 
-/// This program's ProgramData PDA: `[program_id]` under the BPF upgradeable
-/// loader. Computed rather than trusted from the caller, so `program_data`
-/// cannot be pointed at some OTHER program's account that happens to name the
-/// caller as its upgrade authority.
+/// This program's ProgramData PDA, computed so the caller cannot substitute
+/// another program's account that names them as upgrade authority.
 fn program_data_address() -> Pubkey {
     anchor_lang::solana_program::bpf_loader_upgradeable::get_program_data_address(&crate::ID)
 }
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
-    /// Becomes `config.role_admin` — the permanent root authority.
-    ///
-    /// MUST be the program's BPF upgrade authority (see `program_data`
-    /// below). Without that tie this instruction is a land-grab: `config` is
-    /// a singleton PDA at `["psm_config"]`, deploy and initialize are
-    /// necessarily separate transactions, and whoever lands `initialize`
-    /// first becomes `role_admin` permanently AND chooses `usdc_mint` — for
-    /// which only the decimal count is validated, so an attacker-controlled
-    /// fake mint passes. There is no `close_config` and no re-init, so the
-    /// program ID would be unrecoverable.
+    /// Becomes `config.role_admin`. Must be the program's upgrade authority
+    /// (see `program_data`). Otherwise `initialize` is a land-grab: `config` is a
+    /// singleton PDA, deploy and initialize are separate transactions, and
+    /// whoever lands first becomes `role_admin` permanently and picks `usdc_mint`
+    /// (only its decimals are validated). There is no re-init, so the program ID
+    /// would be unrecoverable.
     #[account(mut)]
     pub role_admin: Signer<'info>,
 
-    /// The program's own ProgramData account, used only to prove
-    /// `role_admin` is the upgrade authority.
-    ///
-    /// Checked against the upgrade authority rather than a hardcoded
-    /// `const DEPLOY_AUTHORITY`, so the binary is identical across devnet and
-    /// mainnet. Anyone passing this check could already replace the whole
-    /// program via `bpf_loader_upgradeable::Upgrade`, so it grants no new
-    /// authority — it just stops anyone ELSE claiming the config.
-    ///
-    /// `Account<'info, ProgramData>` enforces `owner == BPFLoaderUpgradeable`
-    /// and the discriminant; `address =` pins it to THIS program's ProgramData
-    /// PDA, so another program's account cannot be substituted.
+    /// This program's ProgramData, proving `role_admin` is the upgrade authority.
+    /// Checked at runtime rather than a hardcoded key, so one binary serves every
+    /// cluster; passing it grants nothing the upgrade authority lacks.
     #[account(
         address = program_data_address() @ LitePsmError::Unauthorized,
         constraint = program_data.upgrade_authority_address == Some(role_admin.key())
@@ -59,26 +44,18 @@ pub struct Initialize<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// USDC mint (standard SPL).
-    ///
-    /// Must have exactly `USDC_DECIMALS` (= 6, the canonical USDC mint) decimals.
-    /// EVM resolves a runtime `usdcDecimalMultiplier` from
-    /// `IERC20Metadata.decimals()`; SVM hardcodes it and asserts at init.
+    /// USDC mint (standard SPL); must have `USDC_DECIMALS` decimals.
     #[account(
         constraint = usdc_mint.decimals == USDC_DECIMALS @ LitePsmError::InvalidUsdcDecimals
     )]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
-    /// Fresh keypair for the OkuM mint (Token-2022).
-    ///
-    /// Created via manual CPIs with ScaledUiAmount + MetadataPointer +
-    /// TokenMetadata extensions; the PsmConfig PDA becomes mint, freeze, and
-    /// ScaledUiAmount authority. A `Signer` because `CreateAccount` requires
-    /// the new account to sign.
+    /// Fresh keypair for the OkuM mint, created in the handler (`CreateAccount`
+    /// needs the new account to sign).
     #[account(mut)]
     pub oku_m_mint: Signer<'info>,
 
-    /// PSM's USDC vault
+    /// PSM's USDC vault (ATA of `config`).
     #[account(
         init,
         payer = role_admin,

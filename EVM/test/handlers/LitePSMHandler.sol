@@ -6,7 +6,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
-import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../../src/interfaces/IOkuDollar.sol";
 // The concrete `OkuDollar` import is no longer needed: the yield rate is driven on
@@ -17,8 +16,7 @@ import {TestConstants} from "../shared/Constants.sol";
  * @title LitePSMHandler
  * @notice Stateful handler for LitePSM invariants. Exercises the full public surface
  *         (mintOkuM, redeemOkuM, mintUsdOku, redeemUsdOku, depositBuffer,
- *         withdrawUsdc, processQueue, rescueQueueEntry) and tracks
- *         exact USDC flow + multiplier-observation ghost state.
+ *         withdrawUsdc) and tracks exact USDC flow + multiplier-observation ghost state.
  * @dev The PSM is granted the admin role at the test level; this handler invokes
  *      role-gated functions via `vm.prank(bridgeAdmin)` (where bridgeAdmin is the
  *      shared admin address from BaseTest). LitePSMHandler is constructed with
@@ -29,7 +27,6 @@ contract LitePSMHandler is Test {
     IOkuMoney public okuMoney;
     IOkuDollar public okuDollar;
     IERC20 public usdc;
-    RedemptionQueue public queue;
     address public rebaser;
     address public minter;
     address public blacklister;
@@ -54,9 +51,6 @@ contract LitePSMHandler is Test {
     uint256 public ghostOkuMBurned;
     uint256 public ghostUsdOkuMinted;
     uint256 public ghostOkuDollarBurned;
-    uint256 public ghostQueuedCount;
-    uint256 public ghostProcessedCount;
-    uint256 public ghostRescuedCount;
 
     // Per-handler success counters (for HandlerSanity)
     uint256 public ghostMintOkuMCalls;
@@ -72,20 +66,12 @@ contract LitePSMHandler is Test {
     uint256 public ghostDepositBufferReverts;
     uint256 public ghostWithdrawUsdcCalls;
     uint256 public ghostWithdrawUsdcReverts;
-    uint256 public ghostProcessQueueCalls;
-    uint256 public ghostProcessQueueReverts;
-    uint256 public ghostRescueCalls;
-    uint256 public ghostRescueReverts;
 
     // ============ Policy violations (must stay 0) ============
-    /// USDC received by an OkuMoney-blacklisted actor through a redeem / queue payout.
+    /// USDC received by an OkuMoney-blacklisted actor through a redeem.
     uint256 public ghostBlacklistedPaid;
     /// USDC that left the PSM during a call made while the PSM was paused.
     uint256 public ghostOutflowWhilePaused;
-    uint256 public ghostCancelCalls;
-    /// OkuM sent straight to the queue, and OkuM swept back out by `rescueExcessOkuM`.
-    uint256 public ghostDonatedToQueue;
-    uint256 public ghostSweptFromQueue;
     uint256 public ghostBlacklistCalls;
 
     // ============ Multiplier observation ============
@@ -100,7 +86,6 @@ contract LitePSMHandler is Test {
         IOkuMoney _okuMoney,
         IOkuDollar _okuDollar,
         IERC20 _usdc,
-        RedemptionQueue _queue,
         address _rebaser,
         address _minter,
         address[4] memory _compliance // blacklister, unblacklister, pauser, unpauser
@@ -109,7 +94,6 @@ contract LitePSMHandler is Test {
         okuMoney = _okuMoney;
         okuDollar = _okuDollar;
         usdc = _usdc;
-        queue = _queue;
         rebaser = _rebaser;
         minter = _minter;
         (blacklister, unblacklister, pauser, unpauser) =
@@ -211,16 +195,11 @@ contract LitePSMHandler is Test {
         Snapshot memory sn = _snap();
 
         vm.prank(actor);
-        try psm.redeemOkuM(okuMAmount) returns (uint256 paid) {
+        // InsufficientBuffer (buffer drained by withdrawUsdc) is counted as a revert.
+        try psm.redeemOkuM(okuMAmount) {
             _checkPolicy(sn);
-            // Paid-vs-queued comes from the return value and the real balance delta, not a
-            // re-derivation of the contract's own rule.
-            if (paid > 0) {
-                ghostUsdcWithdrawn += psmUsdcBefore - usdc.balanceOf(address(psm));
-                ghostOkuMBurned += okuMAmount;
-            } else {
-                ghostQueuedCount++;
-            }
+            ghostUsdcWithdrawn += psmUsdcBefore - usdc.balanceOf(address(psm));
+            ghostOkuMBurned += okuMAmount;
         } catch {
             ghostRedeemOkuMReverts++;
         }
@@ -262,12 +241,7 @@ contract LitePSMHandler is Test {
         try psm.redeemUsdOku(usdAmount) {
             _checkPolicy(sn);
             ghostOkuDollarBurned += usdAmount;
-            uint256 psmUsdcAfter = usdc.balanceOf(address(psm));
-            if (psmUsdcAfter < psmUsdcBefore) {
-                ghostUsdcWithdrawn += (psmUsdcBefore - psmUsdcAfter);
-            } else {
-                ghostQueuedCount++;
-            }
+            ghostUsdcWithdrawn += psmUsdcBefore - usdc.balanceOf(address(psm));
         } catch {
             ghostRedeemOkuDollarReverts++;
         }
@@ -299,19 +273,11 @@ contract LitePSMHandler is Test {
         ghostDepositBufferCalls++;
         amount = bound(amount, 1e6, 1_000_000e6);
 
-        // bufferDepositor is admin in BaseTest's role grants, but the handler doesn't
-        // have a direct reference. Use deal() to give the PSM the depositor role
-        // ergonomically: mint USDC straight to address(this) and approve/deposit.
+        // PSMInvariants grants this handler PSM_BUFFER_DEPOSITOR / PSM_BUFFER_WITHDRAWER.
         deal(address(usdc), address(this), amount);
         usdc.approve(address(psm), amount);
 
-        // The handler itself needs PSM_BUFFER_DEPOSITOR. Grant via the test grants
-        // BUFFER_DEPOSITOR to `bufferDepositor` (an actor address). We can use that
-        // address by impersonation-style: deal+approve from bufferDepositor.
-        // Simpler: grant the role to handler in setUp via the BaseTest admin? We
-        // don't have admin access here. The cleanest fix: have PSMInvariants's
-        // setUp pre-grant PSM_BUFFER_DEPOSITOR to address(this).
-        try psm.depositBuffer(amount, false, 0, 0, 0) {
+        try psm.depositBuffer(amount) {
             ghostUsdcDeposited += amount;
         } catch {
             ghostDepositBufferReverts++;
@@ -323,15 +289,9 @@ contract LitePSMHandler is Test {
         address recipient = actors[actorSeed % actors.length];
 
         uint256 psmBalance = usdc.balanceOf(address(psm));
-        uint256 obligation = queue.totalQueuedUsdc();
-        if (psmBalance <= obligation) {
-            ghostWithdrawUsdcReverts++;
-            return;
-        }
-        uint256 maxWithdraw = psmBalance - obligation;
-        amount = bound(amount, 1, maxWithdraw);
+        if (psmBalance == 0) return;
+        amount = bound(amount, 1, psmBalance);
 
-        // Same role-grant note as depositBuffer: handler must hold PSM_BUFFER_WITHDRAWER.
         try psm.withdrawUsdc(recipient, amount) {
             ghostUsdcWithdrawn += amount;
         } catch {
@@ -339,46 +299,7 @@ contract LitePSMHandler is Test {
         }
     }
 
-    function processQueue(uint256 maxApprove) external {
-        ghostProcessQueueCalls++;
-
-        uint256 head = queue.queueHead();
-        uint256 tail = queue.queueTail();
-        if (head >= tail) return;
-
-        // Process at most 5 entries per call.
-        uint256 endIdx = head + 5 < tail ? head + 5 : tail;
-        maxApprove = bound(maxApprove, 0, usdc.balanceOf(address(psm)));
-
-        uint256 psmUsdcBefore = usdc.balanceOf(address(psm));
-        Snapshot memory sn = _snap();
-        try psm.processQueue(head, endIdx, maxApprove) {
-            _checkPolicy(sn);
-            ghostUsdcWithdrawn += psmUsdcBefore - usdc.balanceOf(address(psm));
-            ghostProcessedCount++;
-        } catch {
-            ghostProcessQueueReverts++;
-        }
-    }
-
-    function rescueQueueEntry(uint256 indexSeed, uint256 actorSeed) external {
-        ghostRescueCalls++;
-
-        uint256 head = queue.queueHead();
-        uint256 tail = queue.queueTail();
-        if (head >= tail) return;
-
-        uint256 idx = head + (indexSeed % (tail - head));
-        address recipient = actors[actorSeed % actors.length];
-
-        try psm.redemptionQueue().rescueQueueEntry(idx, recipient) {
-            ghostRescuedCount++;
-        } catch {
-            ghostRescueReverts++;
-        }
-    }
-
-    // ============ Compliance / pause / cancel ============
+    // ============ Compliance / pause ============
 
     function blacklistActor(uint256 actorSeed, bool on) external {
         ghostBlacklistCalls++;
@@ -400,33 +321,6 @@ contract LitePSMHandler is Test {
             vm.prank(pauser);
             psm.pause();
         }
-    }
-
-    function cancelQueueEntry(uint256 indexSeed) external {
-        ghostCancelCalls++;
-        uint256 head = queue.queueHead();
-        uint256 tail = queue.queueTail();
-        if (head >= tail) return;
-        uint256 idx = head + (indexSeed % (tail - head));
-        // Only the owner can cancel; read them from the entry so the call is meaningful.
-        address owner = queue.getQueueEntry(idx).user;
-        if (owner == address(0)) return;
-        vm.prank(owner);
-        try queue.cancelQueueEntry(idx) {} catch {}
-    }
-
-    function donateToQueue(uint256 amount) external {
-        amount = bound(amount, 1, 1000e18);
-        vm.prank(minter);
-        okuMoney.mint(address(queue), amount);
-        ghostDonatedToQueue += amount;
-    }
-
-    function sweepExcess(uint256 actorSeed) external {
-        uint256 before = okuMoney.balanceOf(address(queue));
-        try queue.rescueExcessOkuM(actors[actorSeed % actors.length]) {
-            ghostSweptFromQueue += before - okuMoney.balanceOf(address(queue));
-        } catch {}
     }
 
     // ============ Yield Rate (drives multiplier compounding) ============
@@ -458,7 +352,7 @@ contract LitePSMHandler is Test {
     // Required so that any active `okuMRatePerSecond` actually compounds
     // the multiplier during invariant runs. Without this, the multiplier stays
     // pinned at PRECISION and rounding-asymmetry bugs in PSM redeem paths
-    // (historical: `_redeemUsdOku` InsufficientBalance) cannot be caught.
+    // (historical: `redeemUsdOku` InsufficientBalance) cannot be caught.
 
     uint256 public ghostWarpCalls;
     uint256 public ghostTotalElapsed;
@@ -484,12 +378,11 @@ contract LitePSMHandler is Test {
     function ghostTotalCalls() external view returns (uint256) {
         return ghostMintOkuMCalls + ghostRedeemOkuMCalls + ghostMintOkuDollarCalls
             + ghostRedeemOkuDollarCalls + ghostRebaseCalls + ghostDepositBufferCalls
-            + ghostWithdrawUsdcCalls + ghostProcessQueueCalls + ghostRescueCalls + ghostWarpCalls;
+            + ghostWithdrawUsdcCalls + ghostWarpCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
         return ghostMintOkuMReverts + ghostRedeemOkuMReverts + ghostMintOkuDollarReverts
-            + ghostRedeemOkuDollarReverts + ghostDepositBufferReverts + ghostWithdrawUsdcReverts
-            + ghostProcessQueueReverts + ghostRescueReverts;
+            + ghostRedeemOkuDollarReverts + ghostDepositBufferReverts + ghostWithdrawUsdcReverts;
     }
 }

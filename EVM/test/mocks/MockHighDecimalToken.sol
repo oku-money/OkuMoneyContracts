@@ -6,7 +6,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 /// @title MockHighDecimalToken
 /// @notice Test-only ERC-20 that reports more than 18 decimals.
 /// @dev Used solely to exercise the `UsdcDecimalsTooLarge` revert in
-///      `LitePSM.initialize` and `RedemptionQueue.initialize`.
+///      `LitePSM.initialize`.
 contract MockHighDecimalToken is ERC20 {
     uint8 private immutable _decimals;
 

@@ -4,18 +4,11 @@ use anchor_lang::prelude::*;
 use anchor_spl::token_2022::Token2022;
 use anchor_spl::token_interface::Mint as MintInterface;
 
-/// Context shared by all three rate-schedule writers
-/// (`set_okum_yield_rate`, `set_next_okum_yield_rate`,
-/// `set_okum_yield_rate_with_successor`).
-///
-/// Note what is absent: **the mint**. The rate schedule lives entirely on
-/// `PsmConfig`, and changing it writes nothing to the token, so these
-/// instructions cannot fail on a token-program error — which matters because
-/// they are the ones that must land reliably at epoch boundaries.
+/// Shared by the three rate-schedule writers. Deliberately takes no mint: the
+/// schedule lives on `PsmConfig`, so these cannot fail on a token-program error
+/// at epoch boundaries.
 #[derive(Accounts)]
 pub struct SetYieldRate<'info> {
-    /// Rebaser role — the single authority over yield on both stacks.
-    /// EVM mirror: `Roles.OKUM_REBASER`.
     pub rebaser: Signer<'info>,
 
     #[account(
@@ -27,14 +20,8 @@ pub struct SetYieldRate<'info> {
     pub config: Account<'info, PsmConfig>,
 }
 
-/// Context for the emergency multiplier override.
-///
-/// The mint is MUTABLE because this instruction force-syncs the display
-/// mirror rather than waiting for the next crank. That is not an optimisation:
-/// the override halts the schedule the mirror was last written against, and
-/// the strict-increase check only guards the CURRENT canonical value, so
-/// leaving the mirror to the crank could let it read above canonical — the one
-/// direction it must never take.
+/// The mint is mutable because the override force-syncs the display mirror;
+/// leaving it to the crank could let the mirror read above canonical.
 #[derive(Accounts)]
 pub struct SetOkuMMultiplier<'info> {
     pub rebaser: Signer<'info>,
@@ -57,16 +44,11 @@ pub struct SetOkuMMultiplier<'info> {
     pub token_2022_program: Program<'info, Token2022>,
 }
 
-/// Context for the permissionless display-mirror crank.
-///
-/// **No signer constraint by design.** The value written is a pure function of
-/// `PsmConfig` and the clock, so the caller chooses nothing; the `PsmConfig`
-/// PDA — not the caller — signs the CPI to Token-2022. Gating this on the
-/// rebaser would make wallet display freshness depend on operator liveness
-/// while adding no security.
+/// Permissionless by design: the written value is a pure function of `PsmConfig`
+/// and the clock, and the config PDA signs the CPI.
 #[derive(Accounts)]
 pub struct SyncDisplayMultiplier<'info> {
-    /// Anyone. Pays the transaction fee; gains nothing else.
+    /// Anyone.
     pub cranker: Signer<'info>,
 
     #[account(
@@ -76,7 +58,6 @@ pub struct SyncDisplayMultiplier<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
-    /// Mutable: the `UpdateMultiplier` CPI writes the extension.
     #[account(
         mut,
         address = config.oku_m_mint,

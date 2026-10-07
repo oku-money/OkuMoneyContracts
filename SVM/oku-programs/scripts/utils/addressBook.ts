@@ -1,31 +1,11 @@
 /**
- * Deployment address book management
+ * Deployment address book: `deployments/<network>.json` (per-target-network),
+ * written by `scripts/deploy/deploy-init.ts`.
  *
- * `deployments/<network>.json` is written by `scripts/deploy/deploy-init.ts`
- * after a successful Phase-2 deploy. **The file is per-target-network**:
- * `deployments/devnet.json` should hold devnet program IDs, `localnet.json`
- * the localnet IDs, and so on.
- *
- * Stale-file failure mode this guards against: a `deployments/<network>.json`
- * left behind from a previous run points scripts at a *different* program than
- * the one currently active for that NETWORK. Symptoms are `Cross-program
- * invocation with unauthorized signer` or `AccountNotFound` for PDAs that
- * "should" exist. Every `loadDeployment` call therefore cross-checks the
- * on-disk program IDs against `Anchor.toml [programs.<network>]` and warns
- * loudly on mismatch; use `loadDeploymentStrict()` to throw instead.
- *
- * Operational note (rent recovery): when an old `deployments/<network>.json`
- * holds program IDs from a previous deploy, the program data accounts at
- * those IDs may still be holding rent SOL. Recover with:
- *
- *     solana program close <OLD_PROGRAM_ID> --bypass-warning \
- *         --recipient <YOUR_DEPLOYER_PUBKEY> --url devnet
- *
- * before deleting the stale `deployments/<network>.json`. Do NOT delete the
- * file first or the old program IDs are gone from the repo and you have to
- * fish them out of explorer history. See contracts/README.md
- * § "Deployment runbook" → "Stale deployments/devnet.json recovery"
- * for the full rent-recovery walkthrough.
+ * `loadDeployment` cross-checks the on-disk program IDs against
+ * `Anchor.toml [programs.<network>]` and warns on mismatch (stale file from a
+ * previous deploy); `loadDeploymentStrict` throws instead.
+ * Rent recovery for stale deployments: see README § Deployment.
  */
 
 import * as fs from 'fs';
@@ -34,13 +14,9 @@ import { PublicKey } from '@solana/web3.js';
 import { NetworkName } from '../config/networks';
 
 /**
- * Per-upgrade audit record appended to `deployments/<network>.json::upgrades`.
- * Mirrors the EVM `UpgradeRecord` shape (addresses.json → upgrades.<chain>).
- *
- * The `idlSnapshot.accountTypes` field stores account-struct field definitions
- * extracted from `target/idl/<program>.json` at upgrade time. On the next
- * upgrade the script compares the current IDL against this snapshot to detect
- * potential storage-layout breaks.
+ * Per-upgrade audit record appended to `deployments/<network>.json::upgrades`
+ * (mirrors the EVM `UpgradeRecord`). `idlSnapshot` lets the next upgrade diff
+ * account layouts to detect storage-layout breaks.
  */
 export interface UpgradeRecord {
   /** Human-readable program name, e.g. "LitePsm". */
@@ -64,18 +40,11 @@ export interface UpgradeRecord {
   timestamp: string;
   /** Deployer wallet pubkey (base58). */
   deployer: string;
-  /**
-   * Snapshot of account-type fields at upgrade time, for future IDL diff.
-   * Key = Rust struct name (e.g. "PsmConfig"); value = array of field descriptors.
-   * Only populated on real upgrades (not "<bytecode-unchanged>" skips).
-   */
+  /** Account-type fields at upgrade time (real upgrades only, not skips). */
   idlSnapshot?: {
     /** SHA-256 of the entire IDL JSON file (for quick-change detection). */
     sha256: string;
-    /**
-     * Account-struct field arrays keyed by type name.
-     * Compact subset of `types[].type.fields` in the IDL.
-     */
+    /** Struct name (e.g. "PsmConfig") -> `types[].type.fields` subset. */
     accountTypes: Record<string, Array<{ name: string; type: unknown }>>;
   };
 }
@@ -100,11 +69,7 @@ export interface DeploymentAddresses {
     warmMultisig?: string;
     orchestrator?: string;
   };
-  /**
-   * Per-upgrade audit trail appended by `scripts/upgrade/index.ts`.
-   * Records every run (including bytecode-unchanged skips) so the operator
-   * can see at a glance what changed when and what the on-chain state was.
-   */
+  /** Per-upgrade audit trail appended by `scripts/upgrade/index.ts` (includes skips). */
   upgrades?: UpgradeRecord[];
 }
 
@@ -127,14 +92,8 @@ function getDeploymentPath(network: NetworkName): string {
 }
 
 /**
- * Read `Anchor.toml`'s `[programs.<section>]` block and return the program
- * IDs declared there. Returns `{}` if the section is absent or the file
- * can't be read.
- *
- * Anchor.toml section name conventions:
- *   - 'devnet' for NETWORK=devnet / NETWORK=devnet-fork
- *   - 'localnet' for NETWORK=localnet
- *   - 'mainnet' for NETWORK=mainnet-beta / NETWORK=mainnet-fork
+ * Read `Anchor.toml`'s `[programs.<section>]` program IDs; `{}` if the section
+ * or file is absent.
  */
 function readAnchorTomlPrograms(
   section: 'devnet' | 'localnet' | 'mainnet'
@@ -172,12 +131,7 @@ function anchorSectionFor(network: NetworkName): 'devnet' | 'localnet' | 'mainne
 
 /**
  * Compare the on-disk deployment's program IDs against
- * `Anchor.toml [programs.<network>]`. Returns the list of (key, fromFile,
- * fromAnchorToml) tuples for any mismatch; empty array means all match.
- *
- * Snake-case → camelCase mapping between Anchor.toml's keys and the
- * `deployments/*.json` `programs` keys:
- *   lite_psm    ↔  litePsm
+ * `Anchor.toml [programs.<network>]`; returns mismatches (empty = all match).
  */
 export function diffDeploymentProgramIds(
   network: NetworkName,
@@ -200,11 +154,9 @@ export function diffDeploymentProgramIds(
 }
 
 /**
- * Load deployment addresses for network. Prints a loud warning to stderr
- * if the on-disk program IDs don't match `Anchor.toml [programs.<network>]`
- * — this catches the "stale deployments file from a previous deploy"
- * failure mode. Callers that should refuse to run on mismatch (deploys,
- * admin txs against mainnet) can use `loadDeploymentStrict()` instead.
+ * Load deployment addresses for network; warns if the on-disk program IDs
+ * don't match `Anchor.toml` (stale file). Use `loadDeploymentStrict()` to
+ * refuse on mismatch.
  */
 export function loadDeployment(network: NetworkName): DeploymentAddresses | null {
   const filepath = getDeploymentPath(network);
@@ -250,11 +202,7 @@ export function loadDeployment(network: NetworkName): DeploymentAddresses | null
   return data;
 }
 
-/**
- * Like `loadDeployment` but throws if the file is missing OR if its program
- * IDs don't match `Anchor.toml [programs.<network>]`. Use from deploy /
- * mainnet-admin paths where a stale file is a hard error.
- */
+/** Like `loadDeployment` but throws if the file is missing or stale. */
 export function loadDeploymentStrict(
   network: NetworkName
 ): DeploymentAddresses {
@@ -276,7 +224,7 @@ export function loadDeploymentStrict(
         `deployments/${network}.json is stale relative to Anchor.toml ` +
           `[programs.${anchorSectionFor(network)}]:`,
         ...lines,
-        `Refusing to run — see addressBook.ts header for rent-recovery steps.`,
+        `Refusing to run — see README § Deployment for rent-recovery steps.`,
       ].join('\n')
     );
   }
@@ -379,13 +327,8 @@ export function clearDeployment(network: NetworkName) {
   }
 }
 
-/**
- * Load deployment for the effective network.
- * For fork networks (devnet-fork, mainnet-fork), loads from the parent network
- * since programs/tokens are forked from there.
- */
+/** Fork networks load from their parent network (programs/tokens are forked from it). */
 export function loadDeploymentForFork(network: NetworkName): DeploymentAddresses | null {
-  // For fork networks, load from parent network
   if (network === 'devnet-fork') {
     return loadDeployment('devnet');
   }
@@ -399,11 +342,7 @@ export function loadDeploymentForFork(network: NetworkName): DeploymentAddresses
 // Upgrade audit trail helpers
 // ============================================================================
 
-/**
- * Append a single upgrade record to `deployments/<network>.json::upgrades`.
- * Creates the upgrades array if it doesn't exist. Writes the file immediately
- * so a subsequent target failure doesn't lose this record.
- */
+/** Append an upgrade record, writing immediately so later failures don't lose it. */
 export function appendUpgradeRecord(
   network: NetworkName,
   record: UpgradeRecord
@@ -411,8 +350,7 @@ export function appendUpgradeRecord(
   ensureDeploymentsDir();
   const filepath = getDeploymentPath(network);
 
-  // Use the raw readFile path to avoid Anchor.toml mismatch warnings during
-  // upgrade runs (the upgrade script intentionally keeps the same program IDs).
+  // Raw read: skip the Anchor.toml mismatch warning during upgrade runs.
   let existing: DeploymentAddresses;
   if (fs.existsSync(filepath)) {
     try {
@@ -431,11 +369,7 @@ export function appendUpgradeRecord(
   fs.writeFileSync(filepath, JSON.stringify(updated, null, 2));
 }
 
-/**
- * Return all upgrade records for a network, or an empty array if none.
- * Does NOT check Anchor.toml alignment — upgrade records are historical and
- * don't need to match the current keypair state.
- */
+/** All upgrade records for a network (no Anchor.toml alignment check). */
 export function getUpgradeRecords(network: NetworkName): UpgradeRecord[] {
   const filepath = getDeploymentPath(network);
   if (!fs.existsSync(filepath)) return [];
@@ -447,10 +381,7 @@ export function getUpgradeRecords(network: NetworkName): UpgradeRecord[] {
   }
 }
 
-/**
- * Find the most recent UpgradeRecord for the given program name.
- * Returns undefined if no prior upgrade exists.
- */
+/** Most recent UpgradeRecord for the program, if any. */
 export function getLastUpgradeRecord(
   network: NetworkName,
   programName: string
@@ -461,16 +392,8 @@ export function getLastUpgradeRecord(
 }
 
 /**
- * Find the most recent UpgradeRecord for the given program name that ALSO
- * carries an `idlSnapshot`.
- *
- * `getLastUpgradeRecord` takes the chronologically-last match unconditionally,
- * including `<bytecode-unchanged>` skip records, which never carry a
- * snapshot. A single no-op upgrade run therefore permanently poisons
- * `getLastUpgradeRecord` for the IDL-diff guard: the newest record has no
- * snapshot even though a perfectly good one may sit one or two records
- * earlier. This variant skips snapshot-less records so the guard keeps
- * working across skip runs.
+ * Most recent UpgradeRecord for the program that carries an `idlSnapshot`
+ * (skips `<bytecode-unchanged>` records so the IDL-diff guard survives no-op runs).
  */
 export function getLastUpgradeRecordWithIdlSnapshot(
   network: NetworkName,

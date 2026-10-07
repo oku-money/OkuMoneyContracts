@@ -4,7 +4,6 @@ pragma solidity 0.8.28;
 /**
  * @title OkuDollarEvents
  * @notice Event declarations for the OkuDollar (rebasing) token contract.
- * @dev Inherited by OkuDollar; see OkuMoneyEvents for the rationale.
  */
 abstract contract OkuDollarEvents {
     /// @notice Emitted on internal share movements, carrying shares plus the
@@ -47,12 +46,9 @@ abstract contract OkuDollarEvents {
     // inherited `IERC4626` interface on OkuDollar, not declared here.
 
     /// @notice Emitted when donated OkuM is rescued from the vault.
-    /// @dev See {OkuDollar.rescueDonation} — donations accrue to nobody under the
-    ///      single-multiplier design and would otherwise be permanently locked.
     event DonationRescued(address indexed receiver, uint256 okuMAmount);
 
     /// @notice Emitted when an address is added to the OkuDollar blacklist
-    /// @dev Uses the shared OKUM_BLACKLISTER role for consistency with OkuMoney.
     event Blacklisted(address indexed account);
 
     /// @notice Emitted when an address is removed from the OkuDollar blacklist

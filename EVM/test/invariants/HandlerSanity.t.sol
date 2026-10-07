@@ -41,7 +41,6 @@ contract HandlerSanityTest is BaseTest {
         excludeContract(address(okuMoney));
         excludeContract(address(okuDollar));
         excludeContract(address(litePsm));
-        excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
     }
 

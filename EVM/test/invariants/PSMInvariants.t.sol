@@ -29,7 +29,6 @@ contract PSMInvariantsTest is BaseTest {
             IOkuMoney(address(okuMoney)),
             IOkuDollar(address(okuDollar)),
             usdc,
-            redemptionQueue,
             rebaser,
             minter,
             [blacklister, unblacklister, pauser, unpauser]
@@ -39,14 +38,12 @@ contract PSMInvariantsTest is BaseTest {
         vm.startPrank(admin);
         litePsm.grantRole(PSM_BUFFER_DEPOSITOR, address(handler));
         litePsm.grantRole(PSM_BUFFER_WITHDRAWER, address(handler));
-        litePsm.grantRole(PSM_QUEUE_PROCESSOR, address(handler));
-        redemptionQueue.grantRole(QUEUE_RESCUER, address(handler));
         vm.stopPrank();
         // SINGLE MULTIPLIER: the handler drives `okuMRatePerSecond` on OkuMoney by
         // pranking `rebaser` (which already holds OKUM_REBASER from BaseTest), which
         // combined with the handler's `warpTime` makes the multiplier actually
         // compound during invariant runs. This is the systemic coverage gap that
-        // allowed the LitePSM `_redeemUsdOku` rounding-asymmetry bug to ship.
+        // allowed the LitePSM `redeemUsdOku` rounding-asymmetry bug to ship.
         // The old `VAULT_REBASER` grant is gone with the role.
 
         targetContract(address(handler));
@@ -54,7 +51,6 @@ contract PSMInvariantsTest is BaseTest {
         excludeContract(address(okuMoney));
         excludeContract(address(okuDollar));
         excludeContract(address(litePsm));
-        excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
     }
 
@@ -65,26 +61,7 @@ contract PSMInvariantsTest is BaseTest {
         assertLe(psmOkuMBalance, 1, "PSM should hold no OkuMoney (allow 1 wei dust)");
     }
 
-    /// @notice Queue OkuMoney == live + frozen escrow + donations not yet swept (exact).
-    function invariant_QueueBackedByOkuMoney() public view {
-        assertEq(
-            okuMoney.balanceOf(address(redemptionQueue)),
-            redemptionQueue.totalQueuedOkuM() + redemptionQueue.totalFrozenOkuM()
-                + handler.ghostDonatedToQueue() - handler.ghostSweptFromQueue(),
-            "Queue OkuMoney balance must equal live + frozen + unswept donations"
-        );
-    }
-
-    /// @notice `totalQueuedOkuM` is exactly the sum of live entries in [head, tail).
-    function invariant_TotalQueuedEqualsSumOfLiveEntries() public view {
-        uint256 sum;
-        for (uint256 i = redemptionQueue.queueHead(); i < redemptionQueue.queueTail(); i++) {
-            sum += redemptionQueue.getQueueEntry(i).okuMAmount;
-        }
-        assertEq(sum, redemptionQueue.totalQueuedOkuM(), "totalQueuedOkuM drifted from entries");
-    }
-
-    /// @notice A blacklisted user is never paid USDC by a redeem or queue payout.
+    /// @notice A blacklisted user is never paid USDC by a redeem.
     function invariant_BlacklistedNeverPaid() public view {
         assertEq(handler.ghostBlacklistedPaid(), 0, "blacklisted user received USDC");
     }

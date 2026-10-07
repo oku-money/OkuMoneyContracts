@@ -3,11 +3,14 @@
 `addresses.json` is the LIVE, tracked address book that
 `scripts/utils/addressBook.ts` reads/writes.
 
-**Current state: `v0.3` is deployed.** The book holds all five contracts
-(`MockUSDC`, `OkuMoney`, `OkuDollar`, `RedemptionQueue`, `LitePSM`) for each of
-the four MVP testnets — `sepolia`, `baseSepolia`, `arbSepolia`, `bscTestnet`.
-Addresses are identical across chains because every deploy goes through the
-Arachnid CREATE2 factory with a `DEPLOYMENT_VERSION`-scoped salt.
+**Current state: `DEPLOYMENT_VERSION = "v0.4"` is pending; the book is empty**
+(every network key is `{}`, as are the EVM entries in the root
+`testnet-addresses.json`). The first deploy populates `MockUSDC`, `OkuMoney`,
+`OkuDollar` and `LitePSM` for each of the four MVP testnets — `sepolia`,
+`baseSepolia`, `arbSepolia`, `bscTestnet`. Addresses are identical across chains
+because every deploy goes through the Arachnid CREATE2 factory with a
+`DEPLOYMENT_VERSION`-scoped salt. Until then, scripts that read EVM addresses
+(operator scripts, `bridge-svm-evm.ts`) fail on a missing entry.
 
 `base` / `bsc` (mainnet) are **not** in this book. They carry a live
 pre-streaming `v0.2` deployment from before the streaming-yield refactor
@@ -22,29 +25,27 @@ participating set.
 
 `tryAttach` reuses whatever address is CURRENTLY in the book, checking only
 that it has on-chain bytecode — **not** that the address matches the current
-version's CREATE2 salt. So on a version bump the four contract keys must be
-cleared for every network *before* deploying, or the new deploy silently
-"reuses" the previous version's live contracts instead of deploying the new
-ones at their own addresses.
+version's CREATE2 salt. So on a version bump the three proxy keys (`OkuMoney`,
+`OkuDollar`, `LitePSM`) must be cleared for every network *before* deploying, or
+the new deploy silently "reuses" the previous version's live contracts instead
+of deploying new ones at their own addresses.
 
-`MockUSDC` is the deliberate exception: its key is retained across bumps so
-`deployMockUSDC`'s reuse path finds the existing, already-funded token. Its
-salt is version-scoped too, so clearing it would mint a fresh token with no
-balances.
+`MockUSDC` is normally retained across bumps so `deployMockUSDC`'s reuse path
+finds the existing, already-funded token. Clearing it deploys a fresh token with
+no balances, because its salt is version-scoped too. The `v0.4` bump cleared it
+deliberately: the mock's bytecode changed, so a reused old token would not match
+the current source.
 
-## Note on addresses after `bytecodeHash = "none"`
+## CREATE2 address stability
 
-`foundry.toml` and `hardhat.config.ts` no longer embed the source-text
-metadata hash in creation bytecode, so CREATE2 addresses no longer move when a
-comment changes. The change itself moved them once: the addresses in this book
-were computed under the old setting.
-
-This does not affect the deployed fleet. Proxy addresses are permanent, and
-`scripts/upgrade/index.ts` resolves them from this book rather than
-recomputing. What it does mean is that a **from-scratch deploy, or a deploy to
-a new chain, will land at different addresses than the entries here** — and
-that block-explorer verification of the current contracts is stale against
-present-day source until they are next upgraded. Testnet-only; accepted.
+`foundry.toml` and `hardhat.config.ts` set `bytecodeHash = "none"`, so the
+source-text metadata hash is not embedded in creation bytecode and CREATE2
+addresses do not move when only a comment changes. They still move with any
+code, compiler or constructor-arg change, and with `DEPLOYMENT_VERSION`; a deploy
+to a new chain or with different constructor args (real USDC vs `MockUSDC`)
+lands at different addresses. `scripts/upgrade/index.ts` resolves proxies from
+this book rather than recomputing them, so proxy addresses are permanent once
+deployed.
 
 ## Archive
 

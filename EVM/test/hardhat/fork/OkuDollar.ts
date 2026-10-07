@@ -5,8 +5,6 @@ import {
     OkuMoney__factory,
     OkuDollar,
     OkuDollar__factory,
-    RedemptionQueue,
-    RedemptionQueue__factory,
     IERC20__factory
 } from "../../../typechain-types"
 import { Signer, parseEther, parseUnits } from "ethers"
@@ -30,7 +28,6 @@ describe("OkuDollar Vault Scenarios", () => {
     let Charlie: Signer
 
     let psm: LitePSM
-    let queue: RedemptionQueue
     let okuMoney: OkuMoney
     let okuUsd: OkuDollar
 
@@ -38,7 +35,6 @@ describe("OkuDollar Vault Scenarios", () => {
 
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
     const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
-    const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
     const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
     const OKUM_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_PAUSER"))
@@ -47,7 +43,6 @@ describe("OkuDollar Vault Scenarios", () => {
     const OKUM_UNBLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_UNBLACKLISTER"))
     const OKUM_CAP_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_CAP_MANAGER"))
     const PSM_BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("PSM_BUFFER_WITHDRAWER"))
-    const PSM_QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("PSM_QUEUE_PROCESSOR"))
 
     async function fundWithUSDC(user: Signer, amount: bigint) {
         await network.provider.request({
@@ -62,16 +57,7 @@ describe("OkuDollar Vault Scenarios", () => {
         })
     }
 
-    /**
-     * Mint OkuM for `user` by depositing exactly `usdcAmount`.
-     *
-     * The previous version rounded the input up to a multiple of the multiplier
-     * to dodge "the PSM slippage check". No such check exists -- `LitePSM` has
-     * no slippage parameter by design, and the two checks that once looked like
-     * one were removed as unreachable. The rounding only served to make the
-     * resulting OkuM amount divide evenly, which is what let several assertions
-     * downstream look exact while actually re-deriving the contract's formula.
-     */
+    /** Mint OkuM for `user` by depositing exactly `usdcAmount` (LitePSM has no slippage parameter). */
     async function getOkuMoney(user: Signer, usdcAmount: bigint) {
         await fundWithUSDC(user, usdcAmount)
         await usdc.connect(user).approve(await psm.getAddress(), usdcAmount)
@@ -114,28 +100,17 @@ describe("OkuDollar Vault Scenarios", () => {
         ) as unknown as OkuDollar
         await okuUsd.waitForDeployment()
 
-        queue = await upgrades.deployProxy(
-            new RedemptionQueue__factory(Frank),
-            [await okuMoney.getAddress(), USDC_MAINNET, frankAddr],
-            { kind: "uups" }
-        ) as unknown as RedemptionQueue
-        await queue.waitForDeployment()
-
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
             [
                 await okuMoney.getAddress(),
                 await okuUsd.getAddress(),
                 USDC_MAINNET,
-                await queue.getAddress(),
                 frankAddr
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
-
-        // OkuBridgeRouter was removed in the noBridge refactor; previously deployed here
-        // but never exercised in this scenario suite.
 
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await psm.getAddress())
         await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await psm.getAddress())
@@ -151,14 +126,11 @@ describe("OkuDollar Vault Scenarios", () => {
 
         // Grant PSM-specific roles to Frank
         await psm.connect(Frank).grantRole(PSM_BUFFER_WITHDRAWER, frankAddr)
-        await psm.connect(Frank).grantRole(PSM_QUEUE_PROCESSOR, frankAddr)
 
         await okuMoney.connect(Frank).configureMinterAllowance(
             await psm.getAddress(),
             parseEther("1000000000")
         )
-        await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
-        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 
     describe("Wrap/Unwrap Round-Trip", () => {
@@ -187,10 +159,8 @@ describe("OkuDollar Vault Scenarios", () => {
             const okuUsdReceived = (await okuUsd.balanceOf(aliceAddr)) - okuUsdBefore
             expect(okuUsdReceived, "wrap mints dollar-for-dollar at m = 1.0").to.equal(noteBalance)
 
-            // The vault must actually have ESCROWED what Alice sent. Comparing
-            // `totalOkuMReserves()` against `okuMoney.balanceOf(vault)` would be
-            // comparing a value to itself -- the getter is literally that call
-            // (`OkuDollar.sol:741`) -- so it is checked against the deposit instead.
+            // The vault must have ESCROWED what Alice sent. `totalOkuMReserves()` is
+            // literally `okuMoney.balanceOf(vault)`, so check against the deposit.
             expect(await okuMoney.balanceOf(okuUsdAddr), "vault escrowed Alice's notes")
                 .to.equal(noteBalance)
             expect(await okuUsd.totalOkuMReserves(), "reserves view agrees with the escrow")
@@ -240,10 +210,8 @@ describe("OkuDollar Vault Scenarios", () => {
             const newReserves = await okuUsd.totalOkuMReserves()
             expect(newReserves).to.equal(initialReserves)
 
-            // REMOVED: surplus() — single-multiplier refactor. OkuM and UsdOku share
-            // one multiplier, so collateralization is exactly 1.0 by construction and
-            // no surplus can accrue. The dollar value of reserves and of obligations
-            // now move together.
+            // OkuM and UsdOku share one multiplier, so collateralization is exactly
+            // 1.0 by construction and no surplus can accrue.
 
             // Unwrap is multiplier-aware: okuMReturned = usdAmount × PRECISION / multiplier
             // After the multiplier increase, each raw note is worth more → fewer notes returned
@@ -269,11 +237,8 @@ describe("OkuDollar Vault Scenarios", () => {
                 .to.be.closeTo(expectedNotes, 1n)
 
             // The unwrap above used `okuUsdBalance`, captured BEFORE the bump. A
-            // UsdOku balance is denominated in raw OkuM, so it grows with the
-            // multiplier: Alice's balance is now `okuUsdBalance × 1.1`, and
-            // unwrapping only the pre-bump figure is a PARTIAL exit leaving ~9%
-            // of her shares behind. An earlier version asserted a drained vault
-            // here and passed only because two errors cancelled.
+            // UsdOku balance grows with the multiplier (now `okuUsdBalance × 1.1`),
+            // so unwrapping the pre-bump figure is a partial exit leaving ~9% behind.
             const remainingUsdOku = await okuUsd.balanceOf(aliceAddr)
             // Derived: she entered with `noteBalance` shares and has burned
             // `expectedNotes` of them; the remainder is priced at the new multiplier.

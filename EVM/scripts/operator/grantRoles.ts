@@ -1,81 +1,21 @@
 /**
  * Grant Operational Roles to Master EOA ("operate, don't own")
  *
- * Idempotently grants MASTER_EOA the bounded set of OPERATIONAL roles it
- * needs to run day-to-day protocol operations on a testnet deployment —
- * mint/burn OkuM, set the yield rate, deposit the PSM buffer, process the
- * redemption queue — and sets its OkuM minter allowance so the mint grant is
- * actually usable. It does NOT grant `DEFAULT_ADMIN_ROLE` or any
- * `*_UPGRADER` role; those stay on the admin/deployer key. This is the EVM
- * mirror of SVM's `scripts/admin/grant-roles.ts --delegate=<pubkey>`; see its
- * NatSpec for the shared "operate, don't own" rationale and the SVM/EVM
- * role-mapping table in `../../../README.md § RBAC`.
+ * Idempotently grants MASTER_EOA the operational roles listed in ROLE_MAP
+ * (mint/burn OkuM, rebase, pause, blacklist, caps/allowances, PSM buffer) and
+ * sets its OkuM minter allowance so the mint grant is usable. It never grants
+ * `DEFAULT_ADMIN_ROLE` or any `*_UPGRADER` role; those stay on the deployer
+ * key, whose admin role is also the backstop for revoking everything here.
+ * EVM mirror of SVM's `scripts/admin/grant-roles.ts --delegate=<pubkey>`; role
+ * mapping in `../../../README.md § RBAC`.
  *
- * ============================================================================
- * WARNING — DIVERGES FROM THE DOCUMENTED PRODUCTION THREAT MODEL
- * ============================================================================
- * `../../README.md` states that the EVM orchestrator role holds NO minting
- * authority ("Orchestrator key compromise grants no special mint privilege
- * beyond the orchestrator's USDC custody" — `mintOkuM` is permissioned only
- * by USDC collateral, not by an EOA role), because EVM bridging is
- * PSM/USDC-mediated.
- *
- * This script grants `OKUM_MINTER`/`OKUM_BURNER` to MASTER_EOA anyway: a
- * DELIBERATE, TESTNET-ONLY parity choice with SVM's `direct_minter`/
- * `direct_burner` roles (which exist there because SVM has no redemption
- * queue and must mint/burn directly). Never point this script at a mainnet
- * network with real funds without revisiting that decision; `assertNotMainnet`
- * below blocks it, and there is deliberately no override.
- *
- * Worse, granting OKUM_MINTER + OKUM_ALLOWANCE_MANAGER + OKUM_CAP_MANAGER
- * together makes MASTER_EOA's mint capability EFFECTIVELY UNBOUNDED:
- *   - `configureMinterAllowance` (`src/token/OkuMoney.sol:820`) is
- *     `onlyRole(OKUM_ALLOWANCE_MANAGER)` and takes an arbitrary `minter_`, so
- *     the holder can raise its OWN allowance past MINTER_ALLOWANCE.
- *   - `setMaxSupply` (`OkuMoney.sol:838`) is `onlyRole(OKUM_CAP_MANAGER)`, so
- *     the holder can then raise the global cap that would otherwise bound it.
- * There is NO on-chain ceiling on what this key can mint;
- * PSM_BUFFER_WITHDRAWER likewise lets it drain the PSM's USDC buffer.
- * (`burn()` stays bounded — it only ever burns the caller's own balance.)
- *
- * This is acceptable ONLY because (a) this script is testnet-only and
- * hard-refuses mainnet, and (b) testnet OkuM is backed by MockUSDC and has no
- * value. The mainnet topology in `grantRolesMainnet.ts` splits these across a
- * cold/warm/orchestrator trio precisely so that no single key holds
- * mint + allowance + cap at once, and MUST NOT be changed to mirror this file.
- *
- * ----------------------------------------------------------------------------
- * WHAT'S GRANTED vs. RETAINED
- * ----------------------------------------------------------------------------
- * MASTER_EOA gets everything needed to OPERATE the protocol.
- * The deployer/admin key keeps exactly two things: the ability to UPGRADE, and
- * literal OWNERSHIP (which is what lets it revoke all of the above).
- *
- * Granted — the full operational surface (20 roles):
- *   OkuMoney:        OKUM_MINTER, OKUM_BURNER, OKUM_REBASER,
- *                    OKUM_PAUSER, OKUM_UNPAUSER,
- *                    OKUM_BLACKLISTER, OKUM_UNBLACKLISTER,
- *                    OKUM_CAP_MANAGER, OKUM_ALLOWANCE_MANAGER
- *                    (+ an initial minter allowance)
- *   OkuDollar:       VAULT_PAUSER, VAULT_UNPAUSER, VAULT_RESCUER,
- *                    OKUM_BLACKLISTER, OKUM_UNBLACKLISTER
- *   LitePSM:         PSM_PAUSER, PSM_UNPAUSER, PSM_QUEUE_PROCESSOR,
- *                    PSM_BUFFER_DEPOSITOR, PSM_BUFFER_WITHDRAWER
- *   RedemptionQueue: QUEUE_RESCUER
- *
- * Retained on the admin/deployer key (4 roles + ownership):
- *   DEFAULT_ADMIN_ROLE (all four contracts) — literal ownership, and the
- *     role-admin for every role above, so the deployer can revoke MASTER_EOA's
- *     entire role set unilaterally at any time. This is the ONLY backstop.
- *   OKUM_UPGRADER / VAULT_UPGRADER / PSM_UPGRADER / QUEUE_UPGRADER —
- *     implementation-swap power (UUPS `_authorizeUpgrade`).
- *
- * Also NOT granted, for a reason unrelated to trust:
- *   QUEUE_PSM — an identity role, not an operator capability. It asserts
- *     "the caller IS the LitePSM proxy", and RedemptionQueue relies on that to
- *     keep its accounting consistent with the PSM's. Handing it to an EOA
- *     would let that EOA drive queue state out of band from the accounting
- *     LitePSM performs around the same calls. It stays on the proxy.
+ * TESTNET ONLY. OKUM_MINTER + OKUM_ALLOWANCE_MANAGER + OKUM_CAP_MANAGER on one
+ * key leaves its minting unbounded (`configureMinterAllowance` and
+ * `setMaxSupply` are both role-gated, so it can raise its own allowance and
+ * the global cap), and PSM_BUFFER_WITHDRAWER can drain the PSM USDC buffer.
+ * That contradicts the mainnet model (see `../../README.md`), where the
+ * orchestrator has no mint authority; `assertNotMainnet` refuses mainnet with
+ * no override. Mainnet uses the split topology in `grantRolesMainnet.ts`.
  *
  * Usage:
  *   npx hardhat run scripts/operator/grantRoles.ts \
@@ -158,9 +98,8 @@ const LIVE_SETTLE_MS = Number(process.env.SETTLE_MS ?? 1500);
 const DRY_RUN = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
 
 /**
- * Mainnet gate — this script is testnet-only by design (see the module doc's
- * WARNING section). Unlike `grantRolesMainnet.ts` there is no opt-in override;
- * a mainnet deployment carrying real funds needs the 3-key topology.
+ * Mainnet gate: testnet-only by design (see module doc), with no opt-in
+ * override unlike `grantRolesMainnet.ts`.
  */
 function assertNotMainnet(networkName: string) {
   if (!isMainnetNetwork(networkName)) return;
@@ -181,13 +120,12 @@ type RoleName = keyof typeof ROLES;
  * Map of contract name (as it appears in addresses.json) → operational roles
  * to grant to MASTER_EOA. Contracts with nothing to grant are simply absent;
  * the grant loop below only visits contracts listed here. DEFAULT_ADMIN_ROLE
- * is deliberately not in any entry — see the module doc.
+ * is deliberately not in any entry.
  */
 const ROLE_MAP: Record<string, readonly RoleName[]> = {
   OkuMoney: [
     "OKUM_REBASER",
-    // Testnet-only parity with SVM's direct_minter/direct_burner — see the
-    // module doc's WARNING before granting on any network with real funds.
+    // Testnet-only parity with SVM's direct_minter/direct_burner.
     "OKUM_MINTER",
     "OKUM_BURNER",
     // Circuit breakers, so an operator can respond to an incident without
@@ -197,35 +135,26 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     // Compliance actions.
     "OKUM_BLACKLISTER",
     "OKUM_UNBLACKLISTER",
-    // Supply/allowance administration. Together with OKUM_MINTER these remove
-    // every on-chain ceiling on this key's minting — see the module doc's
-    // WARNING. Deliberate, testnet-only.
+    // Supply/allowance administration. With OKUM_MINTER this removes every
+    // on-chain ceiling on this key's minting (see module doc).
     "OKUM_CAP_MANAGER",
     "OKUM_ALLOWANCE_MANAGER",
   ],
   OkuDollar: [
     "VAULT_PAUSER",
     "VAULT_UNPAUSER",
-    // Withdraws OkuM donated directly to the vault. Under the single-multiplier
-    // design donations accrue to nobody, so without this they are stuck.
+    // Withdraws OkuM donated directly to the vault.
     "VAULT_RESCUER",
-    // OkuDollar carries its OWN copy of the shared-prefix blacklist roles;
-    // granting them on OkuMoney does not cover the vault. Both are needed.
+    // Roles are per-contract: OkuMoney's blacklist grants do not cover OkuDollar.
     "OKUM_BLACKLISTER",
     "OKUM_UNBLACKLISTER",
   ],
   LitePSM: [
     "PSM_BUFFER_DEPOSITOR",
-    "PSM_QUEUE_PROCESSOR",
     "PSM_PAUSER",
     "PSM_UNPAUSER",
     // Lets the operator pull USDC out of the PSM buffer.
     "PSM_BUFFER_WITHDRAWER",
-  ],
-  RedemptionQueue: [
-    "QUEUE_RESCUER",
-    // QUEUE_PSM deliberately absent — identity role meaning "the caller IS
-    // the LitePSM proxy", not an operator capability. See the module doc.
   ],
 };
 
@@ -465,12 +394,10 @@ function printSummary(results: GrantResult[], skippedContracts: string[]) {
   }
 
   logger.info(
-    "Retained on admin/deployer: DEFAULT_ADMIN_ROLE on all four contracts " +
+    "Retained on admin/deployer: DEFAULT_ADMIN_ROLE on all three contracts " +
       "(literal ownership — it is the role-admin for every role granted here, " +
       "so the deployer can revoke this operator's entire set at any time) and " +
-      "OKUM_/VAULT_/PSM_/QUEUE_UPGRADER (implementation-swap power). " +
-      "QUEUE_PSM stays on the LitePSM proxy — an identity role, not an " +
-      "operator capability."
+      "OKUM_/VAULT_/PSM_UPGRADER (implementation-swap power)."
   );
   logger.warning(
     "This operator holds OKUM_MINTER + OKUM_ALLOWANCE_MANAGER + " +

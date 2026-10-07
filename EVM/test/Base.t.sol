@@ -7,7 +7,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OkuMoney} from "../src/token/OkuMoney.sol";
 import {OkuDollar} from "../src/token/OkuDollar.sol";
 import {LitePSM} from "../src/psm/LitePSM.sol";
-import {RedemptionQueue} from "../src/psm/RedemptionQueue.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {TestConstants} from "./shared/Constants.sol";
 import {TestRoles} from "./shared/Roles.sol";
@@ -65,13 +64,8 @@ abstract contract BaseTest is Test, Actors {
     bytes32 public constant PSM_UPGRADER = TestRoles.PSM_UPGRADER;
     bytes32 public constant PSM_PAUSER = TestRoles.PSM_PAUSER;
     bytes32 public constant PSM_UNPAUSER = TestRoles.PSM_UNPAUSER;
-    bytes32 public constant PSM_QUEUE_PROCESSOR = TestRoles.PSM_QUEUE_PROCESSOR;
     bytes32 public constant PSM_BUFFER_DEPOSITOR = TestRoles.PSM_BUFFER_DEPOSITOR;
     bytes32 public constant PSM_BUFFER_WITHDRAWER = TestRoles.PSM_BUFFER_WITHDRAWER;
-    // RedemptionQueue roles (QUEUE_ prefix)
-    bytes32 public constant QUEUE_PSM = TestRoles.QUEUE_PSM;
-    bytes32 public constant QUEUE_UPGRADER = TestRoles.QUEUE_UPGRADER;
-    bytes32 public constant QUEUE_RESCUER = TestRoles.QUEUE_RESCUER;
 
     // ============ Contracts ============
 
@@ -81,8 +75,6 @@ abstract contract BaseTest is Test, Actors {
     OkuDollar public okuDollarImpl;
     LitePSM public litePsm;
     LitePSM public litePsmImpl;
-    RedemptionQueue public redemptionQueue;
-    RedemptionQueue public redemptionQueueImpl;
     MockUSDC public usdc;
 
     // ============ Setup ============
@@ -103,14 +95,9 @@ abstract contract BaseTest is Test, Actors {
         // Deploy OkuDollar vault
         (okuDollar, okuDollarImpl) = Deploy.deployOkuDollar(address(okuMoney), admin);
 
-        // Deploy RedemptionQueue
-        (redemptionQueue, redemptionQueueImpl) =
-            Deploy.deployRedemptionQueue(address(okuMoney), address(usdc), admin);
-
         // Deploy LitePSM
-        (litePsm, litePsmImpl) = Deploy.deployLitePSM(
-            address(okuMoney), address(okuDollar), address(usdc), address(redemptionQueue), admin
-        );
+        (litePsm, litePsmImpl) =
+            Deploy.deployLitePSM(address(okuMoney), address(okuDollar), address(usdc), admin);
     }
 
     function _setupRoles() internal {
@@ -145,16 +132,8 @@ abstract contract BaseTest is Test, Actors {
         // LitePSM roles - Granular RBAC (PSM_ prefix)
         litePsm.grantRole(PSM_PAUSER, pauser);
         litePsm.grantRole(PSM_UNPAUSER, unpauser);
-        litePsm.grantRole(PSM_QUEUE_PROCESSOR, queueProcessor);
         litePsm.grantRole(PSM_BUFFER_DEPOSITOR, bufferDepositor);
         litePsm.grantRole(PSM_BUFFER_WITHDRAWER, bufferWithdrawer);
-        // RedemptionQueue roles (QUEUE_ prefix)
-        redemptionQueue.grantRole(QUEUE_PSM, address(litePsm));
-        redemptionQueue.grantRole(QUEUE_RESCUER, queueRescuer);
-
-        // Queue burns its own escrow in processQueue; it holds no mint role (as in production).
-        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
-
         vm.stopPrank();
     }
 

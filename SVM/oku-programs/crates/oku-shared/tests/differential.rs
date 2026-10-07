@@ -1,64 +1,16 @@
-//! Cross-language differential replay: Rust vs the Solidity reference.
+//! Differential replay: Rust `compute_multiplier` vs the Solidity reference.
 //!
-//! # What this guards
-//!
-//! `compute_multiplier` exists three times — Solidity, Rust, TypeScript — and
-//! all three must return the same integer for the same inputs. Cross-chain
-//! determinism depends on it entirely, and **nothing on-chain on either stack
-//! can detect a divergence**: each deployment is independent, with no
-//! messaging, no light client, and no state proof between them. A silent drift
-//! between these implementations would show up as chains quietly disagreeing
-//! about how much everyone owns.
-//!
-//! Before this existed, the three were kept in agreement by code review. That
-//! is not a control; this is.
-//!
-//! # The corpus
-//!
-//! `EVM/test/differential/vectors.jsonl` is generated FROM the Solidity, which
-//! is the reference implementation — it shipped first and it is what the live
-//! EVM deployments run. Regenerate (and re-run this replay + the TypeScript
-//! one) with:
-//!
-//! ```text
-//! npm run test:differential   # from the repo root
-//! ```
-//!
-//! Each line records the inputs, whether Solidity REVERTED, and the value if it
-//! did not. Reverts are checked as strictly as values: Rust returns `None` and
-//! TypeScript throws where Solidity reverts, and a divergence in the revert
-//! surface is still a divergence. (One such bug — the atomic setter accepting a
-//! halt plus a successor — was found by hand in the instruction layer during
-//! this work, which is exactly why the corpus records them.)
-//!
-//! # Provenance
-//!
-//! The committed file carries no hash or version field. Provenance is
-//! structural instead: `.github/workflows/test.yml`'s `differential` job
-//! regenerates the corpus from this exact Solidity on every push and
-//! hard-fails on any byte difference, and `GenerateVectors.t.sol`'s generation
-//! is fully deterministic (fixed-seed keccak chain, no wall-clock/block
-//! dependence) — so a corpus that did not come from that generator would fail
-//! CI on the very next run. See that file's doc comment for the caveat (this
-//! proves the CURRENT tree is self-consistent, not that history was honest)
-//! and for what the corpus's revert-case coverage does and doesn't include.
-//!
-//! # Domain
-//!
-//! Vectors are confined to what a compliant writer can produce. Outside it
-//! there is a documented, accepted divergence in the far tail
-//! (see `rate.rs` § reachability): Solidity reverts when an intermediate *product*
-//! exceeds `uint256`, whereas this port returns `None` when a *quotient*
-//! exceeds `u128`, and the Rust bound binds first. Both lie far beyond any
-//! reachable schedule. See the generator for the full reasoning.
+//! `EVM/test/differential/vectors.jsonl` is generated from the Solidity
+//! (`npm run test:differential` from the repo root); CI regenerates it and
+//! fails on any byte difference. Reverts are checked as strictly as values:
+//! Rust must return `None` where Solidity reverts. Vectors stay inside the
+//! reachable domain, outside the accepted `rpow` overflow divergence
+//! (see `rate.rs`).
 
 use oku_shared::rate::compute_multiplier;
 use std::path::PathBuf;
 
-/// One generated case. Parsed by hand rather than with serde — this crate is
-/// deliberately dependency-free (see `lib.rs` design rules), and a dev-dependency
-/// on serde purely for a flat object of string fields is not worth the drift
-/// surface it would add.
+/// One generated case. Parsed by hand to keep the crate dependency-free.
 #[derive(Debug)]
 struct Vector {
     base: u128,
@@ -104,7 +56,6 @@ fn parse(line: &str) -> Vector {
 }
 
 fn corpus_path() -> PathBuf {
-    // crates/oku-shared -> oku-programs -> SVM -> contracts
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../../EVM/test/differential/vectors.jsonl")
 }
@@ -171,9 +122,7 @@ fn matches_solidity_reference_exactly() {
         seen.insert(line.to_string());
     }
 
-    // UNIQUE vectors, not lines. 1,026 of the 3,867 lines are exact duplicates,
-    // so a line count overstates coverage by ~36% -- and a corpus that lost its
-    // variety while keeping its length would not show up in `checked`.
+    // Unique vectors, not lines: the corpus contains duplicates.
     let unique = seen.len();
     assert!(
         unique > 2_500,
@@ -192,10 +141,7 @@ fn matches_solidity_reference_exactly() {
             .join("\n\n")
     );
 
-    // The revert half of the corpus is the easiest thing to lose silently: if
-    // GenerateVectors stopped emitting revert cases, every value check would
-    // still pass and the "one stack accepts what the other rejects" guard would
-    // simply evaporate.
+    // Guards against the generator silently dropping revert cases.
     assert!(
         revert_cases >= 4,
         "corpus contains only {revert_cases} revert case(s) — the revert half of \

@@ -12,21 +12,15 @@ import {
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
-import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
-import {RedemptionQueueEvents} from "../../src/lib/events/RedemptionQueueEvents.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {
-    PausableUpgradeable
-} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {Deploy} from "../shared/Deploy.sol";
 import {OverrideBlockGuard} from "../../src/lib/OverrideBlockGuard.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {MathLib} from "../../src/lib/MathLib.sol";
 import {LitePSMEvents} from "../../src/lib/events/LitePSMEvents.sol";
 import {MockHighDecimalToken} from "../mocks/MockHighDecimalToken.sol";
-import {MockUSDC} from "../mocks/MockUSDC.sol";
 
 /**
  * @title LitePSMTest
@@ -53,7 +47,6 @@ contract LitePSMTest is BaseTest {
     event UsdOkuMinted(
         address indexed user, uint256 usdcAmount, uint256 usdAmount, uint256 okuMMultiplier
     );
-    event QueueProcessed(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);
     event BufferDeposited(address indexed depositor, uint256 amount, uint256 newBufferBalance);
 
     // ============ Setup ============
@@ -471,44 +464,22 @@ contract LitePSMTest is BaseTest {
         assertEq(usdc.balanceOf(user1), user1UsdcBefore + expectedUsdc);
     }
 
-    function test_Redeem_QueuesWhenBufferInsufficient() public {
-        uint256 okuMAmount = 10_000e18; // 10,000 OkuMoney
+    /// @notice A redemption the buffer cannot cover reverts; nothing is pulled or burned.
+    function test_Redeem_RevertsWhenBufferInsufficient() public {
+        uint256 okuMAmount = 10_000e18; // buffer only covers 5000e6 worth
 
         _mintOkuMoney(user1, okuMAmount);
-
-        // PSM only has 5000e6 USDC buffer (worth 5,000 OkuMoney at base price)
-        // User only needs to approve PSM — PSM handles the transfer to queue
         _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(LitePSM.InsufficientBuffer.selector, 5000e6, 10_000e6)
+        );
         litePsm.redeemOkuM(okuMAmount);
-
-        // Should be queued, not immediate redemption (buffer insufficient)
-        // User still has their OkuMoney (transferred to queue contract)
-        // Check queue has entry
-        assertEq(redemptionQueue.queueLength(), 1);
+        assertEq(okuMoney.balanceOf(user1), okuMAmount);
     }
 
-    function test_Redeem_QueuesWithOnlyPSMApproval() public {
-        uint256 okuMAmount = 10_000e18; // 10,000 OkuMoney (buffer only has 5000 USDC worth)
-
-        _mintOkuMoney(user1, okuMAmount);
-
-        // Verify only PSM approval is needed — no queue approval at all
-        _approveOkuMoney(user1, address(litePsm), okuMAmount);
-        // Deliberately do NOT approve the queue
-
-        vm.prank(user1);
-        litePsm.redeemOkuM(okuMAmount); // Must succeed with only PSM approval
-
-        assertEq(redemptionQueue.queueLength(), 1);
-        // OkuMoney is now held by the queue contract
-        assertEq(okuMoney.balanceOf(address(redemptionQueue)), okuMAmount);
-    }
-
-    /// @notice `redeemOkuM`'s return value is the paid-vs-queued signal (see
-    ///         `_redeemOkuMShared`'s NatSpec) — assert it directly rather than only
-    ///         via its side effects, which the other tests in this file already cover.
+    /// @notice `redeemOkuM` returns the USDC actually paid.
     function test_Redeem_ReturnsUsdcAmountWhenBufferCovers() public {
         uint256 okuMAmount = 100e18;
         uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount);
@@ -521,21 +492,6 @@ contract LitePSMTest is BaseTest {
 
         assertEq(usdcAmount, expectedUsdc, "return value must equal USDC actually paid");
         assertGt(usdcAmount, 0);
-    }
-
-    /// @notice Same signal, queued path: `redeemOkuM` must return exactly `0` — "queued,
-    ///         not paid" is a successful call, not a sentinel for failure.
-    function test_Redeem_ReturnsZeroWhenQueued() public {
-        uint256 okuMAmount = 10_000e18; // buffer only covers 5000e6 worth
-
-        _mintOkuMoney(user1, okuMAmount);
-        _approveOkuMoney(user1, address(litePsm), okuMAmount);
-
-        vm.prank(user1);
-        uint256 usdcAmount = litePsm.redeemOkuM(okuMAmount);
-
-        assertEq(usdcAmount, 0, "queued redemption must return 0, not revert or pay");
-        assertEq(redemptionQueue.queueLength(), 1);
     }
 
     function test_Redeem_RevertsZeroAmount() public {
@@ -556,6 +512,43 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         litePsm.redeemOkuM(okuMAmount);
+    }
+
+    function test_Redeem_RevertsWhenBlacklisted() public {
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(litePsm), 100e18);
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1);
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(LitePSM.UserBlacklisted.selector, user1));
+        litePsm.redeemOkuM(100e18);
+    }
+
+    /// @notice An OkuMoney blacklist cannot be bypassed by redeeming through OkuDollar.
+    function test_RedeemUsdOku_RevertsWhenOkuMBlacklisted() public {
+        _approveUsdc(user1, address(litePsm), 1000e6);
+        vm.prank(user1);
+        litePsm.mintUsdOku(1000e6);
+        _approveOkuDollar(user1, address(litePsm), 1000e18);
+
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1); // OkuMoney only; OkuDollar blacklist untouched
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(LitePSM.UserBlacklisted.selector, user1));
+        litePsm.redeemUsdOku(1000e18);
+    }
+
+    /// @notice OkuM is minted to the PSM, so the PSM itself must reject a blacklisted caller.
+    function test_MintUsdOku_RevertsWhenOkuMBlacklisted() public {
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1);
+
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(LitePSM.UserBlacklisted.selector, user1));
+        litePsm.mintUsdOku(100e6);
     }
 
     function test_Redeem_EmitsEvent() public {
@@ -705,226 +698,7 @@ contract LitePSMTest is BaseTest {
         assertEq(usdc.balanceOf(user1) - usdcBefore, 200e6, "Clean round-trip at $2");
     }
 
-    // ============ ProcessQueue Tests ============
-
-    function test_ProcessQueue_OnlyQueueProcessor() public {
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_QUEUE_PROCESSOR
-            )
-        );
-        litePsm.processQueue(0, 10, 0);
-    }
-
-    function test_ProcessQueue_ProcessesFIFO() public {
-        uint256 okuMAmount = 6000e18;
-        _mintOkuMoney(user1, okuMAmount);
-        _mintOkuMoney(user2, okuMAmount);
-
-        _approveOkuMoney(user1, address(litePsm), okuMAmount);
-        vm.prank(user1);
-        litePsm.redeemOkuM(okuMAmount); // queued: buffer is 5000
-        _approveOkuMoney(user2, address(litePsm), okuMAmount);
-        vm.prank(user2);
-        litePsm.redeemOkuM(okuMAmount);
-        assertEq(redemptionQueue.queueLength(), 2);
-
-        uint256 user1Before = usdc.balanceOf(user1);
-        uint256 user2Before = usdc.balanceOf(user2);
-
-        // Buffer 5000 + 8000 = 13000: covers the first entry (6000) but not both (12000
-        // owed leaves 1000 spare, so the SECOND is funded too only if approval allows it).
-        // Approve exactly one entry's worth: the first-queued user must be the one paid.
-        _mintUsdc(address(litePsm), 8000e6);
-        vm.prank(queueProcessor);
-        litePsm.processQueue(0, 2, 6000e6);
-
-        assertEq(usdc.balanceOf(user1), user1Before + 6000e6, "first in line paid");
-        assertEq(usdc.balanceOf(user2), user2Before, "second in line not paid yet");
-        assertEq(redemptionQueue.getQueueEntry(1).user, user2, "second entry still queued");
-        assertEq(redemptionQueue.totalQueuedOkuM(), okuMAmount);
-    }
-
-    function test_ProcessQueue_ApprovesAndRevokesAllowance() public {
-        // Setup: create a queued redemption
-        uint256 okuMAmount = 6000e18; // 6,000 OkuMoney
-
-        _mintOkuMoney(user1, okuMAmount);
-        _approveOkuMoney(user1, address(litePsm), okuMAmount);
-
-        uint256 user1UsdcBefore = usdc.balanceOf(user1);
-
-        vm.prank(user1);
-        litePsm.redeemOkuM(okuMAmount); // Queued (buffer only 5000 USDC)
-
-        assertEq(redemptionQueue.queueLength(), 1);
-
-        // Refill buffer
-        _mintUsdc(address(litePsm), 10_000e6);
-
-        // Verify allowance is 0 before processing
-        assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
-
-        // Process queue
-        uint256 head = redemptionQueue.queueHead();
-        uint256 tail = redemptionQueue.queueTail();
-        vm.prank(queueProcessor);
-        litePsm.processQueue(head, tail, 6000e6);
-        redemptionQueue.advanceHead(tail - head);
-
-        // Verify allowance is revoked back to 0 after processing
-        assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
-
-        // Queue should be processed
-        assertEq(redemptionQueue.queueLength(), 0);
-
-        // User should have received USDC (original balance + 6000e6 from queue at base price)
-        assertEq(usdc.balanceOf(user1), user1UsdcBefore + 6000e6);
-    }
-
-    function test_ProcessQueue_PartialProcessingRevokesAllowance() public {
-        // Setup: create multiple queued redemptions
-        uint256 okuMAmount = 6000e18; // 6,000 OkuMoney each
-
-        _mintOkuMoney(user1, okuMAmount);
-        _mintOkuMoney(user2, okuMAmount);
-
-        _approveOkuMoney(user1, address(litePsm), okuMAmount);
-        _approveOkuMoney(user2, address(litePsm), okuMAmount);
-
-        vm.prank(user1);
-        litePsm.redeemOkuM(okuMAmount);
-
-        vm.prank(user2);
-        litePsm.redeemOkuM(okuMAmount);
-
-        assertEq(redemptionQueue.queueLength(), 2);
-
-        // Refill buffer with only enough for one redemption
-        _mintUsdc(address(litePsm), 7000e6);
-
-        // Process only 1 entry
-        uint256 head = redemptionQueue.queueHead();
-        vm.prank(queueProcessor);
-        litePsm.processQueue(head, head + 1, 6000e6);
-        redemptionQueue.advanceHead(2);
-
-        // Allowance should still be revoked even with partial processing
-        assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
-
-        // Only 1 entry processed
-        assertEq(redemptionQueue.queueLength(), 1);
-    }
-
-    /// @notice An under-sized `approveAmount` halts the batch with `InsufficientFunds`,
-    ///         not `TransferFailed` — end-to-end through the real approve/use/revoke path.
-    /// @dev The companion to `RedemptionQueue`'s unit test, exercised through the actual
-    ///      `forceApprove(approveAmount)` wrapper rather than a hand-set allowance.
-    ///
-    ///      Models the realistic way this arises: `approveAmount` is computed off-chain
-    ///      against a multiplier snapshot, and the multiplier — which streams
-    ///      continuously — is higher by the time the transaction lands, so the approval
-    ///      no longer covers what the entry is now worth. The PSM buffer is deliberately
-    ///      ample here, so ONLY the approval binds; a balance-gated loop would sail past
-    ///      this check and fail inside `trySafeTransferFrom`, reporting the
-    ///      blacklist-shaped `TransferFailed` and inviting an unnecessary
-    ///      `rescueQueueEntry` against a perfectly healthy user.
-    function test_ProcessQueue_StaleApproveAmount_ReportsInsufficientFundsNotTransferFailed()
-        public
-    {
-        uint256 okuMAmount = 6000e18;
-        _mintOkuMoney(user1, okuMAmount);
-        _approveOkuMoney(user1, address(litePsm), okuMAmount);
-
-        vm.prank(user1);
-        litePsm.redeemOkuM(okuMAmount); // queued: buffer holds only 5000 USDC
-        assertEq(redemptionQueue.queueLength(), 1);
-
-        // What the backend would have computed at the multiplier it observed.
-        uint256 staleApproveAmount = _expectedUsdcFromNotes(okuMAmount);
-
-        // The multiplier appreciates between computation and execution.
-        _setNotePrice(1.05e18);
-        uint256 trueRequirement = _expectedUsdcFromNotes(okuMAmount);
-        assertGt(trueRequirement, staleApproveAmount, "entry must now exceed the approval");
-
-        // Buffer is ample — the approval is the ONLY binding constraint.
-        _mintUsdc(address(litePsm), 50_000e6);
-        assertGt(
-            usdc.balanceOf(address(litePsm)),
-            trueRequirement,
-            "balance must not be the binding constraint"
-        );
-
-        uint256 head = redemptionQueue.queueHead();
-        uint256 tail = redemptionQueue.queueTail();
-        uint256 user1UsdcBefore = usdc.balanceOf(user1);
-
-        vm.expectEmit(true, false, false, true);
-        emit RedemptionQueueEvents.RedemptionSkipped(
-            head, RedemptionQueueEvents.RedemptionSkipReason.InsufficientFunds
-        );
-        vm.prank(queueProcessor);
-        litePsm.processQueue(head, tail, staleApproveAmount);
-
-        // Nothing paid, entry still live and claimable on a correctly-sized re-run.
-        assertEq(usdc.balanceOf(user1), user1UsdcBefore, "no partial payout");
-        assertEq(redemptionQueue.queueLength(), 1, "entry must remain queued");
-        assertEq(redemptionQueue.getQueueEntry(head).user, user1, "entry must stay live");
-        // Allowance still revoked on the way out.
-        assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
-
-        // Re-running with a correctly-sized approval settles it.
-        vm.prank(queueProcessor);
-        litePsm.processQueue(head, tail, trueRequirement);
-        redemptionQueue.advanceHead(tail - head);
-        assertEq(usdc.balanceOf(user1), user1UsdcBefore + trueRequirement);
-        assertEq(redemptionQueue.queueLength(), 0);
-    }
-
-    // ============ Price-Aware Queue Tests ============
-
-    function test_ProcessQueue_PriceAware_YieldAccruesWhileQueued() public {
-        // Queue at base price, then process at elevated price
-        uint256 okuMAmount = 6000e18;
-
-        _mintOkuMoney(user1, okuMAmount);
-        _approveOkuMoney(user1, address(litePsm), okuMAmount);
-
-        vm.prank(user1);
-        litePsm.redeemOkuM(okuMAmount); // Queued at base price (buffer only 5000 USDC)
-
-        assertEq(redemptionQueue.queueLength(), 1);
-
-        // Raise okuMMultiplier to 1.05e18 — queued notes now worth more USDC
-        _setNotePrice(1.05e18);
-
-        // Queue entry stores okuMAmount=6000e18. At $1.05: USDC = 6000 * 1.05 = 6300
-        uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount);
-        assertEq(expectedUsdc, 6300e6, "6000 notes at $1.05 = 6300 USDC");
-
-        // Refill buffer with enough for elevated price
-        _mintUsdc(address(litePsm), 10_000e6);
-
-        uint256 user1UsdcBefore = usdc.balanceOf(user1);
-        uint256 head = redemptionQueue.queueHead();
-        uint256 tail = redemptionQueue.queueTail();
-
-        vm.prank(queueProcessor);
-        litePsm.processQueue(head, tail, expectedUsdc);
-        redemptionQueue.advanceHead(tail - head);
-
-        assertEq(redemptionQueue.queueLength(), 0);
-        // User receives more USDC than at base price due to multiplier appreciation
-        assertEq(
-            usdc.balanceOf(user1),
-            user1UsdcBefore + 6300e6,
-            "User earns yield via okuMMultiplier while queued"
-        );
-    }
-
-    function test_Redeem_PriceAware_QueuesWhenBufferInsufficientDueToPrice() public {
+    function test_Redeem_PriceAware_RevertsWhenBufferInsufficientDueToPrice() public {
         // Buffer has 5000 USDC. At base price, 4900 notes → 4900 USDC (sufficient).
         // But at $1.05, 4900 notes → 5145 USDC (exceeds buffer).
         _setNotePrice(1.05e18);
@@ -939,11 +713,10 @@ contract LitePSMTest is BaseTest {
         assertGt(expectedUsdc, usdc.balanceOf(address(litePsm)), "Should exceed buffer");
 
         vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(LitePSM.InsufficientBuffer.selector, 5000e6, expectedUsdc)
+        );
         litePsm.redeemOkuM(okuMAmount);
-
-        // Should be queued because USDC needed (5145) exceeds buffer (5000)
-        assertEq(redemptionQueue.queueLength(), 1, "Should be queued");
-        assertEq(okuMoney.balanceOf(address(redemptionQueue)), okuMAmount, "Notes held by queue");
     }
 
     // ============ Admin Tests ============
@@ -981,6 +754,15 @@ contract LitePSMTest is BaseTest {
             )
         );
         litePsm.withdrawUsdc(user1, 100e6);
+    }
+
+    function test_WithdrawUSDC_RevertsWhenPaused() public {
+        vm.prank(pauser);
+        litePsm.pause();
+
+        vm.prank(bufferWithdrawer);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        litePsm.withdrawUsdc(treasury, 100e6);
     }
 
     function test_WithdrawUSDC_TransfersToRecipient() public {
@@ -1075,20 +857,14 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_DecimalConversion_RedeemTooSmall() public {
-        // 1 wei of OkuMoney is below the dust floor at 6-decimal collateral
-        // (`decimalMultiplier == MIN_REDEMPTION_OKUM == 1e12` here, so either
-        // term alone would already catch it).
-        uint256 tinyAmount = 1; // 1 wei of OkuMoney
+        // At 6-decimal collateral anything below 1e12 OkuM (at multiplier 1) pays 0 USDC.
+        uint256 tinyAmount = DECIMAL_MULTIPLIER - 1;
 
         _mintOkuMoney(user1, tinyAmount);
         _approveOkuMoney(user1, address(litePsm), tinyAmount);
 
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                LitePSM.BelowMinimumRedemption.selector, tinyAmount, DECIMAL_MULTIPLIER
-            )
-        );
+        vm.expectRevert(LitePSM.AmountTooSmall.selector);
         litePsm.redeemOkuM(tinyAmount);
     }
 
@@ -1128,28 +904,6 @@ contract LitePSMTest is BaseTest {
             usdc.balanceOf(user1) - usdcBefore,
             100e6,
             "User receives truncated USDC (dust value lost)"
-        );
-    }
-
-    function test_Redeem_QueuePath_TruncationDustQueuedWithNote() public {
-        // Amount that exceeds buffer AND has dust
-        uint256 okuMAmount = 10_000e18 + 7e11;
-
-        _mintOkuMoney(user1, okuMAmount);
-        _approveOkuMoney(user1, address(litePsm), okuMAmount);
-
-        vm.prank(user1);
-        litePsm.redeemOkuM(okuMAmount);
-
-        // PSM transfers the full okuMAmount (including dust) to the queue.
-        // User retains nothing — all notes are moved.
-        assertEq(okuMoney.balanceOf(user1), 0, "All notes transferred to queue");
-
-        // Queue holds the full amount including dust
-        assertEq(
-            okuMoney.balanceOf(address(redemptionQueue)),
-            okuMAmount,
-            "Queue holds full okuMAmount including dust"
         );
     }
 
@@ -1206,7 +960,7 @@ contract LitePSMTest is BaseTest {
                 PSM_BUFFER_DEPOSITOR
             )
         );
-        litePsm.depositBuffer(100e6, false, 0, 0, 0);
+        litePsm.depositBuffer(100e6);
     }
 
     function test_DepositBuffer_TransfersUSDC() public {
@@ -1217,7 +971,7 @@ contract LitePSMTest is BaseTest {
         uint256 psmBefore = usdc.balanceOf(address(litePsm));
 
         vm.prank(bufferDepositor);
-        litePsm.depositBuffer(amount, false, 0, 0, 0);
+        litePsm.depositBuffer(amount);
 
         assertEq(usdc.balanceOf(address(litePsm)), psmBefore + amount);
         assertEq(usdc.balanceOf(bufferDepositor), 0);
@@ -1234,7 +988,28 @@ contract LitePSMTest is BaseTest {
         emit BufferDeposited(bufferDepositor, amount, expectedBalance);
 
         vm.prank(bufferDepositor);
-        litePsm.depositBuffer(amount, false, 0, 0, 0);
+        litePsm.depositBuffer(amount);
+    }
+
+    function test_DepositBuffer_RevertsWhenPaused() public {
+        vm.prank(pauser);
+        litePsm.pause();
+        _mintUsdc(bufferDepositor, 100e6);
+        _approveUsdc(bufferDepositor, address(litePsm), 100e6);
+
+        vm.prank(bufferDepositor);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        litePsm.depositBuffer(100e6);
+    }
+
+    function test_DepositBuffer_RevertsInYieldDistributionBlock() public {
+        _mintUsdc(bufferDepositor, 100e6);
+        _approveUsdc(bufferDepositor, address(litePsm), 100e6);
+        _stampYieldLockBlock();
+
+        vm.prank(bufferDepositor);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
+        litePsm.depositBuffer(100e6);
     }
 
     // ============ WithdrawUSDC Underflow Guard (Finding 8) ============
@@ -1444,9 +1219,9 @@ contract LitePSMTest is BaseTest {
     /// @dev This is NOT a reentrancy or ordering trick — forge executes top-level
     ///      calls in the order written, so simply not `vm.roll`-ing between the mint
     ///      and the override IS "same block, mint ordered first." See
-    ///      `OverrideBlockGuard.sol`'s NatSpec and `EVM/README.md` Accepted Risk #12.
+    ///      `OverrideBlockGuard.sol`'s NatSpec and `EVM/README.md` Accepted Risk #11.
     ///      If this test ever starts reverting on the mint or the redeem, the
-    ///      guard's scope changed and Accepted Risk #12 needs re-examination, not
+    ///      guard's scope changed and Accepted Risk #11 needs re-examination, not
     ///      this test weakened to match.
     function test_FrontRunOverride_MintBeforeThenRedeemAfter_CapturesDiscreteStep() public {
         uint256 mintUsdc = 100e6;
@@ -1483,11 +1258,11 @@ contract LitePSMTest is BaseTest {
         assertGt(
             usdcReceived,
             mintUsdc,
-            "front-run+delayed-redeem must capture the discrete jump -- this is Accepted Risk #12's unmitigated residual"
+            "front-run+delayed-redeem must capture the discrete jump -- this is Accepted Risk #11's unmitigated residual"
         );
     }
 
-    /// @notice The operational mitigation Accepted Risk #12 recommends: pause the
+    /// @notice The operational mitigation Accepted Risk #11 recommends: pause the
     ///         PSM and vault around `setOkuMMultiplier`, independent of OkuMoney's
     ///         own pause state. Proves the ceremony actually closes BOTH legs the
     ///         on-chain guard alone does not -- the front-run mint before the
@@ -1549,43 +1324,11 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_WithdrawUSDC_RevertsInYieldDistributionBlock() public {
-        _mintOkuMoney(user2, 10_000e18);
-
-        // Distribute yield to set lastYieldDistributionBlock to the current block.
         _stampYieldLockBlock();
 
-        // Same-block withdrawUsdc must revert via the OverrideBlockGuard. This closes the
-        // historical NOTE in withdrawUsdc where queueObligation could be computed against
-        // a freshly-shifted okuMMultiplier.
         vm.prank(bufferWithdrawer);
         vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         litePsm.withdrawUsdc(user1, 1e6);
-    }
-
-    /// @notice `processQueue` pays real USDC against a cached multiplier, so it
-    ///         must carry the same same-block guard every other
-    ///         multiplier-consuming path here already had.
-    /// @dev This was the sole omission: `RedemptionQueue.processQueue` caches
-    ///      `okuMMultiplier()` ONCE before its loop and converts every entry at
-    ///      that rate, so a discrete multiplier bump landing in the same block
-    ///      would shift the entire batch's payout — exactly the hazard
-    ///      `withdrawUsdc`'s NatSpec already calls out.
-    function test_ProcessQueue_RevertsInYieldDistributionBlock() public {
-        _stampYieldLockBlock();
-
-        vm.prank(queueProcessor);
-        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
-        litePsm.processQueue(0, 0, 0);
-    }
-
-    function test_ProcessQueue_SucceedsInNextBlockAfterYield() public {
-        _stampYieldLockBlock();
-        vm.roll(block.number + 1);
-
-        // Empty range — this asserts the guard no longer blocks, not queue
-        // mechanics (covered in RedemptionQueue.t.sol).
-        vm.prank(queueProcessor);
-        litePsm.processQueue(0, 0, 0);
     }
 
     function test_WithdrawUSDC_SucceedsInNextBlockAfterYield() public {
@@ -1624,71 +1367,17 @@ contract LitePSMTest is BaseTest {
         litePsm.mintOkuM(100e6);
     }
 
-    function test_RevokeRole_PsmQueueProcessorRevokesQueueDrain() public {
-        assertTrue(litePsm.hasRole(PSM_QUEUE_PROCESSOR, queueProcessor));
-        vm.prank(admin);
-        litePsm.revokeRole(PSM_QUEUE_PROCESSOR, queueProcessor);
-        assertFalse(litePsm.hasRole(PSM_QUEUE_PROCESSOR, queueProcessor));
-
-        // queueProcessor can no longer drain
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                queueProcessor,
-                PSM_QUEUE_PROCESSOR
-            )
-        );
-        vm.prank(queueProcessor);
-        litePsm.processQueue(0, 0, 0);
-    }
-
     function test_RenounceRole_OkumMinterRenounced() public {
         vm.prank(address(litePsm));
         okuMoney.renounceRole(OKUM_MINTER, address(litePsm));
         assertFalse(okuMoney.hasRole(OKUM_MINTER, address(litePsm)));
     }
 
-    // ---- WS3.1.c: reinit guard on LitePSM and RedemptionQueue ----
+    // ---- WS3.1.c: reinit guard ----
 
     function test_LitePSM_Initialize_CannotReinitialize() public {
         vm.expectRevert(Initializable.InvalidInitialization.selector);
-        litePsm.initialize(
-            address(okuMoney), address(okuDollar), address(usdc), address(redemptionQueue), admin
-        );
-    }
-
-    function test_RedemptionQueue_Initialize_CannotReinitialize() public {
-        vm.expectRevert(Initializable.InvalidInitialization.selector);
-        redemptionQueue.initialize(address(okuMoney), address(usdc), admin);
-    }
-
-    // ---- WS3.1.e: pause-during-queue-drain ----
-
-    function test_Pause_BlocksProcessQueue() public {
-        // Drain buffer so a redeem will queue
-        vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(bufferWithdrawer, 5000e6);
-
-        _mintOkuMoney(user1, 100e18);
-        _approveOkuMoney(user1, address(litePsm), 100e18);
-        vm.prank(user1);
-        litePsm.redeemOkuM(100e18); // buffer is 0 → queues
-
-        // Refill buffer
-        _mintUsdc(bufferDepositor, 200e6);
-        vm.prank(bufferDepositor);
-        usdc.approve(address(litePsm), 200e6);
-        vm.prank(bufferDepositor);
-        litePsm.depositBuffer(200e6, false, 0, 0, 0);
-
-        // Pause the PSM
-        vm.prank(pauser);
-        litePsm.pause();
-
-        // processQueue should revert while paused
-        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        vm.prank(queueProcessor);
-        litePsm.processQueue(0, 1, 200e6);
+        litePsm.initialize(address(okuMoney), address(okuDollar), address(usdc), admin);
     }
 
     // ---- WS3.1.g: multi-decimal USDC mock ----
@@ -1697,17 +1386,9 @@ contract LitePSMTest is BaseTest {
         // Deploy an 8-decimal "USDC" mock
         MockUSDC8Dec usdc8 = new MockUSDC8Dec();
 
-        // This PSM needs its own queue wired to the same 8-decimal USDC —
-        // `LitePSM.initialize` now enforces `queue.usdc() == _usdc`
-        // (`QueueUsdcMismatch`), so it can no longer share `redemptionQueue`
-        // (which is wired to the suite's 6-decimal USDC).
-        (RedemptionQueue queue8,) =
-            Deploy.deployRedemptionQueue(address(okuMoney), address(usdc8), admin);
-
         // Deploy a fresh PSM against it
-        (LitePSM psm8,) = Deploy.deployLitePSM(
-            address(okuMoney), address(okuDollar), address(usdc8), address(queue8), admin
-        );
+        (LitePSM psm8,) =
+            Deploy.deployLitePSM(address(okuMoney), address(okuDollar), address(usdc8), admin);
 
         // decimalMultiplier should be 10^(18-8) = 1e10
         assertEq(psm8.usdcDecimalMultiplier(), 1e10);
@@ -1724,8 +1405,6 @@ contract LitePSMTest is BaseTest {
         vm.stopPrank();
         vm.prank(allowanceManager);
         okuMoney.configureMinterAllowance(address(psm8), MAX_SUPPLY);
-        vm.prank(admin);
-        queue8.grantRole(QUEUE_PSM, address(psm8));
 
         vm.prank(user1);
         usdc8.approve(address(psm8), usdcAmount);
@@ -1739,16 +1418,9 @@ contract LitePSMTest is BaseTest {
         // Deploy an 18-decimal stable mock
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
 
-        // Same reasoning as test_MultiDecimal_8DecimalUsdcPsmInit: this PSM
-        // needs a queue wired to the matching 18-decimal USDC now that
-        // `LitePSM.initialize` enforces `QueueUsdcMismatch`.
-        (RedemptionQueue queue18,) =
-            Deploy.deployRedemptionQueue(address(okuMoney), address(usdc18), admin);
-
         // Deploy a fresh PSM against it
-        (LitePSM psm18,) = Deploy.deployLitePSM(
-            address(okuMoney), address(okuDollar), address(usdc18), address(queue18), admin
-        );
+        (LitePSM psm18,) =
+            Deploy.deployLitePSM(address(okuMoney), address(okuDollar), address(usdc18), admin);
 
         // decimalMultiplier should be 10^(18-18) = 1
         assertEq(psm18.usdcDecimalMultiplier(), 1);
@@ -1764,23 +1436,13 @@ contract LitePSMTest is BaseTest {
     // stops absorbing sub-unit truncation, so it is the one configuration where
     // the conversion rounding is observable at all.
 
-    /// @dev Wire a fresh PSM + queue pair against an arbitrary-decimal collateral,
-    ///      granting every role the mint/redeem paths need. Each pair needs its OWN
-    ///      queue: `LitePSM.initialize` enforces `queue.usdc() == _usdc`
-    ///      (`QueueUsdcMismatch`), so the suite's shared 6-decimal `redemptionQueue`
-    ///      cannot be reused here.
-    function _deployPsmForCollateral(address collateral)
-        internal
-        returns (LitePSM psmX, RedemptionQueue queueX)
-    {
-        (queueX,) = Deploy.deployRedemptionQueue(address(okuMoney), collateral, admin);
-        (psmX,) = Deploy.deployLitePSM(
-            address(okuMoney), address(okuDollar), collateral, address(queueX), admin
-        );
+    /// @dev Wire a fresh PSM against an arbitrary-decimal collateral, granting every
+    ///      role the mint/redeem paths need.
+    function _deployPsmForCollateral(address collateral) internal returns (LitePSM psmX) {
+        (psmX,) = Deploy.deployLitePSM(address(okuMoney), address(okuDollar), collateral, admin);
         vm.startPrank(admin);
         okuMoney.grantRole(OKUM_MINTER, address(psmX));
         okuMoney.grantRole(OKUM_BURNER, address(psmX));
-        queueX.grantRole(QUEUE_PSM, address(psmX));
         vm.stopPrank();
         vm.prank(allowanceManager);
         okuMoney.configureMinterAllowance(address(psmX), MAX_SUPPLY);
@@ -1796,7 +1458,7 @@ contract LitePSMTest is BaseTest {
     ///      and receive zero tokens, with the deposit kept by the PSM.
     function test_MultiDecimal_18Dec_MintRevertsWhenAmountRoundsToZeroOkuM() public {
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
-        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+        LitePSM psm18 = _deployPsmForCollateral(address(usdc18));
 
         _setOkuMMultiplierAndRoll(3e18);
 
@@ -1811,7 +1473,7 @@ contract LitePSMTest is BaseTest {
     /// @notice The same rail on the vault-wrapping mint path, which has its own copy.
     function test_MultiDecimal_18Dec_MintUsdOkuRevertsWhenAmountRoundsToZeroOkuM() public {
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
-        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+        LitePSM psm18 = _deployPsmForCollateral(address(usdc18));
 
         _setOkuMMultiplierAndRoll(3e18);
 
@@ -1823,42 +1485,18 @@ contract LitePSMTest is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice This is the case `EVM/README.md`'s "queue dust floor" Accepted Risk
-    ///         describes: at 18-decimal collateral `decimalMultiplier` collapses to
-    ///         1 (no floor at all), so without `Constants.MIN_REDEMPTION_OKUM` a
-    ///         1-wei redemption would be enqueueable. Confirms the absolute floor
-    ///         is what actually gates this collateral, not `decimalMultiplier`.
-    function test_MultiDecimal_18Dec_RedeemBelowMinRedemptionReverts() public {
+    /// @notice At 18-decimal collateral there is no dust floor: 1 wei OkuM pays 1 wei.
+    function test_MultiDecimal_18Dec_RedeemOneWeiSucceeds() public {
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
-        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
-
-        uint256 tinyAmount = Constants.MIN_REDEMPTION_OKUM - 1;
-        _mintOkuMoney(user1, tinyAmount);
-        _approveOkuMoney(user1, address(psm18), tinyAmount);
-
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                LitePSM.BelowMinimumRedemption.selector, tinyAmount, Constants.MIN_REDEMPTION_OKUM
-            )
-        );
-        psm18.redeemOkuM(tinyAmount);
-    }
-
-    /// @notice Boundary check: exactly at the floor succeeds, confirming the gate
-    ///         is `<`, not `<=`.
-    function test_MultiDecimal_18Dec_RedeemAtMinRedemptionSucceeds() public {
-        MockUSDC18Dec usdc18 = new MockUSDC18Dec();
-        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+        LitePSM psm18 = _deployPsmForCollateral(address(usdc18));
         usdc18.mint(address(psm18), 1_000_000e18); // buffer, 18-decimal collateral
 
-        uint256 amount = Constants.MIN_REDEMPTION_OKUM;
-        _mintOkuMoney(user1, amount);
-        _approveOkuMoney(user1, address(psm18), amount);
+        _mintOkuMoney(user1, 1);
+        _approveOkuMoney(user1, address(psm18), 1);
 
         vm.prank(user1);
-        psm18.redeemOkuM(amount);
-
+        assertEq(psm18.redeemOkuM(1), 1);
+        assertEq(usdc18.balanceOf(user1), 1);
         assertEq(okuMoney.balanceOf(user1), 0);
     }
 
@@ -1878,7 +1516,7 @@ contract LitePSMTest is BaseTest {
     ///      reverted. `100e18 + 1` is such a value (`100e18 mod 3 == 1`).
     function test_MultiDecimal_18Dec_MintSucceedsOnTruncatingAmount() public {
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
-        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+        LitePSM psm18 = _deployPsmForCollateral(address(usdc18));
 
         _setOkuMMultiplierAndRoll(3e18);
 
@@ -1905,7 +1543,7 @@ contract LitePSMTest is BaseTest {
     ///      to pick a round number.
     function test_MultiDecimal_18Dec_MintSucceedsAcrossAllResidues() public {
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
-        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+        LitePSM psm18 = _deployPsmForCollateral(address(usdc18));
 
         _setOkuMMultiplierAndRoll(3e18);
 
@@ -1934,7 +1572,7 @@ contract LitePSMTest is BaseTest {
     ///      broken". This pins the boundary rather than leaving it implied.
     function test_MultiDecimal_8Dec_MintSucceedsAcrossAllResidues() public {
         MockUSDC8Dec usdc8 = new MockUSDC8Dec();
-        (LitePSM psm8,) = _deployPsmForCollateral(address(usdc8));
+        LitePSM psm8 = _deployPsmForCollateral(address(usdc8));
 
         _setOkuMMultiplierAndRoll(3e18);
 
@@ -1963,14 +1601,14 @@ contract LitePSMTest is BaseTest {
     ///      the OUTPUT, which is the behaviour the check was nominally protecting.
     function test_MultiDecimal_18Dec_RedeemReturnsExactFlooredConversion() public {
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
-        (LitePSM psm18,) = _deployPsmForCollateral(address(usdc18));
+        LitePSM psm18 = _deployPsmForCollateral(address(usdc18));
 
         _setOkuMMultiplierAndRoll(3e18);
 
         uint256 okuMAmount = 33_333_333_333_333_333_333;
         _mintOkuMoney(user1, okuMAmount);
 
-        // Fund the buffer so the redemption settles instantly rather than queueing.
+        // Fund the buffer so the redemption does not revert InsufficientBuffer.
         usdc18.mint(address(psm18), 1000e18);
 
         vm.prank(user1);
@@ -2049,40 +1687,6 @@ contract LitePSMTest is BaseTest {
         okuMoney.setMaxSupply(999e18);
     }
 
-    function test_Queue_DrainThenProcess() public {
-        // The PSM buffer starts with 5000e6 USDC (see setUp).
-        // Drain the buffer completely so redemptions will queue.
-        vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(bufferWithdrawer, 5000e6);
-        assertEq(usdc.balanceOf(address(litePsm)), 0);
-
-        // Queue a redemption
-        _mintOkuMoney(user1, 100e18);
-        _approveOkuMoney(user1, address(litePsm), 100e18);
-        vm.prank(user1);
-        litePsm.redeemOkuM(100e18); // buffer is 0 → queues
-
-        assertEq(redemptionQueue.queueLength(), 1);
-        uint256 user1Before = usdc.balanceOf(user1);
-
-        // Refill the buffer
-        _mintUsdc(bufferDepositor, 200e6);
-        vm.prank(bufferDepositor);
-        usdc.approve(address(litePsm), 200e6);
-        vm.prank(bufferDepositor);
-        litePsm.depositBuffer(200e6, false, 0, 0, 0);
-
-        // Approve the queue to pull from PSM and drain
-        vm.prank(queueProcessor);
-        litePsm.processQueue(0, 1, 200e6);
-        redemptionQueue.advanceHead(1);
-
-        assertEq(redemptionQueue.queueLength(), 0);
-        assertEq(
-            usdc.balanceOf(user1), user1Before + 100e6, "100 OkuM at 1.0 pays exactly 100 USDC"
-        );
-    }
-
     // ============ Unpause Success Test ============
 
     function test_Unpause_Succeeds() public {
@@ -2113,40 +1717,19 @@ contract LitePSMTest is BaseTest {
         assertEq(address(litePsm.usdc()), address(usdc));
     }
 
-    function test_View_RedemptionQueue() public view {
-        assertEq(address(litePsm.redemptionQueue()), address(redemptionQueue));
-    }
-
     function test_View_UsdcDecimalMultiplier_Litepsm() public view {
         assertEq(litePsm.usdcDecimalMultiplier(), DECIMAL_MULTIPLIER);
     }
 
-    // ============ _redeemOkuMShared(okuMAtPsm=true) Branch Tests ============
-    //
-    // The `okuMAtPsm=true` branch of `_redeemOkuMShared` is reached only via
-    // `_redeemUsdOku`, which calls it directly after `okuDollar.unwrap()`
-    // deposits the OkuM here. The branch SUPPRESSES the `OkuMRedeemed` event
-    // (the user-facing event is `UsdOkuRedeemed`, emitted by the caller). It
-    // also skips the OkuM safeTransferFrom (the OkuM already sits in this
-    // contract after `unwrap`).
-    //
-    // Two paths must be covered:
-    //   1) Instant payout (buffer >= usdcAmount): OkuM burned, USDC sent, no OkuMRedeemed.
-    //   2) Queued (buffer < usdcAmount): OkuM transferred to RedemptionQueue, enqueued.
+    // ============ redeemUsdOku Tests ============
 
-    /// @notice okuMAtPsm=true instant path: redeemUsdOku with sufficient buffer
-    ///         must NOT emit OkuMRedeemed (only UsdOkuRedeemed). Asserted by
-    ///         using `recordLogs` and walking the log array.
     /// @notice A usdOku redemption too small to move one share reverts rather
     ///         than unwinding a zero-value redemption.
-    /// @dev `_redeemUsdOku` works from the post-transfer BALANCE DELTA, not the
+    /// @dev `redeemUsdOku` works from the post-transfer BALANCE DELTA, not the
     ///      requested `usdAmount`, because `OkuDollar.transferFrom` floors the share
     ///      conversion while `unwrap` ceils the share burn. At `m > 1e18` a 1-wei
     ///      request floors to zero shares, so the transfer succeeds while moving
-    ///      nothing. Without this guard the zero would flow into `unwrap` and then
-    ///      `_redeemOkuMShared`, which would revert further in on a less obvious
-    ///      error — or, if those rails ever loosened, emit a redemption event for a
-    ///      transfer that never happened.
+    ///      nothing; the explicit zero check rejects it before `unwrap`.
     function test_RedeemUsdOku_RevertsWhenTransferRoundsToZeroShares() public {
         _mintUsdOku(user1, 100e18);
         _approveOkuDollar(user1, address(litePsm), 100e18);
@@ -2159,6 +1742,7 @@ contract LitePSMTest is BaseTest {
         litePsm.redeemUsdOku(1);
     }
 
+    /// @notice redeemUsdOku emits only UsdOkuRedeemed, not OkuMRedeemed.
     function test_RedeemUsdOku_OkuMAtPsmInstant_NoOkuMRedeemedEvent() public {
         // Setup: user1 holds UsdOku; PSM buffer covers the redemption.
         _mintUsdOku(user1, 100e18);
@@ -2180,15 +1764,14 @@ contract LitePSMTest is BaseTest {
             if (logs[i].topics[0] == okuMRedeemedSig) sawOkuMRedeemed = true;
             if (logs[i].topics[0] == usdOkuRedeemedSig) sawUsdOkuRedeemed = true;
         }
-        assertFalse(sawOkuMRedeemed, "OkuMRedeemed must be suppressed under okuMAtPsm=true");
+        assertFalse(sawOkuMRedeemed, "OkuMRedeemed must not fire on redeemUsdOku");
         assertTrue(sawUsdOkuRedeemed, "UsdOkuRedeemed must fire on the wrapping caller");
 
         // User received USDC.
         assertGt(usdc.balanceOf(user1), 0);
     }
 
-    /// @notice `redeemUsdOku`'s return value is the same paid-vs-queued signal as
-    ///         `redeemOkuM` ("same convention as {redeemOkuM}" in its NatSpec).
+    /// @notice `redeemUsdOku` returns the USDC actually paid.
     function test_RedeemUsdOku_ReturnsUsdcAmountWhenBufferCovers() public {
         _mintUsdOku(user1, 100e18);
         _approveOkuDollar(user1, address(litePsm), 50e18);
@@ -2206,52 +1789,17 @@ contract LitePSMTest is BaseTest {
         assertGt(usdcOut, 0);
     }
 
-    /// @notice Same signal, queued path: must return exactly `0`.
-    function test_RedeemUsdOku_ReturnsZeroWhenQueued() public {
-        // Drain the buffer.
+    /// @notice A redemption the buffer cannot cover reverts.
+    function test_RedeemUsdOku_RevertsWhenBufferInsufficient() public {
         vm.prank(bufferWithdrawer);
         litePsm.withdrawUsdc(bufferWithdrawer, 5000e6);
-        assertEq(usdc.balanceOf(address(litePsm)), 0);
 
         _mintUsdOku(user1, 100e18);
         _approveOkuDollar(user1, address(litePsm), 100e18);
 
         vm.prank(user1);
-        uint256 usdcOut = litePsm.redeemUsdOku(100e18);
-
-        assertEq(usdcOut, 0, "queued redemption must return 0, not revert or pay");
-    }
-
-    /// @notice okuMAtPsm=true queued path: drained buffer routes OkuM to the
-    ///         queue. The OkuM that arrives at the queue originates from
-    ///         `_redeemOkuMShared`'s `safeTransfer(redemptionQueue, ...)` line
-    ///         (the okuMAtPsm=true queued branch — NOT the okuMAtPsm=false
-    ///         safeTransferFrom path).
-    function test_RedeemUsdOku_OkuMAtPsmQueued_OkuMRoutedToQueue() public {
-        // Drain the buffer.
-        vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(bufferWithdrawer, 5000e6);
-        assertEq(usdc.balanceOf(address(litePsm)), 0);
-
-        // user1 holds UsdOku; redemption will queue because buffer == 0.
-        _mintUsdOku(user1, 100e18);
-        _approveOkuDollar(user1, address(litePsm), 100e18);
-
-        uint256 queueOkuMBefore = okuMoney.balanceOf(address(redemptionQueue));
-        uint256 queueLenBefore = redemptionQueue.queueLength();
-        uint256 user1UsdcBefore = usdc.balanceOf(user1);
-
-        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(LitePSM.InsufficientBuffer.selector, 0, 100e6));
         litePsm.redeemUsdOku(100e18);
-
-        // OkuM ended up at the queue (transferred from PSM, not from user1).
-        assertGt(okuMoney.balanceOf(address(redemptionQueue)), queueOkuMBefore);
-        // Queue length advanced by 1.
-        assertEq(redemptionQueue.queueLength(), queueLenBefore + 1);
-        // User USDC balance unchanged (queued, not paid).
-        assertEq(usdc.balanceOf(user1), user1UsdcBefore);
-        // User's UsdOku is gone (transferred to PSM, then unwrapped).
-        assertEq(okuDollar.balanceOf(user1), 0);
     }
 
     // ============ Initialization rails ============
@@ -2264,8 +1812,7 @@ contract LitePSMTest is BaseTest {
     function test_Initialize_RevertZeroOkuMoney() public {
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(0), address(okuDollar), address(usdc), address(redemptionQueue), admin)
+            LitePSM.initialize, (address(0), address(okuDollar), address(usdc), admin)
         );
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -2274,8 +1821,7 @@ contract LitePSMTest is BaseTest {
     function test_Initialize_RevertZeroOkuDollar() public {
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(0), address(usdc), address(redemptionQueue), admin)
+            LitePSM.initialize, (address(okuMoney), address(0), address(usdc), admin)
         );
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -2284,18 +1830,7 @@ contract LitePSMTest is BaseTest {
     function test_Initialize_RevertZeroUsdc() public {
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(okuDollar), address(0), address(redemptionQueue), admin)
-        );
-        vm.expectRevert(Errors.ZeroAddress.selector);
-        new ERC1967Proxy(address(impl), initData);
-    }
-
-    function test_Initialize_RevertZeroRedemptionQueue() public {
-        LitePSM impl = new LitePSM();
-        bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(okuDollar), address(usdc), address(0), admin)
+            LitePSM.initialize, (address(okuMoney), address(okuDollar), address(0), admin)
         );
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -2304,14 +1839,7 @@ contract LitePSMTest is BaseTest {
     function test_Initialize_RevertZeroAdmin() public {
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (
-                address(okuMoney),
-                address(okuDollar),
-                address(usdc),
-                address(redemptionQueue),
-                address(0)
-            )
+            LitePSM.initialize, (address(okuMoney), address(okuDollar), address(usdc), address(0))
         );
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -2321,8 +1849,7 @@ contract LitePSMTest is BaseTest {
         MockHighDecimalToken hd = new MockHighDecimalToken(19);
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(okuDollar), address(hd), address(redemptionQueue), admin)
+            LitePSM.initialize, (address(okuMoney), address(okuDollar), address(hd), admin)
         );
         vm.expectRevert(abi.encodeWithSelector(LitePSM.UsdcDecimalsTooLarge.selector, uint8(19)));
         new ERC1967Proxy(address(impl), initData);
@@ -2340,57 +1867,9 @@ contract LitePSMTest is BaseTest {
 
         LitePSM impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(other), address(okuDollar), address(usdc), address(redemptionQueue), admin)
+            LitePSM.initialize, (address(other), address(okuDollar), address(usdc), admin)
         );
         vm.expectRevert(LitePSM.AssetMismatch.selector);
-        new ERC1967Proxy(address(impl), initData);
-    }
-
-    /// @notice LitePSM must reject a queue configured with a DIFFERENT USDC.
-    /// @dev Without this check the PSM approves spending of its own USDC while the
-    ///      queue reads balance/allowance on the other token, zeroing `usdcAvailable`
-    ///      in every batch — the queue becomes undrainable via normal processing and
-    ///      surfaces only as a stream of `RedemptionSkipped(InsufficientFunds)`.
-    function test_Initialize_RevertQueueUsdcMismatch() public {
-        MockUSDC otherUsdc = new MockUSDC();
-        (RedemptionQueue otherQueue,) =
-            Deploy.deployRedemptionQueue(address(okuMoney), address(otherUsdc), admin);
-
-        LitePSM impl = new LitePSM();
-        bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(okuDollar), address(usdc), address(otherQueue), admin)
-        );
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                LitePSM.QueueUsdcMismatch.selector, address(otherUsdc), address(usdc)
-            )
-        );
-        new ERC1967Proxy(address(impl), initData);
-    }
-
-    /// @notice LitePSM must reject a queue configured with a DIFFERENT OkuMoney.
-    /// @dev Otherwise `RedemptionQueue.processQueue` burns the wrong token's escrow
-    ///      against entries recorded and priced against this PSM's OkuMoney.
-    function test_Initialize_RevertQueueOkuMoneyMismatch() public {
-        OkuMoney otherImpl = new OkuMoney();
-        bytes memory otherInit =
-            abi.encodeCall(OkuMoney.initialize, ("Other", "OTH", admin, MAX_SUPPLY));
-        OkuMoney other = OkuMoney(address(new ERC1967Proxy(address(otherImpl), otherInit)));
-        (RedemptionQueue otherQueue,) =
-            Deploy.deployRedemptionQueue(address(other), address(usdc), admin);
-
-        LitePSM impl = new LitePSM();
-        bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(okuDollar), address(usdc), address(otherQueue), admin)
-        );
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                LitePSM.QueueOkuMoneyMismatch.selector, address(other), address(okuMoney)
-            )
-        );
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -2411,69 +1890,7 @@ contract LitePSMTest is BaseTest {
     function test_DepositBuffer_RevertZeroAmount() public {
         vm.prank(bufferDepositor);
         vm.expectRevert(Errors.ZeroAmount.selector);
-        litePsm.depositBuffer(0, false, 0, 0, 0);
-    }
-
-    // ============ WouldStrandQueue boundary ============
-
-    /// @notice `withdrawUsdc` must not drop the buffer below the queue's obligation.
-    /// @dev REPLACES a test named `UsdcBalance_GTE_TotalQueuedUsdc_After_QueuedRedeem`
-    ///      whose only assertion was `assertGe(balance, 0)` on a `uint256` — i.e. it
-    ///      could not fail — with the intended error named in a comment next to a bare
-    ///      `vm.expectRevert()`, and its one real check wrapped in `if (balance > queued)`.
-    ///
-    ///      The real invariant is a boundary, so it is tested as one: withdrawing the
-    ///      last wei that would strand the queue reverts with the typed error and its
-    ///      exact arguments; withdrawing everything above the obligation succeeds and
-    ///      lands the balance exactly on it.
-    function test_WithdrawUsdc_StrandBoundary_IsExact() public {
-        _mintOkuMoney(user1, 1000e18);
-        usdc.mint(user1, 1_000_000e6);
-
-        // Leave ~1 USDC so a 1000 OkuM redemption must queue.
-        uint256 buffer0 = usdc.balanceOf(address(litePsm));
-        vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(admin, buffer0 - 1e6);
-
-        vm.prank(user1);
-        okuMoney.approve(address(litePsm), 1000e18);
-        vm.prank(user1);
-        litePsm.redeemOkuM(1000e18);
-
-        // The redemption queued, so the buffer is now BELOW the obligation by
-        // construction. Refill past it so there is a boundary to probe at all.
-        vm.startPrank(user1);
-        usdc.approve(address(litePsm), 2000e6);
-        vm.stopPrank();
-        vm.prank(bufferDepositor);
-        usdc.mint(bufferDepositor, 2000e6);
-        vm.startPrank(bufferDepositor);
-        usdc.approve(address(litePsm), 2000e6);
-        litePsm.depositBuffer(2000e6, false, 0, 0, 0);
-        vm.stopPrank();
-
-        uint256 balance = usdc.balanceOf(address(litePsm));
-        uint256 queued = redemptionQueue.totalQueuedUsdc();
-        assertGt(queued, 0, "fixture: redemption must actually be queued");
-        assertGt(balance, queued, "fixture: buffer must exceed the obligation to test the boundary");
-
-        uint256 withdrawable = balance - queued;
-
-        // One wei past the boundary reverts, with both arguments pinned.
-        vm.prank(bufferWithdrawer);
-        vm.expectRevert(
-            abi.encodeWithSelector(LitePSM.WouldStrandQueue.selector, queued - 1, queued)
-        );
-        litePsm.withdrawUsdc(admin, withdrawable + 1);
-
-        // Exactly at the boundary succeeds and lands on the obligation.
-        vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(admin, withdrawable);
-        assertEq(
-            usdc.balanceOf(address(litePsm)),
-            queued,
-            "post-withdraw balance must equal the queue obligation exactly"
-        );
+        litePsm.depositBuffer(0);
     }
 }
 

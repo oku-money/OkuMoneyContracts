@@ -1,11 +1,6 @@
 /**
  * Contract-instance + tx-wait helpers used by every operator / test script.
- *
- * Proxy-deployment helpers (`deployUUPSProxy`, `deployTransparentProxy`) used
- * to live here but were unused — `scripts/deploy/index.ts` ships its own
- * retry-aware copies inline. They were removed in the post-MVP script
- * overhaul. If you need to deploy a proxy outside the master deploy script,
- * call `upgrades.deployProxy` directly.
+ * Proxy deployment lives in `scripts/deploy/index.ts`.
  */
 
 import { ethers } from "hardhat";

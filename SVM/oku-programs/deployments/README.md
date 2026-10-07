@@ -1,47 +1,31 @@
 # Deployment state files
 
-`devnet.v1-pre-streaming.json` / `devnet-fork.v1-pre-streaming.json` are
-**archived**, not live. They record the discrete-multiplier-era deployment
-(pre streaming-accrual refactor) and are known-stale in several ways:
+## `devnet.json` — live
 
-- `pdas.psmConfig` points at a 562-byte account under the OLD PsmConfig layout
-  (`PsmConfig::LEN` is **754** now — 626 before the `reserved: [u8; 128]` tail
-  padding was added). The current program cannot deserialize it — it is an
-  orphaned account, not a usable config. No migration path to the current
-  layout exists or is planned: a resize could only grow a *current-layout*
-  config, never translate a pre-single-token one. (A `migrate_config_space`
-  instruction briefly existed for the former case and was removed as
-  unreachable: its target set was empty and it had zero tests.)
-- `tokens.okuMoney` / `tokens.usdOku`, `pdas.redemptionQueue`,
-  `pdas.vaultConfig`, `pdas.vaultOkuMoney` are two-token-model keys from before
-  the single-token collapse. Dead.
-- `devnet-fork.json` additionally carries `programs.okuDollarProgram` — a
-  program that no longer exists in this workspace.
-- Several `upgrades[]` entries are for `OkuDollar`, likewise gone.
+The current devnet deployment (program `4k5gmUht…`, see `Anchor.toml`). Written by
+`deploy:programs` / `deploy:init`; `scripts/utils/addressBook.ts::saveDeployment` **merges** into any
+existing file at the same path, so a genuinely fresh deploy should start from no file (move or delete
+the old one first, or stale keys survive into the new record).
 
-Kept for forensic reference (recovering stranded rent, understanding what a
-past deploy looked like), NOT as a template. `scripts/utils/addressBook.ts`'s
-`saveDeployment` MERGES into an existing file at the same path
-(`{...existing.tokens, ...addresses.tokens}`), so if a fresh `devnet.json` were
-written back to the un-archived name, these dead keys would silently survive
-into it. That merge behavior is why these were renamed rather than left in
-place — a genuinely fresh deploy should start from nothing.
+`authorities` is recorded from the deploy-time config (env vars on mainnet), not read back from chain;
+confirm `role_admin` against `PsmConfig` (see [`../../README.md` § Mainnet `role_admin` handover](../../README.md#mainnet-role_admin-handover)).
 
-## `devnet.json` — LIVE (clean-slate redeploy, 2026-09-19)
+## Archived: `devnet.v1-pre-streaming.json`, `devnet-fork.v1-pre-streaming.json`
 
-Written from scratch by the redeploy, so it carries none of the dead keys
-above. Program ID was rotated (`BUQ1ULxn…` → `4k5gmUht…`) because the three
-programs recorded in the archived files have since been **closed** for rent
-recovery, and a closed program ID can never be redeployed.
+Records of the pre-streaming, two-token-era deployments. **Not live and not a template.** They are
+kept only to identify old program IDs and accounts (for example when reconciling rent):
 
-Rent recovered at redeploy time (10.495 SOL total):
+- `pdas.psmConfig` is an orphaned account under a superseded `PsmConfig` layout (the current
+  `PsmConfig::LEN` is 754); the current program cannot deserialize it and no migration exists.
+- `tokens.okuMoney` / `tokens.usdOku`, `pdas.redemptionQueue`, `pdas.vaultConfig`,
+  `pdas.vaultOkuMoney`, `programs.okuDollarProgram` and the `OkuDollar` `upgrades[]` entries refer to
+  components that no longer exist in this workspace.
 
-| Program ID | Was | Rent |
+The program IDs these files record are all **closed** (`solana program show` reports "has been
+closed"), and a closed program ID can never be redeployed:
+
+| Program ID | Recorded in | Was |
 |---|---|---|
-| `BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g` | old `lite_psm` | 4.351 SOL |
-| `5SK6EhbXf9d7jW4vzobZfbtUsZBQmFyo9w3xuSQY3Zke` | `oku_dollar` (crate removed) | 3.286 SOL |
-| `GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb` | `oku_bridge_router` (crate removed) | 2.858 SOL |
-
-All three are now closed — `solana program show` on any of them returns
-"has been closed". They remain in the archived files as explorer history
-only.
+| `BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g` | `devnet.v1-pre-streaming.json` | old `lite_psm` |
+| `3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N` | `devnet-fork.v1-pre-streaming.json` (and `upgrades[]` of the devnet archive) | old `lite_psm` |
+| `3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy` | `devnet-fork.v1-pre-streaming.json` | `oku_dollar` (crate removed) |

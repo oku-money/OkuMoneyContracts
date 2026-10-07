@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * EVM <-> EVM noBridge orchestrator integration test.
+ * EVM <-> EVM off-chain orchestrator integration test.
  *
  * Exercises the full off-chain orchestrator flow between two EVM testnets:
  *
@@ -79,10 +79,7 @@ if (!RUN_PERMUTATIONS && (!SOURCE_CHAIN || !DEST_CHAIN)) {
 // Mainnet guard
 // ============================================================================
 //
-// Consumes the SAME set `mainnetGuard.ts` uses for every operator script,
-// rather than a hand-rolled duplicate — the two previously diverged
-// (this file had optimism/arbitrum; the canonical guard and the sibling
-// EVM<->SVM bridge script's guard did not).
+// Uses the same set as `mainnetGuard.ts` for every operator script.
 
 function guardMainnet(chain: string) {
   if (MAINNET_NETWORKS.has(chain)) {
@@ -405,16 +402,9 @@ async function bridgeLeg(
       `[${source.chainName}] PSM buffer low (${ethers.formatUnits(buffer, source.usdcDecimals)}); ` +
         `minting ${ethers.formatUnits(deficit, source.usdcDecimals)} MockUSDC and depositing`
     );
-    // Deposit buffer: just mint USDC to the PSM's USDC vault address directly.
-    // On these test deploys the deployer is buffer_depositor, but the simplest
-    // way is to mint MockUSDC and do a mintOkuM+redeemOkuM roundtrip to fill
-    // the buffer. Actually, the buffer IS the USDC held by the PSM, so just
-    // minting USDC to the PSM address would work... but the PSM only accepts
-    // USDC via mintOkuM or depositBuffer. Let's use the depositBuffer approach
-    // if the role is wired, but for simplicity just ensure we mint extra OkuM
-    // above so the redeem will release USDC into the buffer organically.
-    // The seeding block above already minted OkuM via mintOkuM, which deposited
-    // USDC into the buffer. If that wasn't enough, we need more.
+    // The PSM only accepts USDC via mintOkuM or depositBuffer (needs
+    // PSM_BUFFER_DEPOSITOR, and an unpaused PSM). Seeding mintOkuM above already
+    // deposited USDC; mint extra MockUSDC for any remaining deficit.
     const usdcBal: bigint = await source.usdc.balanceOf(source.wallet.address);
     if (usdcBal < deficit) {
       await sendTx(

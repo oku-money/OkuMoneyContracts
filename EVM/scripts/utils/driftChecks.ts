@@ -3,9 +3,9 @@
  *
  * Extracted so they can be unit-tested. The drift check is the only layer that
  * can detect cross-chain multiplier divergence — nothing on either stack
- * enforces it on-chain — but it is inherently multi-chain and so was never
- * exercised by a test. These functions carry all of its decision logic and
- * none of its I/O.
+ * enforces it on-chain — but it is inherently multi-chain, so its logic lives
+ * here where it can be unit-tested. These functions carry all of its decision
+ * logic and none of its I/O.
  */
 
 /** Distance in seconds from `rateEnd` to the nearest epoch-grid boundary. */

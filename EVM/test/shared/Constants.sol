@@ -16,7 +16,7 @@ library TestConstants {
     uint256 public constant PRECISION = SrcConstants.PRECISION;
 
     /// @notice Decimal conversion multiplier for Circle-style USDC (6 decimals -> 18).
-    /// @dev The PSM / Queue resolve their own multipliers at init time from
+    /// @dev The PSM resolves its own multiplier at init time from
     ///      `IERC20Metadata.decimals()`. Tests pin to 1e12 because MockUSDC reports 6 decimals.
     uint256 public constant DECIMAL_MULTIPLIER = 1e12;
 

@@ -11,7 +11,7 @@ import {
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
-import { ratePerSecondForApy } from "@okumoney/yield-tooling";
+import { MAX_MULTIPLIER, PRECISION, ratePerSecondForApy } from "@okumoney/yield-tooling";
 import {
   coldMultisig,
   warmMultisig,
@@ -600,11 +600,11 @@ describe("lite-psm", () => {
       });
 
       it("deposit_buffer fails in the same slot as an emergency multiplier override", async () => {
-        // The sandwich lock is now stamped ONLY by `set_okum_multiplier`, the
-        // emergency override. Routine yield no longer touches it, because
-        // streaming accrual produces no discrete jump to sandwich — which is
-        // the whole reason the model was adopted. The display sync
-        // deliberately does not stamp it either (see `display-mirror.ts`).
+        // The yield lock is stamped ONLY by `set_okum_multiplier`, the
+        // emergency override. Routine yield never touches it, because
+        // streaming accrual produces no discrete jump to front-run. The
+        // display sync deliberately does not stamp it either (see
+        // `display-mirror.ts`).
         //
         // Isolated bankrun harness: the override only ever increases the
         // multiplier and HALTS the schedule, and this describe block's
@@ -650,7 +650,7 @@ describe("lite-psm", () => {
         );
         await warpSlots(h2, 1);
 
-        // Stamp the sandwich-lock slot via the emergency override.
+        // Stamp the yield-lock slot via the emergency override.
         const m0 = await computeCanonicalMultiplier(h2, program2, configPda2);
         const m1 = m0 + m0 / 100n; // +1%
         await program2.methods
@@ -719,6 +719,53 @@ describe("lite-psm", () => {
         expect(Number(vaultBefore.amount) - Number(vaultAfter.amount)).to.equal(withdrawAmount.toNumber());
       });
 
+      it("withdraw_buffer reverts Paused while paused, and works after unpause", async () => {
+        const withdrawAmount = new BN(1_000_000);
+        const withdrawAccounts = {
+          bufferWithdrawer: coldMultisig.publicKey,
+          config: configPda,
+          withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+          vaultUsdc: vaultUsdcAta,
+          usdcMint: usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        };
+
+        await program.methods
+          .pause()
+          .accountsPartial({ pauser: warmMultisig.publicKey, config: configPda })
+          .signers([warmMultisig])
+          .rpc();
+
+        const vaultBefore = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+        await expectBankrunError(
+          () =>
+            program.methods
+              .withdrawBuffer(withdrawAmount)
+              .accountsPartial(withdrawAccounts)
+              .signers([coldMultisig])
+              .rpc(),
+          "Paused"
+        );
+        const vaultStillPaused = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+        expect(vaultStillPaused.amount.toString(), "paused withdraw must move no USDC").to.equal(
+          vaultBefore.amount.toString()
+        );
+
+        await program.methods
+          .unpause()
+          .accountsPartial({ unpauser: coldMultisig.publicKey, config: configPda })
+          .signers([coldMultisig])
+          .rpc();
+
+        await program.methods
+          .withdrawBuffer(withdrawAmount)
+          .accountsPartial(withdrawAccounts)
+          .signers([coldMultisig])
+          .rpc();
+        const vaultAfter = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+        expect(Number(vaultBefore.amount) - Number(vaultAfter.amount)).to.equal(withdrawAmount.toNumber());
+      });
+
       it("non-buffer_withdrawer CANNOT withdraw buffer", async () => {
         try {
           await program.methods
@@ -757,10 +804,9 @@ describe("lite-psm", () => {
           .rpc();
 
         // THE POINT OF THE TEST: the multiplier actually moved to the value
-        // submitted. The previous version asserted only
-        // `lastYieldDistributionSlot > 0` -- an unrelated bookkeeping field,
-        // on a shared harness where an earlier test may already have stamped
-        // it, so a silently no-op override would have passed.
+        // submitted. (`lastYieldDistributionSlot > 0` alone would not prove
+        // that: on a shared harness an earlier test may already have stamped
+        // it, so a silently no-op override would pass.)
         const after = await computeCanonicalMultiplier(h, program, configPda);
         expect(after.toString(), "override must set the multiplier exactly").to.equal(
           (current + 1n).toString(),
@@ -771,6 +817,23 @@ describe("lite-psm", () => {
         const configAfter = await program.account.psmConfig.fetch(configPda);
         expect(Number(configAfter.okumRateEnd), "override halts the schedule").to.equal(0);
         expect(Number(configAfter.lastYieldDistributionSlot)).to.be.greaterThan(0);
+      });
+
+      it("rebaser CANNOT force the multiplier above MAX_MULTIPLIER (MultiplierTooHigh)", async () => {
+        await expectBankrunError(
+          () =>
+            program.methods
+              .setOkumMultiplier(new BN((MAX_MULTIPLIER + 1n).toString()))
+              .accountsPartial({
+                rebaser: orchestrator.publicKey,
+                config: configPda,
+                okuMMint: okuMMint,
+                token2022Program: TOKEN_2022_PROGRAM_ID,
+              })
+              .signers([orchestrator])
+              .rpc(),
+          "MultiplierTooHigh"
+        );
       });
 
       it("non-rebaser CANNOT force the multiplier", async () => {
@@ -797,11 +860,9 @@ describe("lite-psm", () => {
   // Yield Operations (okuM Price Model)
   // ==========================================================================
   describe("yield operations (streaming rate schedule)", () => {
-    // The old tests here drove `distribute_yield`, which no longer exists.
     // Under rear-facing epochs the operator measures realised yield off-chain
     // and publishes a RATE; there is no on-chain "distribute N dollars"
-    // primitive, and therefore no `YieldTooSmall` / supply-proportional-bump
-    // behaviour left to assert.
+    // primitive.
     //
     // The full streaming model -- transaction-free accrual, transaction-free
     // successor handover, halting on a missed epoch, and every write rail --
@@ -853,11 +914,9 @@ describe("lite-psm", () => {
     });
 
     it("fails to mint zero amount", async () => {
-      // `ZeroAmount`, specifically. The previous version also accepted
-      // `OverrideInProgress`, justified by "if we got a fresh slot" --
-      // but this file's harness uses the default `autoBumpSlot: true`, so every
-      // `.rpc()` advances the slot and that branch is unreachable. A dead
-      // alternative that weakens a test for no benefit.
+      // `ZeroAmount`, specifically. This file's harness uses the default
+      // `autoBumpSlot: true`, so every `.rpc()` advances the slot and
+      // `OverrideInProgress` is unreachable here.
       await expectBankrunError(
         () =>
           program.methods
@@ -1003,12 +1062,10 @@ describe("lite-psm", () => {
 
       // USDC sent to user == floor(raw * canonicalMultiplier / PRECISION).
       //
-      // This used to assert `> redeemAmount` on the grounds that "prior tests
-      // accrued yield" -- an implicit dependency on earlier tests having
-      // mutated shared multiplier state. That was fragile before and is simply
-      // wrong now: publishing a rate schedule does not move the multiplier,
-      // elapsed time does, and bankrun's clock is sticky. Assert the actual
-      // pricing rule instead, which holds at any multiplier.
+      // Assert the pricing rule itself rather than `> redeemAmount`: publishing
+      // a rate schedule does not move the multiplier, elapsed time does, and
+      // bankrun's clock is sticky, so the rule is the only thing that holds at
+      // any multiplier.
       const usdcReceived = BigInt(userUsdcAfter.amount) - BigInt(userUsdcBefore.amount);
       const m = await computeCanonicalMultiplier(h, program, configPda);
       const expectedOut = (BigInt(redeemAmount.toString()) * m) / 1_000_000_000_000_000_000n;
@@ -1018,6 +1075,60 @@ describe("lite-psm", () => {
       // Vault USDC decreased by the same amount the user received
       const vaultDecrease = BigInt(vaultUsdcBefore.amount) - BigInt(vaultUsdcAfter.amount);
       expect(vaultDecrease.toString()).to.equal(usdcReceived.toString());
+    });
+
+    describe("min_usdc_out slippage floor", () => {
+      const redeemRaw = new BN(1_000_000);
+
+      const redeemWithFloor = (minUsdcOut: bigint) =>
+        program.methods
+          .redeemOkuM(redeemRaw, new BN(minUsdcOut.toString()))
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            usdcMint,
+            okuMMint,
+            userUsdcAta,
+            userOkuMAta,
+            vaultUsdc: vaultUsdcAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+
+      const expectedOutput = async () => {
+        const m = await computeCanonicalMultiplier(h, program, configPda);
+        return (BigInt(redeemRaw.toString()) * m) / PRECISION;
+      };
+
+      it("reverts SlippageExceeded when min_usdc_out is one above the output, and moves nothing", async () => {
+        const expectedOut = await expectedOutput();
+        const okuMBefore = await getAccount(provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID);
+        const usdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
+
+        await expectBankrunError(() => redeemWithFloor(expectedOut + 1n), "SlippageExceeded");
+
+        const okuMAfter = await getAccount(provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID);
+        const usdcAfter = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
+        expect(okuMAfter.amount.toString(), "OkuM must not be burned").to.equal(okuMBefore.amount.toString());
+        expect(usdcAfter.amount.toString(), "no USDC released").to.equal(usdcBefore.amount.toString());
+      });
+
+      it("succeeds with min_usdc_out equal to the exact output, paying exactly that", async () => {
+        const expectedOut = await expectedOutput();
+        const okuMBefore = await getAccount(provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID);
+        const usdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
+
+        await redeemWithFloor(expectedOut);
+
+        const okuMAfter = await getAccount(provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID);
+        const usdcAfter = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
+        expect((okuMBefore.amount - okuMAfter.amount).toString()).to.equal(redeemRaw.toString());
+        expect((usdcAfter.amount - usdcBefore.amount).toString()).to.equal(expectedOut.toString());
+      });
     });
 
     it("fails to redeem when paused", async () => {
@@ -1110,13 +1221,8 @@ describe("lite-psm", () => {
         expect.fail("Should have failed");
       } catch (err: any) {
         // `InsufficientUserBalance`, specifically. The program has a dedicated
-        // pre-check (psm.rs) precisely so this is distinguishable.
-        //
-        // The previous version accepted a six-way disjunction including
-        // `InsufficientBuffer` -- a semantically DIFFERENT failure (the vault
-        // is empty, not the user) -- and `custom program error: 0x1`, which
-        // matches error code 1 from ANY program. A test named for a user
-        // balance shortfall passed when the vault was the thing that was short.
+        // pre-check (psm.rs) precisely so this is distinguishable from
+        // `InsufficientBuffer` (the vault is short, not the user).
         const code = err?.error?.errorCode?.code;
         expect(code, `expected InsufficientUserBalance, got: ${err?.message ?? err}`).to.equal(
           "InsufficientUserBalance",

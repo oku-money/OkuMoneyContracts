@@ -117,23 +117,9 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   // NOTE: deploy script uses MockUSDC by default. The native Binance-Peg USDC
   // listed below has 18 decimals (NOT 6 like Ethereum/Base USDC), so
   // IERC20Metadata.decimals() returns 18 and `usdcDecimalMultiplier` resolves
-  // to 1 rather than 1e12 in both LitePSM.initialize and
-  // RedemptionQueue.initialize.
-  //
-  // STATUS OF THAT PATH, as of the slippage-removal pass:
-  //  - Mint/redeem MATH is covered at 18 decimals, not just `initialize`. See
-  //    `test_MultiDecimal_18Dec_*` in test/psm/LitePSM.t.sol. That coverage
-  //    found and removed a real defect: `RoundTripDriftTooLarge` tolerated one
-  //    COLLATERAL unit of drift, which at 18 decimals is one wei — below the
-  //    truncation it was measuring — so it reverted ~1 in 3 ordinary mints once
-  //    the multiplier passed ~3.0. Fixed by removing the check (EVM/README.md
-  //    Accepted Risk #15).
-  //  - CLOSED: the queue's dust floor used to be `decimalMultiplier` alone,
-  //    which collapses to 1 wei at 18 decimals — no floor at all.
-  //    `Constants.MIN_REDEMPTION_OKUM` now provides an absolute floor
-  //    independent of collateral decimals (`Constants.sol`, AR #16 closed).
-  //
-  // SKIP_MOCK_USDC=true on BSC is unblocked; no open decision gates it.
+  // to 1 rather than 1e12 in LitePSM.initialize.
+  // Mint/redeem math at 18 decimals is covered by `test_MultiDecimal_18Dec_*`
+  // in test/psm/LitePSM.t.sol; SKIP_MOCK_USDC=true on BSC is unblocked.
   bsc: {
     tokens: {
       usdc: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", // Binance-Peg USDC (18 decimals)
@@ -189,8 +175,7 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   // BNB Smart Chain Testnet (Chapel)
   // NOTE: like mainnet BSC, the canonical Binance-Peg USDC carries 18 decimals (NOT 6).
   // Live deploys here default to MockUSDC. See the `bsc` entry above for the current
-  // status of the 18-decimal path — mint/redeem math and the queue dust floor
-  // (Accepted Risk #16) are both covered/closed.
+  // status of the 18-decimal path (mint/redeem math is covered).
   bscTestnet: {
     tokens: {
       usdc: "0x64544969ed7EBf5f083679233325356EbE738930", // Binance-Peg USDC (testnet, 18 decimals)

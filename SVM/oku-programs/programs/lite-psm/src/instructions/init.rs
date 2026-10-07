@@ -1,31 +1,33 @@
-use crate::constants::{OKU_M_METADATA_NAME, OKU_M_METADATA_SYMBOL};
+use crate::constants::{OKU_M_METADATA_NAME, OKU_M_METADATA_SYMBOL, TOKEN_DECIMALS};
 use crate::contexts::Initialize;
 use crate::errors::LitePsmError;
 use crate::events::InitializeEvent;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::invoke;
+use anchor_lang::solana_program::program::{invoke, invoke_signed};
 use anchor_spl::token_2022::spl_token_2022::{
+    self as spl_t22,
     extension::metadata_pointer::instruction::initialize as initialize_metadata_pointer,
     extension::scaled_ui_amount::instruction::initialize as initialize_scaled_ui_amount,
-    instruction::initialize_mint,
+    extension::ExtensionType, instruction::initialize_mint,
 };
 use anchor_spl::token_2022_extensions::spl_pod;
 use anchor_spl::token_2022_extensions::spl_token_metadata_interface;
+use oku_shared::rate::Schedule;
 use spl_token_metadata_interface::state::TokenMetadata;
 
-/// Parameter bundle for [`initialize`]. A named struct keeps the IDL
-/// self-documenting and the call site hard to scramble (every field is named,
-/// not positional).
-///
-/// The pubkey fields are the granular on-chain authorities; see
-/// `roles::AuthorityRole` and `SVM/README.md` § "Authority model".
+/// `ScaledUiAmount` starts at 1.0 (raw == display), the canonical multiplier of
+/// a halted schedule.
+const INITIAL_DISPLAY_MULTIPLIER: f64 = 1.0;
+
+/// Parameter bundle for [`initialize`]. Named fields keep the call site hard to
+/// scramble. Pubkey fields are the granular authorities (`roles::AuthorityRole`).
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct InitializeParams {
-    // ----- Supply / capacity -----
+    /// Supply cap in raw OkuM units (6 decimals).
     pub max_supply: u64,
+    /// Initial `mint_oku_m` allowance in raw OkuM units (6 decimals).
     pub minter_allowance: u64,
-    // ----- Granular authorities -----
     pub pauser: Pubkey,
     pub unpauser: Pubkey,
     pub freezer: Pubkey,
@@ -35,194 +37,157 @@ pub struct InitializeParams {
     pub cap_manager: Pubkey,
     pub allowance_manager: Pubkey,
     pub rebaser: Pubkey,
-    // ----- OkuM mint metadata -----
+    /// Token-2022 metadata URI for the OkuM mint.
     pub oku_m_uri: String,
 }
 
-/// Initialize the PSM.
-///
-/// Creates config PDA, USDC vault, and the OkuM mint (Token-2022 with
-/// ScaledUiAmount + MetadataPointer + TokenMetadata extensions).
-///
-/// The OkuM mint is created here via CPIs because Anchor's `init` macro does
-/// not support multi-extension Token-2022 mints. The deployer passes a fresh
-/// keypair as `oku_m_mint` (Signer); the instruction issues CreateAccount +
-/// extension init + InitializeMint + metadata init CPIs. The PsmConfig PDA is
-/// the mint authority, freeze authority, and ScaledUiAmount authority.
-pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<()> {
-    // Capture keys before taking the mutable borrow on config, so we
-    // can still call `ctx.accounts.config.to_account_info()` for CPIs.
-    let bump = ctx.bumps.config;
-    let mint_key = ctx.accounts.oku_m_mint.key();
-    let config_key = ctx.accounts.config.key();
-    let token_2022_id = ctx.accounts.token_2022_program.key();
+impl InitializeParams {
+    fn granular_authorities(&self) -> [Pubkey; 9] {
+        [
+            self.pauser,
+            self.unpauser,
+            self.freezer,
+            self.unfreezer,
+            self.buffer_depositor,
+            self.buffer_withdrawer,
+            self.cap_manager,
+            self.allowance_manager,
+            self.rebaser,
+        ]
+    }
+}
 
-    // Compute required space for the mint account with extensions:
-    //   Base mint + ScaledUiAmount + MetadataPointer + TokenMetadata
+/// Same two guards as `set_authority`: no zero pubkey (the role would be
+/// silently unusable) and no collapsing a role into `role_admin` (the cold
+/// meta-role stays separate from the warm operational ones).
+fn validate_granular_authorities(params: &InitializeParams, role_admin: &Pubkey) -> Result<()> {
+    for authority in params.granular_authorities() {
+        require!(
+            authority != Pubkey::default() && authority != *role_admin,
+            LitePsmError::InvalidAuthority
+        );
+    }
+    Ok(())
+}
+
+/// Create and initialize the OkuM Token-2022 mint (Anchor's `init` cannot build
+/// multi-extension mints). The `PsmConfig` PDA is mint, freeze, `ScaledUiAmount`
+/// and metadata authority.
+fn create_oku_m_mint(accounts: &Initialize, bump: u8, uri: &str) -> Result<()> {
+    let mint_key = accounts.oku_m_mint.key();
+    let config_key = accounts.config.key();
+    let token_2022_id = accounts.token_2022_program.key();
+
     let metadata = TokenMetadata {
         update_authority: spl_pod::optional_keys::OptionalNonZeroPubkey::try_from(Some(config_key))
             .map_err(|_| error!(LitePsmError::InvalidAuthority))?,
         mint: mint_key,
-        // The base OkuM ("OkuMoney") on-chain identity; see constants.rs for
-        // OkuM vs usdOku. Held in a single constant so this and the
-        // metadata-init CPI below cannot drift on a rename.
         name: OKU_M_METADATA_NAME.to_string(),
         symbol: OKU_M_METADATA_SYMBOL.to_string(),
-        uri: params.oku_m_uri.clone(),
+        uri: uri.to_string(),
         additional_metadata: vec![],
     };
     let metadata_len = metadata.tlv_size_of().map_err(|_| LitePsmError::Overflow)?;
 
-    use anchor_spl::token_2022::spl_token_2022 as spl_t22;
-
-    // Two-step allocation, the standard pattern for Token-2022 mints with
-    // variable-length extensions like TokenMetadata:
-    //
-    //   1. `CreateAccount` with space for the base mint + fixed-size
-    //      extensions only (ScaledUiAmount + MetadataPointer). `InitializeMint`
-    //      validates the TLV layout against the account length, so extra
-    //      uninitialized bytes would cause `InvalidAccountData`.
-    //   2. Fund lamports for the FULL final size. The metadata-init
-    //      instruction reallocs to fit the metadata TLV, and the pre-funded
-    //      lamports cover the extra rent.
-    //
-    // See: https://solana.com/docs/tokens/extensions/metadata-pointer
-    let fixed_space =
-        spl_t22::extension::ExtensionType::try_calculate_account_len::<spl_t22::state::Mint>(&[
-            spl_t22::extension::ExtensionType::ScaledUiAmount,
-            spl_t22::extension::ExtensionType::MetadataPointer,
-        ])
-        .map_err(|_| LitePsmError::Overflow)?;
-
+    // Two-step allocation: `CreateAccount` allocates only the fixed-size
+    // extensions, because `InitializeMint` validates the TLV layout against the
+    // account length. Lamports are funded for the FULL size, since the metadata
+    // init reallocs to fit and draws on the pre-funded rent.
+    let fixed_space = ExtensionType::try_calculate_account_len::<spl_t22::state::Mint>(&[
+        ExtensionType::ScaledUiAmount,
+        ExtensionType::MetadataPointer,
+    ])
+    .map_err(|_| LitePsmError::Overflow)?;
     let total_space = fixed_space
         .checked_add(metadata_len)
         .ok_or(LitePsmError::Overflow)?;
-    let rent = Rent::get()?;
-    // NOTE: CreateAccount uses `fixed_space` for the initial account
-    // length, but lamports cover `total_space` for post-realloc rent.
-    let lamports = rent.minimum_balance(total_space);
-    let space = fixed_space;
+    let lamports = Rent::get()?.minimum_balance(total_space);
 
-    // CreateAccount
     invoke(
         &anchor_lang::solana_program::system_instruction::create_account(
-            ctx.accounts.role_admin.key,
+            accounts.role_admin.key,
             &mint_key,
             lamports,
-            space as u64,
+            fixed_space as u64,
             &token_2022_id,
         ),
         &[
-            ctx.accounts.role_admin.to_account_info(),
-            ctx.accounts.oku_m_mint.to_account_info(),
-            ctx.accounts.system_program.to_account_info(),
+            accounts.role_admin.to_account_info(),
+            accounts.oku_m_mint.to_account_info(),
+            accounts.system_program.to_account_info(),
         ],
     )?;
 
-    // Order matters: all extension inits must precede InitializeMint2, and
-    // MetadataPointer before ScaledUiAmount so extensions are laid out in
-    // ascending ExtensionType order.
-    // InitializeMetadataPointer — point to self (mint stores its own metadata)
+    // All extension inits must precede `InitializeMint`, in ascending
+    // `ExtensionType` order (MetadataPointer before ScaledUiAmount).
     invoke(
         &initialize_metadata_pointer(
             &token_2022_id,
             &mint_key,
-            Some(config_key), // authority
-            Some(mint_key),   // metadata address = self
+            Some(config_key),
+            Some(mint_key), // the mint stores its own metadata
         )?,
-        &[ctx.accounts.oku_m_mint.to_account_info()],
+        &[accounts.oku_m_mint.to_account_info()],
     )?;
-    // InitializeScaledUiAmountConfig — multiplier starts at 1.0
-    // (ScaledUiAmount uses f64; 1.0 means raw == display).
     invoke(
         &initialize_scaled_ui_amount(
             &token_2022_id,
             &mint_key,
-            Some(config_key), // authority = config PDA
-            1.0_f64,          // initial multiplier
+            Some(config_key),
+            INITIAL_DISPLAY_MULTIPLIER,
         )?,
-        &[ctx.accounts.oku_m_mint.to_account_info()],
+        &[accounts.oku_m_mint.to_account_info()],
     )?;
-    // InitializeMint — decimals 6, authorities = config PDA
-    // Uses InitializeMint (not InitializeMint2) which also takes the
-    // Rent sysvar account -- needed for extension-bearing mints.
+    // `InitializeMint` (not `InitializeMint2`): takes the Rent sysvar account.
     invoke(
         &initialize_mint(
             &token_2022_id,
             &mint_key,
             &config_key,       // mint authority
             Some(&config_key), // freeze authority
-            6,                 // decimals
+            TOKEN_DECIMALS,
         )?,
         &[
-            ctx.accounts.oku_m_mint.to_account_info(),
-            ctx.accounts.rent.to_account_info(),
+            accounts.oku_m_mint.to_account_info(),
+            accounts.rent.to_account_info(),
         ],
     )?;
-    // Initialize token metadata (name, symbol, uri).
-    // The mint authority (config PDA) must sign this CPI because
-    // Token-2022 requires the mint authority to authorize metadata init.
+
+    // The mint authority (config PDA) must sign the metadata init.
     let bump_seed = [bump];
     let seeds = PsmConfig::signer_seeds(&bump_seed);
-    let signer_seeds = &[&seeds[..]];
-    anchor_lang::solana_program::program::invoke_signed(
+    invoke_signed(
         &spl_token_metadata_interface::instruction::initialize(
             &token_2022_id,
             &mint_key,   // metadata account = mint (self)
             &config_key, // update authority
-            &mint_key,   // mint
+            &mint_key,
             &config_key, // mint authority
-            // On-chain OkuM identity — see the TokenMetadata block above and
-            // OKU_M_METADATA_* in constants.rs (single source of truth).
             OKU_M_METADATA_NAME.to_string(),
             OKU_M_METADATA_SYMBOL.to_string(),
-            params.oku_m_uri.clone(),
+            uri.to_string(),
         ),
         &[
-            ctx.accounts.oku_m_mint.to_account_info(),
-            ctx.accounts.config.to_account_info(),
+            accounts.oku_m_mint.to_account_info(),
+            accounts.config.to_account_info(),
         ],
-        signer_seeds,
+        &[&seeds[..]],
     )?;
 
-    // ---------------------------------------------------------------
-    // 2. Validate + populate PsmConfig fields.
-    // ---------------------------------------------------------------
-    let role_admin_key = ctx.accounts.role_admin.key();
+    Ok(())
+}
 
-    // Validate the 9 granular authorities before writing any of them.
-    // Mirrors `set_authority`'s two guards (`psm_admin.rs`):
-    //   1. Reject the zero pubkey — it would seat a role at
-    //      `Pubkey::default()` and make it permanently unusable with no
-    //      on-chain signal, since `has_one` would simply never match.
-    //   2. Reject collapsing a granular authority into `role_admin` — the
-    //      cold-multisig meta-role must stay separate from the warm
-    //      operational roles. `role_admin` itself is exempt (a `Signer`
-    //      account, inherently non-default).
-    let granular_authorities = [
-        params.pauser,
-        params.unpauser,
-        params.freezer,
-        params.unfreezer,
-        params.buffer_depositor,
-        params.buffer_withdrawer,
-        params.cap_manager,
-        params.allowance_manager,
-        params.rebaser,
-    ];
-    for authority in granular_authorities {
-        require!(
-            authority != Pubkey::default(),
-            LitePsmError::InvalidAuthority
-        );
-        require!(authority != role_admin_key, LitePsmError::InvalidAuthority);
-    }
+/// Populate the freshly zeroed config. Direct mint/burn start disabled and
+/// `pending_role_admin` empty, so unset fields rely on Anchor's zero-init.
+fn write_initial_config(
+    config: &mut PsmConfig,
+    keys: InitKeys,
+    params: &InitializeParams,
+    now_ts: i64,
+) {
+    config.bump = keys.bump;
 
-    let config = &mut ctx.accounts.config;
-    config.bump = bump;
-
-    // Set all granular authorities from the params struct.
-    config.role_admin = role_admin_key;
+    config.role_admin = keys.role_admin;
     config.pauser = params.pauser;
     config.unpauser = params.unpauser;
     config.freezer = params.freezer;
@@ -233,55 +198,59 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     config.allowance_manager = params.allowance_manager;
     config.rebaser = params.rebaser;
 
-    // Set token references
-    config.usdc_mint = ctx.accounts.usdc_mint.key();
-    config.oku_m_mint = mint_key;
-    config.vault_usdc = ctx.accounts.vault_usdc.key();
+    config.usdc_mint = keys.usdc_mint;
+    config.oku_m_mint = keys.oku_m_mint;
+    config.vault_usdc = keys.vault_usdc;
 
-    // Set limits
     config.max_supply = params.max_supply;
     config.minter_allowance = params.minter_allowance;
-    config.is_paused = false;
 
-    // Sandwich lock — starts at 0 (no lock). Only the emergency multiplier
-    // override ever stamps this under streaming accrual.
-    config.last_yield_distribution_slot = 0;
+    // Flat and halted: a freshly deployed chain has earned nothing.
+    let schedule = Schedule::halted_at(now_ts);
+    config.okum_base_multiplier = schedule.base_multiplier;
+    config.okum_rate_per_second = schedule.rate_per_second as u64;
+    config.okum_last_accrual_time = schedule.last_accrual_time;
+    config.okum_rate_end = schedule.rate_end;
+    config.okum_pending_rate_per_second = schedule.pending_rate_per_second as u64;
+    config.okum_pending_rate_end = schedule.pending_rate_end;
 
-    // Rate schedule — flat and HALTED. The multiplier reads 1.0 and does not
-    // move until the operator publishes a rate, which is the correct initial
-    // state: a freshly deployed chain has earned nothing.
-    //
-    // Mirrors the initializer in `EVM/src/token/OkuMoney.sol`.
-    let init_schedule = oku_shared::rate::Schedule::halted_at(Clock::get()?.unix_timestamp);
-    config.okum_base_multiplier = init_schedule.base_multiplier;
-    config.okum_rate_per_second = init_schedule.rate_per_second as u64;
-    config.okum_last_accrual_time = init_schedule.last_accrual_time;
-    config.okum_rate_end = init_schedule.rate_end;
-    config.okum_pending_rate_per_second = init_schedule.pending_rate_per_second as u64;
-    config.okum_pending_rate_end = init_schedule.pending_rate_end;
+    // The mirror already reads `INITIAL_DISPLAY_MULTIPLIER`, i.e. in sync.
+    config.last_display_sync_ts = schedule.last_accrual_time;
+}
 
-    // Display mirror starts in sync: the extension is initialized to 1.0
-    // above, which is exactly the canonical multiplier of a halted schedule.
-    config.last_display_sync_ts = init_schedule.last_accrual_time;
+/// Account keys recorded in the config at init.
+#[derive(Clone, Copy)]
+struct InitKeys {
+    bump: u8,
+    role_admin: Pubkey,
+    usdc_mint: Pubkey,
+    oku_m_mint: Pubkey,
+    vault_usdc: Pubkey,
+}
 
-    // Two-step `role_admin` transfer slot — empty until
-    // `set_authority(RoleAdmin, ...)` proposes a rotation.
-    config.pending_role_admin = Pubkey::default();
+/// Callable only by the program's upgrade authority (enforced on the `Initialize`
+/// context, which documents the land-grab it prevents).
+pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<()> {
+    let bump = ctx.bumps.config;
+    let role_admin = ctx.accounts.role_admin.key();
+    validate_granular_authorities(&params, &role_admin)?;
 
-    // Direct mint — disabled by default. Operator configures via
-    // `set_authority(DirectMinter, ...)` + `set_direct_minter_allowance`.
-    config.direct_minter = Pubkey::default();
-    config.direct_minter_allowance = 0;
+    create_oku_m_mint(ctx.accounts, bump, &params.oku_m_uri)?;
 
-    // Direct burn — disabled by default. Operator configures via
-    // `set_authority(DirectBurner, ...)` + `set_direct_burner_allowance`.
-    config.direct_burner = Pubkey::default();
-    config.direct_burner_allowance = 0;
+    let keys = InitKeys {
+        bump,
+        role_admin,
+        usdc_mint: ctx.accounts.usdc_mint.key(),
+        oku_m_mint: ctx.accounts.oku_m_mint.key(),
+        vault_usdc: ctx.accounts.vault_usdc.key(),
+    };
+    let now_ts = Clock::get()?.unix_timestamp;
+    write_initial_config(&mut ctx.accounts.config, keys, &params, now_ts);
 
     emit!(InitializeEvent {
-        role_admin: config.role_admin,
-        usdc_mint: config.usdc_mint,
-        oku_m_mint: config.oku_m_mint,
+        role_admin,
+        usdc_mint: keys.usdc_mint,
+        oku_m_mint: keys.oku_m_mint,
         max_supply: params.max_supply,
     });
 

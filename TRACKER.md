@@ -37,14 +37,7 @@ reasonable. Each is listed because the *reason* is not visible from the code alo
    a schedule the other rejects. Long-horizon fixtures must chain 90-day
    re-anchors, not open one long window.
 
-3. **`address(0)` is the "slot cleared" sentinel in `RedemptionQueue`.** A
-   zero-user entry would be unprocessable, unrescuable, and would block
-   `withdrawUsdc` via `WouldStrandQueue`, hence the `enqueue` check. Also:
-   `advanceHead` must keep `nonReentrant`, and `processQueue` must keep deleting
-   before the external transfer. Reasoning: comments in `enqueue` and
-   `processQueue`, NatSpec on `advanceHead`.
-
-4. **`multiplier_to_f64_floor`'s `display <= canonical` holds by exact
+3. **`multiplier_to_f64_floor`'s `display <= canonical` holds by exact
    cancellation, not by margin.** Two `next_down` steps cancel two f64
    roundings with almost nothing left over, so adding any third rounding
    operation breaks it. The margin is per-binade and found by search, so
@@ -98,19 +91,43 @@ An alert that watches distributed-so-far against the epoch target and halts earl
 (re-anchor to `PRECISION`) is part of the backend, not this repo, and does not
 exist here. Why it matters: `EVM/docs/epoch-accounting.md` § Finding.
 
-### Before the next EVM redeploy `[EVM]`
+### Before the next deploy `[both]`
 
-The queue changes are not upgrade-compatible with the deployed testnet contracts, so
-the next deploy must be fresh, not an in-place upgrade:
+The next EVM deploy is clean-slate, not an in-place upgrade: `DEPLOYMENT_VERSION =
+v0.4`, the EVM address book and `testnet-addresses.json` EVM contracts are empty
+(`MockUSDC` included), and `roleGrants.json` is `[]`. Outstanding: run the deploy,
+regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pick up:
 
-- `RedemptionQueue.QueueEntry` is repacked into two slots and `getQueueEntry`'s tuple
-  order changed. Bump `DEPLOYMENT_VERSION` **and** clear the four contract keys per
-  `EVM/scripts/config/addresses.README.md` (the `tryAttach` hazard) in the same change.
-- ABI changes backend consumers must pick up (`artifacts/evm/` is current):
-  `depositBuffer` takes five arguments; `BufferRefilled` is now `QueueProcessed`;
-  new queue functions and events (cancel, freeze/release, `rescueExcessOkuM`).
+- **EVM ABI:** `LitePSM.initialize(okuMoney, okuDollar, usdc, admin)`;
+  `depositBuffer(amount)`; `redeemOkuM` / `redeemUsdOku` revert
+  `InsufficientBuffer(available, required)` and dust redeems revert `AmountTooSmall`.
+  Removed: `QueueProcessed`, the `RedemptionQueue` events, `PSM_QUEUE_PROCESSOR`
+  and `QUEUE_*` roles, `BelowMinimumRedemption`.
+- **SVM IDL:** `ZeroOutput` removed (redeem dust is `AmountTooSmall`);
+  `MultiplierAboveMax` is `MultiplierTooHigh`. Error codes shift; match on names
+  or regenerate the IDL.
+- **Operator-facing behaviour:** buffer deposit and withdraw are now pause-gated and
+  blocked during the override lock on both stacks (`depositBuffer` / `withdrawUsdc`,
+  `deposit_buffer` / `withdraw_buffer`). Automation must unpause before topping up.
 - Once an audited deployment exists, add an OpenZeppelin `validateUpgrade` check against
-  that deployed implementation. The new layout is pinned only by a storage-slot test.
+  that deployed implementation. Layouts are pinned only by storage-slot tests.
+
+### Open: mainnet handover gaps `[EVM]`
+
+`grantRolesMainnet.ts` revokes only the deployer's `DEFAULT_ADMIN_ROLE`. The granular
+roles `initialize` gave the deployer (all `*_UPGRADER`, `OKUM_REBASER`,
+`PSM_BUFFER_WITHDRAWER`, `OKUM_MINTER` / `OKUM_BURNER` on OkuMoney, ...) are left in
+place and no script removes them; `README.md` § Mainnet ceremony documents the manual
+`renounceRole` / `revokeRole` step. Fix: add a renounce-or-revoke pass (with a
+`hasRole` assertion that the deployer holds nothing) to the script, with a drill test.
+
+### Open: SVM `AmountTooSmall` coverage `[SVM]`
+
+No bankrun test hits `AmountTooSmall` in `mint_oku_m`, where it is reachable
+(multiplier > 1 with a 1-unit mint). The `redeem_oku_m` check cannot fire: the
+multiplier is `>= 1` and OkuM / USDC are both 6-decimals, so a non-zero raw amount
+always yields non-zero USDC. It is kept for EVM parity; add the mint test, and
+decide whether to keep or drop the redeem check.
 
 ### Open: tooling and CI `[EVM]`
 
@@ -120,20 +137,11 @@ the next deploy must be fresh, not an in-place upgrade:
 - `forge lint src/ --deny warnings` fails on a clean compile with nightly Foundry
   because of OpenZeppelin's "Unreachable code" warning, which comes from OkuDollar's
   deliberate pure-revert `_update`. CI uses the stable toolchain; confirm it is green there.
-- Operator scripts were out of scope for the queue work. Known gaps:
-  `processQueue.ts` stops when the head can't clear (stranding entries behind a stuck
-  head) and prefers a `MockUSDC` book entry over `USDC`; `depositBuffer.ts` always passes
-  `processQueue_ = false`; `rescueQueueEntry.ts` still names USDC-blacklisting as its
-  trigger.
-- `SVM/.../instructions/psm.rs` has a doc comment saying EVM `withdrawUsdc` isn't
-  pause-gated; it now is.
 
 ### OPEN: deferred audit items `[both]`
 
 Reviewed, understood, deliberately not fixed:
 
-- `LitePSM.processQueue`'s `approveAmount` is unvalidated (EVM) — liveness-only
-  residual, no fund-loss path. See `AUTHORITY-MATRIX.md` §3-G.
 - `update_token_metadata` has no rent payer (SVM) — a `name`/`symbol` rewrite
   that grows the TLV has no account to fund the realloc.
 - Token-2022 CPI errors surface opaquely (SVM) — only `display_sync.rs`'s
@@ -145,22 +153,14 @@ Reviewed, understood, deliberately not fixed:
 ## Standing traps — deploy and operations
 
 - **`verifyDeployment()` must throw, never warn.** It asserts the complete
-  role-grant matrix, both minter allowances, and address-book completeness.
+  role-grant matrix (`expectedRoleGrants()`: 16 entries — 14 granted to the admin by
+  `initialize`, 2 sent by the script), the LitePSM minter allowance, and address-book
+  completeness.
   Roles and allowances are checked separately on purpose: `OkuMoney.mint` gates
   on **both** `onlyRole(OKUM_MINTER)` and the `minterAllowance` mapping, which
   `initialize` populates for nobody — so a grant without an allowance still
-  reverts `ExceedsAllowance`. `expectedRoleGrants()` is exported so the drill
-  asserts against the deploy's own source of truth; never hand-copy the list.
-- **`RedemptionQueue` must not hold `OKUM_MINTER`.** Asserted as an explicit
-  negative in both `verifyDeployment` and the drill, so a re-grant or a stale
-  address-book reuse fails loudly rather than silently widening mint authority.
-- **`LitePSM.initialize`'s `QueueUsdcMismatch`/`QueueOkuMoneyMismatch` checks
-  and `verifyDeployment`'s re-assertion of the same two edges are not
-  redundant.** The init-time check structurally cannot cover a PSM or queue
-  reused from the address book via `tryAttach` without re-running `initialize`.
-  Do not remove either. A mismatched queue fails *closed* — the unguarded
-  `burn` reverts the whole batch, including the already-executed USDC
-  transfer — not silently.
+  reverts `ExceedsAllowance`. The drill asserts against the same exported list;
+  never hand-copy it. Only script-sent grants go in `roleGrants.json`.
 - **`EVM/scripts/config/addresses.json` is tracked and must never receive `fork:`
   keys.** `saveAddressBook()` re-derives the tracked / `addresses.local.json`
   partition on every write, including the reserved `upgrades` index, so no
@@ -236,10 +236,10 @@ flag-vs-env-var breakage on day one. Deferred post-audit.
 
 ### Operator CLI gaps `[SVM]`
 
-`accept-role-admin.ts`, `cancel-role-admin-transfer.ts` — the two-step
-`role_admin` transfer's second step happens once per rotation by the cold
-multisig via Squads; a documented IDL call in the runbook is sufficient. Build
-CLIs only if the runbook requires them.
+`accept-role-admin.ts`, `cancel-role-admin-transfer.ts` — the second step of the
+two-step `role_admin` transfer happens once per rotation, signed by the cold
+multisig via Squads; the IDL call documented in `README.md` § Mainnet ceremony is
+sufficient. Build CLIs only if the runbook requires them.
 
 ### Audit-attention surfaces `[both]`
 
@@ -250,10 +250,7 @@ Informational only — where reviewer time will concentrate:
   and raw `invoke`/`invoke_signed` calls.
 - **SVM `f64` multiplier round-trip** (`helpers/display_sync.rs`,
   `instructions/yield_ops.rs`): the most numerically-sensitive path. See
-  standing invariant 4.
-- **EVM `LitePSM._redeemOkuMShared`**: the densest control flow in the EVM
-  suite — one function serving several call shapes via a `bool okuMAtPsm` flag
-  that toggles both the token-pull and the event emission.
+  standing invariant 3.
 
 ---
 

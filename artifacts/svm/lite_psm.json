@@ -10,9 +10,7 @@
     {
       "name": "accept_role_admin",
       "docs": [
-        "Step 2 of the two-step `RoleAdmin` rotation. Must be signed by the",
-        "`pending_role_admin` previously proposed via `set_authority(RoleAdmin,",
-        "new_admin)`. See `instructions::psm_admin::accept_role_admin`."
+        "Complete a `RoleAdmin` rotation; signed by the proposed admin."
       ],
       "discriminator": [
         203,
@@ -28,7 +26,7 @@
         {
           "name": "new_role_admin",
           "docs": [
-            "The proposed new role admin — must match `config.pending_role_admin`."
+            "Must match `config.pending_role_admin`."
           ],
           "signer": true
         },
@@ -61,9 +59,8 @@
     {
       "name": "burn_oku_m_direct",
       "docs": [
-        "Burn OkuM directly without USDC payout (permissioned --",
-        "`direct_burner` only). Matches EVM `OkuM.burn(amount)` called",
-        "by a non-PSM `OKUM_BURNER`. Enables SVM->EVM bridging."
+        "Burn the caller's OkuM without a USDC payout (`direct_burner` only; the",
+        "SVM->EVM bridge leg). Consumes the direct-burner allowance."
       ],
       "discriminator": [
         202,
@@ -78,9 +75,6 @@
       "accounts": [
         {
           "name": "direct_burner",
-          "docs": [
-            "Operator / bridge backend holding the `direct_burner` authority."
-          ],
           "signer": true,
           "relations": [
             "config"
@@ -112,16 +106,14 @@
         {
           "name": "oku_m_mint",
           "docs": [
-            "OkuM mint (Token-2022). `mint::authority = config` is",
-            "defense-in-depth (see rationale on `MintOkuM::oku_m_mint`)."
+            "OkuM mint (Token-2022). `mint::authority = config` is defense in depth."
           ],
           "writable": true
         },
         {
           "name": "burner_oku_m_ata",
           "docs": [
-            "Burner's OkuM token account -- source of the burn. The burner",
-            "must hold the tokens it wants to destroy."
+            "The burner's own account; source of the burn."
           ],
           "writable": true
         },
@@ -140,9 +132,7 @@
     {
       "name": "cancel_role_admin_transfer",
       "docs": [
-        "Withdraw an in-flight `RoleAdmin` two-step proposal (current",
-        "`role_admin` only). Useful for typo recovery before the new admin",
-        "accepts."
+        "Withdraw a pending `RoleAdmin` proposal (`role_admin` only)."
       ],
       "discriminator": [
         155,
@@ -157,9 +147,6 @@
       "accounts": [
         {
           "name": "role_admin",
-          "docs": [
-            "Role admin - only role_admin can update authorities"
-          ],
           "signer": true,
           "relations": [
             "config"
@@ -167,9 +154,6 @@
         },
         {
           "name": "config",
-          "docs": [
-            "PSM config"
-          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -196,6 +180,10 @@
     },
     {
       "name": "deposit_buffer",
+      "docs": [
+        "Add USDC to the redemption buffer (`buffer_depositor` only). Blocked while",
+        "paused and in the slot of a multiplier override."
+      ],
       "discriminator": [
         192,
         124,
@@ -320,6 +308,9 @@
     },
     {
       "name": "freeze_account",
+      "docs": [
+        "Freeze an OkuM token account (`freezer` only). Works while paused."
+      ],
       "discriminator": [
         253,
         75,
@@ -334,7 +325,7 @@
         {
           "name": "freezer",
           "docs": [
-            "Blacklister authority - can freeze even when PSM is paused"
+            "Works while paused."
           ],
           "signer": true,
           "relations": [
@@ -372,7 +363,7 @@
         {
           "name": "target_oku_m_ata",
           "docs": [
-            "Target account to freeze"
+            "Token account to freeze"
           ],
           "writable": true
         },
@@ -385,6 +376,10 @@
     },
     {
       "name": "initialize",
+      "docs": [
+        "One-time setup, callable only by the program's upgrade authority. Creates",
+        "the config PDA, the USDC vault and the OkuM Token-2022 mint."
+      ],
       "discriminator": [
         175,
         175,
@@ -399,16 +394,12 @@
         {
           "name": "role_admin",
           "docs": [
-            "Becomes `config.role_admin` — the permanent root authority.",
-            "",
-            "MUST be the program's BPF upgrade authority (see `program_data`",
-            "below). Without that tie this instruction is a land-grab: `config` is",
-            "a singleton PDA at `[\"psm_config\"]`, deploy and initialize are",
-            "necessarily separate transactions, and whoever lands `initialize`",
-            "first becomes `role_admin` permanently AND chooses `usdc_mint` — for",
-            "which only the decimal count is validated, so an attacker-controlled",
-            "fake mint passes. There is no `close_config` and no re-init, so the",
-            "program ID would be unrecoverable."
+            "Becomes `config.role_admin`. Must be the program's upgrade authority",
+            "(see `program_data`). Otherwise `initialize` is a land-grab: `config` is a",
+            "singleton PDA, deploy and initialize are separate transactions, and",
+            "whoever lands first becomes `role_admin` permanently and picks `usdc_mint`",
+            "(only its decimals are validated). There is no re-init, so the program ID",
+            "would be unrecoverable."
           ],
           "writable": true,
           "signer": true
@@ -416,18 +407,9 @@
         {
           "name": "program_data",
           "docs": [
-            "The program's own ProgramData account, used only to prove",
-            "`role_admin` is the upgrade authority.",
-            "",
-            "Checked against the upgrade authority rather than a hardcoded",
-            "`const DEPLOY_AUTHORITY`, so the binary is identical across devnet and",
-            "mainnet. Anyone passing this check could already replace the whole",
-            "program via `bpf_loader_upgradeable::Upgrade`, so it grants no new",
-            "authority — it just stops anyone ELSE claiming the config.",
-            "",
-            "`Account<'info, ProgramData>` enforces `owner == BPFLoaderUpgradeable`",
-            "and the discriminant; `address =` pins it to THIS program's ProgramData",
-            "PDA, so another program's account cannot be substituted."
+            "This program's ProgramData, proving `role_admin` is the upgrade authority.",
+            "Checked at runtime rather than a hardcoded key, so one binary serves every",
+            "cluster; passing it grants nothing the upgrade authority lacks."
           ],
           "address": "ChPL9fhREtCc8WQSBkBmqd6ESjfv5JHyENwXkj2JWV8D"
         },
@@ -457,22 +439,14 @@
         {
           "name": "usdc_mint",
           "docs": [
-            "USDC mint (standard SPL).",
-            "",
-            "Must have exactly `USDC_DECIMALS` (= 6, the canonical USDC mint) decimals.",
-            "EVM resolves a runtime `usdcDecimalMultiplier` from",
-            "`IERC20Metadata.decimals()`; SVM hardcodes it and asserts at init."
+            "USDC mint (standard SPL); must have `USDC_DECIMALS` decimals."
           ]
         },
         {
           "name": "oku_m_mint",
           "docs": [
-            "Fresh keypair for the OkuM mint (Token-2022).",
-            "",
-            "Created via manual CPIs with ScaledUiAmount + MetadataPointer +",
-            "TokenMetadata extensions; the PsmConfig PDA becomes mint, freeze, and",
-            "ScaledUiAmount authority. A `Signer` because `CreateAccount` requires",
-            "the new account to sign."
+            "Fresh keypair for the OkuM mint, created in the handler (`CreateAccount`",
+            "needs the new account to sign)."
           ],
           "writable": true,
           "signer": true
@@ -480,7 +454,7 @@
         {
           "name": "vault_usdc",
           "docs": [
-            "PSM's USDC vault"
+            "PSM's USDC vault (ATA of `config`)."
           ],
           "writable": true,
           "pda": {
@@ -572,8 +546,8 @@
     {
       "name": "mint_oku_m",
       "docs": [
-        "Mint OkuM with USDC (multiplier-aware)",
-        "raw_oku_m_amount = usdc_amount * PRECISION / multiplier"
+        "Mint OkuM for USDC at the canonical multiplier:",
+        "`raw_oku_m = usdc_amount * PRECISION / multiplier`, rounded down."
       ],
       "discriminator": [
         200,
@@ -617,12 +591,8 @@
         {
           "name": "usdc_mint",
           "docs": [
-            "USDC mint. Only ever passed through to `transfer_checked` as an",
-            "`AccountInfo` (`instructions/psm.rs::mint_oku_m`), never read in Rust —",
-            "`UncheckedAccount` skips the SPL `Mint` deserialization entirely, and",
-            "`transfer_checked` itself validates mint + decimals on-chain, so no",
-            "security property is lost. `address = config.usdc_mint` is the whole",
-            "check this account needs.",
+            "USDC mint. Unchecked to skip deserialization: it is only forwarded to",
+            "`transfer_checked`, which validates mint and decimals itself.",
             "",
             "forwarded as an `AccountInfo` to `transfer_checked`, which validates it."
           ]
@@ -630,42 +600,25 @@
         {
           "name": "oku_m_mint",
           "docs": [
-            "OkuM mint (Token-2022 with ScaledUiAmount extension).",
-            "`mint::authority = config` is defense-in-depth: even if someone attempted",
-            "an out-of-band mint-authority rotation (which requires a CPI signed by",
-            "the current authority = config PDA, so it cannot happen without the",
-            "program's consent), this constraint would catch it at deserialization."
+            "OkuM mint (Token-2022). `mint::authority = config` is defense in depth."
           ],
           "writable": true
         },
         {
           "name": "user_usdc_ata",
           "docs": [
-            "User's USDC account. `token::` rather than `associated_token::`:",
-            "the latter also derives the canonical ATA address",
-            "(`find_program_address`, ~1.5k CU on SBF) purely to assert the passed",
-            "account matches it. That derivation buys nothing here — this account",
-            "is never created (no `init_if_needed`) and is only ever forwarded as",
-            "an `AccountInfo` to `transfer_checked`, which validates mint and",
-            "decimals itself. `token::mint`/`token::authority` keep the economic",
-            "property (right mint, right owner) a non-canonical token account the",
-            "user happens to also own is not a protocol concern, just a UX",
-            "convention — without paying for the derivation.",
-            "",
-            "Kept as `Account<'info, TokenAccount>` rather than `UncheckedAccount`",
-            "(unlike `usdc_mint` / `vault_usdc` below): this account is the one most",
-            "likely to be wrong on a client's first attempt (wrong account,",
-            "insufficient balance), and Anchor's deserialization error names it",
-            "directly instead of surfacing as a generic failure from `transfer_checked`."
+            "User's USDC account. `token::` rather than `associated_token::` skips the",
+            "~1.5k CU ATA derivation, which buys nothing here: the account is never",
+            "created and `transfer_checked` validates it. Kept typed (not unchecked)",
+            "so a client's wrong-account error names this field."
           ],
           "writable": true
         },
         {
           "name": "user_oku_m_ata",
           "docs": [
-            "User's OkuM account. Keeps `associated_token::` (vs. `user_usdc_ata`",
-            "above) because `init_if_needed` NEEDS the canonical ATA address to",
-            "create the account at — the derivation is not avoidable here."
+            "User's OkuM account. `associated_token::` because `init_if_needed` needs",
+            "the canonical address."
           ],
           "writable": true,
           "pda": {
@@ -725,9 +678,7 @@
         {
           "name": "vault_usdc",
           "docs": [
-            "PSM's USDC vault. Same reasoning as `usdc_mint` above: only ever",
-            "forwarded as an `AccountInfo` to `transfer_checked` (as the `to:`",
-            "destination), never read in Rust.",
+            "PSM's USDC vault. Unchecked for the same reason as `usdc_mint`.",
             "",
             "forwarded as an `AccountInfo` to `transfer_checked`, which validates it."
           ],
@@ -760,8 +711,8 @@
     {
       "name": "mint_oku_m_direct",
       "docs": [
-        "Mint OkuM directly without USDC (permissioned -- `direct_minter` only).",
-        "Matches EVM `OkuM.mint(to, amount)` called by a non-PSM `OKUM_MINTER`."
+        "Mint OkuM without USDC (`direct_minter` only; fiat on-ramp). Consumes the",
+        "direct-minter allowance and respects the supply cap."
       ],
       "discriminator": [
         76,
@@ -777,8 +728,7 @@
         {
           "name": "direct_minter",
           "docs": [
-            "Operator / fiat gateway holding the `direct_minter` authority.",
-            "Also pays for any ATA initialisation."
+            "Also pays for recipient ATA creation."
           ],
           "writable": true,
           "signer": true,
@@ -812,23 +762,20 @@
         {
           "name": "oku_m_mint",
           "docs": [
-            "OkuM mint (Token-2022). `mint::authority = config` is",
-            "defense-in-depth (see rationale on `MintOkuM::oku_m_mint`)."
+            "OkuM mint (Token-2022). `mint::authority = config` is defense in depth."
           ],
           "writable": true
         },
         {
           "name": "recipient",
           "docs": [
-            "Recipient of the minted OkuM. Does NOT need to sign --",
-            "the operator mints on behalf of the user."
+            "Recipient of the minted OkuM; does not sign."
           ]
         },
         {
           "name": "recipient_oku_m_ata",
           "docs": [
-            "Recipient's OkuM token account. `init_if_needed` so the",
-            "recipient doesn't need a pre-existing ATA."
+            "Recipient's OkuM token account, created if missing."
           ],
           "writable": true,
           "pda": {
@@ -907,6 +854,10 @@
     },
     {
       "name": "pause",
+      "docs": [
+        "Pause mint, redeem, direct mint/burn and buffer moves (`pauser` only).",
+        "Freeze/thaw and rate decreases stay available."
+      ],
       "discriminator": [
         211,
         22,
@@ -954,9 +905,9 @@
     {
       "name": "redeem_oku_m",
       "docs": [
-        "Redeem OkuM for USDC (multiplier-aware, with slippage protection)",
-        "usdc_amount = raw_oku_m_amount * multiplier / PRECISION",
-        "Pass min_usdc_out = 0 to skip slippage check."
+        "Redeem OkuM for USDC from the buffer:",
+        "`usdc_amount = raw_oku_m_amount * multiplier / PRECISION`, rounded down.",
+        "Reverts with `SlippageExceeded` below `min_usdc_out` (`0` disables)."
       ],
       "discriminator": [
         85,
@@ -1005,9 +956,7 @@
         {
           "name": "oku_m_mint",
           "docs": [
-            "OkuM mint (Token-2022 with ScaledUiAmount extension).",
-            "`mint::authority = config` is defense-in-depth",
-            "(see rationale on `MintOkuM::oku_m_mint`)."
+            "OkuM mint (Token-2022). `mint::authority = config` is defense in depth."
           ],
           "writable": true
         },
@@ -1168,6 +1117,10 @@
     },
     {
       "name": "set_authority",
+      "docs": [
+        "Replace the authority for `role` (`role_admin` only). For `RoleAdmin` this",
+        "only proposes the new admin; it takes effect on `accept_role_admin`."
+      ],
       "discriminator": [
         133,
         250,
@@ -1181,9 +1134,6 @@
       "accounts": [
         {
           "name": "role_admin",
-          "docs": [
-            "Role admin - only role_admin can update authorities"
-          ],
           "signer": true,
           "relations": [
             "config"
@@ -1191,9 +1141,6 @@
         },
         {
           "name": "config",
-          "docs": [
-            "PSM config"
-          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -1233,6 +1180,10 @@
     },
     {
       "name": "set_direct_burner_allowance",
+      "docs": [
+        "Reset the `burn_oku_m_direct` allowance in raw OkuM units",
+        "(`allowance_manager` only)."
+      ],
       "discriminator": [
         62,
         173,
@@ -1284,6 +1235,10 @@
     },
     {
       "name": "set_direct_minter_allowance",
+      "docs": [
+        "Reset the `mint_oku_m_direct` allowance in raw OkuM units",
+        "(`allowance_manager` only)."
+      ],
       "discriminator": [
         145,
         198,
@@ -1335,6 +1290,10 @@
     },
     {
       "name": "set_max_supply",
+      "docs": [
+        "Set the supply cap in raw OkuM units (`cap_manager` only). Cannot be set",
+        "below current supply."
+      ],
       "discriminator": [
         16,
         207,
@@ -1379,9 +1338,7 @@
         {
           "name": "oku_m_mint",
           "docs": [
-            "OkuM mint -- read so `set_max_supply` can refuse a new cap below",
-            "the current circulating supply (would silently brick all future",
-            "mints). EVM `OkuM.setMaxSupply` parity."
+            "OkuM mint, read so `set_max_supply` can refuse a cap below current supply."
           ]
         },
         {
@@ -1398,6 +1355,9 @@
     },
     {
       "name": "set_minter_allowance",
+      "docs": [
+        "Reset the `mint_oku_m` allowance in raw OkuM units (`allowance_manager` only)."
+      ],
       "discriminator": [
         50,
         245,
@@ -1450,10 +1410,8 @@
     {
       "name": "set_next_okum_yield_rate",
       "docs": [
-        "Pre-stage the successor rate that takes over at `okum_rate_end` with NO",
-        "transaction at the boundary (REBASER only).",
-        "",
-        "EVM: `OkuMoney.setNextOkuMYieldRate(uint256,uint256)`."
+        "Stage the successor rate that takes over at the current `okum_rate_end`",
+        "with no transaction at the boundary (`rebaser` only)."
       ],
       "discriminator": [
         92,
@@ -1468,10 +1426,6 @@
       "accounts": [
         {
           "name": "rebaser",
-          "docs": [
-            "Rebaser role — the single authority over yield on both stacks.",
-            "EVM mirror: `Roles.OKUM_REBASER`."
-          ],
           "signer": true,
           "relations": [
             "config"
@@ -1515,10 +1469,9 @@
     {
       "name": "set_okum_multiplier",
       "docs": [
-        "EMERGENCY: force the multiplier to an explicit value and halt accrual",
-        "(REBASER only). The only instruction that engages the sandwich lock.",
-        "",
-        "EVM: `OkuMoney.setOkuMMultiplier(uint256)`."
+        "EMERGENCY (`rebaser` only): force the multiplier (WAD-scaled) to a strictly",
+        "higher value and halt accrual. The only instruction that engages the",
+        "same-slot yield lock."
       ],
       "discriminator": [
         89,
@@ -1580,9 +1533,9 @@
     {
       "name": "set_okum_yield_rate",
       "docs": [
-        "Set the active per-second rate and its bounded window (REBASER only).",
-        "",
-        "EVM: `OkuMoney.setOkuMYieldRate(uint256,uint256)`."
+        "Set the active per-second rate and its window (`rebaser` only). Re-anchors",
+        "the base multiplier and clears any staged successor. `end_timestamp` must",
+        "be `0` for a halt (`PRECISION`) and in the future otherwise."
       ],
       "discriminator": [
         72,
@@ -1597,10 +1550,6 @@
       "accounts": [
         {
           "name": "rebaser",
-          "docs": [
-            "Rebaser role — the single authority over yield on both stacks.",
-            "EVM mirror: `Roles.OKUM_REBASER`."
-          ],
           "signer": true,
           "relations": [
             "config"
@@ -1644,10 +1593,8 @@
     {
       "name": "set_okum_yield_rate_with_successor",
       "docs": [
-        "Set the active rate and its successor atomically (REBASER only).",
-        "This is the instruction the epoch orchestrator uses.",
-        "",
-        "EVM: `OkuMoney.setOkuMYieldRateWithSuccessor(uint256,uint256,uint256,uint256)`."
+        "Set the active rate and stage its successor atomically (`rebaser` only);",
+        "the epoch orchestrator's instruction."
       ],
       "discriminator": [
         147,
@@ -1662,10 +1609,6 @@
       "accounts": [
         {
           "name": "rebaser",
-          "docs": [
-            "Rebaser role — the single authority over yield on both stacks.",
-            "EVM mirror: `Roles.OKUM_REBASER`."
-          ],
           "signer": true,
           "relations": [
             "config"
@@ -1717,9 +1660,8 @@
     {
       "name": "sync_display_multiplier",
       "docs": [
-        "Refresh the wallet-facing ScaledUiAmount display mirror.",
-        "**Permissionless** — the written value is fully determined by on-chain",
-        "state, so the caller has no discretion. No EVM counterpart."
+        "Refresh the wallet-facing `ScaledUiAmount` mirror to the current canonical",
+        "multiplier. Permissionless: the value is fully determined on-chain."
       ],
       "discriminator": [
         130,
@@ -1735,7 +1677,7 @@
         {
           "name": "cranker",
           "docs": [
-            "Anyone. Pays the transaction fee; gains nothing else."
+            "Anyone."
           ],
           "signer": true
         },
@@ -1764,9 +1706,6 @@
         },
         {
           "name": "oku_m_mint",
-          "docs": [
-            "Mutable: the `UpdateMultiplier` CPI writes the extension."
-          ],
           "writable": true
         },
         {
@@ -1778,6 +1717,9 @@
     },
     {
       "name": "thaw_account",
+      "docs": [
+        "Thaw an OkuM token account (`unfreezer` only). Works while paused."
+      ],
       "discriminator": [
         115,
         152,
@@ -1792,7 +1734,7 @@
         {
           "name": "unfreezer",
           "docs": [
-            "Unblacklister authority - can thaw even when PSM is paused (requires deliberate review)"
+            "Works while paused."
           ],
           "signer": true,
           "relations": [
@@ -1843,6 +1785,9 @@
     },
     {
       "name": "unpause",
+      "docs": [
+        "Resume operation (`unpauser` only)."
+      ],
       "discriminator": [
         169,
         144,
@@ -1890,11 +1835,9 @@
     {
       "name": "update_token_metadata",
       "docs": [
-        "Set the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol` in",
-        "place (`role_admin` only) to the canonical OkuM (\"OkuMoney\") identity.",
-        "This is the true on-chain token identity shown by wallets and",
-        "explorers; the \"$1-pegged usdOku\" figure is a separate ScaledUiAmount",
-        "display value and is unaffected."
+        "Reset the mint's Token-2022 name/symbol to the canonical OkuM identity",
+        "(`role_admin` only). The \"usdOku\" dollar view is the display multiplier",
+        "and is unaffected."
       ],
       "discriminator": [
         243,
@@ -1909,9 +1852,6 @@
       "accounts": [
         {
           "name": "role_admin",
-          "docs": [
-            "Role admin — only `role_admin` may rename the token."
-          ],
           "signer": true,
           "relations": [
             "config"
@@ -1919,10 +1859,6 @@
         },
         {
           "name": "config",
-          "docs": [
-            "PSM config PDA. Holds the Token-2022 metadata `update_authority`",
-            "for the mint and CPI-signs the `update_field` calls."
-          ],
           "pda": {
             "seeds": [
               {
@@ -1946,9 +1882,8 @@
         {
           "name": "oku_m_mint",
           "docs": [
-            "OkuM mint (Token-2022). The metadata is stored on the mint itself",
-            "(metadata-pointer points to self), so this is the `mut` metadata",
-            "account passed to `update_field`."
+            "OkuM mint (Token-2022); also the metadata account, since the pointer",
+            "targets the mint itself."
           ],
           "writable": true
         },
@@ -1961,6 +1896,10 @@
     },
     {
       "name": "withdraw_buffer",
+      "docs": [
+        "Remove USDC from the buffer (`buffer_withdrawer` only). Blocked while",
+        "paused and in the slot of a multiplier override."
+      ],
       "discriminator": [
         90,
         131,
@@ -2481,7 +2420,7 @@
     },
     {
       "code": 6021,
-      "name": "MultiplierAboveMax",
+      "name": "MultiplierTooHigh",
       "msg": "Proposed multiplier exceeds MAX_MULTIPLIER ceiling"
     },
     {
@@ -2521,11 +2460,6 @@
     },
     {
       "code": 6029,
-      "name": "ZeroOutput",
-      "msg": "Redeem output is zero"
-    },
-    {
-      "code": 6030,
       "name": "SlippageExceeded",
       "msg": "Redeem output is below min_usdc_out"
     }
@@ -2534,9 +2468,7 @@
     {
       "name": "AuthorityRole",
       "docs": [
-        "Authority roles that can be updated via set_authority.",
-        "",
-        "These roles govern PSM-specific operations."
+        "Roles settable via `set_authority`."
       ],
       "type": {
         "kind": "enum",
@@ -2583,13 +2515,8 @@
     {
       "name": "AuthorityUpdatedEvent",
       "docs": [
-        "Emitted when a PSM authority role is updated.",
-        "",
-        "For `RoleAdmin` rotations this fires twice: once at proposal time",
-        "(`new_authority` = the *pending* admin, surfaced via",
-        "`RoleAdminTransferProposed` for indexers that want to distinguish the",
-        "two phases) and a second time on acceptance (`old_authority` = previous",
-        "admin, `new_authority` = newly accepted admin)."
+        "Emitted when a role is updated. A `RoleAdmin` rotation fires it twice:",
+        "at proposal (`new_authority` = pending admin) and at acceptance."
       ],
       "type": {
         "kind": "struct",
@@ -2616,31 +2543,24 @@
     {
       "name": "BufferDepositEvent",
       "docs": [
-        "Emitted when USDC is deposited into buffer.",
-        "EVM equivalent: `BufferDeposited(address indexed depositor, uint256 amount, uint256 newBufferBalance)`"
+        "Emitted on a buffer deposit. EVM: `BufferDeposited`."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "orchestrator",
-            "docs": [
-              "Depositor (orchestrator)"
-            ],
             "type": "pubkey"
           },
           {
             "name": "amount",
             "docs": [
-              "Amount deposited (6 decimals)"
+              "USDC deposited (6 decimals)"
             ],
             "type": "u64"
           },
           {
             "name": "new_buffer_balance",
-            "docs": [
-              "New buffer balance after deposit"
-            ],
             "type": "u64"
           }
         ]
@@ -2649,31 +2569,24 @@
     {
       "name": "BufferWithdrawEvent",
       "docs": [
-        "Emitted when USDC is withdrawn from buffer.",
-        "EVM equivalent: `BufferWithdrawn(address indexed to, uint256 amount, uint256 newBufferBalance)`"
+        "Emitted on a buffer withdrawal. EVM: `BufferWithdrawn`."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "actor",
-            "docs": [
-              "Withdrawer (buffer_withdrawer role)"
-            ],
             "type": "pubkey"
           },
           {
             "name": "amount",
             "docs": [
-              "Amount withdrawn (6 decimals)"
+              "USDC withdrawn (6 decimals)"
             ],
             "type": "u64"
           },
           {
             "name": "new_buffer_balance",
-            "docs": [
-              "New buffer balance after withdrawal"
-            ],
             "type": "u64"
           }
         ]
@@ -2682,46 +2595,32 @@
     {
       "name": "DirectBurnEvent",
       "docs": [
-        "Emitted when OkuM is burned via the permissioned direct-burn path",
-        "(no USDC payout). EVM equivalent: the Transfer-to-zero event from",
-        "`OkuM.burn(amount)` called by a non-PSM burner."
+        "Emitted by `burn_oku_m_direct` (no USDC payout). EVM: ERC-20 `Transfer` to the zero address."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "direct_burner",
-            "docs": [
-              "Operator who initiated the burn"
-            ],
             "type": "pubkey"
           },
           {
             "name": "raw_oku_m_amount",
             "docs": [
-              "OkuM raw amount burned (6 decimals)"
+              "OkuM burned (6 decimals)"
             ],
             "type": "u64"
           },
           {
             "name": "multiplier",
-            "docs": [
-              "Canonical OkuM multiplier at time of burn, WAD-scaled (1e18 = $1.00)."
-            ],
             "type": "u128"
           },
           {
             "name": "dollar_value",
-            "docs": [
-              "Dollar value of the burned amount"
-            ],
             "type": "u64"
           },
           {
             "name": "new_total_supply",
-            "docs": [
-              "OkuM supply AFTER the burn completed"
-            ],
             "type": "u64"
           }
         ]
@@ -2730,17 +2629,13 @@
     {
       "name": "DirectBurnerAllowanceUpdatedEvent",
       "docs": [
-        "Emitted when direct-burner allowance is updated.",
-        "EVM equivalent: allowance management for the burner address."
+        "Emitted by `set_direct_burner_allowance`. No EVM counterpart."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "actor",
-            "docs": [
-              "Caller of the update (`allowance_manager` authority)."
-            ],
             "type": "pubkey"
           },
           {
@@ -2757,53 +2652,36 @@
     {
       "name": "DirectMintEvent",
       "docs": [
-        "Emitted when OkuM is minted via the permissioned direct-mint path",
-        "(no USDC required). EVM equivalent: the Transfer event from",
-        "`OkuM.mint(to, amount)` called by a non-PSM minter."
+        "Emitted by `mint_oku_m_direct` (no USDC). EVM: ERC-20 `Transfer` from the zero address."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "direct_minter",
-            "docs": [
-              "Operator who initiated the mint"
-            ],
             "type": "pubkey"
           },
           {
             "name": "recipient",
-            "docs": [
-              "Recipient of the minted OkuM"
-            ],
             "type": "pubkey"
           },
           {
             "name": "raw_oku_m_amount",
             "docs": [
-              "OkuM raw amount minted (6 decimals)"
+              "OkuM minted (6 decimals)"
             ],
             "type": "u64"
           },
           {
             "name": "multiplier",
-            "docs": [
-              "Canonical OkuM multiplier at time of mint, WAD-scaled (1e18 = $1.00)."
-            ],
             "type": "u128"
           },
           {
             "name": "dollar_value",
-            "docs": [
-              "Dollar value of the minted amount"
-            ],
             "type": "u64"
           },
           {
             "name": "new_total_supply",
-            "docs": [
-              "OkuM supply AFTER the mint completed"
-            ],
             "type": "u64"
           }
         ]
@@ -2812,17 +2690,13 @@
     {
       "name": "DirectMinterAllowanceUpdatedEvent",
       "docs": [
-        "Emitted when direct-minter allowance is updated.",
-        "EVM equivalent: `MinterAllowanceUpdated` (for the direct-minter address)"
+        "Emitted by `set_direct_minter_allowance`. EVM: `MinterAllowanceUpdated`."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "actor",
-            "docs": [
-              "Caller of the update (`allowance_manager` authority)."
-            ],
             "type": "pubkey"
           },
           {
@@ -2839,10 +2713,7 @@
     {
       "name": "DisplayMultiplierSynced",
       "docs": [
-        "Emitted when the wallet-facing display mirror is refreshed.",
-        "",
-        "Purely informational — no economic meaning. Useful for monitoring how far",
-        "the display has drifted from canonical and whether the crank is alive."
+        "Emitted when the wallet display mirror is refreshed (informational only)."
       ],
       "type": {
         "kind": "struct",
@@ -2850,8 +2721,7 @@
           {
             "name": "multiplier",
             "docs": [
-              "Canonical multiplier written as immediately effective. The mirror is a",
-              "pure lag — there is no pre-armed next step (see `sync_display_multiplier`)."
+              "Canonical multiplier written, effective immediately"
             ],
             "type": "u128"
           },
@@ -2865,8 +2735,7 @@
     {
       "name": "FreezeEvent",
       "docs": [
-        "Emitted when an account is frozen.",
-        "EVM equivalent: `Blacklisted(address indexed account)`"
+        "Emitted by `freeze_account`. EVM: `Blacklisted`."
       ],
       "type": {
         "kind": "struct",
@@ -2885,9 +2754,7 @@
     {
       "name": "InitializeEvent",
       "docs": [
-        "Emitted when PSM is initialized.",
-        "EVM equivalent: the `Initialized(uint64 version)` event from OZ's `Initializable`",
-        "(LitePSM is upgradeable; there is no Solidity constructor event)."
+        "Emitted by `initialize`. EVM: OZ `Initialized(uint64)`."
       ],
       "type": {
         "kind": "struct",
@@ -2914,22 +2781,24 @@
     {
       "name": "InitializeParams",
       "docs": [
-        "Parameter bundle for [`initialize`]. A named struct keeps the IDL",
-        "self-documenting and the call site hard to scramble (every field is named,",
-        "not positional).",
-        "",
-        "The pubkey fields are the granular on-chain authorities; see",
-        "`roles::AuthorityRole` and `SVM/README.md` § \"Authority model\"."
+        "Parameter bundle for [`initialize`]. Named fields keep the call site hard to",
+        "scramble. Pubkey fields are the granular authorities (`roles::AuthorityRole`)."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "max_supply",
+            "docs": [
+              "Supply cap in raw OkuM units (6 decimals)."
+            ],
             "type": "u64"
           },
           {
             "name": "minter_allowance",
+            "docs": [
+              "Initial `mint_oku_m` allowance in raw OkuM units (6 decimals)."
+            ],
             "type": "u64"
           },
           {
@@ -2970,6 +2839,9 @@
           },
           {
             "name": "oku_m_uri",
+            "docs": [
+              "Token-2022 metadata URI for the OkuM mint."
+            ],
             "type": "string"
           }
         ]
@@ -2978,17 +2850,13 @@
     {
       "name": "MaxSupplyUpdatedEvent",
       "docs": [
-        "Emitted when max supply is updated.",
-        "EVM equivalent: `MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply)`"
+        "Emitted by `set_max_supply`. EVM: `MaxSupplyUpdated`."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "actor",
-            "docs": [
-              "Caller of the update (`cap_manager` authority)."
-            ],
             "type": "pubkey"
           },
           {
@@ -3005,17 +2873,13 @@
     {
       "name": "MintEvent",
       "docs": [
-        "Emitted when OkuM is minted via PSM.",
-        "EVM equivalent: `MintNote(address indexed user, uint256 usdcAmount, uint256 rawOkuMAmount, uint256 multiplier)`"
+        "Emitted on a USDC-backed mint. EVM: `OkuMMinted`."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "user",
-            "docs": [
-              "User who minted"
-            ],
             "type": "pubkey"
           },
           {
@@ -3028,30 +2892,26 @@
           {
             "name": "raw_oku_m_amount",
             "docs": [
-              "OkuM raw amount minted (6 decimals)"
+              "OkuM minted (6 decimals)"
             ],
             "type": "u64"
           },
           {
             "name": "dollar_value",
             "docs": [
-              "Dollar value of the minted amount (raw_oku_m_amount * multiplier / PRECISION)"
+              "`raw_oku_m_amount * multiplier / PRECISION`"
             ],
             "type": "u64"
           },
           {
             "name": "multiplier",
             "docs": [
-              "Canonical OkuM multiplier at time of mint, WAD-scaled (1e18 = $1.00).",
-              "Computed from the rate schedule, NOT read from the display mirror."
+              "Canonical multiplier from the rate schedule (not the display mirror)"
             ],
             "type": "u128"
           },
           {
             "name": "new_total_supply",
-            "docs": [
-              "OkuM supply after the mint completed."
-            ],
             "type": "u64"
           }
         ]
@@ -3060,17 +2920,13 @@
     {
       "name": "MinterAllowanceUpdatedEvent",
       "docs": [
-        "Emitted when minter allowance is updated.",
-        "EVM equivalent: `MinterAllowanceUpdated(address indexed minter, uint256 oldAllowance, uint256 newAllowance)`"
+        "Emitted by `set_minter_allowance`. EVM: `MinterAllowanceUpdated`."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "actor",
-            "docs": [
-              "Caller of the update (`allowance_manager` authority)."
-            ],
             "type": "pubkey"
           },
           {
@@ -3087,22 +2943,14 @@
     {
       "name": "MultiplierUpdated",
       "docs": [
-        "Emitted by the EMERGENCY multiplier override only.",
-        "",
-        "Under streaming accrual this is a rare, incident-response event, not a",
-        "routine yield mechanism. Its presence in the log means an operator forced",
-        "a discrete jump and halted the schedule.",
-        "",
-        "EVM equivalent: `MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`"
+        "Emitted by the emergency multiplier override only (a forced jump that",
+        "halts the schedule). EVM: `OkuMMultiplierUpdated`."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "old_multiplier",
-            "docs": [
-              "WAD-scaled (1e18)."
-            ],
             "type": "u128"
           },
           {
@@ -3111,9 +2959,6 @@
           },
           {
             "name": "total_supply",
-            "docs": [
-              "Total OkuM supply at time of update"
-            ],
             "type": "u64"
           },
           {
@@ -3126,8 +2971,7 @@
     {
       "name": "PauseEvent",
       "docs": [
-        "Emitted when PSM is paused.",
-        "EVM equivalent: `Paused(address account)`"
+        "Emitted by `pause`. EVM: OZ `Paused`."
       ],
       "type": {
         "kind": "struct",
@@ -3142,15 +2986,8 @@
     {
       "name": "PendingRateCancelled",
       "docs": [
-        "Emitted when an armed successor is discarded or replaced before it ever",
-        "activated.",
-        "",
-        "Without this, a chain that had a successor staged and then had it silently",
-        "dropped would be indistinguishable — from the event log alone — from a chain",
-        "that still has one armed. Since the handover itself emits nothing (it needs",
-        "no transaction), the arm/cancel pair is the whole audit trail.",
-        "",
-        "EVM equivalent: `PendingRateCancelled`."
+        "Emitted when an armed successor is discarded or replaced before activating.",
+        "No EVM event of this name (EVM emits `UIMultiplierUpdateCancelled`)."
       ],
       "type": {
         "kind": "struct",
@@ -3173,13 +3010,9 @@
     {
       "name": "PendingYieldRateUpdated",
       "docs": [
-        "Emitted when the PRE-STAGED successor rate changes.",
-        "",
-        "The successor activates at `rate_end` with no transaction, so this event is",
-        "the only on-chain record of the handover being armed. Cross-chain",
-        "monitoring compares these across deployments.",
-        "",
-        "EVM equivalent: `NextOkuMYieldRateSet(newRate, rateEnd, pendingEndTimestamp)`."
+        "Emitted when the pre-staged successor rate changes. The handover itself",
+        "emits nothing, so this is the record of it being armed.",
+        "EVM: `NextOkuMYieldRateSet`."
       ],
       "type": {
         "kind": "struct",
@@ -3195,15 +3028,14 @@
           {
             "name": "rate_end",
             "docs": [
-              "The ACTIVE window's expiry — i.e. exactly when this successor takes",
-              "over."
+              "Active window expiry, i.e. when the successor takes over"
             ],
             "type": "i64"
           },
           {
             "name": "pending_rate_end",
             "docs": [
-              "Absolute expiry of the successor itself, bounding the overhang."
+              "The successor's own expiry"
             ],
             "type": "i64"
           },
@@ -3217,105 +3049,96 @@
     {
       "name": "PsmConfig",
       "docs": [
-        "PSM configuration PDA.",
-        "",
-        "Seeds: `[\"psm_config\"]`. The single program-wide config account: granular",
-        "authorities, token references, limits, and the rate schedule."
+        "PSM configuration PDA, seeds `[\"psm_config\"]`: authorities, token",
+        "references, limits and the rate schedule."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "bump",
-            "docs": [
-              "PDA bump seed"
-            ],
             "type": "u8"
           },
           {
             "name": "role_admin",
             "docs": [
-              "Meta role: grant/revoke roles (cold multisig)"
+              "Grants/revokes all roles"
             ],
             "type": "pubkey"
           },
           {
             "name": "pauser",
             "docs": [
-              "Warm Multisig - pause only"
+              "Pause only"
             ],
             "type": "pubkey"
           },
           {
             "name": "unpauser",
             "docs": [
-              "Cold Multisig - unpause only"
+              "Unpause only"
             ],
             "type": "pubkey"
           },
           {
             "name": "freezer",
             "docs": [
-              "Warm Multisig - freeze accounts"
+              "Freeze accounts"
             ],
             "type": "pubkey"
           },
           {
             "name": "unfreezer",
             "docs": [
-              "Cold Multisig - thaw accounts (requires deliberate review)"
+              "Thaw accounts"
             ],
             "type": "pubkey"
           },
           {
             "name": "buffer_depositor",
             "docs": [
-              "Orchestrator - deposit USDC buffer"
+              "Deposit USDC buffer"
             ],
             "type": "pubkey"
           },
           {
             "name": "buffer_withdrawer",
             "docs": [
-              "Cold Multisig - withdraw buffer"
+              "Withdraw USDC buffer"
             ],
             "type": "pubkey"
           },
           {
             "name": "cap_manager",
             "docs": [
-              "Cold Multisig - set max supply"
+              "Set max supply"
             ],
             "type": "pubkey"
           },
           {
             "name": "allowance_manager",
             "docs": [
-              "Cold Multisig - reset minter / direct-minter / direct-burner allowances"
+              "Reset minter / direct-minter / direct-burner allowances"
             ],
             "type": "pubkey"
           },
           {
             "name": "rebaser",
             "docs": [
-              "Orchestrator - update multiplier on the OkuM mint"
+              "Sets the rate schedule and emergency multiplier override (display",
+              "sync is permissionless)"
             ],
             "type": "pubkey"
           },
           {
             "name": "usdc_mint",
-            "docs": [
-              "USDC mint address"
-            ],
             "type": "pubkey"
           },
           {
             "name": "oku_m_mint",
             "docs": [
-              "OkuM mint address (Token-2022 with ScaledUiAmount extension).",
-              "The multiplier for USDC ↔ OkuM conversion is computed from this",
-              "account's rate-schedule fields, never read from the mint; the",
-              "extension is a write-only display mirror."
+              "Token-2022 mint with `ScaledUiAmount`; that extension is a write-only",
+              "display mirror, never read for pricing"
             ],
             "type": "pubkey"
           },
@@ -3329,54 +3152,42 @@
           {
             "name": "max_supply",
             "docs": [
-              "Maximum OkuM supply cap (in raw token units)"
+              "Supply cap in raw OkuM units (6 decimals)"
             ],
             "type": "u64"
           },
           {
             "name": "minter_allowance",
             "docs": [
-              "Mint allowance remaining (configurable cap on freshly minted OkuM",
-              "between admin resets, mirroring the EVM `minterAllowance` pattern)."
+              "Remaining mint allowance (6 decimals), reset by `allowance_manager`"
             ],
             "type": "u64"
           },
           {
             "name": "is_paused",
-            "docs": [
-              "Whether the PSM is paused"
-            ],
             "type": "bool"
           },
           {
             "name": "last_yield_distribution_slot",
             "docs": [
-              "Solana slot of the last EMERGENCY multiplier override",
-              "(`set_okum_multiplier`), for sandwich prevention. PSM operations are",
-              "blocked in the same slot.",
-              "",
-              "The multiplier advances continuously, so there is no discrete jump to",
-              "sandwich; this fires ONLY on the explicit override path and is NOT",
-              "stamped by the routine display sync. Mirrors EVM's",
-              "`OverrideBlockGuard`, which keys on",
-              "`OkuMoney.lastYieldDistributionBlock` — written only by",
-              "`setOkuMMultiplier`."
+              "Slot of the last emergency override (`set_okum_multiplier`); user",
+              "operations are blocked in that slot. Not stamped by routine display",
+              "sync. Name kept for IDL stability."
             ],
             "type": "u64"
           },
           {
             "name": "okum_base_multiplier",
             "docs": [
-              "Multiplier snapshot taken at `okum_last_accrual_time`, WAD-scaled.",
-              "Starts at `PRECISION`. Re-snapshotted on every schedule write so",
-              "accrual is continuous across the write."
+              "Multiplier snapshot at `okum_last_accrual_time`, WAD-scaled. Starts at",
+              "`PRECISION`; re-snapshotted on every schedule write."
             ],
             "type": "u128"
           },
           {
             "name": "okum_rate_per_second",
             "docs": [
-              "Active per-second rate, WAD-scaled. `PRECISION` means \"no yield\"."
+              "Active per-second rate, WAD-scaled. `PRECISION` means no yield."
             ],
             "type": "u64"
           },
@@ -3390,102 +3201,75 @@
           {
             "name": "okum_rate_end",
             "docs": [
-              "Timestamp `okum_rate_per_second` expires. `0` ONLY when halted.",
-              "",
-              "Every yielding rate carries a bounded window so that an unattended",
-              "schedule HALTS (safe, recoverable, monotonic) rather than compounding",
-              "forever, and so a rate can never end at a transaction-dependent,",
-              "per-chain moment."
+              "Expiry of `okum_rate_per_second`. `0` only when halted; every yielding",
+              "rate has a bounded window so an unattended schedule halts."
             ],
             "type": "i64"
           },
           {
             "name": "okum_pending_rate_per_second",
             "docs": [
-              "Pre-staged successor rate. Activates at `okum_rate_end` with NO",
-              "transaction — which is what keeps multi-chain epoch handovers",
-              "simultaneous to the second even when the staging transactions land",
-              "days apart. `PRECISION` means \"none armed\"."
+              "Pre-staged successor rate, active from `okum_rate_end` with no",
+              "transaction. `PRECISION` means none armed."
             ],
             "type": "u64"
           },
           {
             "name": "okum_pending_rate_end",
             "docs": [
-              "The successor's own expiry, bounding the overhang. `0` = none armed."
+              "Successor's own expiry. `0` = none armed."
             ],
             "type": "i64"
           },
           {
             "name": "last_display_sync_ts",
             "docs": [
-              "Unix timestamp of the last `sync_display_multiplier`.",
-              "",
-              "Observability only: it tells an operator (and",
-              "`scripts/admin/sync-display.ts`) how stale the display mirror is.",
-              "Nothing on-chain reads it, so it has no influence on pricing."
+              "Unix time of the last `sync_display_multiplier`. Observability only."
             ],
             "type": "i64"
           },
           {
             "name": "pending_role_admin",
             "docs": [
-              "Pending `role_admin` rotation target — two-step admin transfer",
-              "(OpenZeppelin `Ownable2Step`). `set_authority(RoleAdmin, new_admin)`",
-              "writes here only; the rotation takes effect when `new_admin` signs",
-              "`accept_role_admin`, which moves the value into `role_admin` and clears",
-              "this slot. Protects against a typo or stale key on the proposing side",
-              "locking out the meta-role.",
-              "",
-              "`Pubkey::default()` means \"no pending rotation\"."
+              "Pending `role_admin` target of the two-step rotation (set by",
+              "`set_authority(RoleAdmin, ..)`, committed by `accept_role_admin`).",
+              "`Pubkey::default()` = no pending rotation."
             ],
             "type": "pubkey"
           },
           {
             "name": "direct_minter",
             "docs": [
-              "Operator / fiat gateway — can mint OkuM directly without USDC.",
-              "`Pubkey::default()` means \"not configured / disabled\"."
+              "`Pubkey::default()` = disabled"
             ],
             "type": "pubkey"
           },
           {
             "name": "direct_minter_allowance",
             "docs": [
-              "Per-direct-minter allowance (separate from the USDC-backed",
-              "`minter_allowance`). Decremented on each direct mint; reset by",
-              "`allowance_manager` via `set_direct_minter_allowance`."
+              "Direct-mint allowance (6 decimals), separate from `minter_allowance`"
             ],
             "type": "u64"
           },
           {
             "name": "direct_burner",
             "docs": [
-              "Operator / bridge backend — can burn OkuM directly without",
-              "triggering a USDC redemption.",
-              "`Pubkey::default()` means \"not configured / disabled\"."
+              "`Pubkey::default()` = disabled"
             ],
             "type": "pubkey"
           },
           {
             "name": "direct_burner_allowance",
             "docs": [
-              "Per-direct-burner allowance. Decremented on each direct burn;",
-              "reset by `allowance_manager` via `set_direct_burner_allowance`."
+              "Direct-burn allowance (6 decimals)"
             ],
             "type": "u64"
           },
           {
             "name": "reserved",
             "docs": [
-              "Space for future fields, appended at the tail.",
-              "",
-              "The account is a singleton PDA and the program has no `realloc`",
-              "instruction, so without this any new field requires closing and",
-              "re-initialising the config — losing every role assignment and the",
-              "accrual anchor. 128 bytes covers 4 more pubkeys or 16 more u64s at a",
-              "rent cost of ~0.0009 SOL. Consume from the FRONT when adding a field",
-              "and shrink the array to match, keeping `LEN` constant."
+              "Reserved tail for future fields; consume from the front and shrink the",
+              "array so `LEN` stays constant (there is no `realloc` instruction)."
             ],
             "type": {
               "array": [
@@ -3500,53 +3284,42 @@
     {
       "name": "RedeemEvent",
       "docs": [
-        "Emitted when OkuM is redeemed for USDC (instant redemption).",
-        "EVM equivalent: `RedeemNote(address indexed user, uint256 rawOkuMIn, uint256 usdcOut, uint256 multiplier)`"
+        "Emitted on redemption. EVM: `OkuMRedeemed`."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "user",
-            "docs": [
-              "User who redeemed"
-            ],
             "type": "pubkey"
           },
           {
             "name": "raw_oku_m_amount",
             "docs": [
-              "OkuM raw amount burned (6 decimals)"
+              "OkuM burned (6 decimals)"
             ],
             "type": "u64"
           },
           {
             "name": "usdc_amount",
             "docs": [
-              "USDC received (6 decimals)"
+              "USDC paid out (6 decimals)"
             ],
             "type": "u64"
           },
           {
             "name": "dollar_value",
-            "docs": [
-              "Dollar value of the redeemed amount"
-            ],
             "type": "u64"
           },
           {
             "name": "multiplier",
             "docs": [
-              "Canonical OkuM multiplier at time of redeem, WAD-scaled (1e18 = $1.00).",
-              "Computed from the rate schedule, NOT read from the display mirror."
+              "Canonical multiplier from the rate schedule (not the display mirror)"
             ],
             "type": "u128"
           },
           {
             "name": "new_total_supply",
-            "docs": [
-              "OkuM supply after the burn completed."
-            ],
             "type": "u64"
           }
         ]
@@ -3555,8 +3328,7 @@
     {
       "name": "RoleAdminTransferAcceptedEvent",
       "docs": [
-        "Emitted when `accept_role_admin` completes a previously-proposed",
-        "two-step transfer."
+        "Emitted by `accept_role_admin`."
       ],
       "type": {
         "kind": "struct",
@@ -3575,7 +3347,7 @@
     {
       "name": "RoleAdminTransferCancelledEvent",
       "docs": [
-        "Emitted when `cancel_role_admin_transfer` clears an in-flight proposal."
+        "Emitted by `cancel_role_admin_transfer`."
       ],
       "type": {
         "kind": "struct",
@@ -3594,9 +3366,8 @@
     {
       "name": "RoleAdminTransferProposedEvent",
       "docs": [
-        "Emitted when `set_authority(RoleAdmin, ...)` proposes a two-step",
-        "transfer of the meta-role. The rotation has NOT taken effect — the new",
-        "admin must still sign `accept_role_admin` to commit it."
+        "Emitted when `set_authority(RoleAdmin, ..)` proposes a transfer; it takes",
+        "effect only when the new admin calls `accept_role_admin`."
       ],
       "type": {
         "kind": "struct",
@@ -3615,8 +3386,7 @@
     {
       "name": "ThawEvent",
       "docs": [
-        "Emitted when an account is unfrozen.",
-        "EVM equivalent: `Unblacklisted(address indexed account)`"
+        "Emitted by `thaw_account`. EVM: `Unblacklisted`."
       ],
       "type": {
         "kind": "struct",
@@ -3635,11 +3405,7 @@
     {
       "name": "TokenMetadataUpdatedEvent",
       "docs": [
-        "Emitted when `update_token_metadata` rewrites the OkuM mint's",
-        "Token-2022 `TokenMetadata` `name`/`symbol` in place. This is the",
-        "on-chain identity shown by wallets and explorers (the true OkuM",
-        "token); the \"$1-pegged usdOku\" figure is a separate ScaledUiAmount",
-        "display value and is unaffected."
+        "Emitted by `update_token_metadata`."
       ],
       "type": {
         "kind": "struct",
@@ -3662,8 +3428,7 @@
     {
       "name": "UnpauseEvent",
       "docs": [
-        "Emitted when PSM is unpaused.",
-        "EVM equivalent: `Unpaused(address account)`"
+        "Emitted by `unpause`. EVM: OZ `Unpaused`."
       ],
       "type": {
         "kind": "struct",
@@ -3678,13 +3443,7 @@
     {
       "name": "YieldRateUpdated",
       "docs": [
-        "Emitted when the ACTIVE per-second rate or its window changes.",
-        "",
-        "There is no dollar-denominated distribution event because there is no",
-        "dollar-denominated instruction — the operator publishes a rate, and the",
-        "yield follows from it continuously.",
-        "",
-        "EVM equivalent: `OkuMYieldRateUpdated`."
+        "Emitted when the active rate or its window changes. EVM: `OkuMYieldRateUpdated`."
       ],
       "type": {
         "kind": "struct",
@@ -3692,29 +3451,29 @@
           {
             "name": "old_rate",
             "docs": [
-              "Previous active per-second rate, WAD-scaled."
+              "Previous per-second rate, WAD-scaled"
             ],
             "type": "u64"
           },
           {
             "name": "new_rate",
             "docs": [
-              "New active per-second rate, WAD-scaled. `PRECISION` means halted."
+              "New per-second rate, WAD-scaled; `PRECISION` means halted"
             ],
             "type": "u64"
           },
           {
             "name": "rate_end",
             "docs": [
-              "Absolute expiry of the new rate. `0` when halting."
+              "Absolute expiry of the new rate; `0` when halting"
             ],
             "type": "i64"
           },
           {
             "name": "base_multiplier",
             "docs": [
-              "The multiplier snapshot taken at this write, so indexers can",
-              "reconstruct `m(t)` for any `t` without replaying from genesis."
+              "Multiplier snapshot taken at this write, so indexers can reconstruct",
+              "`m(t)` without replaying history"
             ],
             "type": "u128"
           },

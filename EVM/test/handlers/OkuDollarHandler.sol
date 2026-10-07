@@ -209,7 +209,7 @@ contract OkuDollarHandler is Test {
     //
     // Without time advancement, the multiplier stays at PRECISION no matter what
     // rate is set, because `rpow(rate, 0, PRECISION) == PRECISION`. This masked the
-    // LitePSM `_redeemUsdOku` rounding-asymmetry bug from all invariant runs.
+    // LitePSM `redeemUsdOku` rounding-asymmetry bug from all invariant runs.
     // Advancing the clock here lets the multiplier actually compound, exercising the
     // full state space the production contracts experience.
     //

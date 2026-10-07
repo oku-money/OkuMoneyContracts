@@ -3,6 +3,7 @@
  *
  * Calls `LitePSM.depositBuffer(amount)`, which pulls USDC from the caller's
  * wallet into the PSM's reserve buffer so instant redemptions can proceed.
+ * Reverts while the PSM is paused or in an override block.
  *
  * Usage (env vars — NOT `--flags`; see scripts/utils/cli.ts for why
  * `hardhat run` rejects custom flags with HH305/HH310):
@@ -68,7 +69,7 @@ export async function runDepositBuffer(
   await approveTx.wait(1);
   logger.success(`Approved ${Number(amount) / 1e6} USDC to PSM`);
 
-  const depositTx = await (psm as any).depositBuffer(amount, false, 0, 0, 0);
+  const depositTx = await (psm as any).depositBuffer(amount);
   const receipt = await depositTx.wait(1);
   logger.success(`depositBuffer tx: ${receipt.hash}`);
 

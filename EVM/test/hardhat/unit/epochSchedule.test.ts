@@ -147,9 +147,8 @@ describe("scripts/utils/epochSchedule", () => {
             // Stage 4 hours before baseEndSec (a realistic lead time on a 24h
             // epoch, whose base window is 22.4h) — the base window has only
             // distributed a PORTION of its own target so far. NOTE: this lead
-            // must stay well inside the base window; the previous value here
-            // was 2 days, which is longer than the entire epoch now and would
-            // put stagingSec before epochStartSec.
+            // must stay well inside the base window, or stagingSec would precede
+            // epochStartSec.
             const stagingSec = baseEndSec(grid24h) - 4 * 3600;
             // Idealized: distributed exactly proportional to elapsed base-window time.
             const baseWindowLenSec = grid24h.epochLengthSec * (1 - grid24h.settlementFraction);

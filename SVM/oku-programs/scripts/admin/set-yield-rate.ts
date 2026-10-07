@@ -1,41 +1,26 @@
 /**
- * Publish the OkuM rate schedule (rebaser-only).
- *
- * This is the normal operator path for yield. Under streaming accrual the
- * operator does not push a multiplier or a dollar amount — it publishes a
- * per-second RATE and a bounded window, and the multiplier follows
- * continuously from elapsed time. (`set-multiplier.ts` still exists, but is an
- * emergency halt-and-reanchor override, not part of this flow.)
- *
- * Wraps three instructions:
+ * Publish the OkuM rate schedule (rebaser-only): the normal operator path for
+ * yield. The operator publishes a per-second RATE and a bounded window; the
+ * multiplier follows from elapsed time. (`set-multiplier.ts` is an emergency
+ * override, not part of this flow.)
  *
  *   --mode=active      set_okum_yield_rate(rate, end)
  *   --mode=successor   set_next_okum_yield_rate(rate, pendingEnd)
  *   --mode=atomic      set_okum_yield_rate_with_successor(rate, end, next, nextEnd)
  *
- * `atomic` is what the epoch orchestrator uses: it re-anchors the active rate
- * and arms the next epoch in a single transaction, so there is no window in
- * which one chain has the successor and another does not.
- *
- * ## Cross-chain
- *
- * The integers passed here MUST be byte-identical to those sent to every EVM
- * deployment. That is the entire basis of cross-chain multiplier agreement —
- * there is no messaging, no oracle, and no on-chain check that would catch a
- * divergence. Derive the rate once (from `--apy`, or better, from the shared
- * epoch tooling) and broadcast the same value everywhere.
+ * CROSS-CHAIN: these integers MUST be byte-identical to those sent to every
+ * EVM deployment; nothing on-chain detects divergence. `atomic` re-anchors the
+ * active rate and arms the next epoch in one tx.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/set-yield-rate.ts --mode=active --apy=0.05 --days=30
  *   NETWORK=devnet tsx scripts/admin/set-yield-rate.ts --mode=active --rate=<wad> --end=<unix>
  *   NETWORK=devnet tsx scripts/admin/set-yield-rate.ts --mode=atomic \
  *       --rate=<wad> --end=<unix> --next-rate=<wad> --next-end=<unix>
- *   --dry-run                      do not submit
- *   --yes-i-mean-it-on-mainnet     required on mainnet
+ *   --dry-run | --yes-i-mean-it-on-mainnet
  *
- * Scale: rates are WAD (1e18). `1000000000000000000` means "no yield".
- * Rates below PRECISION are rejected on-chain — the multiplier is monotonic
- * and there is no representation of a loss.
+ * Rates are WAD (1e18); `1e18` means "no yield". Rates below PRECISION are
+ * rejected on-chain (no representation of a loss).
  */
 
 import * as anchor from '@anchor-lang/core';

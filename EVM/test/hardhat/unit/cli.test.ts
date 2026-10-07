@@ -23,15 +23,8 @@ describe("scripts/utils/cli", () => {
         });
 
         it("resolves camelCase names to SNAKE_CASE env vars", () => {
-            // This previously asserted the OPPOSITE — that "usdcAmount" did NOT
-            // match USDC_AMOUNT, because a naive toUpperCase() produced
-            // "USDCAMOUNT". That wart forced callers to check both spellings
-            // by hand (the old test cited mintOkuM.ts, since deleted).
-            //
-            // It matters much more now: `hardhat run` rejects unknown --flags
-            // (HH305/HH310), so env vars are the PRIMARY interface for every
-            // operator script, and names like MINAMOUNTOUT /
-            // PENDINGENDTIMESTAMP are not a usable operator contract.
+            // `hardhat run` rejects unknown --flags (HH305/HH310), so env vars are the
+            // primary operator interface and camelCase names must map to them.
             process.argv = [...originalArgv];
             process.env.USDC_AMOUNT = "42";
             expect(parseArg("usdcAmount")).to.equal("42");
@@ -91,11 +84,8 @@ describe("scripts/utils/cli", () => {
         });
 
         it("isYesMainnet honours the YES_MAINNET env var (the only form that survives `hardhat run`)", () => {
-            // `hardhat run` rejects `--yes-mainnet` with HH305 before the
-            // script executes, so without this fallback `mainnetGuard` could
-            // never be satisfied and mainnet broadcast was impossible — not
-            // merely guarded. Both accepted values match the convention
-            // grantRoles.ts established independently.
+            // `hardhat run` rejects `--yes-mainnet` with HH305 before the script
+            // executes, so the env var is the only way to satisfy `mainnetGuard`.
             process.argv = [...originalArgv];
 
             delete process.env.YES_MAINNET;

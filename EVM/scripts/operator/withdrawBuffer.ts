@@ -2,9 +2,8 @@
  * Withdraw USDC from the LitePSM buffer (PSM_BUFFER_WITHDRAWER role required).
  *
  * Calls `LitePSM.withdrawUsdc(to, amount)`, which pulls USDC out of the PSM's
- * reserve buffer. The PSM enforces that the remaining balance covers all
- * queued redemption obligations; the call reverts with WouldStrandQueue if it
- * would leave insufficient buffer.
+ * reserve buffer. Reverts with InsufficientBuffer if the PSM holds less than
+ * `amount`, and while the PSM is paused or in an override block.
  *
  * Usage (env vars — NOT `--flags`; see scripts/utils/cli.ts for why
  * `hardhat run` rejects custom flags with HH305/HH310):

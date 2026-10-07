@@ -20,23 +20,15 @@ pub struct MintOkuM<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// USDC mint. Only ever passed through to `transfer_checked` as an
-    /// `AccountInfo` (`instructions/psm.rs::mint_oku_m`), never read in Rust —
-    /// `UncheckedAccount` skips the SPL `Mint` deserialization entirely, and
-    /// `transfer_checked` itself validates mint + decimals on-chain, so no
-    /// security property is lost. `address = config.usdc_mint` is the whole
-    /// check this account needs.
+    /// USDC mint. Unchecked to skip deserialization: it is only forwarded to
+    /// `transfer_checked`, which validates mint and decimals itself.
     ///
     /// CHECK: constrained to `config.usdc_mint`; never deserialized, only
     /// forwarded as an `AccountInfo` to `transfer_checked`, which validates it.
     #[account(address = config.usdc_mint)]
     pub usdc_mint: UncheckedAccount<'info>,
 
-    /// OkuM mint (Token-2022 with ScaledUiAmount extension).
-    /// `mint::authority = config` is defense-in-depth: even if someone attempted
-    /// an out-of-band mint-authority rotation (which requires a CPI signed by
-    /// the current authority = config PDA, so it cannot happen without the
-    /// program's consent), this constraint would catch it at deserialization.
+    /// OkuM mint (Token-2022). `mint::authority = config` is defense in depth.
     #[account(
         mut,
         address = config.oku_m_mint,
@@ -45,22 +37,10 @@ pub struct MintOkuM<'info> {
     )]
     pub oku_m_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// User's USDC account. `token::` rather than `associated_token::`:
-    /// the latter also derives the canonical ATA address
-    /// (`find_program_address`, ~1.5k CU on SBF) purely to assert the passed
-    /// account matches it. That derivation buys nothing here — this account
-    /// is never created (no `init_if_needed`) and is only ever forwarded as
-    /// an `AccountInfo` to `transfer_checked`, which validates mint and
-    /// decimals itself. `token::mint`/`token::authority` keep the economic
-    /// property (right mint, right owner) a non-canonical token account the
-    /// user happens to also own is not a protocol concern, just a UX
-    /// convention — without paying for the derivation.
-    ///
-    /// Kept as `Account<'info, TokenAccount>` rather than `UncheckedAccount`
-    /// (unlike `usdc_mint` / `vault_usdc` below): this account is the one most
-    /// likely to be wrong on a client's first attempt (wrong account,
-    /// insufficient balance), and Anchor's deserialization error names it
-    /// directly instead of surfacing as a generic failure from `transfer_checked`.
+    /// User's USDC account. `token::` rather than `associated_token::` skips the
+    /// ~1.5k CU ATA derivation, which buys nothing here: the account is never
+    /// created and `transfer_checked` validates it. Kept typed (not unchecked)
+    /// so a client's wrong-account error names this field.
     #[account(
         mut,
         token::mint = usdc_mint,
@@ -68,9 +48,8 @@ pub struct MintOkuM<'info> {
     )]
     pub user_usdc_ata: Box<Account<'info, TokenAccount>>,
 
-    /// User's OkuM account. Keeps `associated_token::` (vs. `user_usdc_ata`
-    /// above) because `init_if_needed` NEEDS the canonical ATA address to
-    /// create the account at — the derivation is not avoidable here.
+    /// User's OkuM account. `associated_token::` because `init_if_needed` needs
+    /// the canonical address.
     #[account(
         init_if_needed,
         payer = user,
@@ -80,9 +59,7 @@ pub struct MintOkuM<'info> {
     )]
     pub user_oku_m_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// PSM's USDC vault. Same reasoning as `usdc_mint` above: only ever
-    /// forwarded as an `AccountInfo` to `transfer_checked` (as the `to:`
-    /// destination), never read in Rust.
+    /// PSM's USDC vault. Unchecked for the same reason as `usdc_mint`.
     ///
     /// CHECK: constrained to `config.vault_usdc`; never deserialized, only
     /// forwarded as an `AccountInfo` to `transfer_checked`, which validates it.
@@ -113,9 +90,7 @@ pub struct RedeemOkuM<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
-    /// OkuM mint (Token-2022 with ScaledUiAmount extension).
-    /// `mint::authority = config` is defense-in-depth
-    /// (see rationale on `MintOkuM::oku_m_mint`).
+    /// OkuM mint (Token-2022). `mint::authority = config` is defense in depth.
     #[account(
         mut,
         address = config.oku_m_mint,

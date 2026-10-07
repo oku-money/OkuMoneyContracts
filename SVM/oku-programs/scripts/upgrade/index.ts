@@ -1,46 +1,21 @@
 #!/usr/bin/env tsx
 /**
- * SVM Program Upgrade Script for OkuMoney
+ * SVM program upgrade: deploys the `target/deploy/*.so` artifacts over
+ * BPFLoaderUpgradeable programs (mirrors EVM/scripts/upgrade/index.ts).
  *
- * Upgrades one or more BPFLoaderUpgradeable programs to the freshly-compiled
- * .so artifacts in `target/deploy/`. Mirrors the EVM upgrade script in
- * EVM/scripts/upgrade/index.ts — same conceptual steps, adapted for Solana:
+ * Steps: resolve IDs from `deployments/<network>.json`; verify upgrade
+ * authority; snapshot pre-state; ELF-equality short-circuit (record
+ * `<bytecode-unchanged>`); IDL account-struct diff guard; SOL balance check;
+ * deploy (skipped on `--dry-run`); verify on-chain ELF SHA-256; post-state
+ * invariant diff; append UpgradeRecord to `deployments/<network>.json::upgrades`.
  *
- *   1. Resolve program IDs from `deployments/<network>.json`.
- *   2. Verify the deployer wallet is the upgrade authority for each target.
- *   3. Snapshot pre-upgrade on-chain config PDA state.
- *   4. ELF-equality short-circuit: compare SHA-256 of local .so vs on-chain
- *      ProgramData ELF. If identical → record <bytecode-unchanged>, skip.
- *   5. IDL diff guard: compare account-struct fields against the most recent
- *      upgrade record. Any diff → warn and require confirmation (or auto-proceed
- *      when stdin is not a TTY, e.g. CI).
- *   6. SOL balance check: warn if the wallet may run out of funds mid-upload.
- *   7. Deploy (skipped when `--dry-run` is set).
- *   8. Post-upgrade ELF verification: re-read ProgramData and assert SHA-256.
- *   9. Post-upgrade state snapshot + invariant diff.
- *  10. Append UpgradeRecord to `deployments/<network>.json::upgrades`.
- *
- * Buffer-keypair persistence (auto-resume):
- *   A per-program keypair at `target/upgrade-buffers/<prog>-buffer-keypair.json`
- *   is passed as `--buffer <keypair>` to `solana program deploy`. If the process
- *   dies mid-upload the CLI will resume from the partial buffer on the next run,
- *   saving the full upload cost (~5 SOL for an 800 KB program).
+ * A per-program buffer keypair in `target/upgrade-buffers/` lets an
+ * interrupted upload resume.
  *
  * Usage:
- *
- *   # Upgrade LitePsm on devnet
- *   TARGETS=LitePsm npm run upgrade:devnet
- *
- *   # Dry run — shows plan + IDL diff without broadcasting
- *   TARGETS=LitePsm npm run upgrade:devnet -- --dry-run
- *
- *   # Force deploy even if ELF hasn't changed (useful for CI smoke-test)
- *   TARGETS=LitePsm SKIP_BYTECODE_CHECK=true npm run upgrade:devnet
- *
- * Audit trail:
- *   Each run appends an UpgradeRecord to `deployments/<network>.json::upgrades`
- *   with old/new ELF size + SHA-256, tx signature, deployer, timestamp, and a
- *   compact snapshot of account-struct fields for future IDL diff comparisons.
+ *   TARGETS=LitePsm npm run upgrade:devnet [-- --dry-run]
+ *   TARGETS=LitePsm SKIP_BYTECODE_CHECK=true npm run upgrade:devnet   (force deploy)
+ *   SKIP_IDL_CHECK=true                                               (skip IDL diff guard)
  */
 
 import * as fs from 'fs';
@@ -110,15 +85,8 @@ function formatSol(lamports: number | bigint): string {
   return (Number(lamports) / LAMPORTS_PER_SOL).toFixed(6);
 }
 
-/**
- * Map a NetworkName to the --url argument that `solana program deploy` accepts.
- * We prefer the full RPC URL (from the provider connection) over the short
- * monikers so that Helius / custom endpoints are used for the CLI too.
- * The caller always passes `provider.connection.rpcEndpoint`.
- */
+/** `--url` for `solana program deploy`: the provider's full RPC endpoint (custom endpoints honoured). */
 function solanaUrlFor(network: NetworkName, rpcEndpoint: string): string {
-  // For localnet the CLI accepts 'localhost' as a moniker; use it so the URL
-  // looks clean in logs. For everything else use the actual endpoint.
   if (network === 'localnet') return 'localhost';
   return rpcEndpoint;
 }
@@ -132,23 +100,19 @@ interface IdlSnapshot {
   accountTypes: Record<string, Array<{ name: string; type: unknown }>>;
 }
 
-/**
- * Build an IdlSnapshot from the IDL file at `target/idl/<idlFile>`.
- * Extracts account-struct field definitions (the storage-critical types).
- */
+/** Build an IdlSnapshot (account-struct fields) from `target/idl/<idlFile>`. */
 function buildIdlSnapshot(idlPath: string): IdlSnapshot | null {
   try {
     const raw = fs.readFileSync(idlPath, 'utf-8');
     const sha256 = createHash('sha256').update(raw).digest('hex');
     const idl = JSON.parse(raw);
 
-    // Account names from the `accounts` section (Anchor 1.0: just name+discriminator).
+    // Account names from the `accounts` section.
     const accountNames = new Set<string>(
       (idl.accounts ?? []).map((a: any) => a.name as string)
     );
 
-    // Anchor 1.0 stores struct definitions in `types`. Extract the ones that
-    // correspond to account structs (i.e. same name as an entry in `accounts`).
+    // Struct definitions live in `types`; keep those named in `accounts`.
     const accountTypes: Record<string, Array<{ name: string; type: unknown }>> = {};
     for (const t of idl.types ?? []) {
       if (accountNames.has(t.name) && t.type?.kind === 'struct') {
@@ -165,10 +129,7 @@ function buildIdlSnapshot(idlPath: string): IdlSnapshot | null {
   }
 }
 
-/**
- * Compare current IDL snapshot against a prior record's snapshot.
- * Returns a human-readable description of what changed, or null if nothing did.
- */
+/** Describe account-type changes between two snapshots, or null if none. */
 function describeIdlDiff(
   prior: IdlSnapshot,
   current: IdlSnapshot
@@ -353,14 +314,8 @@ async function upgradeOne(
       const postState = await reader(programs, programId);
       printStateTable(preState, postState);
 
-      // Only persist a skip record when running for real — dry-runs must not
-      // mutate the on-disk audit log (otherwise repeated dry-runs accumulate
-      // noise records that future IDL-diff comparisons would have to walk).
+      // Dry-runs must not mutate the audit log.
       if (!isDryRun()) {
-        // Populate `idlSnapshot` here too (not just on the real-upgrade path
-        // below) — otherwise this is the newest record for the program, and
-        // `getLastUpgradeRecordWithIdlSnapshot` has to walk past it to find a
-        // usable snapshot. See that function's doc comment.
         const skipRecord: UpgradeRecord = {
           program:      name,
           programId:    programId.toBase58(),
@@ -408,9 +363,7 @@ async function upgradeOne(
   // ── 6. IDL diff guard ─────────────────────────────────────────────────────
   if (process.env.SKIP_IDL_CHECK !== 'true') {
     const currentIdlSnap = buildIdlSnapshot(idlPath);
-    // Deliberately skips past `<bytecode-unchanged>` / IDL-read-failure
-    // records with no snapshot, rather than taking the chronologically-last
-    // record unconditionally — see that function's doc comment.
+    // Skips snapshot-less records (e.g. `<bytecode-unchanged>`).
     const priorRecord = getLastUpgradeRecordWithIdlSnapshot(networkName, name);
 
     if (currentIdlSnap && priorRecord?.idlSnapshot) {
@@ -434,9 +387,7 @@ async function upgradeOne(
     } else if (!priorRecord) {
       logger.info(`  No prior upgrade record with an IDL snapshot — diff skipped (first upgrade, or no snapshot has ever been recorded for this program).`);
     } else {
-      // priorRecord exists (with a snapshot) but currentIdlSnap is null —
-      // buildIdlSnapshot failed to read/parse the local IDL. This must not
-      // fall through in silence: it means the guard did NOT run this time.
+      // buildIdlSnapshot failed on the local IDL: the guard did NOT run; say so.
       logger.warning(
         `  Could not read the local IDL to compare against the prior snapshot — ` +
           `IDL diff guard did NOT run this upgrade. Check target/idl/${name}.json.`
@@ -506,12 +457,8 @@ async function upgradeOne(
   });
 
   // ── 11. Post-upgrade ELF verification ────────────────────────────────────
-  //
-  // Pass `expectedSize = localElf.size` so the on-chain hash is computed
-  // over exactly the prefix the new ELF occupies. BPFLoaderUpgradeable does
-  // NOT shrink the ProgramData account when a smaller ELF replaces a larger
-  // one — without the truncation the trailing (zeroed) bytes of the old
-  // ELF would contaminate the hash and produce a false-positive mismatch.
+  // `expectedSize` truncates the hash to the new ELF: ProgramData does not
+  // shrink when a smaller ELF replaces a larger one.
   logger.info(`  Verifying on-chain ELF after upgrade...`);
   let verifiedSha256 = localElf.sha256;
   try {
@@ -541,12 +488,8 @@ async function upgradeOne(
   const diffs = diffSnapshots(preState, postState);
   printStateTable(preState, postState);
 
-  // MUST be checked before trusting an empty `diffs` as "preserved" — see
-  // `hasUncheckedFields`'s doc comment. Without this, a post-upgrade read
-  // that fails for the SAME reason the pre-upgrade read failed (wrong PDA,
-  // wrong program ID, an RPC outage spanning both) produces an empty diff
-  // over zero real fields, and the script would print success having
-  // verified nothing.
+  // Check BEFORE trusting an empty `diffs`: a read that fails the same way
+  // pre- and post-upgrade yields an empty diff over zero real fields.
   if (hasUncheckedFields(postState)) {
     logger.error(`  Post-upgrade state read for ${name} did not return any checkable fields:`);
     printStateTable(preState, postState);

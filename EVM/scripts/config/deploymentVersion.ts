@@ -17,7 +17,7 @@
  * Per-chain variance: chain-specific constructor args (real USDC on mainnet
  * vs. MockUSDC on testnet, Chainlink feed addresses) cascade into different
  * proxy addresses on those chains. Testnets deploy MockUSDC deterministically
- * too, so `RedemptionQueue` and `LitePSM` match across every testnet that has
+ * too, so `LitePSM` matches across every testnet that has
  * the factory. Chains without the factory fall through to nonce-based CREATE
  * deploys (unique addresses per chain) — see `scripts/utils/create2Deploy.ts`.
  */
@@ -31,7 +31,7 @@
  * See `scripts/config/addresses.README.md` for the address-book split and
  * `scripts/config/epochChains.ts` for the MVP chain set.
  */
-export const DEPLOYMENT_VERSION = "v0.3";
+export const DEPLOYMENT_VERSION = "v0.4";
 
 /**
  * Canonical Arachnid CREATE2 factory. Same address on every supported chain.

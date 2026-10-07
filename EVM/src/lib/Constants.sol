@@ -26,57 +26,25 @@ library Constants {
     /// @notice Standard precision for price and multiplier calculations (1e18 = $1.00)
     uint256 public constant PRECISION = 1e18;
 
-    /// @notice Maximum yield rate: PRECISION + 1e11 ≈ 2242% APY safety cap.
-    /// @dev Bounds the per-second compounding input to {MathLib.rpow} away from the
-    ///      overflow region. Caps the PER-SECOND rate, NOT the cumulative multiplier
-    ///      reached after many seconds of compounding — use {MAX_MULTIPLIER} for that.
+    /// @notice Maximum yield rate: PRECISION + 1e11 ≈ 2242% APY.
+    /// @dev Caps the PER-SECOND rate fed to {MathLib.rpow}, not the cumulative multiplier
+    ///      (see {MAX_MULTIPLIER}).
     uint256 public constant MAX_RATE = PRECISION + 1e11;
 
     /// @notice Maximum length of a single rate window: 90 days.
-    /// @dev {MathLib.compoundFor} clamps its OUTPUT to `MAX_MULTIPLIER`, but that clamp
-    ///      runs AFTER `rpow`, so it cannot stop `rpow` overflowing internally on a huge
-    ///      `elapsed`. At `MAX_RATE`, `rpow` overflows at roughly 15 years (empirically
-    ///      472,763,099 seconds). The consequence if it fired is unrecoverable without an
-    ///      upgrade: once `okuMMultiplier()` reverts, EVERY recovery path reverts with it,
-    ///      including `setOkuMYieldRate` and the `setOkuMMultiplier` emergency override,
-    ///      because both read the current multiplier to re-anchor. 90 days keeps ~60x
-    ///      margin against that bound while comfortably exceeding any plausible epoch
-    ///      length, so a schedule never needs to span more than one window.
-    ///
-    ///      Must equal SVM's `MAX_RATE_WINDOW_SECONDS` in `oku-shared/src/constants.rs`
-    ///      or the differential harness diverges.
+    /// @dev `rpow` overflows at ~15y at MAX_RATE, and a reverting multiplier bricks every
+    ///      recovery path (all of them re-anchor off it). Mirrors SVM `MAX_RATE_WINDOW_SECONDS`.
     uint256 public constant MAX_RATE_WINDOW = 90 days;
 
-    /// @notice Absolute ceiling for any cumulative multiplier (OkuMoney's
-    ///         `okuMMultiplier` and OkuDollar's `usdMultiplier`).
-    /// @dev `1e24` = $1,000,000 of dollar value per token (`PRECISION = 1e18` is $1.00).
-    ///      A math sanity bound that keeps downstream `uint256 * uint256` multiplications
-    ///      and the rpow / mulDiv input space away from overflow — not a constraint on the
-    ///      trusted operator. Mirrors SVM's `oku-shared::constants::MAX_MULTIPLIER` (scaled
-    ///      for SVM's 1e9 precision); SVM's `lite-psm` has no OkuDollar-equivalent vault
-    ///      program, so there it governs only the OkuM-side price cap.
+    /// @notice Absolute ceiling for `okuMMultiplier` / `usdMultiplier`: 1e24 = $1,000,000.
+    /// @dev A math sanity bound keeping downstream `uint256` products away from overflow;
+    ///      mirrors oku-shared `MAX_MULTIPLIER` on SVM.
     uint256 public constant MAX_MULTIPLIER = 1e24;
 
-    /// @notice Decimal count of OkuM itself.
-    /// @dev Supplies the exponent in `10 ** (OKU_M_DECIMALS - usdcDecimals)` used by
-    ///      LitePSM and RedemptionQueue to convert USDC amounts into OkuM units. Distinct
-    ///      from {MAX_USDC_DECIMALS}, a tunable validation bound on the collateral token;
-    ///      this is a property of OkuM and cannot change without re-denominating it.
+    /// @notice Decimal count of OkuM itself; the exponent base for PSM USDC conversion.
+    /// @dev Distinct from {MAX_USDC_DECIMALS}, which bounds the collateral token.
     uint8 public constant OKU_M_DECIMALS = 18;
 
-    /// @notice Maximum supported USDC decimal count.
-    /// @dev USDC uses 6. Cannot exceed {OKU_M_DECIMALS} or the conversion exponent
-    ///      underflows; allowing up to that bound supports other stablecoin variants.
+    /// @notice Maximum supported USDC decimal count (must not exceed {OKU_M_DECIMALS}).
     uint8 public constant MAX_USDC_DECIMALS = 18;
-
-    /// @notice Absolute floor on a single redemption, in OkuM units (18 decimals).
-    /// @dev `1e12` OkuM wei ≈ $0.000001 at `okuMMultiplier == PRECISION` — the same
-    ///      floor 6-decimal collateral already gets for free from
-    ///      `usdcDecimalMultiplier == 10**(18-6) == 1e12`. LitePSM's redeem path gates
-    ///      on `max(usdcDecimalMultiplier, MIN_REDEMPTION_OKUM)` specifically because
-    ///      `usdcDecimalMultiplier` collapses to `1` (no floor at all) at 18-decimal
-    ///      collateral. A fixed constant rather than a configurable parameter: it needs
-    ///      no admin lever, no storage slot on an already-deployed UUPS proxy, and no
-    ///      SVM mirror — see {LitePSM-_redeemOkuMShared} and `TRACKER.md`.
-    uint256 public constant MIN_REDEMPTION_OKUM = 1e12;
 }

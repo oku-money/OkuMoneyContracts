@@ -1,52 +1,24 @@
 /**
- * Grant OPERATIONAL (non-governance) roles to a delegate EOA.
+ * Grant OPERATIONAL (non-governance) roles to a delegate EOA ("operate, don't own").
  *
- * Ownership vs. operation
- * ------------------------
- * This script implements "operate, don't own" delegation. It grants ONLY
- * the operational roles a delegate (e.g. a coworker's backend/vault key)
- * needs to run the app day-to-day:
- *
- *   - directMinter      mint OkuM directly (fiat on-ramp), capped by
- *                       direct_minter_allowance
- *   - directBurner      burn OkuM directly (fiat off-ramp / bridge), capped
- *                       by direct_burner_allowance
- *   - rebaser           trigger rebase operations
+ * Grants only:
+ *   - directMinter      mint OkuM directly, capped by direct_minter_allowance
+ *   - directBurner      burn OkuM directly, capped by direct_burner_allowance
+ *   - rebaser           sets the yield-rate schedule / multiplier override
  *   - bufferDepositor   deposit into the USDC buffer
  *
- * It deliberately does NOT touch the governance/safety roles:
+ * NEVER grants roleAdmin (retaining it is the deployer's claw-back power via
+ * set_authority) or the governance/safety roles (pauser, unpauser, freezer,
+ * unfreezer, capManager, allowanceManager, bufferWithdrawer). In particular,
+ * allowanceManager must not go to the party whose allowance it caps. Do not
+ * extend this script to grant them; use `set-authority.ts` for those.
  *
- *   - roleAdmin         two-step transfer, handled separately; NEVER granted
- *                       here. Retaining roleAdmin is what gives the deployer
- *                       unconditional claw-back power over every other role
- *                       (via set_authority) and is the basis of "ownership".
- *   - pauser/unpauser   circuit breaker
- *   - freezer/unfreezer compliance/blacklist
- *   - capManager        supply-cap changes
- *   - allowanceManager  sets direct_minter_allowance / direct_burner_allowance
- *                       (i.e. the blast-radius cap on the delegate's own
- *                       direct-mint/burn power) -- must NOT be handed to the
- *                       same party being capped
- *   - bufferWithdrawer  pulls USDC back out of the buffer
- *
- * WARNING: do NOT extend this script to grant the governance/safety roles to
- * `--delegate`. Handing a third party's operating key pause/freeze/cap/
- * allowance/buffer-withdraw power alongside operations defeats the whole
- * split. For "single dev wallet does everything" local smoke-testing, grant
- * the governance roles separately via `set-authority.ts` to a key you actually
- * hold, and use THIS script only for the operational subset.
- *
- * Idempotent: skips any role whose current authority already equals the
- * delegate. RoleAdmin itself is never touched by this script.
- *
- * The signer must hold `role_admin` on the PSM program (the deployer
- * wallet on testnet deployments).
+ * Idempotent: skips roles already held by the delegate. The signer must hold
+ * `role_admin` on the PSM program.
  *
  * Usage:
- *   NETWORK=devnet tsx scripts/admin/grant-roles.ts
- *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --delegate=<pubkey>
- *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --dry-run
- *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --mint-usdc   (opt-in mock USDC mint)
+ *   NETWORK=devnet tsx scripts/admin/grant-roles.ts [--delegate=<pubkey>] [--dry-run] [--mint-usdc]
+ *   (--mint-usdc: opt-in mock USDC mint to the delegate)
  */
 
 import * as anchor from '@anchor-lang/core';
@@ -113,14 +85,7 @@ const USDC_RECIPIENT = new PublicKey(
 // Role definitions
 // ============================================================================
 
-/**
- * OPERATIONAL PSM roles granted to the delegate by this script.
- *
- * Governance/safety roles (pauser, unpauser, freezer, unfreezer, capManager,
- * allowanceManager, bufferWithdrawer) are intentionally excluded -- see the
- * NatSpec header above. roleAdmin is never granted here (two-step transfer,
- * handled separately, and retaining it is what preserves claw-back/ownership).
- */
+/** OPERATIONAL PSM roles granted to the delegate (see header for exclusions). */
 const PSM_ROLES = [
   'directMinter',
   'directBurner',
@@ -152,17 +117,12 @@ const DIRECT_BURNER_ALLOWANCE = DIRECT_BURNER_ALLOWANCE_CONST;
 type GrantStatus = 'granted' | 'already' | 'would_grant' | 'skipped' | 'error';
 
 /**
- * Resolve the extra signers needed to act as `allowance_manager`.
- *
- * On devnet/localnet `allowance_manager` is the OPERATOR key
- * (`keys/devnet-authority.json`), not the deployer — the on-chain init
- * guard forbids any granular role from equalling `role_admin`, and the
- * deployer must be `role_admin` because it is the BPF upgrade authority.
- * See `config/authorities.ts::allRolesToOperatorKey`.
- *
+ * Resolve the extra signers needed to act as `allowance_manager` (on
+ * devnet/localnet the operator key, not the deployer; see
+ * `config/authorities.ts::allRolesToOperatorKey`).
  *   - `[]`   the signer already IS allowance_manager
  *   - `[kp]` the locally-held operator key is allowance_manager
- *   - `null` allowance_manager is a key we do not hold — caller must skip
+ *   - `null` we do not hold it — caller must skip
  */
 function resolveAllowanceManagerSigners(
   signer: PublicKey,
@@ -234,14 +194,9 @@ async function main() {
   const results: GrantResult[] = [];
 
   // ---- Set direct-minter / direct-burner allowances BEFORE rotating roles ----
-  // NOTE: `allowanceManager` is a retained governance role (see NatSpec
-  // header) -- this script never rotates it. These allowance calls only
-  // succeed when the signer (role_admin/deployer) also happens to hold
-  // allowanceManager (e.g. fresh localnet/devnet where all roles start on
-  // the deployer). Once allowanceManager has been split out to a separate
-  // governance key, run `set-direct-minter-allowance.ts` /
-  // `set-direct-burner-allowance.ts` with that key instead -- this section
-  // will detect the mismatch and skip with a warning rather than fail.
+  // allowanceManager is never rotated here. If the signer (or a local operator
+  // key) is not allowanceManager this section skips with a warning; use
+  // `set-direct-{minter,burner}-allowance.ts` with that key instead.
   logger.section('Direct-minter allowance (pre-rotation)');
 
   {
@@ -328,14 +283,10 @@ async function main() {
     }
   }
 
-  // ---- PSM roles (operational only -- see NatSpec header) ----
+  // ---- PSM roles (operational only -- see header) ----
   logger.section('lite-psm roles (operational)');
 
-  // Fetch config once; re-fetch after mutations would be ideal but for
-  // idempotency checking the initial snapshot is sufficient -- we only
-  // skip roles that already point to DELEGATE_PUBKEY, and the on-chain
-  // set_authority is itself idempotent (re-setting to the same value
-  // would succeed, though it wastes a tx).
+  // Single config snapshot is enough for the idempotency check.
   const psmCfg = await psmProgram.account.psmConfig.fetch(psmConfig);
 
   // Verify signer is role_admin

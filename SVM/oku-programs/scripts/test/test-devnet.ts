@@ -63,17 +63,9 @@ interface TestContext {
   provider: AnchorProvider;
   deployer: Keypair;
   /**
-   * Devnet operator key — holds the 9 granular authorities (pauser,
-   * unpauser, freezer, unfreezer, bufferDepositor, bufferWithdrawer,
-   * capManager, allowanceManager, rebaser).
-   *
-   * It is NOT the deployer: `initialize` forces role_admin == the BPF
-   * upgrade authority (the deployer) and separately forbids any granular
-   * role from equalling role_admin. See
-   * `scripts/config/authorities.ts::allRolesToOperatorKey`.
-   *
-   * The provider wallet (deployer) remains the fee payer for every tx; the
-   * operator is added purely as an extra signer via `.signers([operator])`.
+   * Devnet operator key: holds the 9 granular authorities (not role_admin; see
+   * `scripts/config/authorities.ts::allRolesToOperatorKey`). The deployer
+   * stays fee payer; the operator is an extra signer via `.signers([operator])`.
    */
   operator: Keypair;
   deployment: DeploymentAddresses;
@@ -89,12 +81,9 @@ interface TestContext {
 }
 
 /**
- * The CANONICAL multiplier, WAD-scaled (1e18).
- *
- * Computed from the rate schedule on `PsmConfig`, exactly as the program does.
- * Deliberately NOT read from the mint's ScaledUiAmountConfig: that extension is
- * a write-only display mirror that lags by up to one sync interval, and pricing
- * never touches it.
+ * The CANONICAL multiplier (WAD), computed from the `PsmConfig` rate schedule as
+ * the program does. NOT read from the mint's ScaledUiAmountConfig, which is a
+ * lagging display mirror that pricing never touches.
  */
 async function readMultiplier(ctx: TestContext): Promise<bigint> {
   const cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
@@ -230,7 +219,6 @@ async function buildContext(): Promise<TestContext> {
     );
   }
 
-  // For fork networks, load deployment from parent network
   const deployment = loadDeploymentForFork(network);
   const effectiveNetwork = isForkNetwork(network) ? getParentNetwork(network) : network;
   if (!deployment) {
@@ -251,10 +239,7 @@ async function buildContext(): Promise<TestContext> {
   // Set the address in the IDL for 2-arg Program constructor (Anchor 1.0 compatibility)
   psmIdl.address = litePsmId.toBase58();
 
-  // psmIdl is loaded from disk at runtime (not the statically-typed IDL
-  // import), so its generic infers as Program<Idl>. This cast is asserting
-  // that the on-disk IDL actually matches LitePsm's shape, which the deploy
-  // pipeline is responsible for keeping true.
+  // IDL is loaded from disk, so the cast asserts it matches LitePsm's shape.
   const psm = new Program(psmIdl, provider) as unknown as Program<LitePsm>;
 
   // Mints — single token: OkuM (Token-2022, ScaledUiAmount)
@@ -389,10 +374,8 @@ async function testMint(ctx: TestContext) {
   const minted = okuMAfter - okuMBefore;
   logger.success(`Minted ${fmtAmount(minted)} okuM`);
 
-  // ASSERT, don't just print. Previously this step's pass condition was
-  // "`.rpc()` did not throw" — a program that minted 1 raw unit for 100 USDC
-  // would satisfy it. Both USDC and OkuM are 6-decimal on SVM, so no cross-
-  // decimal scaling is needed beyond the multiplier itself.
+  // Assert amounts, not just that `.rpc()` did not throw. Both tokens are
+  // 6-decimal on SVM, so only the multiplier scales.
   const usdcSpent = usdcBefore - usdcAfter;
   if (usdcSpent !== BigInt(amount)) {
     throw new Error(`mint spent ${usdcSpent} USDC-units, expected exactly ${amount}`);
@@ -476,11 +459,7 @@ async function testTransfer(ctx: TestContext) {
   logger.info(`Sender okuM: ${fmtAmount(senderBal)}`);
   logger.info(`Recipient okuM: ${fmtAmount(recipientBal)}`);
 
-  // EXACT equality — no tolerance. OkuM is a static-balance token; the
-  // ScaledUiAmount extension only affects the DISPLAY read wallets see, never
-  // the canonical raw transfer amount. `senderBal - okuMBefore... 'Transfer
-  // verified'` (a string with no comparison) previously passed regardless of
-  // what actually moved.
+  // EXACT equality: ScaledUiAmount only affects the display, never raw transfer amounts.
   if (recipientBal !== BigInt(transferAmount)) {
     throw new Error(
       `recipient received ${recipientBal} raw units, expected exactly ${transferAmount}`
@@ -503,12 +482,10 @@ async function testRedeem(ctx: TestContext) {
   logger.section('Test: Redeem okuM -> USDC');
 
   const redeemAmount = 10_000_000; // 10 okuM
-  const bufferAmount = 20_000_000; // 20 USDC buffer (extra to ensure instant redemption)
+  const bufferAmount = 20_000_000; // 20 USDC buffer (covers the redemption)
 
-  // 1. Deposit USDC buffer so instant redemption works.
-  //    `buffer_depositor` is held by the operator key (not the deployer),
-  //    so the USDC being deposited must sit in the OPERATOR's ATA and the
-  //    operator must co-sign.
+  // 1. Deposit USDC buffer (redeem reverts InsufficientBuffer otherwise).
+  //    buffer_depositor is the operator key: its ATA funds the deposit and it co-signs.
   logger.info(`Depositing ${bufferAmount / 1_000_000} USDC buffer...`);
 
   const bufferDepositorUsdcAta = await getOrCreateAta(
@@ -550,23 +527,10 @@ async function testRedeem(ctx: TestContext) {
   const userUsdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, ctx.deployer.publicKey, true, TOKEN_PROGRAM_ID);
   const userOkuMAta = getAssociatedTokenAddressSync(ctx.okuMMint, ctx.deployer.publicKey, true, TOKEN_2022_PROGRAM_ID);
 
-  // 4. Call PSM redeemOkuM (redeem_oku_m in the IDL). Second arg is
-  // min_usdc_out (slippage protection).
-  //
-  // This is deliberately NOT 0. Passing 0 disables the program's own
-  // `SlippageExceeded` check and throws away the single cheapest correctness
-  // assertion available anywhere in the on-chain suite.
-  //
-  // By deriving the expected USDC from the TypeScript multiplier mirror and
-  // passing it as the floor, the REDEEM ITSELF becomes a live differential
-  // test: the Rust program computes its own multiplier from on-chain state and
-  // Solana's `Clock`, and if that disagrees with the TypeScript reference by
-  // more than the tolerance below, the transaction REVERTS on-chain rather
-  // than silently succeeding at the wrong price.
-  //
-  // That matters because every other multiplier check in this file is
-  // evaluated client-side (see `readMultiplier`, which uses `Date.now()` and
-  // the TS mirror) and therefore cannot detect a broken Rust accrual path.
+  // 4. Call PSM redeemOkuM. The second arg is min_usdc_out, deliberately NOT 0:
+  // flooring it at the TS-mirror price makes the redeem a live Rust-vs-TS
+  // multiplier differential (it reverts on-chain on divergence). Every other
+  // multiplier check here is client-side and cannot catch a broken Rust accrual.
   const multForRedeem = await readMultiplier(ctx);
   const expectedUsdcOut = (BigInt(redeemAmount) * multForRedeem) / PRECISION;
   // Floor at 99.9% of expected: absorbs the few seconds of accrual between
@@ -604,9 +568,7 @@ async function testRedeem(ctx: TestContext) {
   logger.info(`After - USDC: ${fmtAmount(usdcAfter)}, okuM: ${fmtAmount(okuMAfter)}`);
   logger.success(`Redeemed ${fmtAmount(okuMBefore - okuMAfter)} okuM -> ${fmtAmount(usdcAfter - usdcBefore)} USDC`);
 
-  // ASSERT, don't just print. These deltas were previously computed and
-  // logged with no comparison, so the step's pass condition was "`.rpc()` did
-  // not throw" — which a program redeeming 1 USDC-unit for 10 okuM satisfies.
+  // Assert the deltas, not just that `.rpc()` did not throw.
   const okuMSpent = okuMBefore - okuMAfter;
   const usdcReceived = usdcAfter - usdcBefore;
   if (okuMSpent !== BigInt(redeemAmount)) {
@@ -633,50 +595,21 @@ async function testRedeem(ctx: TestContext) {
 // ---------------------------------------------------------------------------
 
 /**
- * Exercise the streaming rate schedule end-to-end against a live cluster.
+ * Exercise the streaming rate schedule against a live cluster: publish a rate,
+ * wait with no transactions, and check the multiplier advances.
  *
- * This replaces the old `distributeYield` step, which called an instruction
- * that no longer exists. The difference is not cosmetic: there is nothing to
- * "distribute" any more. The operator publishes a per-second RATE and the
- * multiplier follows from elapsed wall-clock time, with no further
- * transactions.
- *
- * ## What this step does and does NOT prove
- *
- * `readMultiplier()` evaluates the TypeScript mirror against `Date.now()`. It
- * is a CLIENT-SIDE projection of on-chain schedule fields — it is NOT a read
- * of the Rust `multiplier::current`. So "before < after" across a sleep is a
- * theorem about the TS function (rpow is monotonic in elapsed time), not
- * evidence that the validator accrued anything. An earlier version of this
- * docblock claimed the opposite; it was wrong.
- *
- * The step's real teeth are:
- *   - the schedule fields are read back and asserted exactly (so the write
- *     landed), and
- *   - `testRedeem` passes a multiplier-derived `min_usdc_out`, which makes the
- *     PROGRAM compute its own multiplier in Rust and revert if it disagrees
- *     with the TS reference. That is the actual Rust-vs-TS differential.
- *
- * Also asserts the display-mirror invariant (`display <= canonical`) that the
- * whole ScaledUiAmount design rests on. Note that check is ONE-SIDED by
- * construction: it catches an over-reporting mirror, never under-accrual.
+ * `readMultiplier()` is a CLIENT-SIDE projection (TS mirror vs `Date.now()`), so
+ * "before < after" does not prove the validator accrued anything. The real
+ * teeth are the exact read-back of the schedule fields and `testRedeem`'s
+ * multiplier-derived `min_usdc_out` (the Rust-vs-TS differential). Also asserts
+ * `display <= canonical`, which is one-sided: it catches an over-reporting
+ * mirror, never under-accrual.
  */
 async function testStreamingAccrual(ctx: TestContext) {
   logger.section('Test: Streaming Accrual');
 
-  // Publish a deliberately fast rate so measurable yield accrues within the
-  // few seconds this test can afford to wait.
-  //
-  // CORRECTION: the previous comment here claimed `ratePerSecondForApy(500)`
-  // was "50,000% APY ... well under MAX_RATE". It is neither. The raw value is
-  // 1000000197127305856, which is ~2x MAX_RATE (1000000100000000000), and
-  // `ratePerSecondForApy` SILENTLY CLAMPS. The rate actually published was
-  // MAX_RATE, i.e. ~2242% APY — the test's stated model of its own input was
-  // wrong by ~22x, and because the assertion compared against the already
-  // clamped local it never noticed.
-  //
-  // Ask for a rate that is genuinely inside the ceiling so the published value
-  // is the requested value, and assert that no clamping occurred.
+  // Publish a fast rate so measurable yield accrues in seconds. Must stay below
+  // MAX_RATE: `ratePerSecondForApy` silently clamps, so assert no clamping occurred.
   const requestedApy = 5.0; // 500% APY — fast enough to move in seconds, inside MAX_RATE
   const rate = ratePerSecondForApy(requestedApy);
   if (rate >= MAX_RATE) {
@@ -686,9 +619,7 @@ async function testStreamingAccrual(ctx: TestContext) {
     );
   }
   const nowSec = Math.floor(Date.now() / 1000);
-  // Short window: if cleanup fails, the blast radius is minutes of elevated
-  // accrual, not an hour. The multiplier is MONOTONIC and cannot be corrected
-  // downward, so an over-long window at an elevated rate is unrecoverable.
+  // Short window: the multiplier is monotonic, so elevated accrual is unrecoverable.
   const endTs = nowSec + 300;
 
   const before = await readMultiplier(ctx);
@@ -711,12 +642,8 @@ async function testStreamingAccrual(ctx: TestContext) {
     throw new Error(`rateEnd mismatch: wrote ${endTs}, read ${schedule.rateEnd}`);
   }
 
-  // Everything from here runs inside try/finally so the elevated rate is ALWAYS
-  // halted. Previously the halt was the last statement, so any failure in the
-  // display-mirror block left devnet compounding at the elevated rate for the
-  // full window — and because the runner catches per-step and continues, the
-  // remaining steps then executed against an inflating chain. The multiplier is
-  // monotonic and cannot be corrected downward, so that inflation is permanent.
+  // try/finally: the elevated rate must ALWAYS be halted, since the runner
+  // continues past failed steps and the multiplier cannot be corrected downward.
   try {
     // Wait on the cluster's real clock. NO transaction is sent in this window --
     // that is the property under test.
@@ -727,9 +654,7 @@ async function testStreamingAccrual(ctx: TestContext) {
     const after = await readMultiplier(ctx);
     logger.info(`canonical multiplier after:  ${after}`);
 
-    // NOTE: `after > before` is a property of the TS mirror (monotonic in
-    // elapsed time), not proof the validator accrued. Kept as a sanity check;
-    // the load-bearing Rust-vs-TS check is `min_usdc_out` in testRedeem.
+    // Sanity check on the TS mirror; the Rust-vs-TS check is `min_usdc_out` in testRedeem.
     if (after <= before) {
       throw new Error(
         `multiplier did not stream: ${before} -> ${after}. Accrual should advance ` +
@@ -760,9 +685,7 @@ async function testStreamingAccrual(ctx: TestContext) {
           'Wallets would promise more than the PSM will pay.'
       );
     }
-    // The mirror must also not lag arbitrarily far BEHIND canonical — a
-    // one-sided `display <= canonical` check passes trivially if the mirror is
-    // stuck at 1.0, which is indistinguishable from a dead display crank.
+    // Log lag: a stuck mirror (dead crank) passes the one-sided check above.
     const mirrorLag = canonical - displayWad;
     const mirrorLagBps = (mirrorLag * 10_000n) / PRECISION;
     logger.info(`display lag behind canonical: ${mirrorLag} wad (${mirrorLagBps} bps)`);
@@ -879,18 +802,9 @@ async function testPause(ctx: TestContext) {
 // ---------------------------------------------------------------------------
 
 /**
- * Rotate a PSM role (pauser) to a freshly generated keypair, verify the
- * previous holder (the operator key) can no longer call `pause`, verify the
- * new holder CAN pause, then restore the role to the operator.
- *
- * Uses `lite_psm::set_authority` (role_admin-gated; role_admin = deployer).
- *
- * NOTE: this step is now fully restorative. Under the old single-key devnet
- * model the pauser could not be handed back (it would have had to equal
- * role_admin, which the separation-of-duties guard rejects), so the test
- * rotated to a second throwaway key and left it there — every run drifted
- * the deployment further. With pauser seated on the operator key, restoring
- * is legal and the PSM ends the run exactly as it started.
+ * Rotate the pauser to a fresh keypair via `set_authority` (role_admin =
+ * deployer), verify the old holder (operator) can no longer pause and the new
+ * one can, then restore the role to the operator so the PSM ends unchanged.
  */
 async function testSetAuthority(ctx: TestContext) {
   logger.section('Test: Set Authority (role rotation)');
@@ -959,9 +873,7 @@ async function testSetAuthority(ctx: TestContext) {
     .signers([ctx.operator])
     .rpc();
 
-  // 6. Restore the pauser role to the operator key. Legal because the
-  //    operator is distinct from role_admin (the deployer), so the
-  //    separation-of-duties guard is satisfied.
+  // 6. Restore the pauser role to the operator key.
   logger.info(`Restoring pauser to operator: ${ctx.operator.publicKey.toBase58()}`);
   const restoreSig = await ctx.psm.methods
     .setAuthority({ pauser: {} }, ctx.operator.publicKey)

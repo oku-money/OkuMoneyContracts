@@ -56,12 +56,9 @@ describe("scripts/utils/epochDistribution", () => {
             }));
 
             const distributed = distributedUsdOverWindow(segments, samples, 0, 1000);
-            // Nothing in the previous expectation was hand-computed: the samples
-            // are built FROM `multiplierAt`, so `supplyAtPrev` reduces to S
-            // exactly and the sum telescopes to `S * (m(1000) - m(0))`
-            // algebraically -- for any `multiplierAt`, including a wrong one.
-            //
-            // Closed form instead: constant supply S growing at a constant rate
+            // Samples are built FROM `multiplierAt`, so the sum telescopes to
+            // `S * (m(1000) - m(0))` for any `multiplierAt`, including a wrong
+            // one; assert a closed form instead: constant supply S growing at a constant rate
             // for 1000 seconds distributes S * (rate^1000 - 1).
             const expected = S * (Math.pow(rate, 1000) - 1);
             expect(distributed, "flat-supply distribution is S * (rate^t - 1)")
@@ -105,9 +102,8 @@ describe("scripts/utils/epochDistribution", () => {
         });
 
         it("REGRESSION: extrapolates the final partial interval when the last sample is BEFORE windowEndSec, rather than silently under-counting it", () => {
-            // Bug this fixes: an earlier version stopped at the last sample and
-            // ignored the gap to windowEndSec entirely — at typical staging leads
-            // this alone under-counted ~1.6% of the epoch target (see TRACKER.md).
+            // Ignoring the gap to windowEndSec under-counts ~1.6% of the epoch
+            // target at typical staging leads.
             const rate = 1.0000001;
             const segments: RateSegment[] = [
                 { startSec: 0, endSec: 1000, ratePerSecond: rate, anchorMultiplier: 1.0 },
@@ -253,13 +249,8 @@ describe("scripts/utils/epochDistribution", () => {
     });
 
     describe("CORE VALIDATION: full base+settlement pipeline lands near Y* under flat supply with NO deliberate buffer", () => {
-        // This is the test the original mechanism bug would have failed: with
-        // conservativeFactor=1.0 (no deliberate withholding) and zero supply
-        // volatility, the mechanism should land within a small rounding-level
-        // tolerance of the raw target — NOT ~3.5% over, which is what the
-        // pre-fix code produced (the base-tail and last-sample-extrapolation
-        // gaps happened to almost exactly cancel a since-removed buffer,
-        // masking the bug — see TRACKER.md).
+        // With conservativeFactor=1.0 (no deliberate withholding) and zero supply
+        // volatility, the mechanism should land within rounding of the raw target.
         it("lands within 0.1% of Y* — proves the base-tail and extrapolation fixes compose correctly", () => {
             const initialSupplyUsd = 1_000_000;
             const realizedApy = 0.032;

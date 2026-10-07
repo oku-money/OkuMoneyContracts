@@ -4,10 +4,6 @@ pragma solidity 0.8.28;
 /**
  * @title IOkuDollar
  * @notice Interface for the OkuDollar vault (rebasing stablecoin backed by OkuMoney reserves).
- * @dev Exposes the full mint / redeem / view surface so tests, handlers, and invariant
- *      runners can program against a single interface. Production call sites only
- *      invoke `wrap` and `unwrap`; the read-only views are kept here for
- *      off-chain consumers and test scaffolding.
  */
 interface IOkuDollar {
     /// @notice Underlying asset (OkuMoney address). ERC-4626 `asset()`.

@@ -5,13 +5,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @title IOkuMoney
- * @notice Shared interface for OkuMoney used by LitePSM, RedemptionQueue, OkuDollar,
- *         and the test mocks/handlers.
- * @dev OkuMoney is a non-rebasing standard ERC-20; `okuMMultiplier()` tracks dollar value
- *      per token separately from `balanceOf()`. Extends `IERC20` so static analyzers can
- *      match the inherited ERC-20 surface without a custom resolver; call sites needing
- *      transfer semantics should still cast via `IERC20` to use SafeERC20.
- *      See Constants.sol for terminology legend.
+ * @notice Shared OkuMoney interface used by LitePSM, OkuDollar and the test mocks.
+ * @dev Extends `IERC20`; call sites needing transfer semantics should still cast via
+ *      `IERC20` to use SafeERC20. See Constants.sol for the terminology legend.
  */
 interface IOkuMoney is IERC20 {
     /// @notice Mint raw tokens to `to`.
@@ -27,9 +23,7 @@ interface IOkuMoney is IERC20 {
     function setOkuMYieldRate(uint256 newRate, uint256 endTimestamp) external;
     /// @notice Pre-stage the successor rate that activates after the active rate's end.
     function setNextOkuMYieldRate(uint256 newRate, uint256 pendingEndTimestamp) external;
-    /// @notice Atomically re-anchor the active rate AND stage its successor —
-    ///         see {OkuMoney-setOkuMYieldRateWithSuccessor} for the atomicity
-    ///         hazard this closes versus calling the two setters separately.
+    /// @notice Atomically re-anchor the active rate AND stage its successor.
     function setOkuMYieldRateWithSuccessor(
         uint256 newRate,
         uint256 endTimestamp,
@@ -37,18 +31,16 @@ interface IOkuMoney is IERC20 {
         uint256 nextEndTimestamp
     )
         external;
-    /// @notice The schedule's stored active-window rate (1e18 = no yield). Not
-    ///         lazily rolled forward — see {okuMEffectiveRatePerSecond}.
+    /// @notice The schedule's stored active-window rate (1e18 = no yield); not rolled forward.
     function okuMRatePerSecond() external view returns (uint256);
     /// @notice The per-second rate actually accruing right now.
     function okuMEffectiveRatePerSecond() external view returns (uint256);
-    /// @notice Timestamp the active rate expires (0 = accrual halted; open-ended
-    ///         yielding rates are rejected).
+    /// @notice Timestamp the active rate expires (0 = accrual halted).
     function okuMRateEnd() external view returns (uint256);
     /// @notice Successor rate, active after {okuMRateEnd} (1e18 = none armed).
     function okuMPendingRatePerSecond() external view returns (uint256);
     /// @notice Emergency discrete override — re-anchors the accrual base.
     function setOkuMMultiplier(uint256 newMultiplier) external;
-    /// @notice Block number of the last discrete override (for sandwich-attack prevention).
+    /// @notice Block of the last discrete override (the override-block stamp).
     function lastYieldDistributionBlock() external view returns (uint256);
 }

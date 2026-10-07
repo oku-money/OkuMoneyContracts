@@ -7,7 +7,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
  * @title ReentrantOkuMoney
  * @notice Test-only mock that simulates a malicious OkuMoney with a reentrant
  *         callback on `burn()`. Used to verify that `nonReentrant` guards on
- *         LitePSM and RedemptionQueue block cross-function reentrancy.
+ *         LitePSM block cross-function reentrancy.
  * @dev NOT FOR PRODUCTION. Implements the IOkuMoney surface with a configurable
  *      reentrant callback. When `reentrantTarget` is set, `burn()` calls back
  *      into the target with `reentrantCalldata` before completing.
@@ -17,7 +17,6 @@ contract ReentrantOkuMoney is ERC20 {
     uint256 public lastYieldDistributionBlock;
     mapping(address => uint256) public minterAllowance;
     mapping(address => bool) public isBlacklisted;
-    bool public paused;
 
     address public reentrantTarget;
     bytes public reentrantCalldata;
@@ -33,7 +32,7 @@ contract ReentrantOkuMoney is ERC20 {
     }
 
     /// @notice Configure the reentrant callback that fires on `burn()`.
-    /// @param target Address to call back into (e.g. LitePSM or RedemptionQueue).
+    /// @param target Address to call back into (e.g. LitePSM).
     /// @param data Calldata for the reentrant call.
     function setReentrantCallback(address target, bytes calldata data) external {
         reentrantTarget = target;

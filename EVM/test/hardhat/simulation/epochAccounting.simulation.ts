@@ -387,13 +387,10 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
     });
 
     before(async () => {
-        // Disable forking for these sims — they only touch our own contracts and
-        // run many time.increaseTo() calls; forking adds RPC overhead with no
-        // benefit. `hardhat_reset` with EMPTY params (an earlier version of this
-        // file) does NOT disable forking — it resets to the network config's
-        // OWN defaults, which per hardhat.config.ts has `forking.enabled: true`
-        // for the default network. Must pass an explicit override to actually
-        // turn forking off.
+        // Disable forking: these sims only touch our own contracts and run many
+        // time.increaseTo() calls. `hardhat_reset` with params `[]` would restore
+        // the config default (forking enabled); an explicit `{}` override is what
+        // turns it off.
         await network.provider.request({
             method: "hardhat_reset",
             params: [{}],
@@ -401,13 +398,8 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
     });
 
     after(async () => {
-        // Restore the config-default (forked) network state so later test
-        // files in the same `npx hardhat test` run aren't silently left on a
-        // plain in-memory chain by this suite — an ordering hazard that
-        // previously existed only because `simulation/` happens to sort after
-        // the fork-dependent test directories alphabetically. Making this
-        // order-independent is cheap insurance against a later directory
-        // rename or new test folder breaking fork tests non-obviously.
+        // Restore the config-default (forked) network so later files in the same
+        // run are not left on a plain in-memory chain; keeps this order-independent.
         await network.provider.request({ method: "hardhat_reset", params: [] });
     });
 
@@ -438,10 +430,7 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
                 // own effect explicitly.
                 const errorVsAdjustedPct =
                     ((result.exactDistributedUsd - result.adjustedTargetUsd) / result.adjustedTargetUsd) * 100;
-                // 3%, and the title says 3%. It previously said "~1%" while
-                // asserting 3 -- someone measured ~2.3, raised the bound and left
-                // the claim, so the suite summary advertised an accuracy figure
-                // the suite does not check.
+                // Bound matches the test title (measured ~2.3%).
                 expect(Math.abs(errorVsAdjustedPct)).to.be.lessThan(3);
                 expect(result.onChainMultiplierParityDiffPct).to.be.lessThan(1e-5);
             });
@@ -509,12 +498,9 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             // ~-49.5% over 24 hours. A tighter bound here would be asserting the
             // epoch length, not the clamp.
             expect(result.errorPctVsRawTarget).to.be.lessThan(-40);
-            // Model/chain parity: this test caught a REAL harness bug (the
-            // ground-truth model previously used the UNCLAMPED float rate while
-            // the chain runs the clamped one, producing ~25.6% spurious
-            // "divergence"). Threshold is looser than the 1e-5% used elsewhere
-            // because MAX_RATE itself is large enough that float rounding in
-            // the clamp-and-reconvert step is proportionally larger.
+            // Model/chain parity: the model must use the CLAMPED rate the chain runs.
+            // Looser than the 1e-5% used elsewhere because float rounding in the
+            // clamp-and-reconvert step is proportionally larger at MAX_RATE.
             expect(result.onChainMultiplierParityDiffPct).to.be.lessThan(1e-4);
         });
     });
@@ -923,7 +909,7 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
     });
 
     // ═══════════════════════════════════════════════════════════════════════
-    // AXIS 6 (NEW): multi-epoch carry threading — the previously-MISSING test.
+    // AXIS 6: multi-epoch carry threading.
     // Validates the headline "cumulative conservation" claim end-to-end
     // against a REAL deployed contract, not just hand-fed numbers.
     // ═══════════════════════════════════════════════════════════════════════
@@ -941,11 +927,9 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             const perEpochSupplyEvents: SupplyEvent[][] = [
                 [], // epoch 1: flat baseline
                 // epoch 2: a LARGE shock landing AFTER staging (0.97 > stagingFraction
-                // ~0.9133) — genuinely uncorrectable within the epoch, unlike the
-                // earlier version's mid-epoch shocks which mostly land before
-                // staging and get largely absorbed by settlement. This is what
-                // actually stresses the carry mechanism: it must produce a real,
-                // large carryForward, not a token one.
+                // ~0.9133) — uncorrectable within the epoch, unlike mid-epoch shocks
+                // that settlement largely absorbs. This is what stresses the carry
+                // mechanism: it must produce a real, large carryForward.
                 [{ atFraction: 0.97, rawDelta: ethers.parseEther("400000") }], // +40%, uncorrectable
                 [], // epoch 3: flat — should show DECELERATION from epoch 2's carry-in
                 [], // epoch 4: flat — carry should be converging back toward baseline
@@ -977,12 +961,9 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             // like the ~-0.02 baseline seen in every flat epoch here. This is
             // what makes the rest of this test meaningful: if this assertion is
             // weak, everything downstream is testing near-zero carry again.
-            // (Measured: ~-45, i.e. ~1.8% of a single epoch's target — real and
-            // >1000x the flat-epoch baseline, but the shock's own brief window —
-            // last ~3% of the epoch — bounds how large it gets. This calibrates
-            // the threshold; an earlier version of this test assumed ~20% of a
-            // single epoch's target with no measurement behind that number, and
-            // failed against the ACTUAL result.)
+            // (Measured: ~-45, i.e. ~1.8% of a single epoch's target — >1000x the
+            // flat-epoch baseline; the shock's brief window (last ~3% of the
+            // epoch) bounds it, which calibrates the threshold.)
             expect(carryHistory[1]).to.be.lessThan(-singleEpochTargetUsd * 0.01);
 
             // Epoch 3 (flat supply, large negative carry-in) must distribute

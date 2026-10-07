@@ -16,8 +16,8 @@ const PRECISION = 10n ** 18n;
 
 /**
  * Covers the decision logic of `operator/checkMultiplierDrift.ts` — the only
- * detector of cross-chain multiplier divergence, and previously untested
- * because the script itself is inherently multi-chain.
+ * detector of cross-chain multiplier divergence; the script itself is
+ * inherently multi-chain, so its decision logic is tested here.
  */
 describe("driftChecks", () => {
     describe("grid alignment", () => {

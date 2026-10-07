@@ -1,118 +1,60 @@
-//! Pure-math primitives shared by every program in the workspace.
+//! Pure-math primitives shared by the programs. Return `Option` (`None` on
+//! overflow or division by zero) so each program maps them to its own error.
+//! EVM: `EVM/src/lib/MathLib.sol`.
 //!
-//! These return `Option<u64>` (None on overflow / division-by-zero) so
-//! each program can map them to its own `Error::Overflow` /
-//! `Error::ZeroAmount` without coupling the crates to a single error type.
+//! ## Rounding policy
 //!
-//! The functions widen to `u128` for the intermediate calculation, then
-//! narrow back to `u64`, returning `None` if the result doesn't fit.
-//! Conceptually equivalent to OpenZeppelin's `Math.mulDiv` with explicit
-//! rounding selector, but simpler: u64×u64 fits in u128 without the
-//! 512-bit intermediate the EVM uint256-by-uint256 version needs (proven
-//! by Kani `proof_mul_div_floor_no_u128_overflow`).
+//! Every protocol-flow conversion rounds in favor of the protocol:
 //!
-//! Equivalent EVM source: `EVM/src/lib/MathLib.sol`.
-//!
-//! ## Rounding-direction policy
-//!
-//! Every protocol-flow conversion rounds **in favor of the protocol**:
-//!
-//! | Direction | Rounding | Primitive |
+//! | Conversion | Rounding | Primitive |
 //! |---|---|---|
-//! | OkuM → dollars (mint) | floor (give the user no more than they earned) | [`raw_to_dollars`] |
-//! | dollars → OkuM (mint) | floor | [`dollars_to_raw`] |
-//! | reserved-balance accounting | ceil (over-reserve, never under-reserve) | [`mul_div_ceil`] |
+//! | OkuM -> dollars (redeem) | floor | [`raw_to_dollars`] |
+//! | dollars -> OkuM (mint) | floor | [`dollars_to_raw`] |
+//! | reserved-balance accounting | ceil | [`mul_div_ceil`] |
 //!
-//! Pick `*_ceil` when a floor would under-protect the protocol's
-//! obligations to other users.
-//! Pick `*_floor` when the user is being credited from the protocol's
-//! pool (the floor leaves dust in the pool, favoring everyone else
-//! collectively). When in doubt, document the choice at the call site.
+//! Use `*_ceil` where a floor would under-reserve against other users' claims.
 
 use crate::constants::PRECISION;
 
-/// Compute `(a * b) / divisor` with intermediate u128 widening and
-/// floor rounding. Returns `None` on overflow OR when `divisor == 0`.
-///
-/// This is the protocol-wide primitive for any multiplier-style
-/// computation. Both `raw_to_dollars` and `dollars_to_raw` are
-/// trivial wrappers around it.
+/// `floor(a * b / divisor)`, widened to `u128`. `None` on `divisor == 0` or a
+/// result that does not fit `u64`. (`u64 * u64` always fits `u128`.)
 #[inline]
 pub fn mul_div_floor(a: u64, b: u64, divisor: u64) -> Option<u64> {
     if divisor == 0 {
         return None;
     }
     let product = (a as u128).checked_mul(b as u128)?;
-    // `divisor` is guaranteed non-zero by the early return above, so the
-    // `/ (divisor as u128)` cannot panic or wrap.
     #[allow(clippy::arithmetic_side_effects)]
     let result = product / (divisor as u128);
     u64::try_from(result).ok()
 }
 
-/// Convert OkuM raw amount → dollar value using a multiplier.
+/// OkuM raw amount -> dollar value: `floor(raw_amount * multiplier / PRECISION)`.
 ///
-/// Formula: `dollar_value = floor(raw_amount * multiplier / PRECISION)`.
-///
-/// `multiplier` is `u128` because at `PRECISION = 1e18` it ranges up to
-/// `MAX_MULTIPLIER = 1e24`, which does not fit `u64`. The product
-/// `u64 × 1e24 ≈ 1.8e43` does not fit `u128` either, so this routes through
-/// [`crate::wad::mul_div_wad_floor`] and its 256-bit intermediate.
-///
-/// Returns `None` if the result doesn't fit in `u64`. `PRECISION` is never
-/// zero so there's no division-by-zero path.
+/// The product can reach ~1.8e43 (beyond `u128`), hence the 256-bit
+/// [`crate::wad::mul_div_wad_floor`]. `None` if the result exceeds `u64`.
 #[inline]
 pub fn raw_to_dollars(raw_amount: u64, multiplier: u128) -> Option<u64> {
     let dollars = crate::wad::mul_div_wad_floor(raw_amount as u128, multiplier)?;
     u64::try_from(dollars).ok()
 }
 
-/// Convert dollar value → OkuM raw amount using a multiplier.
+/// Dollar value -> OkuM raw amount: `floor(dollar_value * PRECISION / multiplier)`.
 ///
-/// Formula: `raw_amount = floor(dollar_value * PRECISION / multiplier)`.
-///
-/// Unlike [`raw_to_dollars`] the divisor here is the multiplier (which can
-/// exceed `u64`), so the small-divisor long division in [`crate::wad`] does
-/// not apply. It does not need to: the numerator is `u64 × 1e18 ≤ 1.8e37`,
-/// comfortably inside `u128`. Bound proven by
-/// `wad::proofs::proof_narrow_path_safe_for_u64_times_precision`.
-///
-/// Returns `None` if the result doesn't fit in `u64`, OR if
-/// `multiplier == 0` (caller should reject before calling this).
+/// The numerator is `u64 * 1e18 <= 1.8e37`, inside `u128`, so the narrow
+/// primitive suffices (see `wad::mul_div_floor_u128_narrow`). `None` if the
+/// result exceeds `u64` or `multiplier == 0`.
 #[inline]
 pub fn dollars_to_raw(dollar_value: u64, multiplier: u128) -> Option<u64> {
     let raw = crate::wad::mul_div_floor_u128_narrow(dollar_value as u128, PRECISION, multiplier)?;
     u64::try_from(raw).ok()
 }
 
-// ---------------------------------------------------------------------------
-// Ceiling siblings
-// ---------------------------------------------------------------------------
-//
-// These are the "round up" counterparts to the floor primitives above.
-// Use when the result becomes a protocol-side reservation — see
-// the rounding-direction policy in the module-level doc.
-//
-// Implementation: `ceil(a*b/d) = floor((a*b + d - 1) / d)` for `d > 0`.
-// The `d - 1` add is the only place rounding-direction inversion can
-// re-overflow `u128`. For `a, b <= u64::MAX` we have `a*b <= 2^128 - 2^65 + 1`
-// (proven by Kani), so `a*b + (d - 1) <= 2^128 - 2^65 + 1 + (u64::MAX - 1)`
-// `= 2^128 - 2^64 < 2^128`, which still fits in u128. The intermediate
-// add therefore cannot overflow either.
-
-/// Compute `(a * b) / divisor` with intermediate u128 widening and
-/// **ceil** rounding. Returns `None` on overflow OR when `divisor == 0`.
+/// `ceil(a * b / divisor)` as `floor((a*b + d - 1) / d)`. `None` on
+/// `divisor == 0` or a result that does not fit `u64`. No on-chain caller yet.
 ///
-/// Strictly `>= mul_div_floor(a, b, divisor)` for the same inputs, and
-/// `== mul_div_floor(a, b, divisor)` iff the product divides evenly.
-///
-/// **This has no on-chain caller today, and that is deliberate — it is not
-/// dead code to be reaped.** It is fuzzed, Kani-proven and unit-tested, and is
-/// retained for a future reserve-accounting path per the rounding policy
-/// above. As a `pub fn` in a library crate with no caller it costs nothing in
-/// the deployed `.so`, and deleting then re-deriving it later is worse than
-/// keeping a proven primitive. Note it takes `u64` and so cannot serve a
-/// WAD-scale divisor; see `wad.rs` for the multiplier paths.
+/// The `d - 1` add cannot overflow: `a*b <= 2^128 - 2^65 + 1` for `u64`
+/// operands, so the sum is at most `2^128 - 2^64`.
 #[inline]
 pub fn mul_div_ceil(a: u64, b: u64, divisor: u64) -> Option<u64> {
     if divisor == 0 {
@@ -120,40 +62,22 @@ pub fn mul_div_ceil(a: u64, b: u64, divisor: u64) -> Option<u64> {
     }
     let d = divisor as u128;
     let product = (a as u128).checked_mul(b as u128)?;
-    // `product + (d - 1)` cannot overflow u128 — see module note above.
-    // `checked_add` is used defensively; the bound is asserted structurally
-    // by Kani in `proof_mul_div_ceil_numerator_fits_u128`.
     let numerator = product.checked_add(d.saturating_sub(1))?;
     #[allow(clippy::arithmetic_side_effects)]
     let result = numerator / d;
     u64::try_from(result).ok()
 }
 
-// ---------------------------------------------------------------------------
-// Kani formal verification proofs
-// ---------------------------------------------------------------------------
-//
-// These harnesses are gated on `#[cfg(kani)]` so they have zero impact on
-// normal builds, tests, or the on-chain BPF target.
-//
-// Run: cargo kani --package oku-shared
-// (from contracts/SVM/oku-programs/)
-//
-// Each harness uses `kani::any()` for symbolic inputs and `kani::assume()`
-// to restrict the domain where needed to keep verification tractable.
-// Full-range u64 proofs for correctness are bounded to u32::MAX to avoid
-// state-space explosion in the model checker; the None/identity/overflow
-// proofs use the full u64 range since those are simpler properties.
-
+// Run: cargo kani --package oku-shared. Inputs are bounded to 8 bits where the
+// property is expensive for the solver.
 #[cfg(kani)]
 mod verification {
     use super::*;
 
-    // -----------------------------------------------------------------------
-    // mul_div_floor proofs
-    // -----------------------------------------------------------------------
+    /// Small-domain bound for tractable proofs (255).
+    const DOMAIN_MAX: u64 = u8::MAX as u64;
 
-    /// Proof: divisor == 0 always returns None (no panic).
+    /// `divisor == 0` always returns `None`.
     #[kani::proof]
     fn proof_mul_div_floor_none_on_zero_divisor() {
         let a: u64 = kani::any();
@@ -162,13 +86,9 @@ mod verification {
         assert!(result.is_none());
     }
 
-    /// Proof: for bounded inputs, result equals the u128 reference oracle.
-    ///
-    /// Domain bound: `a, b, divisor ∈ [0, 255]` (8-bit, `u8::MAX`).
+    /// Division-free floor property: `q * d <= a * b < (q + 1) * d`.
     #[kani::proof]
     fn proof_mul_div_floor_correctness_bounded() {
-        const DOMAIN_MAX: u64 = u8::MAX as u64; // 255
-
         let a: u64 = kani::any();
         let b: u64 = kani::any();
         let divisor: u64 = kani::any();
@@ -177,16 +97,6 @@ mod verification {
         kani::assume(divisor > 0);
         kani::assume(divisor <= DOMAIN_MAX);
 
-        // DIVISION-FREE invariant, not a re-implementation. An earlier version
-        // asserted against `(a as u128) * (b as u128) / (divisor as u128)`,
-        // which is `mul_div_floor`'s own body line-for-line — it could only
-        // catch a typo in the narrowing cast. The floor property below pins the
-        // ANSWER without restating the algorithm:
-        //
-        //     q * d <= a * b < (q + 1) * d
-        //
-        // (The `expected_128 > u64::MAX` branch was also dead: with all three
-        // operands <= 255 the quotient cannot exceed 65_025.)
         let result = mul_div_floor(a, b, divisor);
         let product = (a as u128) * (b as u128);
         let q = result.expect("in-domain inputs must produce a value") as u128;
@@ -195,7 +105,7 @@ mod verification {
         assert!(product < (q + 1) * d, "quotient too small");
     }
 
-    /// Proof: two u64 values can never overflow u128 when multiplied.
+    /// `u64 * u64` never overflows `u128`.
     #[kani::proof]
     fn proof_mul_div_floor_no_u128_overflow() {
         let a: u64 = kani::any();
@@ -205,15 +115,7 @@ mod verification {
         assert!(product.is_some(), "u64*u64 must always fit in u128");
     }
 
-    // -----------------------------------------------------------------------
-    // raw_to_dollars proofs
-    // -----------------------------------------------------------------------
-
-    /// Proof: at multiplier == PRECISION, output equals input (identity).
-    ///
-    /// Unbounded in `amount` — the 256-bit intermediate makes this hold for
-    /// the whole `u64` range, unlike the pre-1e18 version which needed a
-    /// `u16` bound to stay tractable.
+    /// Identity at `multiplier == PRECISION`, over the whole `u64` range.
     #[kani::proof]
     fn proof_raw_to_dollars_identity_at_precision() {
         let amount: u64 = kani::any();
@@ -221,20 +123,9 @@ mod verification {
         assert_eq!(result, Some(amount));
     }
 
-    /// Proof: `raw_to_dollars` narrows correctly.
-    ///
-    /// DELIBERATELY NARROW. This compares against `mul_div_wad_floor`, which is
-    /// what the function calls — so it proves only the `u64::try_from` narrowing
-    /// and the `None` propagation, NOT the arithmetic. It is labelled that way
-    /// rather than named "consistent with the WAD primitive", which read as a
-    /// correctness proof while being the function body restated.
-    ///
-    /// The arithmetic itself is proven by the exact-rational harness below and,
-    /// over the full 256-bit domain, by the `wad` module's own proofs.
-    ///
-    /// ⚠ NOT CURRENTLY DISCHARGED — `cargo kani` does not terminate on this in
-    /// 10 minutes, and did not on its predecessor either. See the note on
-    /// `rate.rs::proof_compound_for_output_clamped`.
+    /// `raw_to_dollars` faithfully narrows `mul_div_wad_floor` (the arithmetic
+    /// itself is covered by the exact-floor proof and the `wad` proofs). Not
+    /// currently discharged: `cargo kani` does not terminate.
     #[kani::proof]
     fn proof_raw_to_dollars_narrowing_is_faithful() {
         let amount: u64 = kani::any();
@@ -249,23 +140,9 @@ mod verification {
         }
     }
 
-    /// Proof: the ANSWER is the exact floor of `amount * multiplier / PRECISION`.
-    ///
-    ///     d * PRECISION <= amount * multiplier < (d + 1) * PRECISION
-    ///
-    /// Division-free, so it restates no algorithm.
-    ///
-    /// `multiplier` is bounded at `2^63` so `amount * multiplier` fits `u128`
-    /// and the property can be expressed in native arithmetic. That bound is
-    /// about a 9.2e18x multiplier -- nine orders of magnitude beyond anything
-    /// the protocol can reach, since `MAX_MULTIPLIER` is 1e24 at `PRECISION`
-    /// 1e18, i.e. 1e6x. Expressing it over the full `u128` domain requires
-    /// 256-bit comparisons, which took the solver past 1.4M clauses without
-    /// terminating -- an unverifiable proof is worth less than a verified one
-    /// on a domain that covers every reachable input.
-    ///
-    /// ⚠ This bounded form STILL does not discharge in 10 minutes. Kept because
-    /// it states the right property; see TRACKER.md.
+    /// Exact floor: `d * PRECISION <= amount * multiplier < (d + 1) * PRECISION`.
+    /// `multiplier <= 2^63` keeps the product in `u128` (far above the reachable
+    /// 1e24). Not currently discharged: `cargo kani` does not terminate.
     #[kani::proof]
     fn proof_raw_to_dollars_is_exact_floor() {
         let amount: u64 = kani::any();
@@ -280,11 +157,7 @@ mod verification {
         assert!(product < (d + 1) * PRECISION, "quotient too small");
     }
 
-    // -----------------------------------------------------------------------
-    // dollars_to_raw proofs
-    // -----------------------------------------------------------------------
-
-    /// Proof: multiplier == 0 always returns None (no divide-by-zero panic).
+    /// `multiplier == 0` always returns `None`.
     #[kani::proof]
     fn proof_dollars_to_raw_none_on_zero_multiplier() {
         let dollar_value: u64 = kani::any();
@@ -292,8 +165,7 @@ mod verification {
         assert!(result.is_none());
     }
 
-    /// Proof: round-trip monotonicity — converting dollars→raw→dollars
-    /// never returns MORE dollars than the starting value.
+    /// dollars -> raw -> dollars never returns more than the input.
     #[kani::proof]
     fn proof_dollars_to_raw_round_trip_monotone() {
         let dollar_value: u64 = kani::any();
@@ -304,18 +176,12 @@ mod verification {
 
         if let Some(raw) = dollars_to_raw(dollar_value, multiplier) {
             if let Some(dollars_back) = raw_to_dollars(raw, multiplier) {
-                // Must never recover more than the original input.
                 assert!(dollars_back <= dollar_value);
             }
         }
     }
 
-    // -----------------------------------------------------------------------
-    // mul_div_ceil proofs
-    // -----------------------------------------------------------------------
-
-    /// Proof: divisor == 0 always returns None (no panic on the ceil
-    /// variant either).
+    /// `divisor == 0` returns `None` for the ceil variant too.
     #[kani::proof]
     fn proof_mul_div_ceil_none_on_zero_divisor() {
         let a: u64 = kani::any();
@@ -323,24 +189,21 @@ mod verification {
         assert!(mul_div_ceil(a, b, 0).is_none());
     }
 
-    /// Proof: the `+ (d - 1)` numerator add can't overflow u128.
+    /// The `+ (d - 1)` numerator add cannot overflow `u128`.
     #[kani::proof]
     fn proof_mul_div_ceil_numerator_fits_u128() {
         let a: u64 = kani::any();
         let b: u64 = kani::any();
         let d: u64 = kani::any();
         kani::assume(d > 0);
-        let product = (a as u128) * (b as u128); // u64*u64 fits in u128
+        let product = (a as u128) * (b as u128);
         let add = product.checked_add((d as u128) - 1);
         assert!(add.is_some());
     }
 
-    /// Proof: `mul_div_ceil(a, b, d) >= mul_div_floor(a, b, d)`.
-    ///
-    /// Domain bound: 8-bit.
+    /// `ceil >= floor`, differing by at most one.
     #[kani::proof]
     fn proof_mul_div_ceil_ge_floor() {
-        const DOMAIN_MAX: u64 = u8::MAX as u64;
         let a: u64 = kani::any();
         let b: u64 = kani::any();
         let d: u64 = kani::any();
@@ -350,15 +213,13 @@ mod verification {
         kani::assume(d <= DOMAIN_MAX);
         if let (Some(ceil_val), Some(floor_val)) = (mul_div_ceil(a, b, d), mul_div_floor(a, b, d)) {
             assert!(ceil_val >= floor_val);
-            // Difference is 0 or 1.
             assert!(ceil_val - floor_val <= 1);
         }
     }
 
-    /// Proof: when the product divides evenly, ceil == floor.
+    /// When the product divides evenly, ceil == floor.
     #[kani::proof]
     fn proof_mul_div_ceil_eq_floor_on_exact() {
-        const DOMAIN_MAX: u64 = u8::MAX as u64;
         let a: u64 = kani::any();
         let b: u64 = kani::any();
         let d: u64 = kani::any();
@@ -366,7 +227,6 @@ mod verification {
         kani::assume(b <= DOMAIN_MAX);
         kani::assume(d > 0);
         kani::assume(d <= DOMAIN_MAX);
-        // Restrict to inputs where the product divides evenly.
         let product = (a as u128) * (b as u128);
         kani::assume(product % (d as u128) == 0);
         if let (Some(ceil_val), Some(floor_val)) = (mul_div_ceil(a, b, d), mul_div_floor(a, b, d)) {
@@ -375,24 +235,17 @@ mod verification {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `1.10` at WAD scale. The pre-1e18 tests used `1_100_000_000`; every
-    /// literal multiplier in this file had to be rescaled by 1e9.
+    /// `1.10` at WAD scale.
     const M_1_10: u128 = 1_100_000_000_000_000_000;
     /// `1.05` at WAD scale.
     const M_1_05: u128 = 1_050_000_000_000_000_000;
 
     #[test]
     fn mul_div_floor_basics() {
-        // Generic u64 helper — unchanged by the WAD migration, still used for
-        // non-multiplier ratios. Floor rounding: 1 * 3 / 2 == 1, not 2.
         assert_eq!(mul_div_floor(1, 3, 2), Some(1));
         assert_eq!(mul_div_floor(10, 10, 4), Some(25));
     }
@@ -409,45 +262,32 @@ mod tests {
 
     #[test]
     fn raw_to_dollars_works() {
-        // At $1.00 price, 1 OkuM = $1.00
         assert_eq!(raw_to_dollars(1_000_000, PRECISION), Some(1_000_000));
-        // At $1.10 price, 1 OkuM = $1.10
         assert_eq!(raw_to_dollars(1_000_000, M_1_10), Some(1_100_000));
-        // At $1.05 price, 100 OkuM = $105.00
         assert_eq!(raw_to_dollars(100_000_000, M_1_05), Some(105_000_000));
     }
 
     #[test]
     fn dollars_to_raw_works() {
-        // At $1.00 price, $1.00 = 1 OkuM
         assert_eq!(dollars_to_raw(1_000_000, PRECISION), Some(1_000_000));
-        // At $1.10 price, $1.10 = 1 OkuM
         assert_eq!(dollars_to_raw(1_100_000, M_1_10), Some(1_000_000));
-        // Zero price → None
         assert_eq!(dollars_to_raw(1_000_000, 0), None);
     }
 
-    /// The whole point of the 256-bit intermediate: `1e15` raw ($1B at par)
-    /// times a 1e24 multiplier is ~1e39, past `u128::MAX`.
+    /// `1e15` raw times a 1e24 multiplier is ~1e39, past `u128::MAX`.
     #[test]
     fn raw_to_dollars_survives_the_old_overflow_region() {
-        let raw = 1_000_000_000_000_000u64; // 1e15 raw = $1B at par
-        let mult = 2 * PRECISION; // 2.0x
+        let raw = 1_000_000_000_000_000u64;
+        let mult = 2 * PRECISION;
         assert_eq!(raw_to_dollars(raw, mult), Some(2_000_000_000_000_000));
-        // And reports honestly when the *result* genuinely exceeds u64.
         assert_eq!(
             raw_to_dollars(u64::MAX, crate::constants::MAX_MULTIPLIER),
             None
         );
     }
 
-    /// Round-trip never gains value, and loses at most `ceil(m/PRECISION)+1`
-    /// units — the same bound the `dollars_to_raw` fuzz target asserts.
-    ///
-    /// Two chained floors are involved (`dollars→raw` then `raw→dollars`),
-    /// so the loss scales with the multiplier: at `m = 1.037` the bound is 2,
-    /// not 1. The direction is what matters — it must always favour the
-    /// protocol, never the caller.
+    /// Round trip never gains value and loses at most `ceil(m/PRECISION)+1`
+    /// units (two chained floors; the bound scales with the multiplier).
     #[test]
     fn round_trip_never_gains_and_loses_within_bound() {
         for mult in [
@@ -475,13 +315,10 @@ mod tests {
 
     #[test]
     fn mul_div_ceil_basics() {
-        // Exact division — equal to floor.
         assert_eq!(mul_div_ceil(2, 3, 2), Some(3));
         assert_eq!(mul_div_floor(2, 3, 2), Some(3));
-        // 1*3/2 = 1.5 → floor=1, ceil=2.
         assert_eq!(mul_div_ceil(1, 3, 2), Some(2));
         assert_eq!(mul_div_floor(1, 3, 2), Some(1));
-        // 7*1/3 = 2.33... → ceil=3.
         assert_eq!(mul_div_ceil(7, 1, 3), Some(3));
         assert_eq!(mul_div_floor(7, 1, 3), Some(2));
     }

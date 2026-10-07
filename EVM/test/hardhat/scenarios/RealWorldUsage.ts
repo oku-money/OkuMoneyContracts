@@ -1,23 +1,19 @@
 /**
  * RealWorldUsage — deterministic multi-chain edge-case suites.
  *
- * Exercises the okuMoney noBridge lifecycle on a dual-chain (A+B) harness, one
+ * Exercises the okuMoney PSM-mediated lifecycle on a dual-chain (A+B) harness, one
  * scenario per suite, each with a hand-derived expected outcome.
  *
  *   E1. Multi-month round-trip A→B→A with yield accruing on B
- *   E2. Queued redeem blocks the orchestrator until processQueue runs
+ *   E2. Source redeem against an empty buffer reverts until it is reseeded
  *   E3. Multiplier divergence between chains (A rebases, B does not)
  *   E4. Blacklisted recipient mid-bridge
  *   E5. Pause on one side during a multi-week run
  *   E7. Yield-lock vs same-block bridge attempt
  *   E8. Cap manager / minterAllowance exhaustion
  *
- * A 365-day stochastic simulation previously sat above these. It was deleted
- * rather than repaired: every state-changing call in it was wrapped in a silent
- * `try/catch`, nothing counted successes, and its headline invariant (per-bridge
- * USDC drift) compared a value against itself. A PSM that reverted every call
- * would have passed it. The scenarios below are deterministic precisely so that
- * each one's expected value can be derived by hand rather than observed.
+ * Scenarios are deterministic so each expected value is derived by hand rather
+ * than observed.
  */
 
 import {
@@ -27,8 +23,6 @@ import {
     OkuMoney__factory,
     OkuDollar,
     OkuDollar__factory,
-    RedemptionQueue,
-    RedemptionQueue__factory,
     MockUSDC,
     MockUSDC__factory,
 } from "../../../typechain-types"
@@ -46,8 +40,8 @@ const DAY = 86400
 const {
     OKUM_MINTER, OKUM_BURNER, OKUM_REBASER, OKUM_ALLOWANCE_MANAGER,
     OKUM_BLACKLISTER, OKUM_UNBLACKLISTER,
-    PSM_BUFFER_DEPOSITOR, PSM_BUFFER_WITHDRAWER, PSM_QUEUE_PROCESSOR,
-    PSM_PAUSER, PSM_UNPAUSER, QUEUE_PSM,
+    PSM_BUFFER_DEPOSITOR, PSM_BUFFER_WITHDRAWER,
+    PSM_PAUSER, PSM_UNPAUSER,
 } = ROLES
 
 const MAX_SUPPLY = parseEther("1000000000")
@@ -61,7 +55,6 @@ type Chain = {
     usdc: MockUSDC
     okuMoney: OkuMoney
     okuDollar: OkuDollar
-    queue: RedemptionQueue
     psm: LitePSM
     label: string
     admin: Signer
@@ -92,20 +85,12 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     )) as unknown as OkuDollar
     await okuDollar.waitForDeployment()
 
-    const queue = (await upgrades.deployProxy(
-        new RedemptionQueue__factory(admin),
-        [await okuMoney.getAddress(), await usdc.getAddress(), adminAddr],
-        { kind: "uups" }
-    )) as unknown as RedemptionQueue
-    await queue.waitForDeployment()
-
     const psm = (await upgrades.deployProxy(
         new LitePSM__factory(admin),
         [
             await okuMoney.getAddress(),
             await okuDollar.getAddress(),
             await usdc.getAddress(),
-            await queue.getAddress(),
             adminAddr,
         ],
         { kind: "uups", unsafeAllow: ["constructor"] }
@@ -115,16 +100,13 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     // Roles
     await okuMoney.connect(admin).grantRole(OKUM_MINTER, await psm.getAddress())
     await okuMoney.connect(admin).grantRole(OKUM_BURNER, await psm.getAddress())
-    await okuMoney.connect(admin).grantRole(OKUM_BURNER, await queue.getAddress())
     await okuMoney.connect(admin).grantRole(OKUM_REBASER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_ALLOWANCE_MANAGER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_BLACKLISTER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_UNBLACKLISTER, adminAddr)
     await okuMoney.connect(admin).configureMinterAllowance(await psm.getAddress(), MINTER_ALLOWANCE)
-    await queue.connect(admin).grantRole(QUEUE_PSM, await psm.getAddress())
     await psm.connect(admin).grantRole(PSM_BUFFER_DEPOSITOR, adminAddr)
     await psm.connect(admin).grantRole(PSM_BUFFER_WITHDRAWER, adminAddr)
-    await psm.connect(admin).grantRole(PSM_QUEUE_PROCESSOR, adminAddr)
     await psm.connect(admin).grantRole(PSM_PAUSER, adminAddr)
     await psm.connect(admin).grantRole(PSM_UNPAUSER, adminAddr)
 
@@ -132,7 +114,7 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     await okuDollar.connect(admin).grantRole(OKUM_BLACKLISTER, adminAddr)
     await okuDollar.connect(admin).grantRole(OKUM_UNBLACKLISTER, adminAddr)
 
-    return { usdc, okuMoney, okuDollar, queue, psm, label, admin }
+    return { usdc, okuMoney, okuDollar, psm, label, admin }
 }
 
 async function warpDays(days: number) {
@@ -149,7 +131,7 @@ async function seedBuffer(chain: Chain, admin: Signer, usdcAmount: bigint) {
     const adminAddr = await admin.getAddress()
     await chain.usdc.mint(adminAddr, usdcAmount)
     await chain.usdc.connect(admin).approve(await chain.psm.getAddress(), usdcAmount)
-    await chain.psm.connect(admin).depositBuffer(usdcAmount, false, 0, 0, 0)
+    await chain.psm.connect(admin).depositBuffer(usdcAmount)
 }
 
 const WAD = 10n ** 18n
@@ -163,7 +145,7 @@ const DECIMAL_MULTIPLIER = 10n ** 12n
  * Returns DOLLAR VALUE on each side, not USDC.
  *
  * The USDC figures cannot measure anything: `LitePSM.mintOkuM(usdcOut)` transfers
- * exactly `usdcOut` (`LitePSM.sol:245`), so the orchestrator's USDC delta across
+ * exactly `usdcOut`, so the orchestrator's USDC delta across
  * the mint is identically the amount handed to it. A drift computed that way is
  * structurally zero and the assertion built on it can never fail — which is what
  * the deleted simulation did, under a comment claiming it had been fixed.
@@ -220,24 +202,6 @@ async function orchestratorBridge(
     const driftBound = DECIMAL_MULTIPLIER + (multDst + WAD - 1n) / WAD + 1n
 
     return { usdcOut, dollarsOut, dollarsIn, driftBound }
-}
-
-/** Drain the redemption queue on a chain. */
-async function drainQueue(chain: Chain, admin: Signer) {
-    for (let i = 0; i < 10; i++) {
-        const [head, tail] = await Promise.all([
-            chain.queue.queueHead(),
-            chain.queue.queueTail(),
-        ])
-        if (head >= tail) break
-        const batchEnd = tail - head > 50n ? head + 50n : tail
-        // Approve the full vault USDC balance as the upper bound
-        const psmBalance = await chain.usdc.balanceOf(await chain.psm.getAddress())
-        await chain.psm.connect(admin).processQueue(head, batchEnd, psmBalance)
-        // processQueue no longer auto-advances queueHead. Drive it forward so
-        // the next iteration's [head, tail) range reflects unprocessed entries.
-        await chain.queue.advanceHead(batchEnd - head)
-    }
 }
 
 describe("RealWorldUsage edge cases", () => {
@@ -321,10 +285,10 @@ describe("RealWorldUsage edge cases", () => {
     })
 
     // -------------------------------------------------------------------------
-    // E2. Queued redeem blocks orchestrator until processQueue
+    // E2. Empty source buffer blocks the orchestrator until reseeded
     // -------------------------------------------------------------------------
-    describe("E2: queued redeem blocks orchestrator", () => {
-        it("src redeem queued when buffer empty; orchestrator must processQueue before dst mint", async () => {
+    describe("E2: empty source buffer blocks orchestrator", () => {
+        it("src redeem reverts InsufficientBuffer while buffer empty; succeeds after reseed", async () => {
             const { chainA, chainB } = await freshChains()
             const adminAddr = await admin.getAddress()
             const aliceAddr = await alice.getAddress()
@@ -337,52 +301,42 @@ describe("RealWorldUsage edge cases", () => {
             await chainA.psm.connect(alice).mintOkuM(aliceUsdc)
             const aliceOkuM = await chainA.okuMoney.balanceOf(aliceAddr)
 
-            // Drain the source buffer to zero. Unconditional: if the buffer were
-            // already empty the scenario would not be testing the queue path, so
-            // a skipped withdraw is a broken fixture, not a no-op.
-            // `freshChains` seeds 100,000 USDC, and Alice's own 100 went in on
-            // mint, so the buffer holds exactly both.
+            // Drain the source buffer to zero. `freshChains` seeds 100,000 USDC and
+            // Alice's 100 went in on mint, so the buffer holds exactly both.
             const bufferBal = await chainA.usdc.balanceOf(await chainA.psm.getAddress())
             expect(bufferBal, "fixture: buffer must be non-empty before draining")
                 .to.equal(parseUnits("100000", 6) + aliceUsdc)
             await chainA.psm.connect(admin).withdrawUsdc(adminAddr, bufferBal)
             expect(await chainA.usdc.balanceOf(await chainA.psm.getAddress())).to.equal(0n)
 
-            // Alice approves orchestrator, orchestrator pulls OkuM and redeems — goes to queue
+            // Orchestrator pulls Alice's OkuM and tries to redeem: reverts, keeps the OkuM.
             await chainA.okuMoney.connect(alice).approve(orchAddr, aliceOkuM)
             await chainA.okuMoney.connect(orchestrator).transferFrom(aliceAddr, orchAddr, aliceOkuM)
             await chainA.okuMoney.connect(orchestrator).approve(await chainA.psm.getAddress(), aliceOkuM)
-            await chainA.psm.connect(orchestrator).redeemOkuM(aliceOkuM) // → queue path
+            await expect(chainA.psm.connect(orchestrator).redeemOkuM(aliceOkuM))
+                .to.be.revertedWithCustomError(chainA.psm, "InsufficientBuffer")
+                .withArgs(0n, aliceUsdc)
+            expect(await chainA.okuMoney.balanceOf(orchAddr), "orchestrator keeps its OkuM")
+                .to.equal(aliceOkuM)
+            expect(await chainA.usdc.balanceOf(orchAddr), "no USDC released").to.equal(0n)
 
-            // Verify entry is in queue
-            const queueHead = await chainA.queue.queueHead()
-            const queueTail = await chainA.queue.queueTail()
-            expect(queueTail - queueHead, "should have 1 queued entry").to.equal(1n)
-
-            // THE POINT OF THE SCENARIO, which the previous version never tested:
-            // the orchestrator is BLOCKED until the queue is processed. It holds
-            // no USDC, so attempting the destination mint now must fail rather
-            // than silently bridging value that was never released on the source.
-            expect(await chainA.usdc.balanceOf(orchAddr), "orchestrator must hold no USDC pre-drain")
-                .to.equal(0n)
-            // Approve generously, so the revert can only be about the balance the
-            // orchestrator does not yet have — not about an allowance.
+            // Without source USDC the destination mint cannot proceed. Approve
+            // generously so the revert can only be about balance, not allowance.
             await chainB.usdc
                 .connect(orchestrator)
                 .approve(await chainB.psm.getAddress(), parseUnits("100", 6))
             await expect(
                 chainB.psm.connect(orchestrator).mintOkuM(parseUnits("100", 6)),
-                "dst mint must fail before the source queue is drained"
+                "dst mint must fail before the source redeem succeeds"
             ).to.be.revertedWithCustomError(chainB.usdc, "ERC20InsufficientBalance")
 
-            // Refill buffer, then drain queue.
+            // Reseed the buffer; the same redeem now succeeds. At multiplier 1.0 the
+            // orchestrator receives exactly the 100 USDC Alice put in.
             await seedBuffer(chainA, admin, parseUnits("200", 6))
-            await drainQueue(chainA, admin)
-
-            // Queue drained — the orchestrator is paid exactly what it redeemed.
-            // At multiplier 1.0 that is the 100 USDC Alice put in, to the unit.
+            await chainA.psm.connect(orchestrator).redeemOkuM(aliceOkuM)
+            expect(await chainA.okuMoney.balanceOf(orchAddr)).to.equal(0n)
             const orchUsdc = await chainA.usdc.balanceOf(orchAddr)
-            expect(orchUsdc, "queue payout must equal the redeemed dollar value").to.equal(aliceUsdc)
+            expect(orchUsdc, "redeem pays the full dollar value").to.equal(aliceUsdc)
 
             // Now orchestrator mints on B. Multiplier is 1.0 on B, so 100 USDC
             // buys exactly 100e18 OkuM (6→18 decimal scaling).
@@ -559,10 +513,7 @@ describe("RealWorldUsage edge cases", () => {
             const aliceOkuMOnA = await chainA.okuMoney.balanceOf(aliceAddr)
             const hundred = parseUnits("100", 6)
 
-            // EVERY user-facing PSM path on A must revert while paused, each with
-            // `EnforcedPause` specifically. The previous version tested only
-            // `mintOkuM` with a bare `.to.be.reverted`, under a comment claiming
-            // "all actions on A should revert".
+            // EVERY user-facing PSM path on A must revert with `EnforcedPause`.
             await chainA.usdc.mint(aliceAddr, hundred)
             await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), hundred)
             await chainA.okuMoney.connect(alice).approve(await chainA.psm.getAddress(), aliceOkuMOnA)
@@ -650,8 +601,7 @@ describe("RealWorldUsage edge cases", () => {
                 await network.provider.send("evm_setAutomine", [true])
             }
 
-            // The actual property this suite is named for. Previously the test
-            // asserted nothing here and would have passed with the guard deleted.
+            // The property this suite is named for.
             expect(mintReceipt!.status).to.equal(0, "same-block mint must revert")
             expect(await chainA.okuMoney.balanceOf(aliceAddr)).to.equal(
                 0n,

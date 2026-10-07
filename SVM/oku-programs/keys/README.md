@@ -1,65 +1,53 @@
 # SVM Signing Keypairs
 
-This directory holds **local** Solana keypair files used during development and
-deployment. They are gitignored and must be generated per-developer.
+This directory holds **local** Solana keypair files for development. Everything here except this file
+and `.gitkeep` is gitignored (`**/keys/**/*.json`).
 
-> **IMPORTANT:** Never commit any `.json` file in this directory.
-> Each file is a 64-byte ed25519 keypair in standard Solana format
-> (`solana-keygen new` output). If any file was accidentally committed,
-> rotate the key immediately and rewrite git history.
+> **IMPORTANT:** Never commit a keypair. Each file is a 64-byte ed25519 keypair in standard
+> `solana-keygen new` format. If one is ever committed, rotate it immediately and rewrite history.
 
----
+## Keys used by the scripts
 
-## Expected files
-
-| Filename | Purpose | Mainnet env var in `scripts/config/authorities.ts` |
+| Key | Used for | Where read |
 |---|---|---|
-| `orchestrator.json` | PSM rebaser + cross-chain orchestrator (KMS-backed on mainnet) | `MAINNET_ORCHESTRATOR` |
-| `cold-multisig.json` | Cold multisig proxy (Squads vault on mainnet) | `MAINNET_COLD_MULTISIG` |
-| `warm-multisig.json` | Warm multisig proxy (Squads vault on mainnet) | `MAINNET_WARM_MULTISIG` |
-| `devnet-authority.json` | Devnet-only deployer / all-roles key | — |
+| deployer: `WALLET_PATH`, default `~/.config/solana/id.json` | Signs deploys and `initialize`; becomes `role_admin` and BPF upgrade authority | `scripts/utils/network.ts` |
+| `keys/devnet-authority.json` (override: `DEVNET_AUTHORITY_PATH`) | **Operator key** on localnet / devnet / forks. It is **not** the deployer; it holds the 9 granular roles (`pauser`, `unpauser`, `freezer`, `unfreezer`, `buffer_depositor`, `buffer_withdrawer`, `cap_manager`, `allowance_manager`, `rebaser`) | `scripts/config/authorities.ts::loadDevnetAuthority` |
 
-On **localnet / devnet / forks** you need **two** keys, not one:
+`initialize` forces two keys: it requires `role_admin` to be the program's BPF upgrade authority (the
+deployer) and rejects any granular role equal to `role_admin`. So localnet/devnet needs the deployer
+**and** the operator key; the operator key collapses all 9 roles onto one signer so a single extra key
+runs every flow. See [`SVM/README.md` § Two binding authority constraints at init](../../README.md#two-binding-authority-constraints-at-init).
 
-| Key | Holds | Why separate |
+`direct_minter` / `direct_burner` sit on a third key, the delegate EOA (`DEFAULT_DIRECT_MINTER` in
+`scripts/config/constants.ts`), wired by `deploy-init` / `grant-roles.ts`. There is no on-chain bridge
+program; the orchestrator key signs both PSM ops and the off-chain cross-chain mint/burn flow.
+
+Program keypairs live in `target/deploy/<program>-keypair.json`, not here.
+
+## Mainnet: env vars only
+
+No keypair file in this directory is read on mainnet. `scripts/config/authorities.ts` takes **public
+keys** from the environment, and the private keys (Squads vaults, KMS) never touch this machine:
+
+| Env var | Required | Roles seated |
 |---|---|---|
-| deployer (`~/.config/solana/id.json`) | `role_admin` | `initialize` constrains `role_admin` == the program's BPF upgrade authority, i.e. whoever deployed. |
-| `devnet-authority.json` | the 9 granular roles | `initialize` rejects any granular authority equal to `role_admin` (separation-of-duties, mirrors `set_authority`). |
+| `MAINNET_COLD_MULTISIG` | yes | `unpauser`, `unfreezer`, `buffer_withdrawer`, `cap_manager`, `allowance_manager` (and the intended `role_admin`, see below) |
+| `MAINNET_WARM_MULTISIG` | yes | `pauser`, `freezer` |
+| `MAINNET_ORCHESTRATOR` | yes | `buffer_depositor`, `rebaser` |
+| `MAINNET_DIRECT_MINTER` | optional | `direct_minter` (unset = disabled) |
+| `MAINNET_DIRECT_BURNER` | optional | `direct_burner` (unset = disabled) |
 
-See `scripts/config/authorities.ts::allRolesToOperatorKey` and the
-"Two binding authority constraints at init" section of `SVM/README.md`.
-The operator key still collapses all 9 roles onto ONE signer, so a single
-extra key is enough to run every devnet flow end-to-end.
+Caveat: `initialize` always sets `role_admin` to the signing deployer, so `MAINNET_COLD_MULTISIG` does
+**not** become `role_admin` at init. Hand it over afterwards with the two-step rotation in
+[`SVM/README.md` § Mainnet `role_admin` handover](../../README.md#mainnet-role_admin-handover).
 
-`direct_minter` / `direct_burner` sit on a third key (the delegate EOA,
-`DEFAULT_DIRECT_MINTER` in `scripts/config/constants.ts`) for the same
-separation reason; they're wired by `deploy-init` / `grant-roles.ts`.
-
-Override the operator key path with `DEVNET_AUTHORITY_PATH`.
-
-On **mainnet**, each env var above must be set to the corresponding Squads
-vault or KMS public key; the private keys never touch this machine.
-
-There is no on-chain bridge program; the orchestrator key above signs both
-PSM ops and the off-chain cross-chain mint/burn flow.
-
----
-
-## Generating keys locally
+## Generating the devnet operator key
 
 ```bash
-# Dev-only operator key holding the 9 granular roles (localnet / devnet).
-# REQUIRED — deploy-init fails without it, since the granular roles cannot
-# be seated on the deployer (which is role_admin).
-solana-keygen new --outfile keys/devnet-authority.json
+solana-keygen new --outfile keys/devnet-authority.json   # REQUIRED: deploy-init fails without it
 solana transfer $(solana-keygen pubkey keys/devnet-authority.json) 0.5 \
     --url devnet --allow-unfunded-recipient
-
-# Separate role keys (mainnet only — mirror the production split)
-solana-keygen new --outfile keys/orchestrator.json
-solana-keygen new --outfile keys/cold-multisig.json
-solana-keygen new --outfile keys/warm-multisig.json
-
-# Fund the deployer on devnet / localnet
-solana airdrop 10 $(solana-keygen pubkey keys/devnet-authority.json) --url devnet
+# or: solana airdrop 2 $(solana-keygen pubkey keys/devnet-authority.json) --url devnet
 ```
+
+Fund the deployer wallet separately (`solana airdrop` on devnet/localnet).

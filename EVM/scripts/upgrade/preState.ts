@@ -27,7 +27,7 @@ export type StateSnapshot = Record<string, string>;
 // ============================================================================
 //
 // Invariants exercised on upgrade:
-//   - Wired addresses (okuMoney, okuDollar, usdc, redemptionQueue) preserved.
+//   - Wired addresses (okuMoney, okuDollar, usdc) preserved.
 //   - usdcDecimalMultiplier preserved (resolved once at init from IERC20Metadata).
 //   - Pause state preserved.
 
@@ -36,14 +36,12 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
     okuMoney,
     okuDollar,
     usdc,
-    redemptionQueue,
     usdcDecimalMultiplier,
     paused,
   ] = await Promise.all([
     c.okuMoney(),
     c.okuDollar(),
     c.usdc(),
-    c.redemptionQueue(),
     c.usdcDecimalMultiplier(),
     c.paused(),
   ]);
@@ -52,7 +50,6 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
     okuMoney: String(okuMoney),
     okuDollar: String(okuDollar),
     usdc: String(usdc),
-    redemptionQueue: String(redemptionQueue),
     usdcDecimalMultiplier: usdcDecimalMultiplier.toString(),
     paused: String(paused),
   };
@@ -154,40 +151,6 @@ export async function readOkuMoneyState(c: Contract): Promise<StateSnapshot> {
 }
 
 // ============================================================================
-// RedemptionQueue
-// ============================================================================
-//
-// Invariants exercised on upgrade:
-//   - Wired addresses (okuMoney, usdc) preserved.
-//   - usdcDecimalMultiplier preserved (resolved once at init from IERC20Metadata).
-//   - Queue head/tail counters and totalQueuedOkuM preserved (an impl upgrade
-//     must not advance or reset the queue cursor).
-//
-// RedemptionQueue does NOT inherit PausableUpgradeable — confirmed against
-// src/psm/RedemptionQueue.sol. No paused() field is snapshotted.
-
-export async function readRedemptionQueueState(c: Contract): Promise<StateSnapshot> {
-  const [okuMoney, usdc, usdcDecimalMultiplier, queueHead, queueTail, totalQueuedOkuM] =
-    await Promise.all([
-      c.okuMoney(),
-      c.usdc(),
-      c.usdcDecimalMultiplier(),
-      c.queueHead(),
-      c.queueTail(),
-      c.totalQueuedOkuM(),
-    ]);
-
-  return {
-    okuMoney: String(okuMoney),
-    usdc: String(usdc),
-    usdcDecimalMultiplier: usdcDecimalMultiplier.toString(),
-    queueHead: queueHead.toString(),
-    queueTail: queueTail.toString(),
-    totalQueuedOkuM: totalQueuedOkuM.toString(),
-  };
-}
-
-// ============================================================================
 // Registry
 // ============================================================================
 
@@ -199,7 +162,6 @@ export async function readRedemptionQueueState(c: Contract): Promise<StateSnapsh
 export const STATE_READERS: Record<string, (c: Contract) => Promise<StateSnapshot>> = {
   OkuMoney: readOkuMoneyState,
   OkuDollar: readOkuDollarState,
-  RedemptionQueue: readRedemptionQueueState,
   LitePSM: readLitePSMState,
 };
 

@@ -36,13 +36,6 @@ contract ERC7201SlotTest is Test {
         );
     }
 
-    function test_RedemptionQueue_StorageLocation() public pure {
-        assertEq(
-            _erc7201Slot("okumoney.storage.RedemptionQueue"),
-            0xa62273ae8f4f9b4de76a6f11e9bbf5ca0a9c42e1f4bbbcb4369e173f90b6e000
-        );
-    }
-
     function test_ReentrancyGuard_StorageLocation() public pure {
         assertEq(
             _erc7201Slot("openzeppelin.storage.ReentrancyGuard"),

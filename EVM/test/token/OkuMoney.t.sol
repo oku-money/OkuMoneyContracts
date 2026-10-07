@@ -62,7 +62,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     /// @dev Asserts against `Constants.OKU_M_DECIMALS`, not a bare 18: that constant is
-    ///      the exponent the PSM/queue USDC conversion is built on, so pinning the
+    ///      the exponent the PSM USDC conversion is built on, so pinning the
     ///      literal here would let `decimals()` and the conversion math drift apart
     ///      while both tests still passed.
     function test_Initialize_SetsCorrectDecimals() public view {
@@ -849,11 +849,11 @@ contract OkuMoneyTest is BaseTest {
     /// @dev The test above only proves internal self-consistency: `supportsInterface`
     ///      is checked against `type(I).interfaceId`, so it passes trivially even if a
     ///      signature change silently moves the computed ID — it can never observe
-    ///      doc drift. ERC-8056 is an explicitly-Draft standard (Accepted Risk #9) that
+    ///      doc drift. ERC-8056 is an explicitly-Draft standard (Accepted Risk #8) that
     ///      may itself change the reference signatures before Final; the moment either
     ///      that or a local edit shifts any of the four IDs, this test fails and names
     ///      exactly which of the three doc sites (this file's NatSpec, the README
-    ///      table, Accepted Risk #9) needs updating — instead of three sites silently
+    ///      table, Accepted Risk #8) needs updating — instead of three sites silently
     ///      going stale with every other test still green.
     function test_InterfaceIds_MatchDocumentedHexValues() public pure {
         assertEq(type(IScaledUIAmount).interfaceId, bytes4(0xa60bf13d), "IScaledUIAmount (core)");

@@ -269,8 +269,7 @@ describe("display mirror (ScaledUiAmount)", () => {
 
     const afterSync = await readDisplayMultiplier(h, okuMMint);
 
-    // No crank -> display must not move, however much time passes. The old
-    // design deliberately advanced here via a pre-armed step; it no longer does.
+    // No crank -> display must not move, however much time passes.
     await warpBy(h, CRANK_SECS * 5);
     const uncranked = await readDisplayMultiplier(h, okuMMint);
     expect(uncranked.effective).to.equal(

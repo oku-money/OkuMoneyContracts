@@ -1,17 +1,7 @@
-//! Pure yield-distribution sandwich-lock primitive.
-//!
-//! The lite-psm program enforces a "no user op in the same slot as a
-//! yield event" invariant. The slot comparison itself is one line; the
-//! Anchor-error mapping is per-program. This crate owns the comparison
-//! so a future change (e.g. a wider lock window) lands in one place.
-//!
-//! No `anchor-lang`, no `solana-program`, no I/O — by design. Callers
-//! resolve `Clock::get()?.slot` themselves and pass it in.
+//! Yield-distribution sandwich-lock primitive: no user op in the same slot as
+//! a yield event. Callers pass in `Clock::get()?.slot`.
 
-/// Return `true` when the current slot collides with the stored
-/// yield-distribution slot. A wrapping `check_yield_lock_*` should
-/// emit its program-specific `OverrideInProgress` error in
-/// that case.
+/// `true` when `current_slot` equals the stored yield-distribution slot.
 #[inline]
 pub const fn yield_lock_engaged(stored_slot: u64, current_slot: u64) -> bool {
     stored_slot == current_slot
@@ -34,8 +24,6 @@ mod tests {
 
     #[test]
     fn disengaged_initial_state() {
-        // Stored slot is 0 (genesis sentinel) and current is somewhere
-        // post-genesis — never engaged in practice.
         assert!(!yield_lock_engaged(0, 1_000_000));
     }
 }

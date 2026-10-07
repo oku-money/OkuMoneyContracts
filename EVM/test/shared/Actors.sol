@@ -38,13 +38,8 @@ abstract contract Actors is Test {
 
     // ============ LitePSM Roles ============
 
-    address public queueProcessor = makeAddr("queueProcessor");
     address public bufferDepositor = makeAddr("bufferDepositor");
     address public bufferWithdrawer = makeAddr("bufferWithdrawer");
-
-    // ============ RedemptionQueue Roles ============
-
-    address public queueRescuer = makeAddr("queueRescuer");
 
     // OkuBridge / OkuBridgeRouter actor aliases were removed in the noBridge
     // refactor. If those contracts return, restore the named actors from the

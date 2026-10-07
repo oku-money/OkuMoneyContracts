@@ -1,84 +1,47 @@
-//! LitePSM user-facing instructions (mint/redeem/buffer).
-//!
-//! The buffer-backed mint + instant redemption lifecycle here mirrors MakerDAO's
-//! `DssLitePsm`: deposit USDC → mint at peg, redeem from buffer when liquid.
-//! Taken from https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol
+//! LitePSM user-facing instructions (mint/redeem/buffer), modelled on MakerDAO's
+//! `DssLitePsm`: deposit USDC, mint at peg, redeem from the buffer when liquid.
 
 use crate::constants::USDC_DECIMALS;
 use crate::contexts::{DepositBuffer, MintOkuM, RedeemOkuM, WithdrawBuffer};
 use crate::errors::LitePsmError;
 use crate::events::*;
 use crate::helpers::{
-    check_yield_lock, check_yield_lock_with_clock, dollars_to_raw, multiplier, raw_to_dollars,
+    check_supply_cap, check_yield_lock, check_yield_lock_with_clock, consume_allowance,
+    dollars_to_raw, multiplier, raw_to_dollars,
 };
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
 
-/// Mint OkuM with USDC (multiplier-aware)
-///
-/// raw_oku_m_amount = usdc_amount * PRECISION / multiplier
-/// When multiplier > PRECISION, you get fewer raw OkuM tokens per USDC
-///
-/// Blocked during the same slot as a yield distribution (sandwich
-/// prevention).
-pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
-    // One Clock::get() for both the yield-lock check and the multiplier read
-    // below, rather than each fetching the sysvar independently. See
-    // `multiplier::at`'s doc comment.
-    let clock = Clock::get()?;
+// Display freshness is the permissionless crank's job: a sync here costs ~31k CU
+// on a hot path. An idle PSM shows a stale-LOW wallet balance; pricing never
+// reads the mirror.
 
-    // Check yield distribution lock FIRST
+/// Prices at the canonical multiplier (never the lagging `ScaledUiAmount`
+/// mirror). A zero-output mint is rejected so USDC is never donated to the buffer.
+pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
+    let clock = Clock::get()?;
     check_yield_lock_with_clock(&ctx.accounts.config, &clock)?;
 
-    // Read state
-    let is_paused = ctx.accounts.config.is_paused;
-    let max_supply = ctx.accounts.config.max_supply;
-    let minter_allowance = ctx.accounts.config.minter_allowance;
-    let current_supply = ctx.accounts.oku_m_mint.supply;
-
-    require!(!is_paused, LitePsmError::Paused);
+    require!(!ctx.accounts.config.is_paused, LitePsmError::Paused);
     require!(usdc_amount > 0, LitePsmError::ZeroAmount);
 
-    // Price against the CANONICAL multiplier from the rate schedule, NOT the
-    // mint's ScaledUiAmount extension (a lagging display mirror).
     let multiplier = multiplier::at(&ctx.accounts.config, clock.unix_timestamp)?;
-
-    // Treat usdc_amount as a dollar value.
     let raw_oku_m_amount = dollars_to_raw(usdc_amount, multiplier)?;
-
-    // Reject zero-output mints — at high `multiplier`, the division can
-    // truncate to zero, which would silently donate USDC to the buffer with
-    // no OkuM minted in return. Matches EVM `LitePSM` `AmountTooSmall`.
     require!(raw_oku_m_amount > 0, LitePsmError::AmountTooSmall);
 
-    // Check max supply
-    require!(
-        current_supply
-            .checked_add(raw_oku_m_amount)
-            .ok_or(LitePsmError::Overflow)?
-            <= max_supply,
-        LitePsmError::MaxSupplyExceeded
-    );
+    // The mint amount is exactly `raw_oku_m_amount`, so the post-mint supply is
+    // computed rather than re-unpacking the mint. Revisit if an extension could
+    // change `supply` independently of this CPI (none in the init extension set).
+    let new_total_supply = check_supply_cap(
+        ctx.accounts.oku_m_mint.supply,
+        raw_oku_m_amount,
+        ctx.accounts.config.max_supply,
+    )?;
+    consume_allowance(&mut ctx.accounts.config.minter_allowance, raw_oku_m_amount)?;
 
-    // Check minter allowance
-    require!(
-        raw_oku_m_amount <= minter_allowance,
-        LitePsmError::AllowanceExceeded
-    );
-
-    // Decrement minter allowance BEFORE the mint CPI. NOT a reentrancy defense —
-    // Anchor only persists `Account<T>` mutations at instruction `exit()`, and Solana
-    // forbids a program calling back into itself within one transaction, so there is
-    // no reentrant path through the CPI below for this ordering to close.
-    let bump = ctx.accounts.config.bump;
-    ctx.accounts.config.minter_allowance = minter_allowance
-        .checked_sub(raw_oku_m_amount)
-        .ok_or(LitePsmError::Overflow)?;
-
-    // Transfer USDC from user to vault. `transfer_checked` validates the mint
-    // and decimals on-chain so a wrong-mint or wrong-decimals account cannot be
-    // substituted for the USDC leg.
+    // `transfer_checked` validates mint and decimals, so a wrong-mint or
+    // wrong-decimals account cannot stand in for the USDC leg.
     anchor_spl::token::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.key(),
@@ -93,13 +56,9 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         USDC_DECIMALS,
     )?;
 
-    // Mint OkuM to user (Token-2022)
-    let bump = [bump];
-    let seeds = PsmConfig::signer_seeds(&bump);
+    let bump_seed = [ctx.accounts.config.bump];
+    let seeds = PsmConfig::signer_seeds(&bump_seed);
     let signer = &[&seeds[..]];
-
-    // Capture user key before borrows
-    let user_key = ctx.accounts.user.key();
 
     token_interface::mint_to(
         CpiContext::new_with_signer(
@@ -114,26 +73,11 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         raw_oku_m_amount,
     )?;
 
-    // Calculate dollar value for event
-    let dollar_value = raw_to_dollars(raw_oku_m_amount, multiplier)?;
-
-    // Post-mint total, computed rather than `reload()`-ed: `current_supply`
-    // above was read before the `mint_to` CPI, and the mint amount is exactly
-    // `raw_oku_m_amount` (checked for overflow against `max_supply` above), so
-    // this is the correct post-mint value without paying for a second
-    // Token-2022 `StateWithExtensions` unpack of the whole mint account.
-    // Caveat accepted: this would need revisiting if a transfer-hook-style
-    // Token-2022 extension could change `supply` independent of this CPI —
-    // none does today (see `instructions/init.rs` for the extension set).
-    let new_total_supply = current_supply
-        .checked_add(raw_oku_m_amount)
-        .ok_or(LitePsmError::Overflow)?;
-
     emit!(MintEvent {
-        user: user_key,
+        user: ctx.accounts.user.key(),
         usdc_amount,
         raw_oku_m_amount,
-        dollar_value,
+        dollar_value: raw_to_dollars(raw_oku_m_amount, multiplier)?,
         multiplier,
         new_total_supply,
     });
@@ -141,83 +85,42 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     Ok(())
 }
 
-// NOTE: do not piggyback an opportunistic display sync onto this path. It
-// measured ~31k compute units on a cold mint (more in the two-rpow overhang
-// branch) for a purely cosmetic refresh, on a hot path already uncomfortably
-// close to Solana's 200k per-instruction default. Display freshness is solely
-// the permissionless crank's job -- see `sync_display_multiplier` and
-// `scripts/admin/sync-display.ts`.
-//
-// Consequence, stated plainly: an idle PSM with no crank running will show a
-// stale (always LOW, never high) wallet balance. Pricing is unaffected,
-// because nothing prices against the mirror.
-
-/// Redeem OkuM for USDC (multiplier-aware, with slippage protection)
-///
-/// usdc_amount = raw_oku_m_amount * multiplier / PRECISION
-/// When multiplier > PRECISION, you get more USDC per raw OkuM token
-///
-/// # Arguments
-/// * `raw_oku_m_amount` - Raw OkuM tokens to redeem
-/// * `min_usdc_out` - Minimum USDC output the user will accept. Pass `0` to
-///   skip. EVM's `LitePSM.redeemOkuM(amount)` has no equivalent because its
-///   monotonic multiplier makes slippage structurally impossible; kept here
-///   for defense-in-depth and client-side safety.
-///
-/// Reverts if buffer is insufficient.
-/// Blocked during same slot as yield distribution (sandwich prevention).
+/// `min_usdc_out` is a client-side guard (`0` skips it). The EVM PSM has no
+/// slippage parameter.
 pub fn redeem_oku_m(
     ctx: Context<RedeemOkuM>,
     raw_oku_m_amount: u64,
     min_usdc_out: u64,
 ) -> Result<()> {
-    // One Clock::get() for both the yield-lock check and the multiplier read
-    // below, rather than each fetching the sysvar independently. See
-    // `multiplier::at`'s doc comment.
     let clock = Clock::get()?;
-
-    // Check yield distribution lock FIRST
     check_yield_lock_with_clock(&ctx.accounts.config, &clock)?;
 
-    // Read state
-    let is_paused = ctx.accounts.config.is_paused;
-    let bump = ctx.accounts.config.bump;
-    let vault_usdc_balance = ctx.accounts.vault_usdc.amount;
-    let current_supply = ctx.accounts.oku_m_mint.supply;
-
-    require!(!is_paused, LitePsmError::Paused);
+    require!(!ctx.accounts.config.is_paused, LitePsmError::Paused);
     require!(raw_oku_m_amount > 0, LitePsmError::ZeroAmount);
 
-    // Price against the CANONICAL multiplier from the rate schedule, NOT the
-    // mint's ScaledUiAmount extension (a lagging display mirror).
     let multiplier = multiplier::at(&ctx.accounts.config, clock.unix_timestamp)?;
-
-    // Treat the dollar value as USDC.
     let usdc_amount = raw_to_dollars(raw_oku_m_amount, multiplier)?;
-
-    // Reject zero-output redeems.
-    require!(usdc_amount > 0, LitePsmError::ZeroOutput);
-
-    // Slippage protection: reject if output is below the caller's minimum.
+    require!(usdc_amount > 0, LitePsmError::AmountTooSmall);
     require!(usdc_amount >= min_usdc_out, LitePsmError::SlippageExceeded);
 
-    // Pre-check user balance to surface a custom error instead of the
-    // opaque SPL insufficient-balance error.
-    {
-        let user_balance = ctx.accounts.user_oku_m_ata.amount;
-        require!(
-            user_balance >= raw_oku_m_amount,
-            LitePsmError::InsufficientUserBalance
-        );
-    }
-
-    // Check buffer is sufficient for redemption
+    // Custom error instead of the opaque SPL insufficient-funds one.
     require!(
-        vault_usdc_balance >= usdc_amount,
+        ctx.accounts.user_oku_m_ata.amount >= raw_oku_m_amount,
+        LitePsmError::InsufficientUserBalance
+    );
+    require!(
+        ctx.accounts.vault_usdc.amount >= usdc_amount,
         LitePsmError::InsufficientBuffer
     );
 
-    // Burn OkuM from user
+    // Post-burn supply is computed for the same reason as in `mint_oku_m`.
+    let new_total_supply = ctx
+        .accounts
+        .oku_m_mint
+        .supply
+        .checked_sub(raw_oku_m_amount)
+        .ok_or(LitePsmError::Overflow)?;
+
     token_interface::burn(
         CpiContext::new(
             ctx.accounts.token_2022_program.key(),
@@ -230,9 +133,8 @@ pub fn redeem_oku_m(
         raw_oku_m_amount,
     )?;
 
-    // Transfer USDC to user
-    let bump = [bump];
-    let seeds = PsmConfig::signer_seeds(&bump);
+    let bump_seed = [ctx.accounts.config.bump];
+    let seeds = PsmConfig::signer_seeds(&bump_seed);
     let signer = &[&seeds[..]];
 
     anchor_spl::token::transfer_checked(
@@ -250,22 +152,11 @@ pub fn redeem_oku_m(
         USDC_DECIMALS,
     )?;
 
-    // Post-burn total, computed rather than `reload()`-ed: `current_supply`
-    // above was read before the `burn` CPI, and the burn amount is exactly
-    // `raw_oku_m_amount` (checked against the user's balance above), so this
-    // is the correct post-burn value without a second Token-2022
-    // `StateWithExtensions` unpack of the whole mint account. Same caveat as
-    // `mint_oku_m`: would need revisiting if a transfer-hook-style extension
-    // could move `supply` independent of this CPI — none does today.
-    let new_total_supply = current_supply
-        .checked_sub(raw_oku_m_amount)
-        .ok_or(LitePsmError::Overflow)?;
-
     emit!(RedeemEvent {
         user: ctx.accounts.user.key(),
         raw_oku_m_amount,
         usdc_amount,
-        dollar_value: usdc_amount, // USDC is dollar-denominated
+        dollar_value: usdc_amount,
         multiplier,
         new_total_supply,
     });
@@ -273,11 +164,6 @@ pub fn redeem_oku_m(
     Ok(())
 }
 
-/// Deposit USDC buffer (buffer_depositor role)
-///
-/// Yield-locked and pause-gated for symmetry with every other value-moving
-/// instruction (`mint_oku_m`, `redeem_oku_m`, `withdraw_buffer`,
-/// `mint_oku_m_direct`, `burn_oku_m_direct`).
 pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
     check_yield_lock(&ctx.accounts.config)?;
     require!(!ctx.accounts.config.is_paused, LitePsmError::Paused);
@@ -297,7 +183,6 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
         USDC_DECIMALS,
     )?;
 
-    // Reload vault balance after transfer
     ctx.accounts.vault_usdc.reload()?;
     let new_buffer_balance = ctx.accounts.vault_usdc.amount;
 
@@ -310,24 +195,16 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
     Ok(())
 }
 
-/// Withdraw USDC from buffer (buffer_withdrawer only)
-///
-/// Used to reclaim excess buffer after redemptions processed.
-///
-/// **Intentionally NOT pause-gated.** Mirrors EVM `LitePSM.withdrawUsdc`,
-/// which carries no `whenNotPaused` modifier.
-/// Pause is a user-side incident lever: it blocks mints/redeems but must NOT
-/// block the cold multisig from rebalancing buffer USDC during an incident
-/// response.
 pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> {
     check_yield_lock(&ctx.accounts.config)?;
+    require!(!ctx.accounts.config.is_paused, LitePsmError::Paused);
     require!(amount > 0, LitePsmError::ZeroAmount);
 
     let vault_balance = ctx.accounts.vault_usdc.amount;
     require!(vault_balance >= amount, LitePsmError::InsufficientBuffer);
 
-    let bump = [ctx.accounts.config.bump];
-    let seeds = PsmConfig::signer_seeds(&bump);
+    let bump_seed = [ctx.accounts.config.bump];
+    let seeds = PsmConfig::signer_seeds(&bump_seed);
     let signer = &[&seeds[..]];
 
     anchor_spl::token::transfer_checked(
@@ -345,7 +222,6 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
         USDC_DECIMALS,
     )?;
 
-    // Reload vault balance after transfer
     ctx.accounts.vault_usdc.reload()?;
     let new_buffer_balance = ctx.accounts.vault_usdc.amount;
 

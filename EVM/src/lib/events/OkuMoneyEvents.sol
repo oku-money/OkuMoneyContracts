@@ -4,20 +4,17 @@ pragma solidity 0.8.28;
 /**
  * @title OkuMoneyEvents
  * @notice Event declarations for the OkuMoney token contract.
- * @dev Solidity cannot emit events declared in libraries, so events live in per-contract
- *      abstract contracts that the main contract inherits — keeping contract bodies
- *      focused on logic while preserving normal `emit` semantics.
+ * @dev Solidity cannot emit events declared in libraries, so they live in abstract
+ *      contracts the main contract inherits.
  */
 abstract contract OkuMoneyEvents {
     /// @notice Emitted when the discrete emergency override {setOkuMMultiplier} re-anchors
     ///         the accrual base.
-    /// @dev NOT emitted for normal streaming accrual (which is continuous and has no
-    ///      discrete events) nor for rate-schedule changes (see {OkuMYieldRateUpdated}).
+    /// @dev Not emitted for streaming accrual or rate changes (see {OkuMYieldRateUpdated}).
     /// @param oldMultiplier  Multiplier immediately before the override
     /// @param newMultiplier  New base multiplier
     /// @param totalSupply    Token supply at time of update
-    /// @param blockNumber    `block.number` at update time; indexed so subgraphs can
-    ///                       shard yield events without re-deriving it from the log
+    /// @param blockNumber    `block.number` at update time
     event OkuMMultiplierUpdated(
         uint256 oldMultiplier,
         uint256 newMultiplier,
@@ -36,9 +33,6 @@ abstract contract OkuMoneyEvents {
     );
 
     /// @notice Emitted when a successor rate is pre-staged.
-    /// @dev The successor activates off `activatesAt` with no transaction at the
-    ///      boundary — the primitive that keeps cross-chain epoch handovers
-    ///      simultaneous.
     /// @param newRate     Successor per-second rate
     /// @param activatesAt Timestamp the successor takes effect (= current okuMRateEnd)
     /// @param expiresAt   Timestamp the successor's own window elapses (bounds the

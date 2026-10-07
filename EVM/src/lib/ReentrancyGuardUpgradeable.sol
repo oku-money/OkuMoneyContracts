@@ -7,16 +7,9 @@ import {StorageSlot} from "@openzeppelin/contracts/utils/StorageSlot.sol";
 /**
  * @title ReentrancyGuardUpgradeable
  * @notice Upgradeable version of OpenZeppelin's ReentrancyGuard
- * @dev Adapted from OpenZeppelin Contracts v5.x.
- *      Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/ReentrancyGuard.sol
- *
- *      Uses the ERC-7201 (https://eips.ethereum.org/EIPS/eip-7201) namespaced storage
- *      pattern at the SAME slot as OZ's `ReentrancyGuard` 5.x, so a contract
- *      inheriting OZ's non-upgradeable guard can switch to this one with no storage
- *      migration.
- *
- *      Must call __ReentrancyGuard_init() in the initializer of inheriting contracts;
- *      this performs the NOT_ENTERED initialization that OZ's constructor normally does.
+ * @dev Adapted from OpenZeppelin Contracts v5.x. Uses the SAME ERC-7201 slot as OZ's
+ *      `ReentrancyGuard`, so switching needs no storage migration. Call
+ *      `__ReentrancyGuard_init()` in the inheriting initializer.
  */
 abstract contract ReentrancyGuardUpgradeable is Initializable {
     using StorageSlot for bytes32;
@@ -28,15 +21,9 @@ abstract contract ReentrancyGuardUpgradeable is Initializable {
     uint256 private constant NOT_ENTERED = 1;
     uint256 private constant ENTERED = 2;
 
-    /**
-     * @dev Unauthorized reentrant call.
-     */
     error ReentrancyGuardReentrantCall();
 
-    /**
-     * @dev Initializes the reentrancy guard to NOT_ENTERED state.
-     *      Must be called in the initializer of the inheriting contract.
-     */
+    /// @dev Sets NOT_ENTERED; must be called in the inheriting initializer.
     function __ReentrancyGuard_init() internal onlyInitializing {
         __ReentrancyGuard_init_unchained();
     }
@@ -45,9 +32,6 @@ abstract contract ReentrancyGuardUpgradeable is Initializable {
         _reentrancyGuardStorageSlot().getUint256Slot().value = NOT_ENTERED;
     }
 
-    /**
-     * @dev Prevents a contract from calling itself, directly or indirectly.
-     */
     modifier nonReentrant() {
         _nonReentrantBefore();
         _;
@@ -65,9 +49,6 @@ abstract contract ReentrancyGuardUpgradeable is Initializable {
         _reentrancyGuardStorageSlot().getUint256Slot().value = NOT_ENTERED;
     }
 
-    /**
-     * @dev Returns true if the reentrancy guard is currently set to "entered".
-     */
     function _reentrancyGuardEntered() internal view returns (bool) {
         return _reentrancyGuardStorageSlot().getUint256Slot().value == ENTERED;
     }

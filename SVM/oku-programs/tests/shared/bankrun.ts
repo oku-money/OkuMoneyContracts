@@ -294,9 +294,8 @@ export async function warpTo(h: BankrunHarness, unixTs: number | bigint): Promis
 }
 
 /**
- * Advance bankrun's slot clock by `slots`. Replaces same-slot sandwich
- * mitigations (e.g. `await sleep(500)` after a yield op) that relied on
- * wall-clock slot rollover on the validator.
+ * Advance bankrun's slot clock by `slots`, deterministically releasing the
+ * same-slot yield lock (no wall-clock sleeps needed).
  */
 export async function warpSlots(h: BankrunHarness, slots: number | bigint): Promise<void> {
   const cur = await h.context.banksClient.getSlot();

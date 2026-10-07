@@ -2,7 +2,7 @@
  * Additional PSM edge-case coverage.
  *
  * Covered:
- *   - zero-supply distribute_yield reverts with ZeroAmount
+ *   - a rate schedule is valid (and accrues) against a zero-supply mint
  *   - PSM double-init negative test
  */
 
@@ -83,26 +83,17 @@ describe("PSM coverage additions", () => {
     await fundKeypairs(h, [user], 10 * anchor.web3.LAMPORTS_PER_SOL);
   });
 
-  // The old `distribute_yield reverts ZeroAmount when okuM supply == 0` test
-  // was deleted with the instruction it covered. Under streaming accrual the
-  // operator publishes a RATE, and a rate is well-defined at zero supply —
-  // nothing is divided by the supply, so there is no degenerate case to guard.
-  // That is the point of the model: the multiplier has no supply term, which
-  // is exactly what makes it identical across chains.
-  //
-  // The replacement property — that a schedule can be published and accrues
-  // correctly against an empty mint — is asserted here.
+  // Under streaming accrual the operator publishes a RATE, and a rate is
+  // well-defined at zero supply — nothing is divided by the supply, so there is
+  // no degenerate case to guard. The multiplier has no supply term, which is
+  // exactly what makes it identical across chains. The property asserted here:
+  // a schedule can be published and accrues correctly against an empty mint.
   it("a rate schedule is valid at zero supply, and prices a later mint higher", async () => {
-    // The previous version evaluated `computeMultiplier` -- the test's OWN TS
-    // mirror -- at two timestamps and asserted it was monotone. The program
-    // contributed nothing to either value, `computeMultiplier` takes no supply
-    // argument so "no supply term" was true by its signature, and the test
-    // never checked that supply was actually zero. It asserted a property of
-    // the test harness.
-    //
-    // The mirror is legitimate for PREDICTING an on-chain result (it is
-    // differentially tested against the Solidity and Rust implementations).
-    // It is not a substitute for one.
+    // The assertions below run against the program, not the TS mirror: the
+    // mirror takes no supply argument, so evaluating it alone could not show
+    // that the multiplier has no supply term. The mirror is legitimate for
+    // PREDICTING an on-chain result (it is differentially tested against the
+    // Solidity and Rust implementations), not as a substitute for one.
     const supplyBefore = (await unpackMint(
       okuMMint,
       (await h.provider.connection.getAccountInfo(okuMMint))!,
@@ -156,11 +147,9 @@ describe("PSM coverage additions", () => {
   });
 
   it("lite-psm initialize fails when the config PDA already exists", async () => {
-    // The previous version omitted the required `okuMUri` param and passed an
-    // existing mint with no signer, so it threw during CLIENT-SIDE Borsh
-    // serialization and never reached the program -- then accepted that with
-    // `expect(err).to.exist`. A test named for a program-level guard that never
-    // invokes the program.
+    // All required params (including `okuMUri`) are supplied so the call
+    // reaches the program rather than failing during CLIENT-SIDE Borsh
+    // serialization.
     //
     // Re-initialising needs a fresh okuM mint keypair (the instruction creates
     // it), so the ONLY thing that can fail is the config PDA already being in

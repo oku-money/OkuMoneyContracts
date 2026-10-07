@@ -23,14 +23,13 @@ contract OkuMPriceInvariantsTest is BaseTest {
         excludeContract(address(okuMoney));
         excludeContract(address(okuDollar));
         excludeContract(address(litePsm));
-        excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
     }
 
     /**
      * @notice Actor balances never exceed totalSupply.
      * @dev Deliberately `<=`, not `==`: addresses outside the actor set (the
-     *      PSM, the queue, the minter) also hold OkuM, so equality would not
+     *      PSM, the minter) also hold OkuM, so equality would not
      *      hold. Named for what it asserts.
      */
     function invariant_ActorBalancesDoNotExceedTotalSupply() public view {

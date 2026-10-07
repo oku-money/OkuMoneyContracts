@@ -370,9 +370,7 @@ describe("compute budget (streaming accrual hot paths)", () => {
     // Warp FIRST, so both measurements below share the same `elapsed` and
     // therefore the same rpow iteration count. Comparing a fresh-display mint
     // against a stale-display mint at different points in time would confound
-    // display staleness with rpow cost, which grows with elapsed time --
-    // an earlier version of this test did exactly that and measured a 10k
-    // delta that had nothing to do with the display.
+    // display staleness with rpow cost, which grows with elapsed time.
     await warpBy(h, 600);
     const stale = await measureMint("mint_oku_m (display stale)");
 
@@ -519,9 +517,8 @@ describe("compute budget (streaming accrual hot paths)", () => {
     const rateSim = await simulateTx(h, rateTx, [orchestrator]);
     expect(rateSim.error).to.be.null;
     record("set_okum_yield_rate_with_successor", rateSim.computeUnits);
-    // Asserted, not merely recorded. The previous version printed this number
-    // and checked nothing, so the operator path could have regressed 10x
-    // without the suite noticing.
+    // Asserted, not merely recorded, so an order-of-magnitude regression on
+    // the operator path fails the suite.
     expect(rateSim.computeUnits).to.be.lessThan(OPERATOR_PATH_CU_CEILING);
 
     await setRateWithSuccessor(

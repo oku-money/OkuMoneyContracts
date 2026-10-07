@@ -1,10 +1,10 @@
 /**
- * PSM-mediated OkuM / UsdOku mint & redeem operations (noBridge orchestrator
- * workflow), consolidated into one script.
+ * PSM-mediated OkuM / UsdOku mint & redeem operations (orchestrator workflow),
+ * consolidated into one script.
  *
  *   ACTION=mintOkuM     USDC  -> OkuM   via LitePSM.mintOkuM(usdcAmount)
  *   ACTION=redeemOkuM   OkuM  -> USDC   via LitePSM.redeemOkuM(okuMAmount)
- *                                          (queues if buffer insufficient)
+ *                                          (reverts InsufficientBuffer if buffer short)
  *   ACTION=mintUsdOku   USDC  -> UsdOku via LitePSM.mintUsdOku(usdcAmount)
  *   ACTION=redeemUsdOku UsdOku -> USDC  via LitePSM.redeemUsdOku(usdAmount)
  *   ACTION=burn         Burn caller's own OkuM balance (OKUM_BURNER role)

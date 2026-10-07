@@ -34,14 +34,10 @@
  * Run both; neither subsumes the other.
  *
  * SOURCE-SIDE LIQUIDITY IS A PRECONDITION, NOT AN OUTCOME.
- * The EVM LitePSM redeems from a buffer and falls back to a redemption
- * QUEUE when the buffer cannot cover the redemption (`_redeemOkuMShared`
- * returns 0 and routes the OkuM to `RedemptionQueue`). SVM has no queue at
- * all — it reverts with `InsufficientBuffer`. A queued redemption is NOT a
- * bridgeable event: the orchestrator watches for `OkuMRedeemed`, which the
- * queued path never emits. Both directions therefore pre-flight the source
- * buffer and abort with an actionable message rather than misreporting a
- * queued redemption as a bridge failure.
+ * Both the EVM LitePSM and the SVM lite_psm redeem from a USDC buffer and
+ * revert with `InsufficientBuffer` when it cannot cover the redemption. Both
+ * directions pre-flight the source buffer and abort with an actionable
+ * message before sending anything.
  *
  * Refuses to operate against Solana mainnet-beta or EVM mainnets (base/bsc).
  *
@@ -138,8 +134,7 @@ if (!PRIVATE_KEY) {
 const SVM_NETWORK = SVM_NETWORK_ARG as NetworkName;
 
 // Mainnet guard. Sourced from `@okumoney/yield-tooling` so it cannot drift from
-// the EVM-side gate; a hand-copied set here previously omitted optimism and
-// arbitrum, both real deployable targets.
+// the EVM-side gate.
 const EVM_MAINNETS = EVM_MAINNET_NETWORKS;
 if (EVM_MAINNETS.has(EVM_CHAIN) || SVM_MAINNET_NETWORKS.has(SVM_NETWORK)) {
   throw new Error(
@@ -167,6 +162,10 @@ const EVM_OKU_MONEY_ABI = [
 const EVM_LITE_PSM_ABI = [
   'function mintOkuM(uint256 usdcAmount)',
   'function redeemOkuM(uint256 okuMAmount)',
+  // Custom errors (signatures match artifacts/evm/LitePSM.json) so reverts
+  // decode by name instead of "unknown custom error".
+  'error InsufficientBuffer(uint256 available, uint256 required)',
+  'error AmountTooSmall()',
 ];
 
 interface EvmCtx {
@@ -204,11 +203,6 @@ function loadEvmRegistry(): any {
  * This script does NOT load any .env itself (same convention as PRIVATE_KEY
  * above — the caller exports it), so ALCHEMY_API_KEY must be exported by
  * whoever invokes this, same as PRIVATE_KEY.
- *
- * Previously this script skipped straight to the registry's raw `rpcUrl`
- * (often a public, load-balanced endpoint), making it the MOST exposed of
- * the two bridge scripts to exactly the RPC read-replica lag both scripts
- * spend significant code working around.
  */
 function resolveEvmRpcUrl(chainName: string, registryRpcUrl: string): string {
   const alchemyKey = process.env.ALCHEMY_API_KEY;
@@ -570,7 +564,9 @@ async function svmRedeemOkuM(ctx: SvmCtx, okuMAmount: bigint): Promise<bigint> {
   );
   const delta = usdcAfter - usdcBefore;
   if (delta === 0n) {
-    throw new Error('[SVM] redeemOkuM released 0 USDC — buffer may be depleted; deposit_buffer first');
+    // The program reverts (InsufficientBuffer / AmountTooSmall) rather than
+    // paying out nothing, so a zero delta means the balance read is stale.
+    throw new Error('[SVM] redeemOkuM confirmed but the USDC balance did not change (stale RPC read?)');
   }
   return delta;
 }
@@ -658,12 +654,8 @@ function assertValueConserved(
 /**
  * Assert the EVM LitePSM buffer can cover `usdcNeeded` BEFORE redeeming.
  *
- * Without this, an under-funded PSM silently routes the redemption to the
- * RedemptionQueue: the tx succeeds, OkuM leaves the wallet, no USDC
- * arrives, and the script previously reported the misleading
- * "redeemOkuM released 0 USDC". The OkuM is not lost (it is escrowed in
- * the queue) but it is NOT bridged, and no `OkuMRedeemed` event is emitted
- * for the orchestrator to act on.
+ * An under-funded PSM reverts `InsufficientBuffer(available, required)`;
+ * checking first gives an actionable message before any tx is sent.
  */
 async function assertEvmBufferCovers(evm: EvmCtx, usdcNeeded: bigint): Promise<void> {
   const buffer: bigint = await evm.usdc.balanceOf(evm.litePSMAddr);
@@ -675,10 +667,8 @@ async function assertEvmBufferCovers(evm: EvmCtx, usdcNeeded: bigint): Promise<v
     throw new Error(
       `[EVM:${evm.chainName}] PSM buffer ${ethers.formatUnits(buffer, evm.usdcDecimals)} USDC ` +
         `< required ${ethers.formatUnits(usdcNeeded, evm.usdcDecimals)} USDC. ` +
-        `redeemOkuM would ENQUEUE instead of paying out, which is not a ` +
-        `bridgeable event (no OkuMRedeemed emitted). Fund it first:\n` +
-        `  LitePSM.depositBuffer(<amount>)  [role: PSM_BUFFER_DEPOSITOR]\n` +
-        `then drain any backlog with LitePSM.processQueue(head, tail, approve).`
+        `redeemOkuM would revert InsufficientBuffer. Fund it first:\n` +
+        `  LitePSM.depositBuffer(<amount>)  [role: PSM_BUFFER_DEPOSITOR]`
     );
   }
 }
@@ -698,8 +688,8 @@ async function assertSvmBufferCovers(svm: SvmCtx, usdcNeeded: bigint): Promise<v
   if (acct.amount < usdcNeeded) {
     throw new Error(
       `[SVM:${svm.network}] PSM vault ${Number(acct.amount) / 1e6} USDC < required ` +
-        `${Number(usdcNeeded) / 1e6} USDC. SVM has NO redemption queue — ` +
-        `redeem_oku_m reverts with InsufficientBuffer. Top up with ` +
+        `${Number(usdcNeeded) / 1e6} USDC. redeem_oku_m would revert ` +
+        `InsufficientBuffer. Top up with ` +
         `\`npm run admin:deposit-buffer\` [role: buffer_depositor].`
     );
   }
@@ -824,18 +814,14 @@ async function evmToSvm(
   const evmMultPre: bigint = await evm.okuMoney.okuMMultiplier();
   const srcDollars18 = evmOkuMToDollars18(okuMAmountEvm, evmMultPre);
 
-  // Pre-flight: the buffer must cover this redemption or it will silently
-  // enqueue instead of paying out.
+  // Pre-flight: the buffer must cover this redemption or redeemOkuM reverts
+  // InsufficientBuffer.
   const expectedUsdc =
     srcDollars18 / 10n ** BigInt(18 - evm.usdcDecimals);
   await assertEvmBufferCovers(evm, expectedUsdc);
 
-  // DRY_RUN stops HERE, after the read-only pre-flight, rather than continuing
-  // into legs whose assertions compare balance deltas that by definition cannot
-  // move when nothing is sent. Previously `DRY_RUN=true` always failed at the
-  // "released 0 USDC" check — a documented flag that could not work. Everything
-  // above this line (registry resolution, RPC wiring, both multipliers, the
-  // buffer sufficiency check) is exactly what a dry run is useful for.
+  // DRY_RUN stops HERE, after the read-only pre-flight: later assertions
+  // compare balance deltas that cannot move when nothing is sent.
   if (DRY_RUN) {
     logger.success(
       `DRY_RUN pre-flight OK: would bridge ${ethers.formatUnits(okuMAmountEvm, 18)} OkuM ` +
@@ -866,11 +852,10 @@ async function evmToSvm(
   );
   if (released === 0n) {
     throw new Error(
-      `[EVM:${evm.chainName}] redeemOkuM released 0 USDC despite a pre-flight ` +
-        `buffer check passing. The redemption was almost certainly routed to ` +
-        `the RedemptionQueue (OkuM left the wallet, no USDC arrived, no ` +
-        `OkuMRedeemed event). Inspect RedemptionQueue.queueTail() and drain ` +
-        `with LitePSM.processQueue(). This is NOT a bridgeable redemption.`
+      `[EVM:${evm.chainName}] redeemOkuM confirmed but the USDC balance did not ` +
+        `change within the poll window. redeemOkuM reverts rather than paying ` +
+        `nothing, so this is most likely RPC read lag; check the tx on the ` +
+        `explorer before retrying.`
     );
   }
   logger.success(`[EVM:${evm.chainName}] released ${ethers.formatUnits(released, evm.usdcDecimals)} USDC`);
@@ -948,11 +933,8 @@ async function svmToEvm(
   // Source leg (SVM): ensure OkuM, redeem.
   if (svmPre.okuM < okuMAmountSvm) {
     const short = okuMAmountSvm - svmPre.okuM;
-    // Size the seed from the ACTUAL on-chain multiplier rather than the old
-    // "1:1 plus 10% cushion" guess. OkuM appreciates, so 1 USDC buys strictly
-    // less than 1 OkuM once the multiplier exceeds PRECISION; the guess was
-    // only safe because the cushion happened to exceed the drift. Deriving it
-    // keeps the seed correct at any multiplier.
+    // Size the seed from the on-chain multiplier: 1 USDC buys strictly less
+    // than 1 OkuM once the multiplier exceeds PRECISION.
     const multSeed = await svmMultiplier(svm);
     const seedUsdc = (short * multSeed) / PRECISION + 1n;
     logger.info(
@@ -967,13 +949,11 @@ async function svmToEvm(
   const svmMultPre = await svmMultiplier(svm);
   const srcDollars18 = svmOkuMToDollars18(okuMAmountSvm, svmMultPre);
 
-  // Pre-flight: SVM has NO queue — an under-funded vault hard-reverts.
+  // Pre-flight: an under-funded vault reverts InsufficientBuffer.
   await assertSvmBufferCovers(svm, srcDollars18 / 10n ** 12n);
 
   // See the matching guard in evmToSvm: DRY_RUN stops after the read-only
-  // pre-flight. This direction previously ran to completion under DRY_RUN and
-  // reported PASS having executed nothing, because its destination leg had no
-  // zero-check — the inverse failure to evmToSvm's, in the same script.
+  // pre-flight.
   if (DRY_RUN) {
     logger.success(
       `DRY_RUN pre-flight OK: would bridge ${Number(okuMAmountSvm) / 1e6} OkuM ` +

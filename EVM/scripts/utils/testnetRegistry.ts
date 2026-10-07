@@ -24,10 +24,8 @@ export interface EvmNetworkEntry {
     okuMoney?: string;
     okuDollar?: string;
     litePSM?: string;
-    redemptionQueue?: string;
     mockUSDC?: string;
-    // okuBridge / okuBridgeRouter were removed in the noBridge refactor; the
-    // open-ended index keeps historical entries readable without re-typing them.
+    // Open-ended so older registry entries stay readable.
     [key: string]: string | undefined;
   };
   orchestrator?: string;

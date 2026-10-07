@@ -22,6 +22,13 @@ contract ERC7201SlotTest is Test {
         );
     }
 
+    function test_OkuMoneyRateSchedule_StorageLocation() public pure {
+        assertEq(
+            _erc7201Slot("okumoney.storage.OkuMoneyRateSchedule"),
+            0xf549d049d5f1892d94a28293517dbae0d59f3eeb1d0d052265836a74d32f3400
+        );
+    }
+
     function test_OkuDollar_StorageLocation() public pure {
         assertEq(
             _erc7201Slot("okumoney.storage.OkuDollar"),

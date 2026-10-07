@@ -101,7 +101,7 @@ describe("scripts/utils/epochDistribution", () => {
             ).to.throw(/need at least 2/);
         });
 
-        it("REGRESSION: extrapolates the final partial interval when the last sample is BEFORE windowEndSec, rather than silently under-counting it", () => {
+        it("extrapolates the final partial interval when the last sample is BEFORE windowEndSec, rather than silently under-counting it", () => {
             // Ignoring the gap to windowEndSec under-counts ~1.6% of the epoch
             // target at typical staging leads.
             const rate = 1.0000001;

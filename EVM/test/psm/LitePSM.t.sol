@@ -21,6 +21,9 @@ import {Constants} from "../../src/lib/Constants.sol";
 import {MathLib} from "../../src/lib/MathLib.sol";
 import {LitePSMEvents} from "../../src/lib/events/LitePSMEvents.sol";
 import {MockHighDecimalToken} from "../mocks/MockHighDecimalToken.sol";
+import {LitePSMErrors} from "../../src/lib/errors/LitePSMErrors.sol";
+import {OkuDollarErrors} from "../../src/lib/errors/OkuDollarErrors.sol";
+import {OkuMoneyErrors} from "../../src/lib/errors/OkuMoneyErrors.sol";
 
 /**
  * @title LitePSMTest
@@ -75,8 +78,7 @@ contract LitePSMTest is BaseTest {
         return dollarValue18 / DECIMAL_MULTIPLIER;
     }
 
-    // _setOkuMMultiplierAndRoll is inherited from BaseTest. The local _setNotePrice
-    // helper that previously lived here was removed — use the shared helper instead.
+    /// @dev Alias for the inherited {_setOkuMMultiplierAndRoll}.
     function _setNotePrice(uint256 newPrice) internal {
         _setOkuMMultiplierAndRoll(newPrice);
     }
@@ -191,10 +193,9 @@ contract LitePSMTest is BaseTest {
         assertEq(okuMoney.balanceOf(user1), 50e18, "100 USDC at $2/note = 50 notes");
     }
 
-    /// @notice CRITICAL: Test that mint works at non-even prices (e.g., $1.05)
-    /// @dev This test catches the slippage check bug where 18-decimal rounding
-    ///      caused valid transactions to revert at prices that don't evenly divide.
-    ///      The fix compares in USDC terms (6 decimals) to absorb the rounding.
+    /// @notice Mint must succeed at prices that don't evenly divide (e.g., $1.05).
+    /// @dev Pins that 18-decimal rounding of the OkuM amount cannot trip a slippage
+    ///      check; the comparison is in USDC terms (6 decimals), absorbing the dust.
     function test_Mint_PriceAware_NonEvenPrice() public {
         // Set okuMMultiplier to 1.05e18 ($1.05) - a typical post-yield price
         _setNotePrice(105e16);
@@ -203,7 +204,6 @@ contract LitePSMTest is BaseTest {
 
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
-        // This would revert with the old buggy slippage check
         vm.prank(user1);
         litePsm.mintOkuM(usdcAmount);
 
@@ -263,11 +263,10 @@ contract LitePSMTest is BaseTest {
 
     // ============ Price-Aware mintUsdOku Tests ============
     //
-    // mintUsdOku flows USDC -> mint OkuM -> wrap -> UsdOku. SINGLE MULTIPLIER:
-    // `usdMultiplier() == okuMMultiplier()` always, so the slippage floor passed to
-    // `wrap` is exactly MathLib.okuMToDollars — no separate wrap-replica helper
-    // needed. Tests below pin that behavior at the multipliers most likely to
-    // expose rounding.
+    // mintUsdOku flows USDC -> mint OkuM -> wrap -> UsdOku. Since
+    // `usdMultiplier() == okuMMultiplier()`, the slippage floor passed to `wrap` is
+    // exactly MathLib.okuMToDollars. Tests below pin that at multipliers most likely
+    // to expose rounding.
 
     /// @dev Helper: expected UsdOku minted for a given USDC deposit at the current multiplier.
     function _expectedUsdMintedFromUsdc(uint256 usdcAmount) internal view returns (uint256) {
@@ -277,16 +276,15 @@ contract LitePSMTest is BaseTest {
         return MathLib.okuMToDollars(okuMAmount, okuMMult);
     }
 
-    /// @notice Regression: the on-chain failure that motivated this fix.
-    ///         okuMMultiplier ≈ 8/7 ($1.142857...), 1 USDC -> OutputBelowMinimum
-    ///         (999999999999999999, 1000000000000000000) before the fix.
+    /// @notice okuMMultiplier ≈ 8/7 ($1.142857...), 1 USDC: wrap output lands 1 wei
+    ///         below usdcValue18, which must not trip `OutputBelowMinimum`.
     function test_MintUsdOku_PriceAware_UserReportedCase() public {
         // 8e18 / 7 ≈ 1.142857142857142857e18, which truncates okuMAmount so the
         // wrap output falls 1 wei short of usdcValue18.
         uint256 mult = (8 * PRECISION) / 7;
         _setNotePrice(mult);
 
-        uint256 usdcAmount = 1e6; // 1 USDC — the exact case from the revert
+        uint256 usdcAmount = 1e6; // 1 USDC
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         uint256 expectedUsd = _expectedUsdMintedFromUsdc(usdcAmount);
@@ -354,9 +352,7 @@ contract LitePSMTest is BaseTest {
         }
     }
 
-    /// @dev Variant of {_expectedUsdMintedFromUsdc} that lets the test pin the
-    ///      okuMMultiplier explicitly (the storage helper has already set it, but
-    ///      reading it back is fine — keeping the parameter makes intent clear).
+    /// @dev Variant of {_expectedUsdMintedFromUsdc} with an explicit multiplier.
     function _expectedUsdMintedFromUsdcFor(
         uint256 usdcAmount,
         uint256 okuMMult
@@ -370,16 +366,7 @@ contract LitePSMTest is BaseTest {
         return MathLib.okuMToDollars(okuMAmount, okuMMult);
     }
 
-    /// @notice Exercise the rounding path at an elevated shared multiplier.
-    /// @dev PREVIOUSLY (dual-multiplier design) this elevated okuMMultiplier and
-    ///      usdMultiplier to two DIFFERENT values to exercise their cross-rate
-    ///      rounding. Under the single-multiplier design there is only one value
-    ///      to elevate — `_setNotePrice` after `_elevateUsdMultiplier` would try to
-    ///      move the (now-shared) multiplier backwards and revert
-    ///      `MultiplierCannotDecrease`. A single elevation still exercises the
-    ///      same rounding path since `_expectedUsdMintedFromUsdc` independently
-    ///      reads `okuMMult` (parameter) and `usdMult` (live read) — they're just
-    ///      guaranteed equal now.
+    /// @notice Exercise the rounding path at a multiplier reached via rate accrual.
     function test_MintUsdOku_PriceAware_AtElevatedUsdMultiplier() public {
         _elevateUsdMultiplier(11e17); // ~$1.10, rolls block internally
 
@@ -473,7 +460,7 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert(
-            abi.encodeWithSelector(LitePSM.InsufficientBuffer.selector, 5000e6, 10_000e6)
+            abi.encodeWithSelector(LitePSMErrors.InsufficientBuffer.selector, 5000e6, 10_000e6)
         );
         litePsm.redeemOkuM(okuMAmount);
         assertEq(okuMoney.balanceOf(user1), okuMAmount);
@@ -521,7 +508,7 @@ contract LitePSMTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(LitePSM.UserBlacklisted.selector, user1));
+        vm.expectRevert(abi.encodeWithSelector(LitePSMErrors.UserBlacklisted.selector, user1));
         litePsm.redeemOkuM(100e18);
     }
 
@@ -536,7 +523,7 @@ contract LitePSMTest is BaseTest {
         okuMoney.blacklist(user1); // OkuMoney only; OkuDollar blacklist untouched
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(LitePSM.UserBlacklisted.selector, user1));
+        vm.expectRevert(abi.encodeWithSelector(LitePSMErrors.UserBlacklisted.selector, user1));
         litePsm.redeemUsdOku(1000e18);
     }
 
@@ -547,7 +534,7 @@ contract LitePSMTest is BaseTest {
 
         _approveUsdc(user1, address(litePsm), 100e6);
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(LitePSM.UserBlacklisted.selector, user1));
+        vm.expectRevert(abi.encodeWithSelector(LitePSMErrors.UserBlacklisted.selector, user1));
         litePsm.mintUsdOku(100e6);
     }
 
@@ -714,7 +701,7 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert(
-            abi.encodeWithSelector(LitePSM.InsufficientBuffer.selector, 5000e6, expectedUsdc)
+            abi.encodeWithSelector(LitePSMErrors.InsufficientBuffer.selector, 5000e6, expectedUsdc)
         );
         litePsm.redeemOkuM(okuMAmount);
     }
@@ -864,7 +851,7 @@ contract LitePSMTest is BaseTest {
         _approveOkuMoney(user1, address(litePsm), tinyAmount);
 
         vm.prank(user1);
-        vm.expectRevert(LitePSM.AmountTooSmall.selector);
+        vm.expectRevert(Errors.AmountTooSmall.selector);
         litePsm.redeemOkuM(tinyAmount);
     }
 
@@ -1020,7 +1007,7 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(bufferWithdrawer);
         vm.expectRevert(
-            abi.encodeWithSelector(LitePSM.InsufficientBuffer.selector, balance, balance + 1)
+            abi.encodeWithSelector(LitePSMErrors.InsufficientBuffer.selector, balance, balance + 1)
         );
         litePsm.withdrawUsdc(user1, balance + 1);
     }
@@ -1052,7 +1039,7 @@ contract LitePSMTest is BaseTest {
         // Named, not a comment: a bare expectRevert would also accept an
         // allowance or pause failure, i.e. it would pass without ever reaching
         // the reserves check this test exists for.
-        vm.expectRevert(OkuDollar.InsufficientReserves.selector);
+        vm.expectRevert(OkuDollarErrors.InsufficientReserves.selector);
         litePsm.redeemUsdOku(usdBalance);
     }
 
@@ -1238,8 +1225,8 @@ contract LitePSMTest is BaseTest {
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(preMultiplier * 2);
 
-        // Confirm the guard IS armed for the rest of this block (the part that
-        // already works) -- a same-block back-run attempt still correctly reverts.
+        // Confirm the guard IS armed for the rest of this block -- a same-block
+        // back-run attempt reverts.
         vm.prank(user1);
         okuMoney.approve(address(litePsm), okuMReceived);
         vm.prank(user1);
@@ -1343,9 +1330,9 @@ contract LitePSMTest is BaseTest {
         assertEq(usdc.balanceOf(user1), before + 100e6);
     }
 
-    // ============ WS3 Additional Tests ============
+    // ============ Role, Reinit, and Multi-Decimal Tests ============
 
-    // ---- WS3.1.b: revokeRole / renounceRole cycle tests ----
+    // ---- revokeRole / renounceRole ----
 
     function test_RevokeRole_OkumMinterRevokesFromPsm() public {
         assertTrue(okuMoney.hasRole(OKUM_MINTER, address(litePsm)));
@@ -1373,14 +1360,14 @@ contract LitePSMTest is BaseTest {
         assertFalse(okuMoney.hasRole(OKUM_MINTER, address(litePsm)));
     }
 
-    // ---- WS3.1.c: reinit guard ----
+    // ---- reinit guard ----
 
     function test_LitePSM_Initialize_CannotReinitialize() public {
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         litePsm.initialize(address(okuMoney), address(okuDollar), address(usdc), admin);
     }
 
-    // ---- WS3.1.g: multi-decimal USDC mock ----
+    // ---- multi-decimal USDC mock ----
 
     function test_MultiDecimal_8DecimalUsdcPsmInit() public {
         // Deploy an 8-decimal "USDC" mock
@@ -1396,9 +1383,7 @@ contract LitePSMTest is BaseTest {
         // Mint/redeem round-trip
         uint256 usdcAmount = 100e8; // 100 USDC at 8 decimals
         usdc8.mint(user1, usdcAmount);
-        // Cycle 4 (EVM-15): both OKUM_MINTER and OKUM_BURNER needed —
-        // the PSM mints OkuMoney on USDC deposits and burns it on
-        // USDC redemptions.
+        // The PSM needs OKUM_MINTER (USDC deposits) and OKUM_BURNER (redemptions).
         vm.startPrank(admin);
         okuMoney.grantRole(OKUM_MINTER, address(psm8));
         okuMoney.grantRole(OKUM_BURNER, address(psm8));
@@ -1429,12 +1414,9 @@ contract LitePSMTest is BaseTest {
     // ---- 18-decimal collateral: mint/redeem MATH (not just init) ----
     //
     // BSC's canonical Binance-Peg USDC carries 18 decimals, not 6
-    // (`scripts/config/chains.ts`). Until these tests existed, the only
-    // non-6-decimal coverage in the suite asserted `initialize` succeeded and
-    // stopped there — no test ever pushed a mint or a redeem through the
-    // `decimalMultiplier == 1` path. That is exactly where the collateral unit
-    // stops absorbing sub-unit truncation, so it is the one configuration where
-    // the conversion rounding is observable at all.
+    // (`scripts/config/chains.ts`). At `decimalMultiplier == 1` the collateral unit
+    // stops absorbing sub-unit truncation, so it is the one configuration where the
+    // conversion rounding is observable at all.
 
     /// @dev Wire a fresh PSM against an arbitrary-decimal collateral, granting every
     ///      role the mint/redeem paths need.
@@ -1465,7 +1447,7 @@ contract LitePSMTest is BaseTest {
         usdc18.mint(user1, 1);
         vm.startPrank(user1);
         usdc18.approve(address(psm18), 1);
-        vm.expectRevert(LitePSM.AmountTooSmall.selector);
+        vm.expectRevert(Errors.AmountTooSmall.selector);
         psm18.mintOkuM(1);
         vm.stopPrank();
     }
@@ -1480,7 +1462,7 @@ contract LitePSMTest is BaseTest {
         usdc18.mint(user1, 1);
         vm.startPrank(user1);
         usdc18.approve(address(psm18), 1);
-        vm.expectRevert(LitePSM.AmountTooSmall.selector);
+        vm.expectRevert(Errors.AmountTooSmall.selector);
         psm18.mintUsdOku(1);
         vm.stopPrank();
     }
@@ -1502,18 +1484,10 @@ contract LitePSMTest is BaseTest {
 
     /// @notice A mint whose dollar value does not divide evenly by the multiplier
     ///         must still succeed at 18-decimal collateral.
-    /// @dev REGRESSION: this reverted before `RoundTripDriftTooLarge` was removed.
-    ///
-    ///      At 18 decimals `decimalMultiplier == 1`, so the collateral unit IS the
-    ///      dollar wei and `dollarsToOkuM`'s truncation has nowhere to hide. The old
-    ///      check compared `roundTripUsdc + 1 < usdcAmount` — a tolerance of one
-    ///      collateral unit, which at 6 decimals is $0.000001 (comfortably above any
-    ///      truncation) but at 18 decimals is one wei (below it).
-    ///
-    ///      At `m = 3.0`, `okuM = floor(V/3)` and the round trip returns
-    ///      `3 * floor(V/3)`, so the drift is exactly `V mod 3`. For `V mod 3 == 2`
-    ///      the drift is 2 units, the tolerance is 1, and a perfectly ordinary mint
-    ///      reverted. `100e18 + 1` is such a value (`100e18 mod 3 == 1`).
+    /// @dev At 18 decimals the collateral unit IS the dollar wei, so `dollarsToOkuM`'s
+    ///      truncation is visible: at `m = 3.0` the round trip `3 * floor(V/3)` drifts
+    ///      by `V mod 3` units. Pins that mint accepts the worst-case drift of 2 units
+    ///      (`100e18 + 1` has `V mod 3 == 2`) rather than gating on round-trip loss.
     function test_MultiDecimal_18Dec_MintSucceedsOnTruncatingAmount() public {
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
         LitePSM psm18 = _deployPsmForCollateral(address(usdc18));
@@ -1536,11 +1510,8 @@ contract LitePSMTest is BaseTest {
     }
 
     /// @notice Every residue class mints successfully — not just two in three.
-    /// @dev REGRESSION: before the removal this reverted on exactly the iterations
-    ///      where `amount % 3 == 2`, i.e. a third of all legitimate mints on an
-    ///      18-decimal chain once the multiplier reached 3.0. Walking consecutive
-    ///      amounts is the point: the defect was invisible to any test that happened
-    ///      to pick a round number.
+    /// @dev Walking consecutive amounts covers every residue of `amount % 3`; a
+    ///      round-number fixture would only ever hit one.
     function test_MultiDecimal_18Dec_MintSucceedsAcrossAllResidues() public {
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
         LitePSM psm18 = _deployPsmForCollateral(address(usdc18));
@@ -1565,11 +1536,8 @@ contract LitePSMTest is BaseTest {
         }
     }
 
-    /// @notice The same property at 8 decimals, where the tolerance is 100 units of
-    ///         truncation headroom rather than 1.
-    /// @dev Passes both before and after the removal — included so the 18-decimal
-    ///      tests above are read as "the tolerance ran out", not "8 decimals is also
-    ///      broken". This pins the boundary rather than leaving it implied.
+    /// @notice The same property at 8 decimals, where each collateral unit is 1e10
+    ///         dollar-wei and absorbs the truncation.
     function test_MultiDecimal_8Dec_MintSucceedsAcrossAllResidues() public {
         MockUSDC8Dec usdc8 = new MockUSDC8Dec();
         LitePSM psm8 = _deployPsmForCollateral(address(usdc8));
@@ -1592,13 +1560,8 @@ contract LitePSMTest is BaseTest {
 
     /// @notice Redeeming at 18-decimal collateral returns exactly the floored
     ///         conversion, with no minimum-output gate rejecting it.
-    /// @dev The redeem path's old `OutputBelowMinimum` check compared `usdcAmount`
-    ///      against a floor derived from `okuMAmount` truncated to
-    ///      `decimalMultiplier`. At 18 decimals that truncation is the identity
-    ///      (`decimalMultiplier == 1`), so the two sides were the same expression and
-    ///      the branch was unreachable — as it was at every other decimal count, for
-    ///      the separate reason that both conversions are monotone. This test pins
-    ///      the OUTPUT, which is the behaviour the check was nominally protecting.
+    /// @dev Pins the redeem OUTPUT directly: `(okuMAmount * m) / PRECISION` with no
+    ///      decimal truncation at `decimalMultiplier == 1`.
     function test_MultiDecimal_18Dec_RedeemReturnsExactFlooredConversion() public {
         MockUSDC18Dec usdc18 = new MockUSDC18Dec();
         LitePSM psm18 = _deployPsmForCollateral(address(usdc18));
@@ -1662,7 +1625,7 @@ contract LitePSMTest is BaseTest {
         );
     }
 
-    // ---- WS3.1.i: setMaxSupply edge case ----
+    // ---- setMaxSupply edge case ----
 
     function test_SetMaxSupply_AllowsDecreaseToCurrentSupply() public {
         // Mint half the supply
@@ -1675,7 +1638,7 @@ contract LitePSMTest is BaseTest {
 
         // totalSupply == maxSupply: any new mint must revert with ExceedsSupplyCap
         vm.prank(minter);
-        vm.expectRevert(OkuMoney.ExceedsSupplyCap.selector);
+        vm.expectRevert(OkuMoneyErrors.ExceedsSupplyCap.selector);
         okuMoney.mint(user2, 1);
     }
 
@@ -1683,7 +1646,7 @@ contract LitePSMTest is BaseTest {
         _mintOkuMoney(user1, 1000e18);
         // Try to set cap below current supply
         vm.prank(capManager);
-        vm.expectRevert(OkuMoney.BelowCurrentSupply.selector);
+        vm.expectRevert(OkuMoneyErrors.BelowCurrentSupply.selector);
         okuMoney.setMaxSupply(999e18);
     }
 
@@ -1738,7 +1701,7 @@ contract LitePSMTest is BaseTest {
         _setOkuMMultiplierAndRoll(3e18);
 
         vm.prank(user1);
-        vm.expectRevert(LitePSM.AmountTooSmall.selector);
+        vm.expectRevert(Errors.AmountTooSmall.selector);
         litePsm.redeemUsdOku(1);
     }
 
@@ -1798,16 +1761,11 @@ contract LitePSMTest is BaseTest {
         _approveOkuDollar(user1, address(litePsm), 100e18);
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(LitePSM.InsufficientBuffer.selector, 0, 100e6));
+        vm.expectRevert(abi.encodeWithSelector(LitePSMErrors.InsufficientBuffer.selector, 0, 100e6));
         litePsm.redeemUsdOku(100e18);
     }
 
     // ============ Initialization rails ============
-    //
-    // Relocated from the former CoverageGaps.t.sol, whose header stated its aim
-    // was "to push the per-contract branch coverage above the audit-readiness
-    // target rather than to add additional functional verification". The tests
-    // below are worth keeping; the bucket they lived in was not.
 
     function test_Initialize_RevertZeroOkuMoney() public {
         LitePSM impl = new LitePSM();
@@ -1851,7 +1809,9 @@ contract LitePSMTest is BaseTest {
         bytes memory initData = abi.encodeCall(
             LitePSM.initialize, (address(okuMoney), address(okuDollar), address(hd), admin)
         );
-        vm.expectRevert(abi.encodeWithSelector(LitePSM.UsdcDecimalsTooLarge.selector, uint8(19)));
+        vm.expectRevert(
+            abi.encodeWithSelector(LitePSMErrors.UsdcDecimalsTooLarge.selector, uint8(19))
+        );
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -1869,7 +1829,7 @@ contract LitePSMTest is BaseTest {
         bytes memory initData = abi.encodeCall(
             LitePSM.initialize, (address(other), address(okuDollar), address(usdc), admin)
         );
-        vm.expectRevert(LitePSM.AssetMismatch.selector);
+        vm.expectRevert(LitePSMErrors.AssetMismatch.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 

@@ -174,8 +174,9 @@ redeem:  usdcAmount = okuMAmount × m / PRECISION
 ```
 
 Redemptions are paid from the PSM's USDC buffer on both stacks. A redeem the
-buffer cannot cover reverts `InsufficientBuffer` (nothing is burned); a mint or
-redeem whose output rounds to zero reverts `AmountTooSmall`.
+buffer cannot cover reverts `InsufficientBuffer` (nothing is burned). A mint whose
+output rounds to zero reverts `AmountTooSmall`; so does a zero-output redeem on EVM,
+which SVM cannot produce (multiplier ≥ 1 and OkuM / USDC share 6 decimals).
 
 **Buffer controls (identical on both stacks).** `depositBuffer` /
 `deposit_buffer` (depositor role) and `withdrawUsdc` / `withdraw_buffer`

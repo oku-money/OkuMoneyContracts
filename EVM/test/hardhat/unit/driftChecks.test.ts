@@ -93,8 +93,8 @@ describe("driftChecks", () => {
         });
 
         it("does NOT report halted while a staged successor is accruing", () => {
-            // The regression this guards: an elapsed active window with a live
-            // successor is the normal epoch transition, not a halt.
+            // An elapsed active window with a live successor is the normal
+            // epoch transition, not a halt.
             const s = classifyAccrual({
                 effectiveRate: PRECISION + 1n,
                 rateEnd: now - 100n,

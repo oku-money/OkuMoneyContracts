@@ -63,8 +63,7 @@ contract ReentrantOkuMoney is ERC20 {
 
     /// @notice Stamps the sandwich-guard block, mirroring the real
     ///         `OkuMoney.setOkuMMultiplier` discrete override.
-    /// @dev REMOVED: `distributeYield(uint256)` — deleted from OkuMoney. This mock
-    ///      keeps a way to stamp `lastYieldDistributionBlock` for guard tests.
+    /// @dev Lets guard tests stamp `lastYieldDistributionBlock` without moving the multiplier.
     function stampYieldBlock() external {
         lastYieldDistributionBlock = block.number;
     }

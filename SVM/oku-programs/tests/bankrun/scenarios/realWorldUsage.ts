@@ -726,7 +726,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
         ctx.configPda, ctx.usdcMint, ctx.okuMMint,
         ctx.userUsdcAtas[1], ctx.userOkuMAtas[1], ctx.vaultUsdcAta
       );
-      // Exact: 10 USDC at the live multiplier. `> 0` passed on a single unit.
+      // Exact: 10 USDC at the live multiplier. `> 0` would pass on a single unit.
       const multAfterUnpause = await computeCanonicalMultiplier(ctx.h, ctx.psm, ctx.configPda);
       const expectedMint = (10_000_000n * PRECISION) / multAfterUnpause;
       assertEq(

@@ -92,7 +92,7 @@ describe("init invariants (OkuM mint extensions)", () => {
     expect(mintData.mintAuthority?.equals(configPda)).to.be.true;
     expect(Number(mintData.decimals)).to.equal(DECIMALS);
 
-    // The initial multiplier the test name promises, which was never read.
+    // The initial multiplier the test name promises.
     const display = await readDisplayMultiplier(h, okuMMint);
     expect(display.effective, "mint must start at a 1.0 display multiplier").to.equal(1.0);
 
@@ -107,13 +107,9 @@ describe("init invariants (OkuM mint extensions)", () => {
   // revert with `InvalidAuthority` before any state is written; the
   // `deploy-authority gate` tests use it unmodified.
   //
-  // Declared at THIS level, not inside `authority validation` — when it was
-  // scoped to that block, the deploy-authority tests threw
-  // `ReferenceError: baseParams is not defined`, which has no
-  // `error.errorCode`, so their `expect(...errorCode.code)` assertions
-  // compared `undefined` and the negative tests passed for entirely the
-  // wrong reason. A test that passes because the harness threw is worse
-  // than no test at all.
+  // Declared at THIS level, not inside `authority validation`: scoped there,
+  // the deploy-authority tests would throw a ReferenceError with no
+  // `error.errorCode`, and their negative assertions would pass vacuously.
   function baseParams(warm: PublicKey, cold: PublicKey, orchestrator: PublicKey) {
     return {
       maxSupply: MAX_SUPPLY,

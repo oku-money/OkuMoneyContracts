@@ -103,12 +103,20 @@ regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pic
   `InsufficientBuffer(available, required)` and dust redeems revert `AmountTooSmall`.
   Removed: `QueueProcessed`, the `RedemptionQueue` events, `PSM_QUEUE_PROCESSOR`
   and `QUEUE_*` roles, `BelowMinimumRedemption`.
-- **SVM IDL:** `ZeroOutput` removed (redeem dust is `AmountTooSmall`);
+- **SVM IDL:** `ZeroOutput` removed (redeem output can never be zero);
   `MultiplierAboveMax` is `MultiplierTooHigh`. Error codes shift; match on names
   or regenerate the IDL.
+- **EVM storage layout:** OkuMoney's rate schedule and `lastYieldDistributionBlock`
+  moved to their own ERC-7201 namespace (`okumoney.storage.OkuMoneyRateSchedule`,
+  in `OkuMoneyRateSchedule.sol`). This is incompatible with any existing proxy;
+  it is acceptable only because this deploy is clean-slate. ABIs are unchanged.
 - **Operator-facing behaviour:** buffer deposit and withdraw are now pause-gated and
   blocked during the override lock on both stacks (`depositBuffer` / `withdrawUsdc`,
   `deposit_buffer` / `withdraw_buffer`). Automation must unpause before topping up.
+- **Clear on deploy:** the tracked `EVM/.openzeppelin/*.json` manifests and
+  `EVM/scripts/config/addresses.pre-streaming.json` describe the retired queue-era
+  deployments, and `artifacts/evm/MockUSDC.json` is not written by `export-abis`.
+  Kept until the next deploy; delete them (and regenerate `artifacts/`) as part of it.
 - Once an audited deployment exists, add an OpenZeppelin `validateUpgrade` check against
   that deployed implementation. Layouts are pinned only by storage-slot tests.
 
@@ -120,14 +128,6 @@ roles `initialize` gave the deployer (all `*_UPGRADER`, `OKUM_REBASER`,
 place and no script removes them; `README.md` § Mainnet ceremony documents the manual
 `renounceRole` / `revokeRole` step. Fix: add a renounce-or-revoke pass (with a
 `hasRole` assertion that the deployer holds nothing) to the script, with a drill test.
-
-### Open: SVM `AmountTooSmall` coverage `[SVM]`
-
-No bankrun test hits `AmountTooSmall` in `mint_oku_m`, where it is reachable
-(multiplier > 1 with a 1-unit mint). The `redeem_oku_m` check cannot fire: the
-multiplier is `>= 1` and OkuM / USDC are both 6-decimals, so a non-zero raw amount
-always yields non-zero USDC. It is kept for EVM parity; add the mint test, and
-decide whether to keep or drop the redeem check.
 
 ### Open: tooling and CI `[EVM]`
 

@@ -1,18 +1,10 @@
 /**
  * Executes the REAL `applyScheduleToChain()` / `parseApplyArgs()` with the
  * single on-chain call stubbed, so the control flow around the chain write is
- * asserted rather than assumed.
+ * asserted rather than assumed. The operator drill calls `runSetOkuMYieldRate`
+ * directly, re-implementing this driver's sequence rather than exercising it.
  *
- * This file exists because the operator drill covered the *write* — via
- * `runSetOkuMYieldRate`, which it calls directly — while carrying the comment
- * "Apply it, exactly as `applyScheduleSingleChain.ts` would". That is a hand
- * re-implementation of the driver's sequence: it verifies the test author's
- * understanding of the control flow, not the control flow. Exactly the shape
- * of coverage that let the `EPOCH_PHASE`-vs-`PHASE` bug survive a "tested"
- * pass in the sibling broadcaster.
- *
- * The parts under test are the ones that have no network in them and have
- * broken before: argument validation, the already-confirmed early return, the
+ * Under test: argument validation, the already-confirmed early return, the
  * dry-run path, and the receipt write-back.
  */
 

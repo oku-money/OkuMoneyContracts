@@ -18,22 +18,20 @@ import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.so
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {OkuDollarErrors} from "../../src/lib/errors/OkuDollarErrors.sol";
 
 /**
  * @title OkuDollarTest
  * @notice Unit tests for OkuDollar rebasing stablecoin vault (NOT ERC-4626)
  * @dev OkuMoney is a non-rebasing ERC-20 with okuMMultiplier() for price tracking.
  *      Wrap/unwrap are multiplier-aware: they convert between note tokens and OkuDollar
- *      using okuMMultiplier() and usdMultiplier(). When okuMMultiplier = 1e18 (initial state),
- *      the math is identical to old 1:1 behavior.
+ *      using okuMMultiplier() and usdMultiplier(). At okuMMultiplier = 1e18 (initial state),
+ *      wrap/unwrap are 1:1.
  */
 contract OkuDollarTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    // REMOVED (single-multiplier refactor): local mirrors of UsdYieldRateUpdated,
-    // NextUsdYieldRateSet, MinCollateralRatioUpdated, ReservesDeposited and
-    // SurplusWithdrawn — all deleted from OkuDollarEvents.
 
     // ============ Initialization Tests ============
 
@@ -58,9 +56,6 @@ contract OkuDollarTest is BaseTest {
     function test_Initialize_SetsOkuMoneyReference() public view {
         assertEq(address(okuDollar.okuMoney()), address(okuMoney));
     }
-
-    // REMOVED (single-multiplier refactor): test_Initialize_SetsMinCollateralRatio —
-    // `initialize` no longer takes a min-ratio and `minCollateralRatio()` is gone.
 
     function test_Initialize_UsdMultiplierStartsAtPrecision() public view {
         assertEq(okuDollar.usdMultiplier(), PRECISION);
@@ -97,11 +92,8 @@ contract OkuDollarTest is BaseTest {
     }
 
     /// @notice `wrap`'s `minAmountOut` is the vault's ONE reachable slippage rail.
-    /// @dev Worth pinning precisely because the PSM's two look-alike checks were
-    ///      removed as unreachable — this one is not. It guards the OkuM -> usdOku
-    ///      leg, where the caller supplies the bound, so unlike the PSM there IS a
-    ///      user-specified expectation that can be missed. Do not delete it by
-    ///      analogy with the PSM removals.
+    /// @dev It guards the OkuM -> usdOku leg, where the caller supplies the bound, so
+    ///      (unlike the PSM) there IS a user-specified expectation that can be missed.
     function test_Wrap_RevertsWhenOutputBelowMinimum() public {
         uint256 okuMAmount = 100e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -111,26 +103,17 @@ contract OkuDollarTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                OkuDollar.OutputBelowMinimum.selector, okuMAmount, okuMAmount + 1
+                OkuDollarErrors.OutputBelowMinimum.selector, okuMAmount, okuMAmount + 1
             )
         );
         okuDollar.wrap(okuMAmount, user1, okuMAmount + 1);
     }
 
     /// @notice Zero-address rails on the share-transfer path.
-    /// @dev `_transferUsdShares` is reached by `transfer`, `transferFrom` and both
-    ///      4626 entry points, and it is the only place the pair is checked —
-    ///      OkuDollar overrides every public mover rather than delegating to
-    ///      `ERC20Upgradeable`, so none of OZ's own zero-address guards are in the
-    ///      path. Burning via `transfer(0, x)` would otherwise silently destroy
-    ///      shares while leaving `totalUsdShares` untouched, breaking the
-    ///      supply-vs-shares identity the vault's collateralisation rests on.
-    ///
-    ///      Only the `to` half is asserted because only the `to` half is
-    ///      reachable: `transferFrom(address(0), ...)` is stopped earlier by the
-    ///      allowance check, and address(0) can never have granted an allowance.
-    ///      The `from` guard is defence-in-depth against a future caller that
-    ///      reaches `_transferUsdShares` without spending one.
+    /// @dev `_transferUsdShares` is the only place the pair is checked (OkuDollar overrides
+    ///      every public mover, so OZ's zero-address guards are not in the path). Without it
+    ///      `transfer(0, x)` would destroy shares while leaving `totalUsdShares` untouched.
+    ///      Only `to` is asserted: `from == 0` is unreachable behind the allowance check.
     function test_Transfer_RevertsOnZeroRecipient() public {
         uint256 okuMAmount = 100e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -273,7 +256,7 @@ contract OkuDollarTest is BaseTest {
         _elevateUsdMultiplier(102e16);
 
         // Read achieved multipliers — `_elevateUsdMultiplier` may overshoot the target
-        // because it drives the value via setUsdYieldRate + warp.
+        // because it drives the value via setOkuMYieldRate + warp.
         uint256 okuMMult = okuMoney.okuMMultiplier();
         uint256 usdMult = okuDollar.usdMultiplier();
 
@@ -312,7 +295,7 @@ contract OkuDollarTest is BaseTest {
         _mintUsdOku(user1, okuMAmount);
 
         // _mintUsdOku wraps `okuMAmount` at the live multiplier; at base the
-        // share count IS the OkuM count. `> 0` would have passed on a wei.
+        // share count IS the OkuM count.
         uint256 sharesBefore = okuDollar.usdSharesOf(user1);
         assertEq(sharesBefore, okuMAmount, "wrap mints one share per OkuM at m = 1.0");
 
@@ -361,11 +344,9 @@ contract OkuDollarTest is BaseTest {
         okuDollar.unwrap(okuMAmount, address(0));
     }
 
-    /// @dev Post-cycle-4 D2 fix: `unwrap` now mirrors `wrap`'s receiver check
-    ///      so a user blacklisted only on OkuDollar cannot route OkuMoney to
-    ///      a third-party recipient via `unwrap(amount, victimAddr)`. The
-    ///      OkuMoney-side `_update` blacklist check is still independent;
-    ///      this assertion closes the cross-token consistency hole.
+    /// @dev `unwrap` mirrors `wrap`'s receiver check, so an address blacklisted only on
+    ///      OkuDollar cannot receive OkuMoney via `unwrap(amount, addr)`, independent of
+    ///      OkuMoney's own `_update` blacklist check.
     function test_Unwrap_RevertsOnBlacklistedReceiver() public {
         uint256 okuMAmount = 100e18;
         _mintUsdOku(user1, okuMAmount);
@@ -375,7 +356,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user2);
 
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.expectRevert(Errors.RecipientBlacklisted.selector);
         okuDollar.unwrap(okuMAmount, user2);
     }
 
@@ -459,11 +440,9 @@ contract OkuDollarTest is BaseTest {
     // ============ Insufficient Reserves ============
 
     /// @notice The `InsufficientReserves` branch on `unwrap`.
-    /// @dev Under the single-multiplier design this is UNREACHABLE through any public
-    ///      path (shares track raw OkuM 1:1, and `rescueDonation` cannot dip into
-    ///      backing). We therefore force the state with `vm.store`-free surgery: drain
-    ///      the vault's OkuM by pranking the vault itself. The branch is defensive code
-    ///      and this test exists solely to keep it covered.
+    /// @dev Unreachable through any public path (shares track raw OkuM 1:1, and
+    ///      `rescueDonation` cannot dip into backing), so the state is forced by pranking
+    ///      the vault to transfer its own OkuM out. Keeps the defensive branch covered.
     function test_Unwrap_RevertsOnInsufficientReserves() public {
         _mintUsdOku(user1, 100e18);
 
@@ -473,19 +452,15 @@ contract OkuDollarTest is BaseTest {
         okuMoney.transfer(treasury, 10e18);
 
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.InsufficientReserves.selector);
+        vm.expectRevert(OkuDollarErrors.InsufficientReserves.selector);
         okuDollar.unwrap(100e18, user1);
     }
 
     // ============ ERC-4626 Surface Tests ============
-    //
-    // Regression coverage for the `_redeemShares` floor-vs-ceil mismatch: prior to
-    // the fix, a third-party `withdraw`/`redeem` acting on an owner's exact balance
-    // at an elevated `usdMultiplier` could revert with `InsufficientBalance` because
-    // the internal-share move floored while `unwrap`'s burn ceiled. `_unwrap` now
-    // burns directly from `owner` using a single ceil computation, so this must
-    // succeed and leave a zero balance.
 
+    /// @notice Pins that a third-party `redeem` of an owner's exact balance at an elevated
+    ///         multiplier succeeds and drains it: `_unwrap` burns from `owner` with a single
+    ///         ceil computation, so no floor-vs-ceil gap can trigger `InsufficientBalance`.
     function test_Redeem_ThirdParty_ExactBalance_AtElevatedMultiplier_Succeeds() public {
         _mintUsdOku(user1, 1000e18);
         _setOkuMMultiplierAndRoll(PRECISION + PRECISION / 3); // ~$1.33, forces ceil-vs-floor daylight
@@ -532,8 +507,7 @@ contract OkuDollarTest is BaseTest {
         assertEq(sharesReturned, sharesQuote, "withdraw must return the shares burned");
 
         // Withdraw(sender, receiver, owner, assets, shares) — sender is the spender
-        // (user2), NOT the owner whose shares were burned (user1). Prior to the fix,
-        // `Withdraw` always reported `msg.sender` as the owner.
+        // (user2), NOT the owner whose shares were burned (user1).
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bool found;
         for (uint256 i = 0; i < logs.length; i++) {
@@ -553,8 +527,7 @@ contract OkuDollarTest is BaseTest {
         _mintUsdOku(user1, 1000e18);
         _setOkuMMultiplierAndRoll(PRECISION * 2);
 
-        // Prior bug: maxWithdraw returned balanceOf(owner) (dollars/shares) instead
-        // of the OkuM asset equivalent.
+        // At m = 2.0 the dollar balance and its OkuM equivalent differ ~2x.
         assertEq(
             okuDollar.maxWithdraw(user1),
             okuDollar.convertToAssets(okuDollar.balanceOf(user1)),
@@ -564,15 +537,8 @@ contract OkuDollarTest is BaseTest {
 
     // ── EIP-4626 return-value contract ──────────────────────────────────────
     //
-    // Every one of the four entry points' RETURN VALUES was previously
-    // unasserted anywhere in this suite — tests called them for their effects
-    // and discarded the result. `withdraw` was returning assets instead of
-    // shares as a result (`shares = previewWithdraw(...)` was immediately
-    // overwritten by `return _redeemShares(...)`, which returns OkuM), and
-    // nothing caught it. These tests pin the whole class, not just the one
-    // instance, and deliberately run at a non-unit multiplier so that assets
-    // and shares are far apart — at multiplier 1.0 the bug is invisible
-    // because the two quantities coincide.
+    // Pins the return value of all four entry points. Runs at a non-unit multiplier so
+    // assets and shares diverge — at 1.0 the two coincide and a swap would be invisible.
 
     function test_Withdraw_ReturnsSharesNotAssets() public {
         _mintUsdOku(user1, 1000e18);
@@ -663,8 +629,8 @@ contract OkuDollarTest is BaseTest {
         assertEq(shares, okuDollar.balanceOf(user1));
     }
 
-    /// @notice The ERC-4626 `mint(shares, receiver)` entry point (previously
-    ///         zero test coverage) — distinct from `deposit`: caller specifies
+    /// @notice The ERC-4626 `mint(shares, receiver)` entry point — distinct from
+    ///         `deposit`: caller specifies
     ///         the desired SHARE output, and `mint` derives the asset input via
     ///         `previewMint` (ceil-rounded) before routing through `wrap`.
     function test_Mint_SharesEntryPoint() public {
@@ -765,7 +731,7 @@ contract OkuDollarTest is BaseTest {
     // ============ Price-Aware Wrap/Unwrap Behavior Tests ============
 
     function test_PriceAware_OneNoteWrapsToOneOkuDollar_AtBasePrice() public {
-        // At okuMMultiplier=1e18 (initial), 1 note = 1 OkuDollar (identical to old 1:1 behavior)
+        // At okuMMultiplier=1e18 (initial), 1 note = 1 OkuDollar
         uint256 okuMAmount = 1e18;
         _mintOkuMoney(user1, okuMAmount);
         _approveOkuMoney(user1, address(okuDollar), okuMAmount);
@@ -825,13 +791,6 @@ contract OkuDollarTest is BaseTest {
         assertLe(notesBack, okuMAmount, "Round trip should not gain tokens");
     }
 
-    // REMOVED (single-multiplier refactor): test_WrapUnwrap_RoundTrip_AfterUsdMultiplierChange.
-    // Its premise was a pure USD-side rebase leaving okuMMultiplier at 1e18 —
-    // impossible now that usdMultiplier() delegates to okuMMultiplier() exactly.
-    // It had become a duplicate of test_WrapUnwrap_RoundTrip_AfterNotePriceChange
-    // below (moving "the" multiplier via `_elevateUsdMultiplier` vs.
-    // `_setOkuMMultiplierAndRoll` is now the same operation on the same storage).
-
     function test_WrapUnwrap_RoundTrip_AfterNotePriceChange() public {
         // Wrap at okuMMultiplier=1e18
         uint256 okuMAmount = 100e18;
@@ -840,7 +799,6 @@ contract OkuDollarTest is BaseTest {
 
         // Increase okuMMultiplier to 1.5e18
         // Vault still has 100 note tokens, but each is worth $1.50 → $150 backing
-        // Obligations: 100 OkuDollar → overcollateralized
         _setOkuMMultiplierAndRoll((PRECISION * 3) / 2);
 
         // Unwrap 100 OkuDollar: okuMReturned = 100e18 * 1e18 / 1.5e18 ≈ 66.67e18
@@ -853,13 +811,8 @@ contract OkuDollarTest is BaseTest {
         assertLt(notesBack, 100e18, "Should return fewer notes at higher note price");
     }
 
-    /// @notice CRITICAL: Test that caught the original okuMReturned formula bug.
-    /// @dev Historically this elevated OkuM's and OkuDollar's multipliers
-    ///      independently to the SAME value and asserted a round trip returned
-    ///      exactly the original deposit. Under the single-multiplier design
-    ///      "elevate both to the same value" is not a distinct scenario — there is
-    ///      only one multiplier, so every elevated round trip already exercises
-    ///      this. This keeps the regression as a direct single-multiplier version.
+    /// @notice Pins that unwrapping the full elevated balance returns exactly the OkuM
+    ///         deposited: `okuMReturned` divides by the same multiplier `balanceOf` scaled by.
     function test_WrapUnwrap_RoundTrip_MatchedPriceAndMultiplier() public {
         uint256 okuMAmount = 100e18;
         _mintUsdOku(user1, okuMAmount);
@@ -946,24 +899,9 @@ contract OkuDollarTest is BaseTest {
 
     // ============ Yield-rate delegation tests ============
     //
-    // SINGLE MULTIPLIER: OkuDollar has no rate state. These tests now drive
-    // `okuMoney.setOkuMYieldRate` / `setNextOkuMYieldRate` and assert that
-    // `okuDollar.usdMultiplier()` tracks it exactly — that delegation is the
-    // property worth testing here.
-    //
-    // REMOVED (single-multiplier refactor):
-    //   * test_SetUsdYieldRate_OnlyUsdRebaser / test_SetNextUsdYieldRate_OnlyUsdRebaser
-    //     — VAULT_REBASER and both setters are gone; OKUM_REBASER gating on OkuMoney is
-    //     covered in OkuMoney.t.sol.
-    //   * test_SetUsdYieldRate_RevertsOnNegativeRate / _RevertsOnRateTooHigh /
-    //     _RevertsOnPastEndTimestamp, test_SetNextUsdYieldRate_RevertsWhenNoEnd /
-    //     _RevertsOnNegativeRate / _RevertAtExactEndBoundary /
-    //     _RevertOneSecondPastEnd / _SucceedsOneSecondBeforeEnd / _RevertsOnRateTooHigh
-    //     — OkuDollar.InvalidRate / RateTooHigh / EndTimestampInPast / NoRateEndSet /
-    //     RateAlreadyExpired no longer exist. The identical bounds now live on
-    //     OkuMoney and are tested in OkuMoney.t.sol.
-    //   * test_UsdMultiplier_IndependentOfNotePrice — the multipliers are the same
-    //     value by construction; independence is no longer a property.
+    // OkuDollar has no rate state. These tests drive `okuMoney.setOkuMYieldRate` /
+    // `setNextOkuMYieldRate` and assert that `okuDollar.usdMultiplier()` tracks it.
+    // Rate bounds and OKUM_REBASER gating are tested in OkuMoney.t.sol.
 
     function test_UsdMultiplier_TracksOkuMYieldRate_SnapshotsMultiplier() public {
         uint256 rate = PRECISION + 1393e6;
@@ -1045,20 +983,8 @@ contract OkuDollarTest is BaseTest {
 
     // ============ Reserve management ============
     //
-    // REMOVED (single-multiplier refactor): the whole depositReserves /
-    // withdrawSurplus / setMinCollateralRatio / collateralizationRatio / surplus
-    // test blocks (test_DepositReserves_*, test_WithdrawSurplus_*,
-    // test_SetMinCollateralRatio_*, test_CollateralizationRatio_*, test_Surplus_*).
-    //
-    // Rationale: those functions, the `minCollateralRatio` config, the
-    // `BelowMinimumCollateral` / `RatioExceedsMax` / `RatioBelowFloor` errors, and the
-    // `ReservesDeposited` / `SurplusWithdrawn` / `MinCollateralRatioUpdated` events were
-    // all deleted. Collateralization is exactly 1.0 by construction: `usdMultiplier()`
-    // IS `okuMoney.okuMMultiplier()`, and shares are only ever minted/burned 1:1 against
-    // real OkuM at the same multiplier, so there is no over- or under-collateralized
-    // state to reach and therefore no surplus to withdraw and no floor to enforce.
-    //
-    // The surviving properties are kept below.
+    // Collateralization is exactly 1.0 by construction: `usdMultiplier()` IS
+    // `okuMoney.okuMMultiplier()`, and shares are only minted/burned 1:1 against real OkuM.
 
     function test_TotalOkuMReserves_EqualsOkuMBalance() public {
         _mintUsdOku(user1, 100e18);
@@ -1115,7 +1041,7 @@ contract OkuDollarTest is BaseTest {
         _mintUsdOku(user1, 100e18);
 
         vm.prank(vaultRescuer);
-        vm.expectRevert(OkuDollar.NoDonationAvailable.selector);
+        vm.expectRevert(OkuDollarErrors.NoDonationAvailable.selector);
         okuDollar.rescueDonation(1, treasury);
     }
 
@@ -1130,7 +1056,7 @@ contract OkuDollarTest is BaseTest {
 
         // Cannot exceed the donation.
         vm.prank(vaultRescuer);
-        vm.expectRevert(OkuDollar.NoDonationAvailable.selector);
+        vm.expectRevert(OkuDollarErrors.NoDonationAvailable.selector);
         okuDollar.rescueDonation(50e18 + 1, treasury);
 
         vm.prank(vaultRescuer);
@@ -1191,7 +1117,7 @@ contract OkuDollarTest is BaseTest {
         _mintOkuMoney(user1, okuMAmount);
         _approveOkuMoney(user1, address(okuDollar), okuMAmount);
 
-        // M-4 fix: wrap is now blocked when paused (full freeze)
+        // Pause is a full freeze: wrap is blocked
         vm.prank(user1);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuDollar.wrap(okuMAmount, user1, 0);
@@ -1203,7 +1129,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(vaultPauser);
         okuDollar.pause();
 
-        // M-4 fix: unwrap is now blocked when paused (full freeze)
+        // Pause is a full freeze: unwrap is blocked
         vm.prank(user1);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuDollar.unwrap(100e18, user1);
@@ -1322,9 +1248,6 @@ contract OkuDollarTest is BaseTest {
     function test_Transfer_RevertsOnInsufficientBalance() public {
         _mintUsdOku(user1, 100e18);
 
-        // _transferUsdShares should revert with InsufficientBalance — the share
-        // balance check is unrelated to vault collateralization (which has its own
-        // distinct InsufficientCollateral error).
         vm.prank(user1);
         vm.expectRevert(Errors.InsufficientBalance.selector);
         okuDollar.transfer(user2, 101e18);
@@ -1362,21 +1285,20 @@ contract OkuDollarTest is BaseTest {
     }
 
     /// @notice `amount = 1` (dollar-wei) floors to `floor(1 * 1e18 / m) = 0` shares at
-    ///         any `m > 1e18`, which `_elevateUsdMultiplier` guarantees. Before this
-    ///         guard existed, such a call silently moved nothing, still emitted
-    ///         `Transfer(from, to, 0)`, and returned `true` — see Accepted Risk #4.
+    ///         any `m > 1e18`, which `_elevateUsdMultiplier` guarantees. The guard
+    ///         reverts rather than moving nothing while emitting `Transfer` and
+    ///         returning `true` — see Accepted Risk #4.
     function test_Transfer_RevertsOnDustAmountBelowOneShare() public {
         _mintUsdOku(user1, 100e18);
         _elevateUsdMultiplier(PRECISION * 2);
 
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.AmountTooSmall.selector);
+        vm.expectRevert(Errors.AmountTooSmall.selector);
         okuDollar.transfer(user2, 1);
     }
 
-    /// @notice Same dust floor as `transfer` above, but via `transferFrom` — this is
-    ///         also the path that used to debit the caller's allowance for a transfer
-    ///         that moved zero shares.
+    /// @notice Same dust floor as `transfer` above, but via `transferFrom` — so no
+    ///         allowance is debited for a transfer that would move zero shares.
     function test_TransferFrom_RevertsOnDustAmountBelowOneShare() public {
         _mintUsdOku(user1, 100e18);
         _elevateUsdMultiplier(PRECISION * 2);
@@ -1385,7 +1307,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.approve(user2, 1);
 
         vm.prank(user2);
-        vm.expectRevert(OkuDollar.AmountTooSmall.selector);
+        vm.expectRevert(Errors.AmountTooSmall.selector);
         okuDollar.transferFrom(user1, user2, 1);
     }
 
@@ -1447,17 +1369,6 @@ contract OkuDollarTest is BaseTest {
     }
 
     // ============ Role Enforcement Tests ============
-    //
-    // REMOVED (single-multiplier refactor):
-    // test_RoleEnforcement_NoteRebaserCannotSetUsdRate (there is no separate USD rate
-    // to gate — `rebaser` legitimately controls the one schedule),
-    // test_RoleEnforcement_NonReserveManagerCannotDeposit / ...CannotWithdraw
-    // (`depositReserves` / `withdrawSurplus` and VAULT_RESERVE_MANAGER deleted), and
-    // test_RoleEnforcement_NonVaultAdminCannotSetCollateralRatio
-    // (`setMinCollateralRatio` and VAULT_ADMIN deleted).
-    //
-    // The replacement gate is VAULT_RESCUER on `rescueDonation`, covered by
-    // test_RescueDonation_OnlyVaultRescuer above.
 
     function test_RoleEnforcement_NonPauserCannotPause() public {
         vm.prank(user1);
@@ -1498,12 +1409,9 @@ contract OkuDollarTest is BaseTest {
     }
 
     function test_RepeatedWrapUnwrap_NoShareInflation_ElevatedPrice() public {
-        // Set okuMMultiplier to elevated value but keep multiplier at base
-        // This tests the overcollateralized scenario (price > mult)
         uint256 elevatedPrice = 15e17; // 1.5e18
 
         _setOkuMMultiplierAndRoll(elevatedPrice);
-        // usdMultiplier stays at default PRECISION
 
         // Create some existing vault state at elevated price
         _mintOkuMoney(user2, 5000e18);
@@ -1599,7 +1507,7 @@ contract OkuDollarTest is BaseTest {
         okuMoney.setOkuMYieldRate(rate1, endTime);
 
         // The successor's own window is [endTime, pendingEnd] and is subject to
-        // MAX_RATE_WINDOW (90 days) — this used to request 400 days.
+        // MAX_RATE_WINDOW (90 days).
         vm.prank(rebaser);
         okuMoney.setNextOkuMYieldRate(rate2, endTime + MAX_RATE_WINDOW);
 
@@ -1653,14 +1561,9 @@ contract OkuDollarTest is BaseTest {
     }
 
     // ============ Single Multiplier Delegation Tests ============
-    //
-    // REPLACES test_UsdMultiplier_IndependentOfNotePrice (removed): under the
-    // pre-refactor dual-multiplier design, OkuM's discrete price and OkuDollar's
-    // independent USD rate could diverge over time. Under the single-multiplier
-    // design that's no longer a property to test — `usdMultiplier()` delegates to
-    // `okuMoney.okuMMultiplier()` exactly, by construction, always. This asserts
-    // that identity holds across both a discrete override AND a streaming rate.
 
+    /// @notice `usdMultiplier()` equals `okuMoney.okuMMultiplier()` across both a discrete
+    ///         override and a streaming rate.
     function test_UsdMultiplier_AlwaysEqualsOkuMMultiplier() public {
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(PRECISION * 1045 / 1000); // discrete override
@@ -1678,19 +1581,9 @@ contract OkuDollarTest is BaseTest {
     }
 
     /// @notice ERC-8056's `toUIAmount` and ERC-4626's `convertToShares` are the SAME
-    ///         function under two standards' names, not merely two functions that happen
-    ///         to agree today. Both reduce to `MathLib.okuMToDollars(x, okuMMultiplier())`
-    ///         — `OkuMoney.toUIAmount` calls it directly (`okuMMultiplier()` is `public`),
-    ///         `OkuDollar.convertToShares` calls it via `usdMultiplier()`, which is a
-    ///         direct one-line delegation to `okuMoney.okuMMultiplier()`
-    ///         (`test_UsdMultiplier_AlwaysEqualsOkuMMultiplier` above pins that
-    ///         delegation). There is exactly one multiplier read from exactly one place;
-    ///         this test pins the two public entry points a caller would actually use
-    ///         (the ERC-8056 display surface and the ERC-4626 share/asset surface)
-    ///         against each other directly, across both a discrete override and a
-    ///         streaming rate, so a future change that reads the multiplier through a
-    ///         different path on one side (e.g. a caching optimisation) cannot
-    ///         silently diverge the two without a test failing here.
+    ///         function under two standards' names: both reduce to
+    ///         `MathLib.okuMToDollars(x, okuMMultiplier())`. Pins the two public surfaces
+    ///         against each other so neither can read the multiplier via a divergent path.
     function test_ToUIAmount_EqualsConvertToShares_AcrossMultiplierChanges() public {
         uint256 rawAmount = 12_345e18;
 
@@ -1874,13 +1767,10 @@ contract OkuDollarTest is BaseTest {
     // ============ Fuzz Round-Trip Tests ============
 
     function testFuzz_WrapUnwrap_RoundTrip(uint256 mult) public {
-        // Test wrap/unwrap at base multiplier=1e18 but varying okuMMultiplier.
         // `setOkuMMultiplier` requires strict increase, so bound starts above PRECISION.
         mult = bound(mult, PRECISION + 1, 5e18);
 
-        // Only set okuMMultiplier (not multiplier) to avoid collateralization issues
         _setOkuMMultiplierAndRoll(mult);
-        // usdMultiplier stays at default 1e18
 
         uint256 okuMAmount = 77.777e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -1926,39 +1816,6 @@ contract OkuDollarTest is BaseTest {
         assertLe(finalNotes, okuMAmount, "Must not gain from round trip");
     }
 
-    function testFuzz_WrapUnwrap_RoundTrip_BothPriceAndMult(uint256 price) public {
-        // Test wrap/unwrap when price varies but multiplier stays at base (1e18).
-        // Strict increase required by setOkuMMultiplier.
-        price = bound(price, PRECISION + 1, 3e18);
-        // Keep mult at base - this ensures vault stays solvent (price >= mult means overcollateralized)
-        uint256 mult = PRECISION;
-
-        _setOkuMMultiplierAndRoll(price);
-
-        // usdMultiplier stays at default PRECISION
-
-        uint256 okuMAmount = 77.777e18;
-        _mintOkuMoney(user1, okuMAmount);
-        _approveOkuMoney(user1, address(okuDollar), okuMAmount);
-
-        // Wrap
-        vm.prank(user1);
-        okuDollar.wrap(okuMAmount, user1, 0);
-
-        // Unwrap full balance
-        uint256 bal = okuDollar.balanceOf(user1);
-        vm.prank(user1);
-        okuDollar.unwrap(bal, user1);
-
-        uint256 finalNotes = okuMoney.balanceOf(user1);
-        // When price >= mult, round trip should return ≈ okuMAmount (within rounding)
-        // Loss bounded by combined rounding effects
-        uint256 maxLoss = Math.mulDiv(5, mult, PRECISION, Math.Rounding.Ceil)
-            + Math.mulDiv(5, price, PRECISION, Math.Rounding.Ceil) + 10;
-        assertApproxEqAbs(finalNotes, okuMAmount, maxLoss, "Round trip rounding loss within bounds");
-        assertLe(finalNotes, okuMAmount, "Must not gain from round trip");
-    }
-
     // ============ Yield Distribution Lock Tests (Sandwich Attack Prevention) ============
 
     function test_Wrap_RevertsInYieldDistributionBlock() public {
@@ -1990,7 +1847,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(user1);
         okuDollar.wrap(50e18, user1, 0);
 
-        // 50 OkuM at the live multiplier. `> 0` would have passed on a wei.
+        // 50 OkuM at the live multiplier.
         assertEq(
             okuDollar.balanceOf(user1),
             (50e18 * okuDollar.usdMultiplier()) / PRECISION,
@@ -2072,9 +1929,7 @@ contract OkuDollarTest is BaseTest {
         assertGt(okuDollar.balanceOf(user2), 0);
     }
 
-    // ============ WS3 Additional Tests ============
-
-    // ---- WS3.1.a: zero-supply rate change ----
+    // ============ Zero-supply rate change ============
 
     /// @notice Setting the rate when totalUsdShares == 0 should succeed. The multiplier
     ///         has no supply term, so it accrues regardless and any later `wrap()`
@@ -2104,14 +1959,14 @@ contract OkuDollarTest is BaseTest {
         assertEq(usdMinted, okuDollar.balanceOf(user1));
     }
 
-    // ---- WS3.1.c: reinit guard on OkuDollar ----
+    // ============ Reinitialization guard ============
 
     function test_Initialize_CannotReinitialize() public {
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         okuDollar.initialize(address(okuMoney), "OkuDollar", "usdOku", admin);
     }
 
-    // ---- WS3.1.d: OkuDollar UUPS upgrade authorization ----
+    // ============ UUPS upgrade authorization ============
 
     function test_UUPS_Upgrade_RevertsForNonUpgrader() public {
         OkuDollar newImpl = new OkuDollar();
@@ -2132,15 +1987,7 @@ contract OkuDollarTest is BaseTest {
         assertEq(address(okuDollar.okuMoney()), address(okuMoney));
     }
 
-    // ---- WS3.1.f: pause coverage ----
-    //
-    // REMOVED (single-multiplier refactor): test_Pause_BlocksDepositReserves,
-    // test_Pause_BlocksWithdrawSurplus, test_Unpause_AllowsDepositReservesAgain —
-    // `depositReserves` / `withdrawSurplus` no longer exist. Pause coverage for the
-    // surviving state-changing surface (wrap / unwrap / transfer / transferFrom) is in
-    // the Pause Tests section above.
-
-    // ---- WS3.1.j: OkuDollar blacklist ----
+    // ============ Blacklist ============
 
     function test_Blacklist_BlocksWrapSender() public {
         _mintOkuMoney(user1, 100e18);
@@ -2148,7 +1995,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         okuDollar.blacklist(user1);
 
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(Errors.SenderBlacklisted.selector);
         vm.prank(user1);
         okuDollar.wrap(100e18, user1, 0);
     }
@@ -2159,7 +2006,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         okuDollar.blacklist(user1); // blacklist receiver, not sender
 
-        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.expectRevert(Errors.RecipientBlacklisted.selector);
         vm.prank(user2);
         okuDollar.wrap(100e18, user1, 0); // receiver is blacklisted
     }
@@ -2169,7 +2016,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         okuDollar.blacklist(user1);
 
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(Errors.SenderBlacklisted.selector);
         vm.prank(user1);
         okuDollar.unwrap(50e18, user1);
     }
@@ -2179,7 +2026,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         okuDollar.blacklist(user1);
 
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(Errors.SenderBlacklisted.selector);
         vm.prank(user1);
         okuDollar.transfer(user2, 50e18);
     }
@@ -2189,7 +2036,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         okuDollar.blacklist(user2);
 
-        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.expectRevert(Errors.RecipientBlacklisted.selector);
         vm.prank(user1);
         okuDollar.transfer(user2, 50e18);
     }
@@ -2200,7 +2047,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user1);
 
         // Permit with blacklisted owner should revert
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(Errors.SenderBlacklisted.selector);
         okuDollar.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
     }
 
@@ -2252,11 +2099,11 @@ contract OkuDollarTest is BaseTest {
         _blacklistOnOkuMoneyOnly(user1);
 
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(Errors.SenderBlacklisted.selector);
         okuDollar.transfer(user3, 10e18);
 
         vm.prank(user2);
-        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.expectRevert(Errors.RecipientBlacklisted.selector);
         okuDollar.transfer(user1, 10e18);
     }
 
@@ -2265,7 +2112,7 @@ contract OkuDollarTest is BaseTest {
         _blacklistOnOkuMoneyOnly(user1);
 
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(Errors.SenderBlacklisted.selector);
         okuDollar.unwrap(50e18, user3);
     }
 
@@ -2275,11 +2122,11 @@ contract OkuDollarTest is BaseTest {
         _blacklistOnOkuMoneyOnly(user1);
 
         vm.prank(user2);
-        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.expectRevert(Errors.RecipientBlacklisted.selector);
         okuDollar.wrap(100e18, user1, 0);
 
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(Errors.SenderBlacklisted.selector);
         okuDollar.approve(user2, 1);
     }
 
@@ -2307,31 +2154,16 @@ contract OkuDollarTest is BaseTest {
     function test_Blacklist_RevertAlreadyBlacklisted() public {
         vm.prank(blacklister);
         okuDollar.blacklist(user1);
-        vm.expectRevert(OkuDollar.AlreadyBlacklisted.selector);
+        vm.expectRevert(Errors.AlreadyBlacklisted.selector);
         vm.prank(blacklister);
         okuDollar.blacklist(user1);
     }
 
     function test_Blacklist_RevertNotBlacklisted() public {
-        vm.expectRevert(OkuDollar.NotBlacklisted.selector);
+        vm.expectRevert(Errors.NotBlacklisted.selector);
         vm.prank(unblacklister);
         okuDollar.unblacklist(user1);
     }
-
-    // REMOVED (single-multiplier refactor): the withdrawSurplus yield-lock and
-    // boundary/postRatio blocks (test_WithdrawSurplus_BlockedDuringYieldDistribution,
-    // test_WithdrawSurplus_OneWeiBelowFloor_Reverts,
-    // test_WithdrawSurplus_ZeroObligations_UsesInfiniteRatio,
-    // test_WithdrawSurplus_EventPostRatioMatchesView). `withdrawSurplus`,
-    // `collateralizationRatio()` and the min-ratio floor no longer exist, so there is
-    // no postRatio arithmetic left to bound. The yield-sandwich guard itself is still
-    // covered on wrap/unwrap in the "Yield Distribution Lock Tests" section above.
-    //
-    // REMOVED: the setNextUsdYieldRate boundary block
-    // (test_SetNextUsdYieldRate_RevertAtExactEndBoundary, _RevertOneSecondPastEnd,
-    // _SucceedsOneSecondBeforeEnd, _RevertsOnRateTooHigh). Those bounds moved to
-    // OkuMoney.setNextOkuMYieldRate along with the RateAlreadyExpired / RateTooHigh
-    // errors, and are tested in OkuMoney.t.sol.
 
     // ============ Permit Blacklist Spender Branch ============
 
@@ -2342,7 +2174,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user2);
 
         // Permit signature is bogus — call must revert before signature check.
-        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.expectRevert(Errors.RecipientBlacklisted.selector);
         okuDollar.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
     }
 
@@ -2352,7 +2184,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user2);
 
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.expectRevert(Errors.RecipientBlacklisted.selector);
         okuDollar.approve(user2, 50e18);
     }
 
@@ -2363,12 +2195,12 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user1);
 
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(Errors.SenderBlacklisted.selector);
         okuDollar.approve(user2, 50e18);
     }
 
-    /// @notice OkuMoney already pinned this (test_Approve_DoesNotRevokeExistingAllowanceOnBlacklist);
-    ///         OkuDollar had no counterpart despite the identical behavior/comment.
+    /// @notice Blacklisting a spender does not revoke an existing allowance (mirrors the
+    ///         OkuMoney test of the same name); exercising it is blocked separately.
     function test_Approve_DoesNotRevokeExistingAllowanceOnBlacklist() public {
         vm.prank(user1);
         okuDollar.approve(user2, 50e18);
@@ -2381,11 +2213,9 @@ contract OkuDollarTest is BaseTest {
 
     // ============ Circle Parity: blacklisted spender cannot exercise a prior allowance ============
 
-    /// @notice THE gap this parity pass closes, on OkuDollar's `transferFrom`. A
-    ///         blacklisted spender holding a pre-existing allowance must not be able
-    ///         to move clean funds between clean addresses. Before this fix,
-    ///         `transferFrom` only checked `from`/`to` via `_transferUsdShares`,
-    ///         never the third-party spender itself.
+    /// @notice A blacklisted spender holding a pre-existing allowance must not be able
+    ///         to move clean funds between clean addresses: `transferFrom` checks the
+    ///         spender itself, not just `from`/`to` via `_transferUsdShares`.
     function test_TransferFrom_RevertsOnBlacklistedSpender_EvenWithPriorAllowance() public {
         _mintUsdOku(user1, 100e18);
         vm.prank(user1);
@@ -2401,11 +2231,11 @@ contract OkuDollarTest is BaseTest {
         );
 
         vm.prank(user2);
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(Errors.SenderBlacklisted.selector);
         okuDollar.transferFrom(user1, user3, 50e18);
     }
 
-    /// @notice Sanity check: a clean allowance-holder is unaffected by the new check.
+    /// @notice Sanity check: a clean allowance-holder is unaffected by the spender check.
     function test_TransferFrom_SucceedsForCleanSpender() public {
         _mintUsdOku(user1, 100e18);
         vm.prank(user1);
@@ -2417,17 +2247,11 @@ contract OkuDollarTest is BaseTest {
         assertEq(okuDollar.balanceOf(user3), 50e18);
     }
 
-    /// @notice Same gap, on the ERC-4626 surface: `redeem()` called by a blacklisted
+    /// @notice Same property on the ERC-4626 surface: `redeem()` called by a blacklisted
     ///         THIRD-PARTY spender (not the owner) against a pre-existing allowance.
-    ///         `_redeemShares` only checked `owner`/`receiver` via `_unwrap`; the
-    ///         caller exercising someone else's allowance was invisible to it.
-    /// @dev Receiver is deliberately user3, NOT the spender (user2) — isolates the
-    ///      spender-blacklist mechanism from `_unwrap`'s pre-existing receiver-check.
-    ///      Caught in verification: an earlier version of this test used the spender
-    ///      as its own receiver, so reverting the fix locally still passed (for the
-    ///      wrong reason — RecipientBlacklisted via `_unwrap`, not the intended
-    ///      SenderBlacklisted from the new spender-check) and the regression this
-    ///      test exists to catch would have gone undetected.
+    /// @dev Receiver is deliberately user3, NOT the spender (user2), so the revert must
+    ///      come from the spender check (SenderBlacklisted) rather than `_unwrap`'s
+    ///      receiver check (RecipientBlacklisted).
     function test_Redeem_RevertsOnBlacklistedSpender_EvenWithPriorAllowance() public {
         _mintUsdOku(user1, 100e18);
         vm.prank(user1);
@@ -2437,12 +2261,12 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user2);
 
         vm.prank(user2);
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(Errors.SenderBlacklisted.selector);
         okuDollar.redeem(50e18, user3, user1);
     }
 
     /// @notice Sanity check: the owner redeeming their OWN shares is unaffected —
-    ///         the new third-party-spender check only fires in the allowance branch.
+    ///         the third-party-spender check only fires in the allowance branch.
     function test_Redeem_SucceedsForOwnerActingAsOwnSpender() public {
         _mintUsdOku(user1, 100e18);
 
@@ -2453,9 +2277,8 @@ contract OkuDollarTest is BaseTest {
     }
 
     /// @notice `maxWithdraw`/`maxRedeem` must report `0` for a blacklisted owner —
-    ///         mirrors `maxDeposit`'s existing pause/blacklist gating. Before this
-    ///         fix they reported the full balance for an owner whose `withdraw`/
-    ///         `redeem` call would unconditionally revert in `_unwrap`.
+    ///         mirrors `maxDeposit`'s pause/blacklist gating, since that owner's
+    ///         `withdraw`/`redeem` would unconditionally revert in `_unwrap`.
     function test_MaxWithdrawRedeem_ZeroForBlacklistedOwner() public {
         _mintUsdOku(user1, 100e18);
 
@@ -2466,7 +2289,7 @@ contract OkuDollarTest is BaseTest {
         assertEq(okuDollar.maxRedeem(user1), 0, "maxRedeem must be 0 for blacklisted owner");
     }
 
-    /// @notice Sanity check: a clean owner's max views are unaffected by the fix.
+    /// @notice Sanity check: a clean owner's max views are unaffected by blacklist gating.
     function test_MaxWithdrawRedeem_NonZeroForCleanOwner() public {
         _mintUsdOku(user1, 100e18);
 
@@ -2561,9 +2384,7 @@ contract OkuDollarTest is BaseTest {
 
     // ============ View Getter Tests ============
 
-    /// @dev REMOVED (single-multiplier refactor): OkuDollar no longer exposes
-    ///      `usdLastAccrualTime` — the accrual clock lives on OkuMoney. Retained here as
-    ///      a delegation check.
+    /// @dev The accrual clock lives on OkuMoney; OkuDollar's multiplier delegates to it.
     function test_UsdMultiplier_DelegatesLastAccrualTime() public {
         // Calling setOkuMYieldRate stamps okuMLastAccrualTime = block.timestamp.
         vm.prank(rebaser);
@@ -2573,8 +2394,6 @@ contract OkuDollarTest is BaseTest {
     }
 
     // ============ Initialization rails ============
-    //
-    // Relocated from the former CoverageGaps.t.sol.
 
     function test_Initialize_RevertZeroOkuMoney() public {
         OkuDollar impl = new OkuDollar();
@@ -2597,7 +2416,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_RescueDonation_RevertNoDonation() public {
         vm.prank(vaultRescuer);
-        vm.expectRevert(OkuDollar.NoDonationAvailable.selector);
+        vm.expectRevert(OkuDollarErrors.NoDonationAvailable.selector);
         okuDollar.rescueDonation(1e18, admin);
     }
 
@@ -2620,11 +2439,8 @@ contract OkuDollarTest is BaseTest {
     }
 
     /// @notice A peer-to-peer transfer moves shares, not the inherited ERC-20 balance.
-    /// @dev Renamed from `test_OkuDollar_Update_PeerToPeerPassThrough`, which claimed
-    ///      to exercise the `_update` tripwire. It never reached `_update` -- OkuDollar
-    ///      overrides `transfer` entirely -- and asserted only `balanceOf(user2) > 0`.
-    ///      What is actually worth pinning is that the override moves the exact amount
-    ///      and conserves the share total.
+    /// @dev OkuDollar overrides `transfer` entirely (it never reaches `_update`), so this
+    ///      pins that the override moves the exact amount and conserves the share total.
     function test_Transfer_MovesSharesNotInheritedBalance() public {
         _mintOkuMoney(user1, 100e18);
         vm.prank(user1);
@@ -2647,8 +2463,8 @@ contract OkuDollarTest is BaseTest {
     }
 
     /// @notice Streaming accrual SATURATES at MAX_MULTIPLIER; it must not wrap or revert.
-    /// @dev The counterpart to `OkuMoney.setOkuMMultiplier`'s hard rejection above.
-    ///      The asymmetry is deliberate: an operator typo should fail loudly, but mere
+    /// @dev The counterpart to `OkuMoney.setOkuMMultiplier`'s hard rejection of values
+    ///      above MAX_MULTIPLIER. The asymmetry is deliberate: an operator typo should fail loudly, but mere
     ///      passage of time must never brick `balanceOf` -- every downstream read goes
     ///      through the multiplier, so a revert here would freeze the whole vault.
     function test_UsdMultiplier_SaturatesAtMaxMultiplier() public {

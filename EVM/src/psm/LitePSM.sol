@@ -21,6 +21,7 @@ import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {OverrideBlockGuard} from "../lib/OverrideBlockGuard.sol";
 import {LitePSMEvents} from "../lib/events/LitePSMEvents.sol";
+import {LitePSMErrors} from "../lib/errors/LitePSMErrors.sol";
 
 /**
  * @title LitePSM
@@ -47,7 +48,8 @@ contract LitePSM is
     ReentrancyGuardUpgradeable,
     OverrideBlockGuard,
     UUPSUpgradeable,
-    LitePSMEvents
+    LitePSMEvents,
+    LitePSMErrors
 {
     using SafeERC20 for IERC20;
 
@@ -71,16 +73,6 @@ contract LitePSM is
             $.slot := LITEPSM_STORAGE_LOCATION
         }
     }
-
-    // ============ Custom Errors ============
-
-    /// @dev Swap input converts to zero output.
-    error AmountTooSmall();
-    error InsufficientBuffer(uint256 available, uint256 required);
-    error UsdcDecimalsTooLarge(uint8 reported);
-    /// @dev `_okuDollar` must wrap `_okuMoney`; all pricing assumes one shared multiplier.
-    error AssetMismatch();
-    error UserBlacklisted(address user);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -245,7 +237,7 @@ contract LitePSM is
         uint256 balBefore = okuDollarToken.balanceOf(address(this));
         okuDollarToken.safeTransferFrom(msg.sender, address(this), usdAmount);
         uint256 received = okuDollarToken.balanceOf(address(this)) - balBefore;
-        if (received == 0) revert AmountTooSmall();
+        if (received == 0) revert Errors.AmountTooSmall();
 
         uint256 okuMAmount = $.okuDollar.unwrap(received, address(this));
         uint256 okuMMult;
@@ -272,7 +264,7 @@ contract LitePSM is
         okuMAmount = MathLib.dollarsToOkuM(
             MathLib.usdcToDollars(usdcAmount, $.usdcDecimalMultiplier), okuMMult
         );
-        if (okuMAmount == 0) revert AmountTooSmall();
+        if (okuMAmount == 0) revert Errors.AmountTooSmall();
     }
 
     /// @dev Reverts if the output rounds to zero or exceeds the buffer.
@@ -289,7 +281,7 @@ contract LitePSM is
         usdcAmount = MathLib.dollarsToUsdc(
             MathLib.okuMToDollars(okuMAmount, okuMMult), $.usdcDecimalMultiplier
         );
-        if (usdcAmount == 0) revert AmountTooSmall();
+        if (usdcAmount == 0) revert Errors.AmountTooSmall();
         uint256 buffer = $.usdc.balanceOf(address(this));
         if (buffer < usdcAmount) revert InsufficientBuffer(buffer, usdcAmount);
     }

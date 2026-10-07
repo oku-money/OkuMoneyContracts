@@ -312,8 +312,10 @@ NETWORK=<chain> hh run scripts/test/test-onchain.ts --network <chain>
 ```
 src/
   token/
-    OkuMoney.sol            # Non-rebasing OkuM; okuMMultiplier() is COMPUTED from a rate
-                            # schedule. Also implements ERC-8056.
+    OkuMoney.sol            # Non-rebasing OkuM: ERC-20, supply cap, minter allowances,
+                            # blacklist, pause; ERC-8056 conversion/balances
+    OkuMoneyRateSchedule.sol # Abstract base of OkuMoney: the rate schedule, okuMMultiplier()
+                            # (COMPUTED), setters, emergency override, ERC-8056 scheduling
     OkuDollar.sol           # Rebasing $1-pegged usdOku wrapping OkuM; usdMultiplier() delegates
                             # to okuMoney.okuMMultiplier(). IERC4626-conformant, rebasing shares.
   psm/
@@ -322,11 +324,12 @@ src/
   lib/
     Roles.sol               # Shared RBAC role constants
     Constants.sol           # Compile-time constants + terminology legend
-    Errors.sol              # Errors shared by more than one contract
+    Errors.sol              # Errors raised by more than one contract (incl. blacklist)
     MathLib.sol             # computeMultiplier / compoundFor / rpow + conversion helpers
     ReentrancyGuardUpgradeable.sol  # OZ 5.x dropped the upgradeable variant; this replaces it
     OverrideBlockGuard.sol  # whenNoOverrideThisBlock (OkuDollar + LitePSM); emergency override only
     events/                 # One event-declaration file per contract
+    errors/                 # One error-declaration file per contract (contract-specific errors)
 
 test/mocks/                 # Test-only mocks/harnesses, compiled by Hardhat but outside `src/`.
                             # MockUSDC.sol (6-decimal) is also the deploy script's testnet collateral.
@@ -442,7 +445,8 @@ simultaneity requirement.
 ### The multiplier is computed, not stored
 
 `okuMMultiplier()` is `MathLib.computeMultiplier` evaluated at `block.timestamp`
-over the packed schedule fields in `OkuMoneyStorage` (base, rate, anchor, rate
+over the packed schedule fields in `RateScheduleStorage`
+([`OkuMoneyRateSchedule.sol`](src/token/OkuMoneyRateSchedule.sol)) (base, rate, anchor, rate
 end, pending rate, pending rate end). It is a MakerDAO `chi`/DSR-style `rpow`
 accumulator: it compounds the active rate from the anchor, rolls over to the
 pending rate at `okuMRateEnd`, bounds that pending rate's own overhang at
@@ -564,13 +568,21 @@ Full model, derivation, and the simulation study that validated it:
 
 ## OkuMoney.sol
 
-**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `UUPSUpgradeable`, plus the four ERC-8056 interfaces.
+**Inherits**: `OkuMoneyRateSchedule` (which brings `AccessControlUpgradeable`, `PausableUpgradeable`, `IOkuMoney` and the two scheduling ERC-8056 interfaces), `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `UUPSUpgradeable`, plus the two remaining ERC-8056 interfaces.
 
 **Concept**: Non-rebasing base token with rear-facing yield. Balances are static;
 yield is the multiplier, **computed continuously** from a rate schedule (§ Streaming
-Accrual). `struct OkuMoneyStorage` (ERC-7201) has **no stored multiplier slot**,
-and every runtime-variable downcast goes through `SafeCast`, so an out-of-range
-value reverts rather than truncating.
+Accrual).
+
+**Layout**: the schedule lives in the abstract
+[`OkuMoneyRateSchedule.sol`](src/token/OkuMoneyRateSchedule.sol) (`okuMMultiplier()`,
+the rate setters, `setOkuMMultiplier`, `lastYieldDistributionBlock`, `uiMultiplier` /
+`newUIMultiplier` / `effectiveAt`) so it can be reviewed on its own. `OkuMoney.sol` holds
+the ERC-20, supply cap, minter allowances, blacklist, pause and upgrade surface. Each
+has its own ERC-7201 namespace (`okumoney.storage.OkuMoneyRateSchedule`,
+`okumoney.storage.OkuMoney`); neither stores the multiplier itself, and every
+runtime-variable downcast goes through `SafeCast`, so an out-of-range value reverts
+rather than truncating.
 
 **Rate setters** (`OKUM_REBASER`): `setOkuMYieldRate`, `setNextOkuMYieldRate`,
 and the atomic `setOkuMYieldRateWithSuccessor` stream yield; every window is

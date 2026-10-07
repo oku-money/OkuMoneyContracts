@@ -787,7 +787,7 @@ describe("lite-psm", () => {
       });
 
       it("rebaser can force the multiplier via the emergency override", async () => {
-        // Multiplier is WAD-scaled (1e18) since the PRECISION migration.
+        // Multiplier is WAD-scaled (1e18).
         // Nudge it one unit above whatever has accrued so far.
         const current = await computeCanonicalMultiplier(h, program, configPda);
         const newMultiplier = new BN((current + 1n).toString());
@@ -938,6 +938,47 @@ describe("lite-psm", () => {
             .rpc(),
         "ZeroAmount",
       );
+    });
+
+    it("reverts AmountTooSmall when 1 micro-USDC floors to zero OkuM, and moves nothing", async () => {
+      // floor(1 * PRECISION / m) == 0 requires m > PRECISION; earlier tests in this
+      // file raise it, so assert that rather than depend on it silently.
+      const m = await computeCanonicalMultiplier(h, program, configPda);
+      expect(m > PRECISION, "precondition: multiplier above 1").to.equal(true);
+
+      const usdcBefore = (await getAccount(provider.connection, userUsdcAta)).amount;
+      const vaultBefore = (await getAccount(provider.connection, vaultUsdcAta)).amount;
+      const okuMBefore = (
+        await getAccount(provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID)
+      ).amount;
+
+      await expectBankrunError(
+        () =>
+          program.methods
+            .mintOkuM(new BN(1))
+            .accountsPartial({
+              user: user.publicKey,
+              config: configPda,
+              usdcMint,
+              okuMMint,
+              userUsdcAta,
+              userOkuMAta,
+              vaultUsdc: vaultUsdcAta,
+              tokenProgram: TOKEN_PROGRAM_ID,
+              token2022Program: TOKEN_2022_PROGRAM_ID,
+              associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+              systemProgram: SystemProgram.programId,
+            })
+            .signers([user])
+            .rpc(),
+        "AmountTooSmall",
+      );
+
+      expect((await getAccount(provider.connection, userUsdcAta)).amount).to.equal(usdcBefore);
+      expect((await getAccount(provider.connection, vaultUsdcAta)).amount).to.equal(vaultBefore);
+      expect(
+        (await getAccount(provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID)).amount,
+      ).to.equal(okuMBefore);
     });
 
     it("fails to mint when max supply exceeded", async () => {

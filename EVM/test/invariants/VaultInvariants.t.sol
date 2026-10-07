@@ -11,26 +11,21 @@ import {OkuDollarHandler} from "../handlers/OkuDollarHandler.sol";
 contract VaultInvariantsTest is BaseTest {
     OkuDollarHandler public handler;
 
-    /// @notice Cap the per-call rounding tolerance at a small constant. The previous
-    ///         linear-in-call-count formula trivially passed because tolerance grew
-    ///         faster than any plausible deficit.
+    /// @notice Fixed rounding tolerance. Deliberately not scaled by call count, which
+    ///         would grow faster than any plausible deficit and make the check vacuous.
     uint256 public constant ROUNDING_TOLERANCE = 100; // wei (in dollar terms)
 
     function setUp() public override {
         super.setUp();
         handler = new OkuDollarHandler(okuMoney, okuDollar, minter, rebaser);
 
-        // Grant roles required by the handler surface.
-        // REMOVED (single-multiplier refactor): VAULT_REBASER / VAULT_RESERVE_MANAGER
-        // grants — those roles no longer exist. The handler drives the shared
-        // multiplier by pranking `rebaser` (OKUM_REBASER on OkuMoney), granted in
-        // BaseTest._setupRoles.
+        // Grant roles required by the handler surface. The handler drives the shared
+        // multiplier by pranking `rebaser` (OKUM_REBASER, granted in BaseTest).
         vm.startPrank(admin);
         okuDollar.grantRole(DEFAULT_ADMIN_ROLE, address(handler));
         vm.stopPrank();
 
-        // Handler also needs to be able to mint OkuMoney via `vm.prank(minter)`. The
-        // handler still uses minter for that path, so no extra grant needed.
+        // The handler mints OkuMoney via `vm.prank(minter)`, so no extra grant is needed.
 
         targetContract(address(handler));
 
@@ -41,17 +36,9 @@ contract VaultInvariantsTest is BaseTest {
     }
 
     /// @notice Reserves exactly cover obligations — collateralization is 1.0.
-    /// @dev Restated from the old `>= 100% within tolerance` form. Under the
-    ///      single-multiplier design shares track raw OkuM 1:1, so
-    ///      `totalUsdShares == ` the OkuM required to honour every share, and both
-    ///      sides are floored through the same multiplier. The remaining content of
-    ///      this invariant is that the vault holds AT LEAST its share backing — i.e.
-    ///      that no code path can transfer out OkuM that backs live shares
-    ///      (`rescueDonation` being the one path that touches reserves directly).
-    ///
-    ///      REMOVED: the separate `invariant_CollateralizationRatio` — it asserted
-    ///      the identical inequality on the identical quantities and was a duplicate
-    ///      even before the refactor.
+    /// @dev Shares track raw OkuM 1:1, so `totalUsdShares` is the OkuM required to
+    ///      honour every share. Pins that no code path (notably `rescueDonation`) can
+    ///      transfer out OkuM that backs live shares.
     function invariant_VaultBacked() public view {
         uint256 reserves = okuMoney.balanceOf(address(okuDollar));
         uint256 shareBacking = okuDollar.totalUsdShares();

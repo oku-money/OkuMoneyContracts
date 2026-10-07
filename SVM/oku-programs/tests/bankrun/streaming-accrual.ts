@@ -1,17 +1,12 @@
 /**
- * Streaming accrual — the SVM port of EVM's continuous rate-schedule model.
- *
- * Replaces the old `rate-over-time.ts`, whose central assertion was the exact
- * OPPOSITE of the one here: it asserted that wall-clock progression alone does
- * NOT change the multiplier (the discrete stored-multiplier model). Under
- * streaming accrual, wall-clock progression is the ONLY thing that changes it.
+ * Streaming accrual — the SVM implementation of EVM's continuous rate-schedule
+ * model. Wall-clock progression alone moves the multiplier.
  *
  * What these tests establish, in rough order of how badly a regression would
  * hurt:
  *
- *   1. The multiplier advances with NO transaction. This is the property the
- *      whole refactor exists for — it is what removes the discrete tick a
- *      searcher could sandwich, and what makes cross-chain agreement free.
+ *   1. The multiplier advances with NO transaction. This removes any discrete
+ *      tick a searcher could sandwich, and makes cross-chain agreement free.
  *   2. A pre-staged successor activates at `rateEnd` with NO transaction, so
  *      epoch handovers are simultaneous across chains even when the staging
  *      transactions land days apart.
@@ -559,12 +554,11 @@ describe("streaming accrual (continuous rate schedule)", () => {
   });
 
   // -------------------------------------------------------------------
-  // 5b. Atomic-setter composition — regressions for two EVM divergences
+  // 5b. Atomic-setter composition — parity with EVM
   // -------------------------------------------------------------------
   //
-  // Both of these passed before `set_okum_yield_rate_with_successor` was
-  // restructured to compose the same two private writers EVM composes. They
-  // exist to keep it that way.
+  // `set_okum_yield_rate_with_successor` composes the same two private
+  // writers EVM composes; these pin the behaviours that follow from that.
 
   it("rejects halting AND arming a successor in the same atomic call", async () => {
     // EVM: `_setOkuMYieldRate(PRECISION, 0)` leaves `rateEnd == 0`, so the
@@ -580,8 +574,8 @@ describe("streaming accrual (continuous rate schedule)", () => {
   it("while paused, rejects a successor that increases on the rate written in the same call", async () => {
     // The subtle one. Paused with a 5% baseline, `withSuccessor(3%, .., 4%, ..)`
     // must revert: the successor's pause gate has to compare against the 3%
-    // just written, NOT the 5% that was there before. Comparing against the old
-    // value lets a rate INCREASE through while users cannot exit — exactly what
+    // just written, NOT the prior 5%. Comparing against the prior
+    // value would let a rate INCREASE through while users cannot exit — exactly what
     // the gate exists to prevent.
     const start = await nowTs();
     await setRate(ratePerSecondForApy(0.05), start + 30 * DAY);

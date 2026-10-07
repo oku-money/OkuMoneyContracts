@@ -51,15 +51,10 @@ import { loadArtifact } from "../../../scripts/utils/epochArtifact";
 import { summarizeLedger, upsertLedgerEntry, backfillReconciliation, buildLedgerEntry, loadLedger } from "../../../scripts/utils/carryLedger";
 
 const ADDRESS_BOOK_PATH = path.join(__dirname, "../../../scripts/config/addresses.json");
-// Gitignored reference-implementation stores (see TRACKER.md). They MUST be
-// cleared before each run: a stale entry from a previous local run silently
-// corrupts this run's carry/target math with no error, no stack trace, and a
-// result that just looks like a slightly-wrong number — exactly the kind of
-// bug this drill exists to catch, caught here against itself while writing
-// it. Being gitignored means `git` won't flag a leftover file as dirty, so —
-// same as the tracked address book below — this drill backs both up and
-// restores them in `after()`, rather than deleting an operator's real local
-// state with no way back.
+// Gitignored reference-implementation stores. They MUST be cleared before
+// each run: a stale entry silently corrupts carry/target math into a
+// slightly-wrong number. They hold an operator's real local state, so the
+// drill backs them up and restores them in `after()` rather than deleting.
 const CARRY_LEDGER_PATH = path.join(__dirname, "../../../scripts/config/carryLedger.json");
 const GLOBAL_VALUE_SAMPLES_PATH = path.join(__dirname, "../../../scripts/config/globalValueSamples.json");
 const EPOCHS_DIR = path.join(__dirname, "../../../scripts/config/epochs");
@@ -99,21 +94,14 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         // deriveEpochSchedule tests write into.
         if (fs.existsSync(EPOCHS_DIR)) fs.renameSync(EPOCHS_DIR, EPOCHS_DIR_BACKUP);
 
-        // Deliberately do NOT force NETWORK here: the underlying fork's
-        // chainId depends on how the current hardhat process was started
-        // (e.g. `FORK_NETWORK=mainnet hh node` pins chainId 1, the default
-        // pins Sepolia). Hardcoding "sepolia" caused a hard chainId-mismatch
-        // failure whenever the process was started against a different fork.
-        // Let resolveNetworkContext() auto-detect from the live chainId
-        // instead, and reset to whatever fork is already configured.
+        // Deliberately do NOT force NETWORK: the fork's chainId depends on how
+        // the hardhat process was started (`FORK_NETWORK=mainnet` pins 1, the
+        // default pins Sepolia), so let resolveNetworkContext() auto-detect.
         delete process.env.NETWORK;
         await network.provider.request({ method: "hardhat_reset", params: [{}] });
 
-        // Independently derive the expected network name from the live
-        // chainId (same lookup resolveNetworkContext() itself uses) so this
-        // assertion can actually fail — checking `ctx.bookKey` against a
-        // value re-derived FROM `ctx` is a tautology that can never catch a
-        // regression.
+        // Derive the expected name independently of `ctx` so the assertion
+        // below can actually fail.
         const liveChainId = Number((await ethers.provider.getNetwork()).chainId);
         const expectedNetworkName = getNetworkNameByChainId(liveChainId);
         expect(expectedNetworkName, `no CHAIN_METADATA entry for chainId ${liveChainId}`).to.exist;
@@ -258,7 +246,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             rate: PRECISION + 10n ** 8n,
             endTimestamp: rateEnd,
         });
-        await time.increase(16 * 3600); // 16h into the 22.4h base window (same fraction as the old 20-of-28-days)
+        await time.increase(16 * 3600); // 16h into the 22.4h base window
 
         // Target set generously ABOVE what the tiny base rate alone could
         // have distributed over the full window, so settlement has real,
@@ -271,10 +259,9 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const realisedYieldUsd = supply * 0.0005;
 
         // Seed the V(t) store. `deriveStageSettlement` hard-errors on an empty
-        // sample set rather than falling back to this chain's local supply —
-        // deriving a rate from an unmeasured denominator is the failure that
-        // fallback existed to hide. Two samples spanning the elapsed base
-        // window are the minimum for a time-weighted average.
+        // sample set rather than deriving a rate from an unmeasured denominator.
+        // Two samples spanning the elapsed base window are the minimum for a
+        // time-weighted average.
         const multNow = Number(await okuMoney.okuMMultiplier()) / 1e18;
         // Anchor read from the contract, not recomputed: the window starts at
         // `okuMLastAccrualTime`, which is the block the rate tx mined in, not
@@ -318,8 +305,8 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const rateEnd = await okuMoney.okuMRateEnd();
         await time.increaseTo(Number(rateEnd) + 1); // now inside the settlement window
 
-        // Same "target relative to actual supply" fix as the stage-settlement
-        // test above, for the same reason.
+        // Target sized relative to actual supply, as in the stage-settlement
+        // test above.
         const supply = Number(ethers.formatEther(await okuMoney.totalSupply()));
         const nextRealisedYieldUsd = supply * 0.0005;
         const mult = Number(await okuMoney.okuMMultiplier()) / 1e18;
@@ -352,15 +339,9 @@ describe("Operator drill: exercise every lever on a clean local chain", function
     });
 
     it("deriveEpochSchedule + broadcastSchedule's carry-ledger wiring: two full derive cycles, exercising artifact identity and the reconciledCarryUsd/carryForwardUsd split end-to-end", async function () {
-        // This test exists because `deriveEpochSchedule.ts` /
-        // `broadcastSchedule.ts` — unlike `runEpoch.ts` above — had ZERO test
-        // coverage before the deploy-readiness audit, which is exactly how
-        // defects #1-#4 (no CLI entrypoint, artifact collision, inverted
-        // carry semantics, unscoped chain targets) shipped unnoticed. This
-        // replicates `broadcastSchedule.ts`'s POST-CONFIRMATION ledger-write
-        // sequence directly (backfillReconciliation + upsertLedgerEntry) —
-        // the actual subprocess-spawning/multi-chain fan-out is out of scope
-        // for a single-chain drill, same as `sampleGlobalValueUsd()` above.
+        // Replicates `broadcastSchedule.ts`'s POST-CONFIRMATION ledger-write
+        // sequence directly (backfillReconciliation + upsertLedgerEntry); the
+        // subprocess/multi-chain fan-out is out of scope for a single-chain drill.
         const EPOCH_A = "drill-epoch-a";
         const EPOCH_B = "drill-epoch-b";
         const PRECISION = 10n ** 18n;
@@ -397,11 +378,11 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         );
 
         const ledgerStateBeforeA = summarizeLedger();
-        // Anti-degeneracy: if these ever coincide again, the assertion below
-        // stops discriminating and must be re-seeded rather than left green.
+        // Anti-degeneracy: if these coincide, the assertion below stops
+        // discriminating and must be re-seeded rather than left green.
         expect(
             ledgerStateBeforeA.currentEpochCarryInUsd,
-            "fixture: the two candidate carry values must differ, or defect #3's guard is vacuous"
+            "fixture: the two candidate carry values must differ, or the reconciled-vs-forward carry guard is vacuous"
         ).to.not.equal(ledgerStateBeforeA.outstandingCarryUsd);
         expect(ledgerStateBeforeA.latestEntry?.epochId, "fixture: a prior entry must exist")
             .to.equal(SEED_EPOCH);
@@ -416,11 +397,9 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         });
         expect(stageArtifact.phase).to.equal("stage-settlement");
         // Must equal `currentEpochCarryInUsd` (the carry baked into whatever
-        // epoch is CURRENTLY open per the ledger), NOT `outstandingCarryUsd`
-        // — this is defect #3's fix, asserted directly.
+        // epoch is CURRENTLY open per the ledger), NOT `outstandingCarryUsd`.
         expect(stageArtifact.meta.carryInUsd).to.equal(ledgerStateBeforeA.currentEpochCarryInUsd);
-        // REGRESSION (defect #2): re-derive under the SAME epochId, different
-        // phase, must NOT collide with the artifact above.
+        // Same epochId, different phase: must NOT collide with the artifact above.
         expect(() => loadArtifact(EPOCH_A, "stage-settlement")).to.not.throw();
 
         // Apply exactly the WAD integers the artifact carries — proves the
@@ -435,7 +414,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         });
         expect(await okuMoney.okuMPendingRatePerSecond()).to.equal(BigInt(stageArtifact.schedule.nextRate));
 
-        // ---- Phase 2: roll-epoch (epoch A, first ever epoch — no prior ledger entry) ----
+        // ---- Phase 2: roll-epoch (epoch A, reconciles the seeded entry) ----
         await time.increaseTo(Number(await okuMoney.okuMRateEnd()) + 1);
         const supplyAtRoll = Number(ethers.formatEther(await okuMoney.totalSupply()));
         const multAtRoll = Number(await okuMoney.okuMMultiplier()) / 1e18;
@@ -452,10 +431,8 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             globalValueUsdOverride: supplyAtRoll * multAtRoll,
         });
         expect(rollArtifactA.phase).to.equal("roll-epoch");
-        // Whatever the ledger's latest entry was BEFORE this derivation is
-        // what gets reconciled — could be a pre-existing entry from an
-        // earlier test in this shared-chain drill, or none.
-        // Now a real comparison: the seeded entry is what must get reconciled.
+        // The ledger's latest entry BEFORE this derivation (the seed) is what
+        // gets reconciled.
         expect(rollArtifactA.meta.priorEpochId, "roll must reconcile the seeded prior epoch")
             .to.equal(SEED_EPOCH);
         expect(rollArtifactA.meta.carryForwardUsd).to.equal(0); // unknown until epoch A is itself reconciled
@@ -507,7 +484,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             epochLengthSec: 86400,
             globalValueUsdOverride: supplyAtRollB * multAtRollB,
         });
-        // REGRESSION (defect #3): epoch B's carryInUsd is epoch A's
+        // Epoch B's carryInUsd is epoch A's
         // RECONCILED carry (ex-post actual-vs-target), NOT epoch A's
         // (always-0) carryForwardUsd — these must be threaded from different
         // sources, per carryLedger.ts's module doc.
@@ -533,14 +510,14 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         expect(summary.pendingReconciliation).to.equal(true); // epoch B is now the latest, still pending
         // currentEpochCarryInUsd reflects epoch B's OWN carryInUsd (what's
         // baked into ITS target) — this is the value `deriveStageSettlement`
-        // would use, NOT `outstandingCarryUsd` (defect #3's fix).
+        // would use, NOT `outstandingCarryUsd`.
         expect(summary.currentEpochCarryInUsd).to.equal(rollArtifactB.meta.carryInUsd);
 
         expect(summary.latestEntry!.epochId).to.equal(EPOCH_B);
         // Confirm the backfill actually landed on epoch A specifically.
         const epochAEntry = loadLedger().find((e) => e.epochId === EPOCH_A)!;
         expect(epochAEntry.reconciledCarryUsd).to.equal(rollArtifactB.meta.carryInUsd);
-        expect(epochAEntry.carryForwardUsd).to.equal(0); // unchanged — a DIFFERENT field, per the regression guard
+        expect(epochAEntry.carryForwardUsd).to.equal(0); // unchanged — a DIFFERENT field from reconciledCarryUsd
     });
 
     it("setOkuMMultiplier: emergency override collapses the schedule", async () => {

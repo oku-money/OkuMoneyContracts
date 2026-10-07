@@ -20,7 +20,7 @@ library TestRoles {
     bytes32 public constant OKUM_PAUSER = SrcRoles.OKUM_PAUSER;
     bytes32 public constant OKUM_UNPAUSER = SrcRoles.OKUM_UNPAUSER;
     bytes32 public constant OKUM_MINTER = SrcRoles.OKUM_MINTER;
-    /// @dev Cycle 4 (EVM-15): burn role split from `OKUM_MINTER`.
+    /// @dev Burn-only role, separate from `OKUM_MINTER`.
     bytes32 public constant OKUM_BURNER = SrcRoles.OKUM_BURNER;
     bytes32 public constant OKUM_REBASER = SrcRoles.OKUM_REBASER;
     bytes32 public constant OKUM_BLACKLISTER = SrcRoles.OKUM_BLACKLISTER;
@@ -34,9 +34,7 @@ library TestRoles {
     bytes32 public constant VAULT_PAUSER = SrcRoles.VAULT_PAUSER;
     bytes32 public constant VAULT_UNPAUSER = SrcRoles.VAULT_UNPAUSER;
     bytes32 public constant VAULT_RESCUER = SrcRoles.VAULT_RESCUER;
-    // REMOVED (single-multiplier refactor): VAULT_REBASER (OkuDollar has no rate of its
-    // own — use OKUM_REBASER on OkuMoney), VAULT_RESERVE_MANAGER and VAULT_ADMIN
-    // (collateralization is 1.0 by construction, so no surplus/min-ratio machinery).
+    // OkuDollar has no rate of its own; its multiplier is driven by OKUM_REBASER.
 
     // ============ LitePSM Roles (PSM_ prefix) ============
 

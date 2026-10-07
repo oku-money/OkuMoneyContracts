@@ -106,8 +106,7 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
     });
 
     it("does NOT write fork entries into the TRACKED address book", async () => {
-        // The actual regression this split exists to prevent: a fork deploy
-        // must leave `addresses.json` byte-identical, so `git status` stays
+        // A fork deploy must leave `addresses.json` byte-identical, so `git status` stays
         // clean and ephemeral fork addresses can't be committed by accident.
         const tracked = JSON.parse(fs.readFileSync(ADDRESS_BOOK_PATH, "utf-8"));
         const forkKeys = Object.keys(tracked).filter((k) => k.startsWith("fork:"));

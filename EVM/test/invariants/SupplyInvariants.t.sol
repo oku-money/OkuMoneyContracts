@@ -7,7 +7,7 @@ import {OkuMoneyHandler} from "../handlers/OkuMoneyHandler.sol";
 /**
  * @title SupplyInvariantsTest
  * @notice Invariant tests for OkuMoney supply cap enforcement
- * @dev Updated for non-rebasing OkuMoney redesign. totalSupply() is standard ERC-20;
+ * @dev Non-rebasing: totalSupply() is standard ERC-20;
  *      okuMMultiplier() tracks multiplier appreciation separately.
  */
 contract SupplyInvariantsTest is BaseTest {
@@ -48,6 +48,4 @@ contract SupplyInvariantsTest is BaseTest {
         uint256 expectedSupply = handler.ghostMintedTotal() - handler.ghostBurnedTotal();
         assertEq(actualSupply, expectedSupply, "Supply should equal minted - burned");
     }
-
-    // NOTE: Handler success rate check moved to HandlerSanity.t.sol
 }

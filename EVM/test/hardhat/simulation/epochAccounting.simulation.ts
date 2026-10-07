@@ -32,43 +32,22 @@
  * settings, epoch length, supply scenario) is varied independently against a
  * fixed realistic baseline for the others.
  *
- * PER USER DIRECTIVE: 7-day and 30-day epochs are the fully-tested candidates
- * (most likely to be adopted). 1 hour / 1 day / 90 days are included for
- * characterization only and explicitly labeled as such — do not read their
- * numbers as recommendations.
+ * 7-day and 30-day epochs are the fully-tested candidates. 1 hour / 1 day /
+ * 90 days are included for characterization only and labeled as such — do
+ * not read their numbers as recommendations.
  *
- * INTEGRITY NOTES (added after an audit pass found real problems with the
- * first version of this suite — see TRACKER.md "Simulation suite integrity
- * fixes" for the full history):
- *   - A REAL BUG existed in the underlying mechanism: `deriveSettlementRate`
- *     failed to account for the base window's own remaining tail after
- *     staging, and `distributedUsdOverWindow` silently dropped the gap
- *     between the last sample and the window end. Together these produced a
- *     ~3.5% systematic OVER-distribution that happened to nearly cancel the
- *     deliberate 3% conservativeFactor buffer — masking the bug as "the
- *     mechanism is accurate" in the test summary. Both are now fixed (see
- *     `epochDistribution.ts`); `test/hardhat/unit/epochDistribution.test.ts`'s
- *     "CORE VALIDATION" test proves flat supply + NO buffer lands within
- *     0.1% of Y*.
- *   - Assertions now compare against the correct baseline: tests that
- *     deliberately exercise `conservativeFactor < 1` compare against the
- *     ADJUSTED (buffered) target, not raw Y* — a permanent, intentional gap
- *     vs. raw Y* is the buffer working correctly, not error.
- *   - The "no split" control now uses `noSettlement: true` (a genuine single
- *     rate for the whole epoch), not `baseWindowFraction: 1.0` (which still
- *     runs a same-rate settlement window and understates how much worse a
- *     true no-B3 baseline is).
- *   - "Epoch length" scenarios now use ABSOLUTE staging lead time and sample
- *     cadence (not fractions of the epoch) — the previous version used
- *     identical FRACTIONAL geometry across every epoch length, making
- *     "accuracy is flat across 5 orders of magnitude" a tautology of the test
- *     setup rather than a finding.
- *   - Vacuous assertions (`.to.not.be.NaN`, `.to.be.greaterThan(0)` on
- *     obviously-positive quantities) replaced with concrete, checked bounds
- *     throughout.
- *   - On-chain/model parity threshold tightened from `< 0.01%` to `< 1e-5%`
- *     (measured parity is consistently ~1e-7%; the old threshold had 5+
- *     orders of magnitude of slack and would not have caught a real regression).
+ * INTEGRITY NOTES:
+ *   - A buffer can mask mechanism error, so the unbuffered baseline lives in
+ *     `test/hardhat/unit/epochDistribution.test.ts` ("CORE VALIDATION": flat
+ *     supply + NO buffer lands within 0.1% of Y*).
+ *   - Tests that exercise `conservativeFactor < 1` compare against the
+ *     ADJUSTED (buffered) target, not raw Y* — that gap is the buffer working.
+ *   - The "no split" control uses `noSettlement: true` (a genuine single rate),
+ *     not `baseWindowFraction: 1.0`, which still runs a settlement window.
+ *   - "Epoch length" scenarios use ABSOLUTE staging lead time and sample
+ *     cadence; fractional geometry would make accuracy trivially flat across
+ *     epoch lengths.
+ *   - On-chain/model parity bound is `< 1e-5%` (measured ~1e-7%).
  */
 
 import { expect } from "chai";
@@ -192,12 +171,8 @@ async function runScenario(cfg: ScenarioConfig): Promise<ScenarioResult> {
         grid,
     });
     // CRITICAL: re-derive the float rate from the CLAMPED on-chain bigint, not
-    // the raw theoretical derivation. Without this, an extreme scenario whose
-    // derived rate exceeds MAX_RATE produces a ground-truth model using a rate
-    // the chain never actually runs at — a real bug this harness had (~25.6%
-    // model/chain divergence on a MAX_RATE-clamping scenario before this fix).
-    // Every non-extreme scenario is unaffected (floatRateToBigint is a no-op
-    // clamp-wise when the rate is already in range).
+    // the raw theoretical derivation, so a scenario whose derived rate exceeds
+    // MAX_RATE models the rate the chain actually runs at (a no-op in range).
     const rBaseFloat = Number(floatRateToBigint(rBaseFloatRaw)) / 1e18;
 
     const baseEnd = Math.floor(baseEndSec(grid));
@@ -472,9 +447,9 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             // weaker, epoch-length-dependent consequence of it.
             const MAX_RATE_FLOAT = 1 + 1e-7; // Constants.sol: PRECISION + 1e11, in float terms
             expect(result.rBaseFloat).to.be.closeTo(MAX_RATE_FLOAT, 1e-12);
-            // Distribution still happens, bounded by the clamp. `isFinite` and
-            // `> 0` were vacuous on a monotone multiplier; the clamped rate makes
-            // the payout computable, so assert that instead.
+            // Distribution still happens, bounded by the clamp. The clamped rate
+            // makes the payout computable, so assert it exactly (`> 0` is vacuous
+            // on a monotone multiplier).
             //
             // At the ceiling, 1M tokens held for the 90% base window of a 24h
             // epoch distribute `S x (MAX_RATE^baseLen - 1)`. Derived from the
@@ -596,7 +571,7 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             // target committed to the (measurement-anchored) base rate, the
             // settlement window is doing most of the work off a SHORT persistence
             // forecast — this should still land closer to target than the
-            // feed-forward control, but the mechanism's accuracy is now
+            // feed-forward control, but the mechanism's accuracy is
             // concentrated in one short window's forecast quality.
             expect(Math.abs(result.errorPctVsRawTarget)).to.be.lessThan(10);
         });
@@ -619,18 +594,11 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             expect(Math.abs(withSplit.errorPctVsRawTarget)).to.be.lessThan(Math.abs(noSplit.errorPctVsRawTarget));
         });
 
-        // EXPERIMENT (added after an audit found the recommendation was
-        // UNSUBSTANTIATED by the existing scenarios): the mid-epoch (40-50%
-        // through) shock used above lands in the BASE window, before staging —
-        // in that case a SMALLER base commitment (0.3) means LESS exposure to
-        // the disruption, so 0.3 can look better than 0.9 there. That is not
-        // the risk the README claimed 0.3 carries ("concentrates risk in a
-        // short, forecast-dependent window"). This test constructs the
-        // scenario that actually tests that specific claim: a shock landing
-        // DURING the settlement window itself, AFTER staging has already
-        // fixed the settlement rate against a forecast that could not see it
-        // coming. At baseWindowFraction=0.3, 70% of the target's exposure sits
-        // in that disrupted window; at 0.9, only 10% does.
+        // EXPERIMENT: the mid-epoch shock above lands in the BASE window, where
+        // a smaller base commitment (0.3) means LESS exposure. The risk 0.3
+        // actually carries is a shock DURING the settlement window, after
+        // staging has fixed the rate: at 0.3, 70% of the target's exposure sits
+        // there; at 0.9, only 10%.
         it("EXPERIMENT: a shock DURING the settlement window (after staging) tests the claimed 0.3-vs-0.9 risk difference directly", async () => {
             const settlementFraction = BASELINE.settlementFraction;
             const stagingFraction = 1 - settlementFraction - 0.02; // ~0.9133
@@ -663,37 +631,20 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
                     `(0.9 better: ${Math.abs(high.errorPctVsRawTarget) < Math.abs(low.errorPctVsRawTarget)})`
             );
 
-            // This assertion is the actual finding, not an assumption: it will
-            // FAIL (loudly, not silently) if 0.3 turns out to be equal-or-better
-            // even for a shock specifically constructed to expose the claimed
-            // settlement-window concentration risk. Whichever way this goes,
-            // the recommendation in EVM/README.md is updated to match — see
-            // that file for which one won and by how much.
+            // The finding backing the 0.9 recommendation in EVM/README.md: fails
+            // if 0.3 is equal-or-better even under settlement-window shock.
             expect(Math.abs(high.errorPctVsRawTarget)).to.be.lessThan(Math.abs(low.errorPctVsRawTarget));
         });
     });
 
     // ═══════════════════════════════════════════════════════════════════════
-    // AXIS 4: epoch length — user directive: fully test 7-day and 30-day
-    // epochs (most likely candidates for adoption). 1h/1d/90d are included as
-    // characterization only, clearly labeled as such, and — critically — use
-    // ABSOLUTE (not fractional) staging lead + sample cadence, so the
-    // comparison isn't a tautology of self-similar geometry (a bug in the
-    // PREVIOUS version of this suite: all 5 "epoch length" scenarios used the
-    // exact same fractional staging lead and sample count, so the discretized
-    // gap was IDENTICAL in fractional terms across every length, making
-    // "accuracy is flat across 5 orders of magnitude" a foregone conclusion
-    // rather than a finding).
+    // AXIS 4: epoch length. Staging lead and sample cadence are ABSOLUTE (not
+    // fractional), so the comparison isn't a tautology of self-similar geometry.
     //
-    // HONEST LIMITATION (found while fixing the above, not fully chased down
-    // per the "don't over-troubleshoot" directive): despite the absolute lead
-    // time fix, measured error is STILL nearly identical across all 5 lengths
-    // (~2.27-2.29%). The remaining self-similarity is very likely because the
-    // mid-epoch supply SHOCK's position is still specified as a FRACTION
-    // (`atFraction: 0.4`) of the epoch, not an absolute time — so the shock's
-    // relationship to the (now-absolute) staging lead still scales with epoch
-    // length. A fully decoupled test would fix the shock at an absolute time
-    // too. Flagged in TRACKER.md rather than chased further here.
+    // KNOWN LIMITATION: measured error is still ~2.27-2.29% at every length,
+    // most likely because the supply shock is placed by FRACTION
+    // (`atFraction: 0.4`), so its relationship to the staging lead still
+    // scales with epoch length. Full decoupling would place it absolutely.
     // ═══════════════════════════════════════════════════════════════════════
     describe("Epoch length", () => {
         // Fixed ABSOLUTE staging lead and sample interval, clamped down for
@@ -710,12 +661,9 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
         }
 
         // `fullyTested` marks a length as an operationally supported candidate
-        // rather than a characterization data point. "1 day" was promoted when
-        // the production grid moved to 24h (scripts/config/epoch.ts): its
-        // settlement window is 1.6h, comfortably above the sub-hour threshold
-        // flagged below, and the accuracy result is in line with the longer
-        // lengths. "1 hour" stays characterization-only — a 4-minute settlement
-        // window is not an operational window.
+        // rather than a characterization data point. "1 day" is the production
+        // grid (scripts/config/epoch.ts); its 1.6h settlement window clears the
+        // sub-hour threshold below. "1 hour" (4-minute settlement) does not.
         const lengths: { name: string; epochLengthSec: number; fullyTested: boolean }[] = [
             { name: "1 hour", epochLengthSec: 3600, fullyTested: false },
             { name: "1 day (baseline — production grid)", epochLengthSec: 86400, fullyTested: true },
@@ -738,27 +686,14 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
                     stagingFraction,
                     supplyEvents: [{ atFraction: 0.4, rawDelta: ethers.parseEther("300000") }], // +30% mid-epoch
                 });
-                // Measured error is ~2.27-2.29% at EVERY length tested -- see the
-                // HONEST LIMITATION note above, which explains why
-                // (`atFraction` still scales the shock's position with epoch
-                // length, so the scenario is not actually decoupled).
-                //
-                // The bound is therefore stated as what is observed, two-sided,
-                // not as `< 20`. That bound was ~9x looser than any measurement
-                // and sat under an inline comment claiming "error now varies
-                // genuinely with epoch length" -- which the note 50 lines above
-                // directly contradicts. A 5x regression would have passed.
+                // Two-sided bound at the observed ~2.28% (see KNOWN LIMITATION
+                // above), so a drift in either direction fails.
                 expect(
                     Math.abs(result.errorPctVsRawTarget),
                     "epoch-length error is self-similar at ~2.28% until atFraction is decoupled"
                 ).to.be.closeTo(2.28, 0.5);
                 expect(result.onChainMultiplierParityDiffPct).to.be.lessThan(1e-5);
                 if (!l.fullyTested) {
-                    // Sub-day epochs: ASSERT the operational infeasibility rather
-                    // than only logging it. The previous version's guarded branch
-                    // contained a `console.log` and no assertion at all, so a
-                    // length silently becoming operationally viable -- or a
-                    // `fullyTested` flag going stale -- would not surface.
                     // A length is characterization-only for one of two reasons,
                     // and they are opposites: the settlement window is too short
                     // to operate (1 hour -> 4 minutes), or the epoch itself
@@ -898,7 +833,7 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             });
             // "Error grows" is the test's own claim, so assert it against a flat
             // control rather than only checking the run produced a number.
-            // `greaterThan(0)` was vacuous on a monotone multiplier.
+            // `greaterThan(0)` is vacuous on a monotone multiplier.
             expect(
                 Math.abs(result.errorPctVsRawTarget),
                 "a +100% mid-epoch shock must degrade accuracy vs flat supply"
@@ -971,15 +906,10 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
             // must be real and measurable, not just "doesn't crash".
             expect(distributedHistory[2]).to.be.lessThan(distributedHistory[0]);
 
-            // Carry must be CONVERGING (shrinking in magnitude) by epoch 5, not
-            // diverging or oscillating — each flat epoch after the shock should
-            // claw back part of the deficit via the reduced (but still
-            // buffer-discounted) target, same steady-state argument as
-            // yieldRate.ts's "steady state" test, now proven end-to-end against
-            // a real contract instead of just the isolated rate-derivation math.
-            // (Measured: convergence is essentially complete by epoch 4 already
-            // — one epoch of deceleration claws back nearly all of the shock's
-            // carry — so epoch 4 and 5 are both compared against epoch 2's peak.)
+            // Carry must CONVERGE, not diverge or oscillate — the steady-state
+            // argument of yieldRate.ts's "steady state" test, end-to-end against
+            // a real contract. Convergence is essentially complete by epoch 4, so
+            // epochs 4 and 5 are both compared against epoch 2's peak.
             expect(Math.abs(carryHistory[3])).to.be.lessThan(Math.abs(carryHistory[1]));
             expect(Math.abs(carryHistory[4])).to.be.lessThan(Math.abs(carryHistory[1]));
 
@@ -1017,11 +947,9 @@ describe("Simulation: base+settlement epoch distribution accuracy", function () 
 
             // Decelerates: distributes LESS than the zero-carry control.
             expect(withCarry.exactDistributedUsd).to.be.lessThan(withoutCarry.exactDistributedUsd);
-            // Never breaks monotonicity. `>= 1` was true by construction --
-            // `floatRateToBigint` returns PRECISION for any input <= 1, so
-            // `rBaseFloat` cannot be below 1 whatever the carry does. The real
-            // content is that carry only DECELERATES: it must stay strictly
-            // between the no-yield floor and the control rate.
+            // Never breaks monotonicity. `>= 1` holds by construction
+            // (`floatRateToBigint` floors at PRECISION), so assert carry only
+            // DECELERATES: strictly between the no-yield floor and the control.
             expect(withCarry.rBaseFloat, "carry decelerates but never halts accrual")
                 .to.be.greaterThan(1);
             expect(withCarry.rBaseFloat, "carry must not accelerate past the control")

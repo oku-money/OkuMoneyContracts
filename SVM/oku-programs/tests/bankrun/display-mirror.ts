@@ -114,12 +114,9 @@ describe("display mirror (ScaledUiAmount)", () => {
    * `display * 1e18 > canonical` becomes the integer comparison
    * `mantissa * 1e18 > canonical * 2^-exp` with no rounding anywhere.
    *
-   * The previous helper was `BigInt(Math.floor(ratio * 1e18))`, doc-commented
-   * "for exactness". It is not exact: at a ratio near 1, `ratio * 1e18` lands on
-   * a double whose ULP is 256, and `Math.floor` then truncates DOWNWARD -- i.e.
-   * it carried a hidden ~256-wei tolerance biased in the direction that makes
-   * the assertion pass. An overshoot below ~2.6e-16 relative was undetectable,
-   * which is the same order as the margin the mirror actually runs on.
+   * `BigInt(Math.floor(ratio * 1e18))` is NOT exact: near 1 the product's ULP
+   * is 256, and flooring hides a ~256-wei overshoot — the same order as the
+   * margin the mirror actually runs on.
    */
   const displayExceedsCanonical = (displayRatio: number, canonicalWad: bigint): boolean => {
     if (!Number.isFinite(displayRatio) || displayRatio <= 0) {
@@ -171,10 +168,9 @@ describe("display mirror (ScaledUiAmount)", () => {
       // but must not sit materially below the value at that crank.
       //
       // The slack is 1e-12 relative. That is ~4500x the deliberate f64
-      // conversion bias (two `next_down` steps, ~2.2e-16 -- which this
-      // assertion caught on its first run) and still ~4 orders of magnitude
-      // tighter than one crank interval of accrual at 20% APY, so a frozen or
-      // regressing mirror fails.
+      // conversion bias (two `next_down` steps, ~2.2e-16) and still ~4 orders
+      // of magnitude tighter than one crank interval of accrual at 20% APY, so
+      // a frozen or regressing mirror fails.
       const syncFloor = atSync - atSync / 1_000_000_000_000n;
       expect(
         displayExceedsCanonical(d.effective, syncFloor),
@@ -199,10 +195,8 @@ describe("display mirror (ScaledUiAmount)", () => {
     await sync(stranger);
     const fresh = await readDisplayMultiplier(h, okuMMint);
 
-    // `> 0` was vacuous: the extension is initialised to 1.0 at `initialize`, so
-    // it held whether or not the crank wrote anything. What matters is that the
-    // unprivileged crank ADVANCED the mirror, and that it landed at the
-    // canonical value rather than merely somewhere higher.
+    // The extension starts at 1.0, so `> 0` would be vacuous: assert the
+    // unprivileged crank ADVANCED the mirror and landed at canonical.
     expect(fresh.effective).to.be.greaterThan(stale.effective);
     const c = await canonical();
     expect(!displayExceedsCanonical(fresh.effective, c), "crank must not overshoot").to.be.true;
@@ -217,14 +211,10 @@ describe("display mirror (ScaledUiAmount)", () => {
   // -------------------------------------------------------------------
 
   it("never reads above canonical across a rate DECREASE", async () => {
-    // This is the case that broke the old pre-armed design, and it is not an
-    // edge case: settlement rates are routinely lower than base rates, so a
-    // decrease happens at essentially every epoch roll.
-    //
-    // Previously the sync armed m(now+60) under the fast schedule; lowering the
-    // rate re-anchored canonical onto a slower curve, and at now+60 the armed
-    // step fired ABOVE it. The mirror now writes only m(now), so there is no
-    // armed step to go stale.
+    // Not an edge case: settlement rates are routinely lower than base rates,
+    // so a decrease happens at essentially every epoch roll. Any future step
+    // armed under the fast schedule would fire ABOVE the slower re-anchored
+    // curve; the mirror writes only m(now), so there is none to go stale.
     const start = await nowTs();
     await setRate(ratePerSecondForApy(20.0), start + 30 * DAY);
     await sync();
@@ -274,7 +264,7 @@ describe("display mirror (ScaledUiAmount)", () => {
     const uncranked = await readDisplayMultiplier(h, okuMMint);
     expect(uncranked.effective).to.equal(
       afterSync.effective,
-      "display moved without a crank — there should be no pre-armed step",
+      "display moved without a crank",
     );
 
     // Canonical has moved on, so the gap is pure (safe) lag.
@@ -320,14 +310,14 @@ describe("display mirror (ScaledUiAmount)", () => {
 
   it("emergency override force-syncs the mirror immediately", async () => {
     const start = await nowTs();
-    // A fast schedule, so the pre-armed step is meaningfully ahead of the
-    // value the override will land on.
+    // A fast schedule, so any lingering future step would be meaningfully
+    // ahead of the value the override lands on.
     await setRate(ratePerSecondForApy(20.0), start + 30 * DAY);
     await sync();
 
     const beforeOverride = await readDisplayMultiplier(h, okuMMint);
 
-    // Override to barely above current canonical — well BELOW the armed step.
+    // Override to barely above current canonical.
     const current = await canonical();
     const target = current + 1_000n;
 

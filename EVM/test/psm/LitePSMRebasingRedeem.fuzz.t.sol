@@ -8,9 +8,9 @@ import {LitePSM} from "../../src/psm/LitePSM.sol";
  * @title LitePSMRebasingRedeemFuzzTest
  * @notice Fuzz coverage for `LitePSM.redeemUsdOku` at every reachable
  *         (usdMultiplier, okuMMultiplier, redeemAmount) tuple.
- * @dev The sibling `LitePSMFuzzTest` covers the mint path exhaustively. This file
- *      closes the symmetric gap on the redeem path that allowed the
- *      `InsufficientBalance()` bug to ship.
+ * @dev Mirrors `LitePSMFuzzTest` (mint path) for redeem. The property pinned is that
+ *      redeem never reverts with `InsufficientBalance()` from the transferFrom-floor /
+ *      unwrap-ceil share mismatch, and strands at most 1 wei of UsdOku.
  */
 contract LitePSMRebasingRedeemFuzzTest is BaseTest {
     /// @notice Maximum allowed stranded UsdOku dust per redeem (1 wei).
@@ -33,19 +33,10 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
         return okuDollar.balanceOf(user) - balBefore;
     }
 
-    /// @notice No-op retained so the call sites below read unchanged.
-    /// @dev REMOVED (single-multiplier refactor): the reserve top-up. `depositReserves`
-    ///      is gone and there is nothing to top up — shares track raw OkuM 1:1 and both
-    ///      reserves and obligations are valued through the same multiplier, so
-    ///      collateral cannot drift as the multiplier accrues. `InsufficientReserves`
-    ///      is no longer a confounding failure mode for these rounding tests.
-    function _topUpReservesFully() internal pure {}
-
     // ============ Fuzz Tests ============
 
-    /// @notice The headline regression: redeem must not revert with the historical
-    ///         `InsufficientBalance()` bug at any reachable usdMultiplier. Mirrors
-    ///         testFuzz_MintUsdOku_NoRevertOnRounding.
+    /// @notice Redeem must not revert with `InsufficientBalance()` at any reachable
+    ///         usdMultiplier. Mirrors testFuzz_MintUsdOku_NoRevertOnRounding.
     /// @dev The only revert this test pin-asserts CAN'T happen is `InsufficientBalance`.
     ///      `AmountTooSmall` (from the USDC-flooring leg) is a legitimate
     ///      orthogonal failure mode that is filtered or absorbed.
@@ -67,10 +58,6 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
         // Elevate the multiplier (helper rolls blocks and resets rate to PRECISION
         // at the end, so the multiplier is "frozen" at the elevated value).
         _elevateUsdMultiplier(usdMultTarget);
-
-        // Top up vault reserves to match the elevated obligations. We're testing
-        // the rounding-asymmetry path, not collateral drift.
-        _topUpReservesFully();
 
         uint256 userBal = okuDollar.balanceOf(user1);
         if (userBal < 1e15) return;
@@ -94,21 +81,21 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
             assertLe(usdcReceived * DECIMAL_MULTIPLIER, redeemAmount, "Fuzz: USDC out <= UsdOku in");
             assertLe(strandedDelta, MAX_STRANDED_DUST, "Fuzz: stranded within budget");
         } catch (bytes memory reason) {
-            // ONLY `AmountTooSmall` is permitted here. `InsufficientBalance` is the
-            // historical bug and must never appear post-fix.
+            // ONLY `AmountTooSmall` is permitted here; `InsufficientBalance` must never
+            // appear.
             bytes4 sel;
             assembly {
                 sel := mload(add(reason, 32))
             }
             // Errors.InsufficientBalance selector — must NEVER show up.
-            require(sel != 0xf4d678b8, "Fuzz: InsufficientBalance regression");
+            require(sel != 0xf4d678b8, "Fuzz: must not revert InsufficientBalance");
             // AmountTooSmall = 0xc2e4ff97; allow + log.
         }
     }
 
-    /// @notice Dual-multiplier fuzz — both okuMMultiplier and usdMultiplier off-base.
-    ///         Mirrors testFuzz_MintUsdOku_DualMultiplier exactly for the redeem path.
-    function testFuzz_RedeemUsdOku_DualMultiplier(
+    /// @notice Mint at a fuzzed multiplier, elevate it further, then redeem a fuzzed
+    ///         fraction of the balance.
+    function testFuzz_RedeemUsdOku_MintElevatedThenElevateFurther(
         uint256 usdcAmount,
         uint256 okuMMultInput,
         uint256 usdMultTarget,
@@ -121,12 +108,11 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
         usdMultTarget = bound(usdMultTarget, PRECISION, 2 * PRECISION);
         redeemFraction = bound(redeemFraction, 1, 10_000); // bps
 
-        // Set okuMMultiplier first (rolls block), then mint, then elevate usdMult.
+        // Set the multiplier (rolls block), mint, then elevate it further.
         _setOkuMMultiplierAndRoll(okuMMult);
         uint256 mintedUsdOku = _mintUsdOkuViaPsm(user1, usdcAmount);
         if (mintedUsdOku < 1e15) return;
         _elevateUsdMultiplier(usdMultTarget);
-        _topUpReservesFully(); // isolate rounding from collateral
 
         uint256 userBal = okuDollar.balanceOf(user1);
         uint256 redeemAmount = (userBal * redeemFraction) / 10_000;
@@ -141,14 +127,16 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
         try litePsm.redeemUsdOku(redeemAmount) {
             uint256 usdcReceived = usdc.balanceOf(user1) - usdcBefore;
             uint256 strandedDelta = okuDollar.balanceOf(address(litePsm)) - strandedBefore;
-            assertGt(usdcReceived, 0, "Dual-mult fuzz: must receive USDC");
-            assertLe(strandedDelta, MAX_STRANDED_DUST, "Dual-mult fuzz: stranded within budget");
+            assertGt(usdcReceived, 0, "Elevate-further fuzz: must receive USDC");
+            assertLe(
+                strandedDelta, MAX_STRANDED_DUST, "Elevate-further fuzz: stranded within budget"
+            );
         } catch (bytes memory reason) {
             bytes4 sel;
             assembly {
                 sel := mload(add(reason, 32))
             }
-            require(sel != 0xf4d678b8, "Dual-mult fuzz: InsufficientBalance regression");
+            require(sel != 0xf4d678b8, "Elevate-further fuzz: must not revert InsufficientBalance");
         }
     }
 
@@ -169,14 +157,12 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
         redeemFraction = bound(redeemFraction, 1, 10_000);
 
         _mintUsdOkuViaPsm(user1, usdcAmount);
-        // SINGLE MULTIPLIER: the rate lives on OkuMoney; `usdMultiplier()` reads it.
-        // A single window may not exceed MAX_RATE_WINDOW (90 days), so the up-to-
-        // 50-year fuzz horizon is walked as chained re-anchors at the same rate —
-        // see `_accrueAtCurrentRate`. That is also what production does.
+        // The rate lives on OkuMoney; `usdMultiplier()` reads it. A window may not
+        // exceed MAX_RATE_WINDOW (90 days), so the horizon is walked as chained
+        // re-anchors at the same rate (see `_accrueAtCurrentRate`).
         vm.prank(rebaser);
         okuMoney.setOkuMYieldRate(1_000_000_001_546_176_000, block.timestamp + MAX_RATE_WINDOW); // ~5% APY
         _accrueAtCurrentRate(elapsedSeconds);
-        _topUpReservesFully();
 
         uint256 userBal = okuDollar.balanceOf(user1);
         uint256 redeemAmount = (userBal * redeemFraction) / 10_000;
@@ -192,8 +178,7 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
             uint256 usdcReceived = usdc.balanceOf(user1) - usdcBefore;
             uint256 strandedDelta = okuDollar.balanceOf(address(litePsm)) - strandedBefore;
             // usdOku is dollar-denominated, so a successful redeem pays its own
-            // dollar value scaled to collateral decimals, whatever the fuzzer
-            // picked for the multiplier. `> 0` passed on a single wei.
+            // dollar value scaled to collateral decimals, whatever the multiplier.
             assertApproxEqAbs(
                 usdcReceived,
                 redeemAmount / 1e12,
@@ -206,7 +191,7 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
             assembly {
                 sel := mload(add(reason, 32))
             }
-            require(sel != 0xf4d678b8, "Live-compound fuzz: InsufficientBalance regression");
+            require(sel != 0xf4d678b8, "Live-compound fuzz: must not revert InsufficientBalance");
         }
     }
 }

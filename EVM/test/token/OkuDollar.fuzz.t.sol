@@ -4,12 +4,13 @@ pragma solidity ^0.8.28;
 import {BaseTest} from "../Base.t.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
+import {OkuDollarErrors} from "../../src/lib/errors/OkuDollarErrors.sol";
 
 /**
  * @title OkuDollarFuzzTest
  * @notice Fuzz tests for OkuDollar rebasing vault: wrap/unwrap math, collateralization, and share invariants
- * @dev Updated for OkuMoney non-rebasing redesign. OkuMoney balanceOf is static;
- *      okuMMultiplier() tracks multiplier appreciation separately. Wrap/unwrap are multiplier-aware:
+ * @dev OkuMoney balanceOf is static; okuMMultiplier() tracks appreciation, and
+ *      usdMultiplier() == okuMMultiplier(). Wrap/unwrap are multiplier-aware:
  *      sharesToMint = okuMAmount × okuMMultiplier / usdMultiplier,
  *      okuMReturned = usdAmount × PRECISION / okuMMultiplier.
  *      Note: usdMultiplier converts shares↔dollars, NOT dollars↔OkuMoney.
@@ -47,19 +48,9 @@ contract OkuDollarFuzzTest is BaseTest {
     }
 
     /// @notice Round-trip at various USD multipliers (multiplier-aware)
-    /// @dev When usdMultiplier is elevated:
-    ///      wrap(N) → sharesToMint = N × okuMMultiplier / usdMultiplier
-    ///      balanceOf = shares × usdMultiplier / PRECISION
-    ///
-    ///      Key insight: The usdMultiplier converts shares↔dollars, NOT dollars↔OkuMoney.
-    ///      unwrap formula: okuMReturned = usdAmount × PRECISION / okuMMultiplier
-    ///
-    ///      At elevated usdMultiplier with okuMMultiplier=PRECISION:
-    ///      - wrap(N): shares = N × PRECISION / mult (fewer shares)
-    ///      - balanceOf: shares × mult / PRECISION = N (unchanged dollar balance)
-    ///      - unwrap(N): okuMReturned = N × PRECISION / PRECISION = N (correct!)
-    ///
-    ///      The vault stays solvent because the multiplier doesn't inflate OkuMoney output.
+    /// @dev wrap(N) → shares = N × okuMMultiplier / usdMultiplier; balanceOf = shares ×
+    ///      usdMultiplier / PRECISION; unwrap(usd) → usd × PRECISION / okuMMultiplier.
+    ///      usdMultiplier converts shares↔dollars only, so it never inflates OkuM output.
     function testFuzz_WrapUnwrapRoundTripAtMultiplier(
         uint256 okuMAmount,
         uint256 multiplier
@@ -74,16 +65,14 @@ contract OkuDollarFuzzTest is BaseTest {
 
         _elevateUsdMultiplier(multiplier);
 
-        uint256 price = okuMoney.okuMMultiplier(); // Still at PRECISION
+        uint256 price = okuMoney.okuMMultiplier();
 
         vm.startPrank(user1);
         okuDollar.wrap(okuMAmount, user1, 0);
 
         uint256 usdBalance = okuDollar.balanceOf(user1);
-        // With the tightened lower bound and 5x multiplier cap, usdBalance is always >0.
         assertGt(usdBalance, 0, "wrap should always produce non-zero shares");
 
-        // At okuMMultiplier = PRECISION, unwrap(usdBalance) returns usdBalance OkuMoney.
         uint256 notesBack = okuDollar.unwrap(usdBalance, user1);
         vm.stopPrank();
 
@@ -174,7 +163,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         _elevateUsdMultiplier(multiplier);
         // Read achieved multiplier — `_elevateUsdMultiplier` may overshoot the target
-        // because it drives the value via setUsdYieldRate + warp.
+        // because it drives the value via setOkuMYieldRate + warp.
         uint256 achievedMult = okuDollar.usdMultiplier();
 
         uint256 price = okuMoney.okuMMultiplier();
@@ -201,10 +190,8 @@ contract OkuDollarFuzzTest is BaseTest {
     }
 
     /// @notice Wrap share-minting at an elevated multiplier is the exact identity.
-    /// @dev SINGLE MULTIPLIER: `sharesToMint == actualReceived` always (the contract
-    ///      no longer computes `mulDiv(amount, okuMMultiplier, usdMultiplier)` — with
-    ///      both multipliers provably equal, that mulDiv IS the identity, so `wrap`
-    ///      assigns shares directly). Only the dollar VALUE credited scales with the
+    /// @dev `wrap` assigns shares 1:1 with OkuM received (usdMultiplier == okuMMultiplier,
+    ///      so the ratio is the identity). Only the dollar VALUE credited scales with the
     ///      multiplier, via a single `okuMToDollars` conversion.
     function testFuzz_WrapRoundingAtHighNotePrice(
         uint256 okuMAmount,
@@ -261,19 +248,11 @@ contract OkuDollarFuzzTest is BaseTest {
     }
 
     // ============ 4. Collateralization ============
-    //
-    // REMOVED (single-multiplier refactor): testFuzz_CollateralizationAtParity,
-    // testFuzz_NotePriceIncreaseOvercollateralizes, testFuzz_UsdRebaseUndercollateralizes,
-    // testFuzz_CollateralizationViewsAfterNotePriceIncrease. `collateralizationRatio()`
-    // and `surplus()` no longer exist, and the properties they asserted are now vacuous:
-    // OkuDollar's `usdMultiplier()` IS `okuMoney.okuMMultiplier()`, so a multiplier move
-    // scales reserves' dollar value and obligations by the identical factor. There is no
-    // over/under-collateralization state to reach.
 
     /// @notice Reserve/obligation views stay consistent and collateralization is exactly 1.0.
-    /// @dev Restated from the deleted `collateralizationRatio()` / `surplus()` assertions:
-    ///      the ratio is computed manually here to pin that it really is PRECISION (modulo
-    ///      the single floor() in `totalSupply`).
+    /// @dev The ratio is computed manually to pin that it really is PRECISION (modulo the
+    ///      single floor() in `totalSupply`): a multiplier move scales reserves' dollar
+    ///      value and obligations by the identical factor.
     function testFuzz_CollateralizationIsExactlyOne(uint256 okuMAmount) public {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
@@ -294,14 +273,6 @@ contract OkuDollarFuzzTest is BaseTest {
     }
 
     // ============ 5. Donation Rescue ============
-    //
-    // REMOVED (single-multiplier refactor): the four `withdrawSurplus` fuzz tests
-    // (testFuzz_WithdrawSurplusRevertsAtFloor, ...WithExcessReserves,
-    // ...RevertsBelowFloor, ...AfterNotePriceIncrease). `withdrawSurplus`,
-    // `depositReserves`, `surplus()`, `minCollateralRatio()` and the
-    // `BelowMinimumCollateral` error are all gone: there is no surplus because
-    // collateralization is 1.0 by construction. The replacement surface is
-    // `rescueDonation`, which recovers OkuM transferred directly to the vault.
 
     /// @notice `rescueDonation` can recover exactly the donated OkuM and no more.
     function testFuzz_RescueDonationBoundedByDonation(uint256 okuMAmount, uint256 donation) public {
@@ -319,7 +290,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Over-rescuing must revert.
         vm.prank(vaultRescuer);
-        vm.expectRevert(OkuDollar.NoDonationAvailable.selector);
+        vm.expectRevert(OkuDollarErrors.NoDonationAvailable.selector);
         okuDollar.rescueDonation(donation + 1, treasury);
 
         // Rescuing exactly the donation must succeed and leave backing intact.
@@ -368,15 +339,9 @@ contract OkuDollarFuzzTest is BaseTest {
     }
 
     /// @notice OkuDollar shares are untouched by an okuMMultiplier change; balance
-    ///         moves in lockstep with it (single-multiplier design).
-    /// @dev PREVIOUSLY (dual-multiplier design) `usdMultiplier` was independent of
-    ///      `okuMMultiplier`, so `balanceOf` (shares × usdMultiplier) was provably
-    ///      unaffected by an OkuM-side price move. Under the single-multiplier
-    ///      design `usdMultiplier() == okuMMultiplier()` by construction, so moving
-    ///      one moves the other — the invariant worth asserting is that the
-    ///      internal SHARE accounting is untouched, and that balance tracks the
-    ///      formula exactly (shares × new multiplier / PRECISION), not that it's
-    ///      frozen.
+    ///         moves in lockstep with it.
+    /// @dev `usdMultiplier() == okuMMultiplier()`, so balance must track
+    ///      shares × new multiplier / PRECISION exactly while share accounting is frozen.
     function testFuzz_OkuUsdBalanceTracksOkuMMultiplier(
         uint256 okuMAmount,
         uint256 newNotePrice
@@ -574,14 +539,11 @@ contract OkuDollarFuzzTest is BaseTest {
     }
 
     // ============ 9. Reserve donations ============
-    //
-    // REMOVED (single-multiplier refactor): testFuzz_DepositReservesIncreasesRatio and
-    // testFuzz_DepositReservesReflectedInReserves — `depositReserves` was deleted.
-    // A bare `transfer` into the vault is the only way OkuM arrives outside `wrap`, and
-    // it accrues to nobody (conversions use the multiplier, not totalAssets/totalSupply).
 
     /// @notice A bare OkuM transfer into the vault mints no shares and does not change
     ///         anyone's balance — it is purely a rescuable donation.
+    /// @dev Donations accrue to nobody because conversions use the multiplier, not
+    ///      totalAssets/totalSupply.
     function testFuzz_DonationMintsNoShares(uint256 okuMAmount, uint256 donation) public {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 4);
         donation = bound(donation, 1e6, okuMoney.balanceOf(user2) / 4);
@@ -659,7 +621,7 @@ contract OkuDollarFuzzTest is BaseTest {
         vm.prank(user1);
         uint256 usdMinted = okuDollar.wrap(okuMAmount, user1, 0);
 
-        // Increase note price (vault now overcollateralized)
+        // Increase note price
         uint256 currentNotePrice = okuMoney.okuMMultiplier();
         newNotePrice =
             bound(newNotePrice, currentNotePrice + currentNotePrice / 10, currentNotePrice * 5);
@@ -680,7 +642,7 @@ contract OkuDollarFuzzTest is BaseTest {
     // ============ 11. OkuMoney Balance Invariants ============
 
     /// @notice OkuMoney balanceOf is NOT affected by okuMMultiplier changes
-    /// @dev This is the key semantic change: non-rebasing means balances are static
+    /// @dev OkuMoney is non-rebasing: balances are static; only the multiplier moves.
     function testFuzz_OkuMoneyBalanceUnchangedByNotePrice(
         uint256 okuMAmount,
         uint256 newNotePrice

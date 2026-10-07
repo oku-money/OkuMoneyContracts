@@ -91,7 +91,7 @@ describe("scripts/operator/broadcastSchedule", () => {
         throw new Error("expected the promise to reject, but it resolved");
     }
 
-    it("REGRESSION: passes PHASE (the name parseArg('phase') actually reads) to every EVM subprocess — NOT EPOCH_PHASE", async () => {
+    it("passes PHASE (the name parseArg('phase') actually reads) to every EVM subprocess — NOT EPOCH_PHASE", async () => {
         const a = save(makeArtifact({ epochId: "bcast-phase-env" }));
         await broadcastArtifact({ epochId: a.epochId, phase: a.phase, dryRun: true, run: recorder, ledgerPath });
 
@@ -112,7 +112,7 @@ describe("scripts/operator/broadcastSchedule", () => {
         expect(svmCalls().length).to.equal(1);
     });
 
-    it("REGRESSION (defect #4): refuses to broadcast to a mainnet chain without yesMainnet", async () => {
+    it("refuses to broadcast to a mainnet chain without yesMainnet", async () => {
         const a = save(makeArtifact({ epochId: "bcast-mainnet-guard" }));
         const err = await rejection(
             broadcastArtifact({

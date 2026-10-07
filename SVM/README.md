@@ -161,9 +161,9 @@ pub fn deposit_buffer(amount: u64)    // buffer_depositor
 pub fn withdraw_buffer(amount: u64)   // buffer_withdrawer
 ```
 
-All four are yield-locked and pause-gated; neither buffer instruction has a solvency check. A mint or
-redeem whose output rounds to zero reverts `AmountTooSmall` (as on EVM); on redeem this is
-unreachable in practice (multiplier ≥ 1, OkuM and USDC both 6 decimals). `mint_oku_m` is fully
+All four are yield-locked and pause-gated; neither buffer instruction has a solvency check. A mint whose
+output rounds to zero reverts `AmountTooSmall` (as on EVM). Redeem has no such check: with
+multiplier ≥ 1 and OkuM / USDC both 6 decimals, its output is never below its input. `mint_oku_m` is fully
 permissionless: the orchestrator holds no privileged PSM mint authority, so its key compromise grants
 no mint beyond its `direct_minter` allowance (asserted by `tests/bankrun/crossChainBridging.ts`).
 
@@ -303,7 +303,7 @@ signs every smoke-test call while the deployer keeps claw-back via `set_authorit
   `RateAlreadyExpired` (6019), `PendingEndNotAfterRateEnd` (6020).
 - `InvalidAuthority` (6024): zero pubkey, or a granular role / proposal equal to `role_admin`;
   `NoPendingRoleAdmin` (6025) / `NotPendingRoleAdmin` (6026): accept/cancel preconditions.
-- `AmountTooSmall` (6028): mint or redeem output rounds to zero (EVM name); `SlippageExceeded`
+- `AmountTooSmall` (6028): mint output rounds to zero (EVM name); `SlippageExceeded`
   (6029): redeem output below `min_usdc_out` (no EVM equivalent).
 
 ---
@@ -332,7 +332,7 @@ From `SVM/oku-programs`; `npm test` runs both suites.
 | Suite | Command | Count |
 |---|---|---|
 | Rust (`cargo test --workspace`) | `npm run test:rust` | 62 (lite-psm 10, oku-shared 51, differential 1) |
-| Bankrun (in-process BPF on litesvm via `anchor-bankrun`) | `npm run test:bankrun` | 129 |
+| Bankrun (in-process BPF on litesvm via `anchor-bankrun`) | `npm run test:bankrun` | 130 |
 | Cross-language `compute_multiplier` (Solidity corpus replayed in Rust and TS; `EVM/test/differential/GenerateVectors.t.sol`) | `npm run test:differential` (repo root) | 3,867 vectors |
 | Live devnet / fork smoke | `npm run test:onchain[:fork]` | — |
 
@@ -459,7 +459,7 @@ SVM-specific deliberate departures from EVM; the symmetric view is in
 |---|---|
 | `Constants.sol` / `MathLib.sol` | `oku-shared/src/constants.rs` / `rate.rs` + `wad.rs` (+ `math.rs` for u64 PSM conversions) |
 | `OverrideBlockGuard.sol` | `oku-shared/src/yield_lock.rs` + `lite-psm/src/helpers/yield_lock.rs` |
-| `Roles.sol` / `Errors.sol` / `events/*.sol` | `programs/lite-psm/src/{roles,errors,events}.rs` |
+| `Roles.sol` / `Errors.sol` + `errors/*.sol` / `events/*.sol` | `programs/lite-psm/src/{roles,errors,events}.rs` |
 | `ReentrancyGuardUpgradeable.sol` | not ported: Solana forbids a program re-entering itself |
 
 ### Token model and multiplier location

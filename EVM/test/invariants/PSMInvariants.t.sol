@@ -39,12 +39,9 @@ contract PSMInvariantsTest is BaseTest {
         litePsm.grantRole(PSM_BUFFER_DEPOSITOR, address(handler));
         litePsm.grantRole(PSM_BUFFER_WITHDRAWER, address(handler));
         vm.stopPrank();
-        // SINGLE MULTIPLIER: the handler drives `okuMRatePerSecond` on OkuMoney by
-        // pranking `rebaser` (which already holds OKUM_REBASER from BaseTest), which
-        // combined with the handler's `warpTime` makes the multiplier actually
-        // compound during invariant runs. This is the systemic coverage gap that
-        // allowed the LitePSM `redeemUsdOku` rounding-asymmetry bug to ship.
-        // The old `VAULT_REBASER` grant is gone with the role.
+        // The handler drives `okuMRatePerSecond` by pranking `rebaser` (OKUM_REBASER
+        // from BaseTest); with `warpTime` this makes the multiplier compound, which
+        // the PSM redeem rounding paths need in order to be exercised.
 
         targetContract(address(handler));
 
@@ -82,7 +79,7 @@ contract PSMInvariantsTest is BaseTest {
 
     /// @notice No handler action may revert on every call. A handler whose bounds drift out
     ///         of sync with the contracts passes every other invariant while exercising
-    ///         nothing (the yield-rate handler once did exactly that).
+    ///         nothing.
     function invariant_NoHandlerActionAlwaysReverts() public view {
         _assertSometimesSucceeds(
             handler.ghostSetUsdYieldRateCalls(), handler.ghostSetUsdYieldRateReverts(), "yield rate"

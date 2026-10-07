@@ -8,8 +8,6 @@ import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../../src/interfaces/IOkuDollar.sol";
-// The concrete `OkuDollar` import is no longer needed: the yield rate is driven on
-// OkuMoney under the single-multiplier design, so `IOkuDollar` suffices here.
 import {TestConstants} from "../shared/Constants.sol";
 
 /**
@@ -17,10 +15,8 @@ import {TestConstants} from "../shared/Constants.sol";
  * @notice Stateful handler for LitePSM invariants. Exercises the full public surface
  *         (mintOkuM, redeemOkuM, mintUsdOku, redeemUsdOku, depositBuffer,
  *         withdrawUsdc) and tracks exact USDC flow + multiplier-observation ghost state.
- * @dev The PSM is granted the admin role at the test level; this handler invokes
- *      role-gated functions via `vm.prank(bridgeAdmin)` (where bridgeAdmin is the
- *      shared admin address from BaseTest). LitePSMHandler is constructed with
- *      `admin` (the BaseTest admin) so it can invoke admin-only functions.
+ * @dev Role-gated OkuMoney/PSM calls are made by pranking the role holders passed to
+ *      the constructor; PSMInvariants grants this handler the PSM buffer roles directly.
  */
 contract LitePSMHandler is Test {
     LitePSM public psm;
@@ -247,8 +243,8 @@ contract LitePSMHandler is Test {
         }
     }
 
-    /// @notice Trigger a multiplier change. Allowed range raised to allow occasional
-    ///         large jumps so PSM truncation/dust branches surface in invariant runs.
+    /// @notice Trigger a multiplier change. Occasional large jumps make PSM
+    ///         truncation/dust branches surface in invariant runs.
     function rebase(uint256 priceIncrease, bool largeJump) external {
         ghostRebaseCalls++;
         uint256 currentPrice = okuMoney.okuMMultiplier();
@@ -267,7 +263,7 @@ contract LitePSMHandler is Test {
         } catch {}
     }
 
-    // ============ Admin / Operator surface (newly added) ============
+    // ============ Admin / Operator surface ============
 
     function depositBuffer(uint256 amount) external {
         ghostDepositBufferCalls++;
@@ -330,10 +326,8 @@ contract LitePSMHandler is Test {
 
     /// @notice Drive `okuMRatePerSecond` so that subsequent `warpTime` calls compound
     ///         the (single) multiplier above PRECISION.
-    /// @dev SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` is exactly
-    ///      `okuMoney.okuMMultiplier()`, so the rate is set on OkuMoney via
-    ///      OKUM_REBASER. Retains the historical handler name so the fuzz selector
-    ///      set is unchanged.
+    /// @dev `okuDollar.usdMultiplier()` is exactly `okuMoney.okuMMultiplier()`, so the
+    ///      rate is set on OkuMoney via OKUM_REBASER.
     function setUsdYieldRate(uint256 rate) external {
         ghostSetUsdYieldRateCalls++;
         rate = bound(rate, PRECISION, MAX_RATE);
@@ -349,10 +343,9 @@ contract LitePSMHandler is Test {
 
     // ============ Time Progression ============
     //
-    // Required so that any active `okuMRatePerSecond` actually compounds
-    // the multiplier during invariant runs. Without this, the multiplier stays
-    // pinned at PRECISION and rounding-asymmetry bugs in PSM redeem paths
-    // (historical: `redeemUsdOku` InsufficientBalance) cannot be caught.
+    // Required so that any active `okuMRatePerSecond` actually compounds the
+    // multiplier; otherwise it stays at PRECISION and rounding asymmetries in the
+    // PSM redeem paths cannot surface.
 
     uint256 public ghostWarpCalls;
     uint256 public ghostTotalElapsed;

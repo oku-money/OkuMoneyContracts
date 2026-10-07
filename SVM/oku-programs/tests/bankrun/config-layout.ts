@@ -10,13 +10,12 @@
  * wrong offset would not throw; it would produce a plausible-looking number and
  * mis-size the rate on every chain.
  *
- * The offsets were also genuinely easy to get wrong: the first version counted
- * 16 pubkeys before the accrual block when only 13 precede it (`pending_role_admin`
- * and the two `direct_*` keys come after). Arithmetic in a comment is not a
- * control, so this decodes a REAL account with the exact offsets the EVM side
- * uses and compares against Anchor's own decoding.
+ * The offsets are easy to get wrong: 13 pubkeys precede the accrual block
+ * (`pending_role_admin` and the two `direct_*` keys come after). This decodes a
+ * REAL account with the exact offsets the EVM side uses and compares against
+ * Anchor's own decoding.
  *
- * If this fails, `svmValue.ts` must be updated in the same commit.
+ * If this fails, `svmValue.ts` must be updated alongside the layout change.
  */
 
 import * as anchor from "@anchor-lang/core";

@@ -3,8 +3,7 @@
  *
  * ## Why this suite exists
  *
- * Under the discrete model the multiplier was a stored scalar and reading it
- * was a field access. It is now *computed* on every mint and every redeem:
+ * The multiplier is *computed* on every mint and every redeem:
  * `compute_multiplier` runs `rpow`, which is exponentiation by squaring over
  * ~20-25 iterations depending on the window length, each iteration costing two
  * 256-bit `mul_div`s whose inner `u128` divisions are libcalls on SBF.
@@ -14,9 +13,8 @@
  * close to it forces every integrator to attach a `ComputeBudgetProgram`
  * instruction, which is a real composability tax.
  *
- * The refactor was shipped on an *estimate* of 15-40k CU. This suite replaces
- * the estimate with measurements and pins them, so a regression in the math or
- * an extra CPI on the hot path fails CI instead of surfacing in production.
+ * This suite pins measured costs, so a regression in the math or an extra CPI
+ * on the hot path fails CI instead of surfacing in production.
  *
  * ## Reading the numbers
  *
@@ -78,24 +76,10 @@ const USER_PATH_CU_CEILING = 100_000;
  * Ceiling for mint_oku_m on a COLD ATA (first-time minter) in the two-rpow
  * branch — the measured worst case or close to it.
  *
- * A CU-reduction pass (dropping three unused `Account<T>` deserializations on
- * the mint path, relaxing `user_usdc_ata`'s `associated_token::` constraint to
- * `token::` to skip a PDA derivation, threading one `Clock::get()` through
- * both the yield-lock check and the multiplier read instead of two, and
- * computing post-mint/burn supply arithmetically instead of `reload()`-ing
- * the mint) brought this down from a measured 101,847-131,847 CU to
- * 98,597-107,597 CU across repeated runs — see commit history for the before
- * figures. That is CLOSE to `USER_PATH_CU_CEILING` (occasionally under it,
- * occasionally over), not a clean win: the dominant costs are the ATA-program
- * CPI + rent-exempt allocation (~intrinsic to `init_if_needed`) and `rpow`'s
- * bit-pattern-dependent cost, neither of which this pass touched.
- *
- * Rather than chase the remaining gap with structural changes (pre-create
- * ATAs client-side, split `init_if_needed` into a separate instruction — see
- * `TRACKER.md` history for that decision), the target moves: 150k leaves the
- * same proportional headroom under Solana's 200k hard limit that 100k left
- * before this path existed, without claiming a precision this measurement
- * doesn't have.
+ * Measured at ~98.6k-107.6k CU across runs, straddling `USER_PATH_CU_CEILING`.
+ * The dominant costs are the ATA-program CPI + rent-exempt allocation
+ * (intrinsic to `init_if_needed`) and `rpow`'s bit-pattern-dependent cost.
+ * 150k keeps proportional headroom under Solana's 200k hard limit.
  */
 const COLD_PATH_CU_CEILING = 150_000;
 
@@ -103,9 +87,8 @@ const COLD_PATH_CU_CEILING = 150_000;
  * Ceiling for the permissionless display crank.
  *
  * Not user-facing and composes with nothing, so it only has to fit Solana's
- * 200k default on its own. It was ~104k when the mirror pre-armed a second
- * step; dropping the pre-arm (one `compute_multiplier`, one CPI) roughly halved
- * it, so the ceiling is tightened accordingly rather than left slack.
+ * 200k default on its own. The crank does one `compute_multiplier` and one
+ * CPI; the ceiling is set tight to that rather than left slack.
  */
 const CRANK_CU_CEILING = 80_000;
 
@@ -349,10 +332,10 @@ describe("compute budget (streaming accrual hot paths)", () => {
   });
 
   // -------------------------------------------------------------------
-  // The piggyback: isolating what the opportunistic display sync costs
+  // The user path must not touch the display mirror
   // -------------------------------------------------------------------
 
-  it("mint cost does not depend on display staleness (piggyback is gone)", async () => {
+  it("mint cost does not depend on display staleness", async () => {
     const start = await nowTs();
     await setRate(ratePerSecondForApy(0.05), start + 30 * DAY);
     await seedBuffer();
@@ -403,9 +386,8 @@ describe("compute budget (streaming accrual hot paths)", () => {
   /**
    * `MintOkuM.user_oku_m_ata` is `init_if_needed` (contexts/psm.rs), so a
    * first-time minter pays an ATA-program CPI plus a rent-exempt allocation on
-   * top of the accrual math. See `COLD_PATH_CU_CEILING`'s doc comment for the
-   * CU-reduction pass this path has already had and why 100k is no longer the
-   * right ceiling for it specifically.
+   * top of the accrual math. See `COLD_PATH_CU_CEILING`'s doc comment for why
+   * this path has its own ceiling.
    *
    * EVERY OTHER MEASUREMENT IN THIS FILE IS THE WARM PATH: `beforeEach` calls
    * `ensureAtaViaBankrun` for the shared `user`, so `init_if_needed` is a
@@ -467,25 +449,9 @@ describe("compute budget (streaming accrual hot paths)", () => {
     // The precondition above is what guarantees this is the cold path --
     // `simulateTx` does not commit, so the ATA is still absent afterwards.
     //
-    // HISTORY: originally measured 101,847 / 106,347 / 107,847 / 131,847 CU,
-    // breaching the 100k `USER_PATH_CU_CEILING` on every run. A CU-reduction
-    // pass (see `COLD_PATH_CU_CEILING`'s doc comment for exactly what it did)
-    // brought this down to 98,597 / 107,597 CU across repeated runs --
-    // SOMETIMES under 100k, sometimes over, which is why this is asserted
-    // against `COLD_PATH_CU_CEILING` (150k) rather than `USER_PATH_CU_CEILING`
-    // now. The spread itself is real and expected -- `rpow` is exp-by-squaring,
-    // so its cost depends on the BIT PATTERN of `elapsed`, and bankrun's start
-    // clock is wall-clock derived, so each run lands on a different pattern.
-    //
-    // Both bounds below are real constraints, not artifacts of a single run:
-    //   - below Solana's 200k default (the hard limit);
-    //   - below `COLD_PATH_CU_CEILING`, so a future regression (e.g. an
-    //     opportunistic display sync creeping back onto this path) still
-    //     trips a test rather than silently eating the remaining headroom.
-    //
-    // No lower bound: unlike before this pass, the cold path can legitimately
-    // land under 100k on some runs. A floor here would be asserting the
-    // ABSENCE of a future optimisation, which is not a property worth pinning.
+    // Run-to-run spread is expected: `rpow`'s cost depends on the BIT PATTERN
+    // of `elapsed`, and bankrun's start clock is wall-clock derived. No lower
+    // bound — a floor would pin the absence of a future optimisation.
     expect(
       sim.computeUnits,
       "cold-ATA mint must still fit Solana's default compute limit",

@@ -32,18 +32,11 @@ abstract contract Actors is Test {
     address public vaultPauser = makeAddr("vaultPauser");
     address public vaultUnpauser = makeAddr("vaultUnpauser");
     address public vaultRescuer = makeAddr("vaultRescuer");
-    // REMOVED (single-multiplier refactor): usdRebaser (VAULT_REBASER is gone; the
-    // rate lives on OkuMoney and is driven by `rebaser`) and reserveManager
-    // (VAULT_RESERVE_MANAGER is gone; collateralization is 1.0 by construction).
 
     // ============ LitePSM Roles ============
 
     address public bufferDepositor = makeAddr("bufferDepositor");
     address public bufferWithdrawer = makeAddr("bufferWithdrawer");
-
-    // OkuBridge / OkuBridgeRouter actor aliases were removed in the noBridge
-    // refactor. If those contracts return, restore the named actors from the
-    // master branch.
 
     // ============ Generic Test Users ============
 
@@ -55,8 +48,7 @@ abstract contract Actors is Test {
 
     // ============ Generic Recipients ============
 
-    /// @dev Not fee-related despite the name history; used as a generic
-    ///      recipient address in `rescueDonation` tests.
+    /// @dev Generic recipient address (not fee-related), e.g. in `rescueDonation` tests.
     address public treasury = makeAddr("treasury");
 
     // ============ Signing keys (for EIP-712 / EIP-2612 tests) ============
@@ -69,9 +61,6 @@ abstract contract Actors is Test {
     address public orchestratorSigner;
 
     /// @notice Initialize orchestrator signer address from its private key.
-    /// @dev The bridge tests that consumed this helper were removed in the
-    ///      noBridge refactor. Retained because EIP-2612 permit tests still
-    ///      reuse the orchestrator key.
     function _initOrchestrator() internal {
         orchestratorSigner = vm.addr(orchestratorPk);
     }

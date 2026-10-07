@@ -210,10 +210,8 @@ describe("OkuMoney Scenarios", () => {
             // Verify allowance was set
             expect(await okuMoney.minterAllowance(psmAddr)).to.equal(limitedAllowance)
 
-            // Alice swaps 40,000 USDC. No rounding games: `LitePSM` has no
-            // slippage check to dodge, and rounding the input to a multiple of
-            // the multiplier only served to make the expectation below look
-            // exact while re-deriving the contract's own formula.
+            // Alice swaps 40,000 USDC (`LitePSM` has no slippage check, so no
+            // input alignment is needed).
             //
             // The allowance decrement is measured directly rather than predicted,
             // and then checked against the MINT that actually landed -- so the
@@ -353,16 +351,8 @@ describe("OkuMoney Scenarios", () => {
             expect(aliceBalance - aliceBeforeMint, "mint credits the exact converted amount")
                 .to.equal((depositAmount * DECIMAL_MULT_6_TO_18 * WAD_1E18) / mult)
 
-            // Transfer works before pause.
-            //
-            // Asserted as a DELTA against Bob's balance captured immediately
-            // before this transfer, not as an absolute. Contracts in this
-            // file are deployed once in a top-level `before` hook and state
-            // persists across every `it()`, so Bob already holds 5,000 OkuM
-            // from the "User-to-User Transfers" test above. The previous
-            // absolute assertion (`closeTo(transferAmount)`) only passed when
-            // this test ran in isolation and broke as soon as the file ran as
-            // a whole — an ordering dependency, not a real behavioural check.
+            // Transfer works before pause. Asserted as a DELTA: state persists
+            // across `it()` blocks, so Bob already holds OkuM from earlier tests.
             const transferAmount = parseEther("1000")
             const bobBeforeTransfer = await okuMoney.balanceOf(bobAddr)
             await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
@@ -442,9 +432,7 @@ describe("OkuMoney Scenarios", () => {
             await okuMoney.connect(Frank).unblacklist(bobAddr)
             expect(await okuMoney.isBlacklisted(bobAddr)).to.equal(false)
 
-            // Bob can send again. The previous version made both calls with NO
-            // assertions, so it only proved "does not throw" -- it would have
-            // passed even if the transfers moved nothing.
+            // Bob can send again (balances asserted, not just "does not throw").
             const bobBeforeResume = await okuMoney.balanceOf(bobAddr)
             const charlieBeforeResume = await okuMoney.balanceOf(charlieAddr)
             await okuMoney.connect(Bob).transfer(charlieAddr, transferAmount)

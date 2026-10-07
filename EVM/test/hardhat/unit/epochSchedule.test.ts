@@ -133,7 +133,7 @@ describe("scripts/utils/epochSchedule", () => {
             expect(rSettle).to.be.greaterThan(1);
         });
 
-        it("subtracts the PROJECTED base-window tail when staging happens before baseEndSec — this is the fix for a real bug (see TRACKER.md)", () => {
+        it("subtracts the PROJECTED base-window tail when staging happens before baseEndSec", () => {
             const targetUsd = 40_000;
             const baseWindowFraction = 1.0; // isolate the tail effect, no withholding
             const measuredAvgValueUsd = 10_000_000;
@@ -164,13 +164,9 @@ describe("scripts/utils/epochSchedule", () => {
                 baseRatePerSecond: rBaseFloat,
             });
 
-            // Without the tail correction (old buggy behavior), the settlement
-            // rate would be derived as if the ~4 remaining base-window hours
-            // don't exist — i.e. targeting the FULL remaining gap
-            // (targetUsd - distributedSoFarUsd) instead of that minus the
-            // projected tail. That would produce a HIGHER settlement rate than
-            // the corrected version, since it fails to account for base-window
-            // accrual that's still coming.
+            // Reference: ignoring the ~4h projected tail targets the FULL gap
+            // (targetUsd - distributedSoFarUsd) and so yields a HIGHER rate,
+            // double-paying base-window accrual that is still to come.
             const growthWithoutTailFix =
                 1 + (targetUsd - distributedSoFarUsd) / measuredAvgValueUsd;
             const rSettleWithoutTailFix = Math.pow(

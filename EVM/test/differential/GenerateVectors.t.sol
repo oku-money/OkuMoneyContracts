@@ -19,20 +19,16 @@ import {Constants} from "../../src/lib/Constants.sol";
 ///      All three must agree bit-for-bit, because cross-chain determinism rests
 ///      on every deployment returning the same integer at the same wall-clock
 ///      second — and NOTHING on-chain, on either stack, can detect a divergence.
-///      Before this harness existed the three were kept in lockstep by hand and
-///      by code review, which is not a control.
 ///
-///      Solidity is the reference implementation: it shipped first and it is
-///      what the six live EVM deployments run. So vectors are generated FROM it
+///      Solidity is the reference implementation: it is what the six live EVM
+///      deployments run. So vectors are generated FROM it
 ///      and replayed against the other two.
 ///
 ///      ## Reverts are vectors too
 ///
 ///      Each case records whether the reference REVERTED. That matters as much
 ///      as the values: Rust returns `None` and TypeScript throws where Solidity
-///      reverts, and a divergence in the revert surface is still a divergence
-///      (it was exactly such a case — `withSuccessor` accepting a halt plus a
-///      successor — that this work found by hand in the instruction layer).
+///      reverts, and a divergence in the revert surface is still a divergence.
 ///
 ///      ## Domain
 ///
@@ -213,10 +209,8 @@ contract GenerateVectorsTest is Test {
 
         uint256[4] memory bases = [P, P + 1, 2 * P, Constants.MAX_MULTIPLIER];
 
-        // `1 days` is the PRODUCTION epoch length (see scripts/config/epoch.ts).
-        // It was previously absent — the corpus bracketed it with 1 hours and
-        // 7 days but never sampled it — so the three implementations were never
-        // cross-validated at the exact window the fleet actually runs on.
+        // `1 days` is the PRODUCTION epoch length (see scripts/config/epoch.ts), so
+        // the implementations are cross-validated at the exact window the fleet runs on.
         uint256[6] memory windows = [
             uint256(1),
             uint256(1 hours),

@@ -88,7 +88,4 @@ contract MathLibHarness {
     {
         return MathLib.usdcToDollars(usdcAmount, decimalMultiplier);
     }
-    // REMOVED (single-multiplier collapse): wrappedSharesFromOkuM / okuMToWrappedUsd
-    // harness entries — MathLib no longer carries these two-multiplier helpers.
-    // `okuMToDollars` above covers the single-multiplier equivalent.
 }

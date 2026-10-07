@@ -6,6 +6,7 @@ import {Errors} from "../../src/lib/Errors.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {Constants} from "../../src/lib/Constants.sol";
+import {OkuMoneyErrors} from "../../src/lib/errors/OkuMoneyErrors.sol";
 
 /**
  * @title OkuMoneyFuzzTest
@@ -261,13 +262,6 @@ contract OkuMoneyFuzzTest is BaseTest {
     }
 
     // ============ Streaming-accrual Fuzz Tests ============
-    //
-    // REMOVED (streaming-accrual refactor): testFuzz_DistributeYield and
-    // testFuzz_DistributeYield_RevertWhenYieldTooSmall — `distributeYield(uint256)`
-    // and the `YieldTooSmall` error were deleted. The multiplier is no longer moved by
-    // a supply-relative yield amount, so the `yieldAmount * PRECISION / supply`
-    // arithmetic and its truncation-to-zero revert branch no longer exist. The
-    // replacements below fuzz the rate schedule instead.
 
     /// @notice The multiplier is monotonically non-decreasing over any (rate, elapsed)
     ///         pair in the legal input space, and never exceeds MAX_MULTIPLIER.
@@ -287,10 +281,8 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         uint256 before = okuMoney.okuMMultiplier();
         // A halted rate (== PRECISION) requires endTimestamp == 0; a yielding rate
-        // requires a bounded future window comfortably beyond the fuzzed elapsed.
-        // A single window may not exceed MAX_RATE_WINDOW (90 days). `elapsed`
-        // still ranges to 10 years — past the window the schedule halts at
-        // rateEnd, which is exactly the behaviour these properties assert.
+        // gets the longest legal window (MAX_RATE_WINDOW). `elapsed` may run past it,
+        // where the schedule halts at rateEnd — which these properties also cover.
         uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + MAX_RATE_WINDOW;
 
         vm.prank(rebaser);
@@ -318,9 +310,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         supply = bound(supply, 1e18, MAX_SUPPLY / 100);
         _mintOkuMoney(user1, supply);
 
-        // A single window may not exceed MAX_RATE_WINDOW (90 days). `elapsed`
-        // still ranges to 10 years — past the window the schedule halts at
-        // rateEnd, which is exactly the behaviour these properties assert.
+        // `elapsed` may run past MAX_RATE_WINDOW, where the schedule halts at rateEnd.
         uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + MAX_RATE_WINDOW;
         vm.prank(rebaser);
         okuMoney.setOkuMYieldRate(rate, endTimestamp);
@@ -343,17 +333,18 @@ contract OkuMoneyFuzzTest is BaseTest {
         }
         vm.prank(rebaser);
         vm.expectRevert(
-            rate < PRECISION ? OkuMoney.InvalidRate.selector : OkuMoney.RateTooHigh.selector
+            rate < PRECISION
+                ? OkuMoneyErrors.InvalidRate.selector
+                : OkuMoneyErrors.RateTooHigh.selector
         );
         okuMoney.setOkuMYieldRate(rate, 0);
     }
 
     /// @notice `okuMMultiplier()` must never revert, no matter how a bounded-window
     ///         rate, a long warp past its `okuMRateEnd`, and a subsequent discrete
-    ///         override are combined. Regression for the underflow found in
-    ///         `MathLib.computeMultiplier` branch 2 (`rateEnd - anchor`) when
-    ///         `setOkuMMultiplier` re-anchored past an already-expired window without
-    ///         clearing the schedule — see `setOkuMMultiplier`'s schedule collapse.
+    ///         override are combined. Pins that `MathLib.computeMultiplier` branch 2
+    ///         (`rateEnd - anchor`) does not underflow when `setOkuMMultiplier`
+    ///         re-anchors past an expired window (it collapses the schedule).
     function testFuzz_OkuMMultiplierNeverReverts(
         uint256 rate,
         uint256 endOffset,
@@ -362,9 +353,8 @@ contract OkuMoneyFuzzTest is BaseTest {
     )
         public
     {
-        // Exclude PRECISION: a halted rate requires endTimestamp == 0, which is a
-        // different (and already separately covered) scenario from this bounded-
-        // window regression test.
+        // Exclude PRECISION: a halted rate requires endTimestamp == 0, a separately
+        // covered scenario.
         rate = bound(rate, PRECISION + 1, MAX_RATE);
         endOffset = bound(endOffset, 1, MAX_RATE_WINDOW);
         warpAmount = bound(warpAmount, 0, 100 * 365 days);
@@ -386,7 +376,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(newMultiplier);
 
-        // The regression: this call must not revert either.
+        // Must not revert after the override either.
         uint256 afterOverride = okuMoney.okuMMultiplier();
         assertEq(afterOverride, newMultiplier, "collapsed schedule must not drift");
 
@@ -524,7 +514,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         // Should not be able to mint more
         vm.prank(minter);
-        vm.expectRevert(OkuMoney.ExceedsSupplyCap.selector);
+        vm.expectRevert(OkuMoneyErrors.ExceedsSupplyCap.selector);
         okuMoney.mint(user2, extraAmount);
     }
 
@@ -547,7 +537,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         // But no more
         vm.prank(minter);
-        vm.expectRevert(OkuMoney.ExceedsSupplyCap.selector);
+        vm.expectRevert(OkuMoneyErrors.ExceedsSupplyCap.selector);
         okuMoney.mint(user3, 1);
     }
 

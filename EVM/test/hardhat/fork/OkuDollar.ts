@@ -220,18 +220,9 @@ describe("OkuDollar Vault Scenarios", () => {
             const notesAfter = await okuMoney.balanceOf(aliceAddr)
             const notesReturned = notesAfter - notesBefore
 
-            // Expected value derived from the SCENARIO, not from `_unwrap`.
-            //
-            // Alice wrapped `noteBalance` raw notes at m = 1.0, so she holds
-            // exactly that many shares. The multiplier then rose 10%. Unwrapping
-            // the PRE-bump dollar figure `okuUsdBalance` (== noteBalance) buys
-            // back only 1/1.1 of those notes, because each note is now worth 1.1
-            // dollars. So: noteBalance × 100 / 110.
-            //
-            // The previous version asserted `(okuUsdBalance * PRECISION) / newPrice`,
-            // which is a transcription of `_unwrap`'s own
-            // `mulDiv(usdAmount, PRECISION, mult, Floor)` -- it would have passed
-            // for any self-consistent unwrap formula, including a wrong one.
+            // Expected value derived from the SCENARIO, not transcribed from
+            // `_unwrap`: Alice wrapped `noteBalance` notes at m = 1.0; after a 10%
+            // bump the pre-bump dollar figure buys back noteBalance × 100 / 110.
             const expectedNotes = (noteBalance * 100n) / 110n
             expect(notesReturned, "partial exit returns notes/1.1 after a 10% bump")
                 .to.be.closeTo(expectedNotes, 1n)
@@ -305,16 +296,11 @@ describe("OkuDollar Vault Scenarios", () => {
             // up to the floor in `dollarsToOkuM`. Each mint floors independently,
             // and `floor(k·x/m)` can exceed `k·floor(x/m)` by at most `k-1` wei,
             // so the tolerances below are k-1, not a round number.
-            //
-            // The previous version allowed ±10% OF ALICE'S POSITION, which would
-            // have accepted a vault mispricing Bob by 9%. These bounds are ~21
-            // orders of magnitude tighter and are derived, not observed.
             expect(bobUsdGained, "Bob deposited 2x Alice").to.be.closeTo(aliceUsdGained * 2n, 1n)
             expect(charlieUsdGained, "Charlie deposited 3x Alice")
                 .to.be.closeTo(aliceUsdGained * 3n, 2n)
 
-            // Admin increases notePrice by 10%. Collateralization stays exactly 1.0
-            // under the single-multiplier design (no surplus() to check).
+            // Admin increases notePrice by 10%.
             const priceBefore = await okuMoney.okuMMultiplier()
             const newPrice = priceBefore * 110n / 100n
             await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
@@ -323,11 +309,8 @@ describe("OkuDollar Vault Scenarios", () => {
             // multiplier increase each user gets FEWER raw notes back, because
             // each note is now worth more.
             //
-            // `newPrice` is the test's OWN number, not a value read back from the
-            // contract. The previous version re-read `okuMMultiplier()` here, so
-            // a silently no-op `setOkuMMultiplier` would still have satisfied all
-            // three assertions below -- in a test whose whole purpose is to verify
-            // multiplier-aware unwrap.
+            // `newPrice` is the test's OWN number, not read back from the
+            // contract, so a silently no-op `setOkuMMultiplier` fails here.
             expect(await okuMoney.okuMMultiplier(), "the bump must have landed")
                 .to.equal(newPrice)
 

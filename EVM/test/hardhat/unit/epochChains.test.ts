@@ -29,7 +29,7 @@ describe("scripts/config/epochChains", () => {
         expect(() => participatingChains({ requested: ["sepolia", "not-a-real-chain"] })).to.throw(/unknown chain/i);
     });
 
-    it("REGRESSION (defect #4): participatingChains() refuses a mainnet chain without yesMainnet", () => {
+    it("participatingChains() refuses a mainnet chain without yesMainnet", () => {
         expect(() => participatingChains({ requested: ["base"] })).to.throw(/mainnet/i);
         expect(() => participatingChains({ requested: ["mainnet", "bsc"] })).to.throw(/mainnet/i);
     });

@@ -4,14 +4,13 @@ import { CHAIN_METADATA } from "../../../scripts/config/chains";
 
 /**
  * The guard is the last thing between a mistyped `--network` and a live
- * broadcast, and had no test. Its failure mode is silence: a network absent
- * from the set is simply allowed through.
+ * broadcast. Its failure mode is silence: a network absent from the set is
+ * simply allowed through.
  */
 describe("mainnetGuard", () => {
     describe("network set", () => {
         it("covers every mainnet in CHAIN_METADATA", () => {
-            // The defect this pins: three call sites carried a hand-copied set
-            // missing optimism and arbitrum, so those chains bypassed the gate.
+            // Any configured mainnet missing from the set bypasses the gate.
             const KNOWN_TESTNETS = new Set([
                 "sepolia", "baseSepolia", "arbSepolia", "bscTestnet",
                 "opSepolia", "localhost", "hardhat",

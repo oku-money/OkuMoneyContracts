@@ -101,9 +101,7 @@ describe("scripts/utils/carryLedger", () => {
         expect(summary.cumulativeRealisedYieldUsd).to.be.closeTo(realisedPerEpoch * 5, 1e-6);
         // Checked against the independently accumulated total, NOT against
         // `cumulativeRealisedYieldUsd - outstandingCarryUsd` -- which is the
-        // literal definition of `cumulativeAchievedUsd` (`carryLedger.ts:242`).
-        // Comparing a field to its own definition is arithmetic, not a test; the
-        // previous version labelled it "the identity itself" and could not fail.
+        // literal definition of `cumulativeAchievedUsd` and so could not fail.
         expect(summary.cumulativeAchievedUsd, "cumulative achieved matches the per-epoch sum")
             .to.be.closeTo(expectedAchieved, 1e-6);
         // With conservativeFactor < 1, SOME carry must still be outstanding —
@@ -114,8 +112,7 @@ describe("scripts/utils/carryLedger", () => {
     // ── upsertLedgerEntry / backfillReconciliation ──────────────────────────
     // Exercises the exact call pattern `broadcastSchedule.ts` uses: insert a
     // roll-epoch entry, then backfill the PRIOR entry's reconciliation once
-    // the NEXT roll computes it. This is the code path defect #3 in the
-    // deploy-readiness audit lived in, and had zero test coverage.
+    // the NEXT roll computes it.
 
     function baseEntry(overrides: Partial<CarryLedgerEntry>): CarryLedgerEntry {
         return {
@@ -193,8 +190,8 @@ describe("scripts/utils/carryLedger", () => {
         expect(summary.currentEpochCarryInUsd).to.equal(5);
     });
 
-    it("REGRESSION (defect #3): reconciledCarryUsd threaded as next epoch's carryInUsd does not equal carryForwardUsd — they answer different questions", () => {
-        // Simulates exactly what `broadcastSchedule.ts` now does for a
+    it("reconciledCarryUsd threaded as next epoch's carryInUsd does not equal carryForwardUsd — they answer different questions", () => {
+        // Simulates exactly what `broadcastSchedule.ts` does for a
         // roll-epoch artifact: insert epoch N's entry with carryForwardUsd=0
         // (deriveBaseRate has no clamping yet), then — once epoch N+1 derives
         // and reconciles epoch N's actual-vs-target — backfill epoch N's
@@ -210,8 +207,7 @@ describe("scripts/utils/carryLedger", () => {
         expect(epoch1.reconciledCarryUsd).to.equal(reconciledForEpoch1);
 
         // Epoch 2's carryInUsd should equal epoch 1's RECONCILED carry, per
-        // deriveRollEpoch.ts — not the (always-0) carryForwardUsd, which is
-        // the bug this test guards against re-introducing.
+        // deriveRollEpoch.ts — not the (always-0) carryForwardUsd.
         upsertLedgerEntry(
             baseEntry({ epochId: "epoch-2", carryInUsd: reconciledForEpoch1, carryForwardUsd: 0 }),
             tmpPath

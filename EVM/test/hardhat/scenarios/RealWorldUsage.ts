@@ -147,8 +147,7 @@ const DECIMAL_MULTIPLIER = 10n ** 12n
  * The USDC figures cannot measure anything: `LitePSM.mintOkuM(usdcOut)` transfers
  * exactly `usdcOut`, so the orchestrator's USDC delta across
  * the mint is identically the amount handed to it. A drift computed that way is
- * structurally zero and the assertion built on it can never fail — which is what
- * the deleted simulation did, under a comment claiming it had been fixed.
+ * structurally zero and the assertion built on it can never fail.
  *
  * Dollar value is the quantity that can actually move. It passes through two
  * independent floors:

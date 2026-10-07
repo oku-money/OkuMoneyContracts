@@ -8,12 +8,10 @@ import {MathLib} from "../../src/lib/MathLib.sol";
 /**
  * @title LitePSMFuzzTest
  * @notice Fuzz tests for LitePSM mint paths that exercise multiplier-driven rounding.
- * @dev Focused on `mintUsdOku`: the path that flows USDC -> mint OkuM -> wrap -> UsdOku.
- *      SINGLE MULTIPLIER: `usdMultiplier() == okuMMultiplier()` always, so `wrap`'s
- *      dollar output is exactly {MathLib.okuMToDollars} — no separate wrap-replica
- *      helper needed. These fuzz tests pin the invariant that any USDC amount at any
- *      reachable multiplier must mint without reverting on rounding, and the minted
- *      UsdOku must match the helper-computed value within share-conversion drift.
+ * @dev Focused on `mintUsdOku`: USDC -> mint OkuM -> wrap -> UsdOku. Since
+ *      `usdMultiplier() == okuMMultiplier()`, `wrap`'s dollar output is exactly
+ *      {MathLib.okuMToDollars}. Pins that any USDC amount at any reachable multiplier
+ *      mints without reverting on rounding, matching helper math within share drift.
  */
 contract LitePSMFuzzTest is BaseTest {
     // ============ Setup ============
@@ -27,9 +25,7 @@ contract LitePSMFuzzTest is BaseTest {
 
     // ============ Helpers ============
 
-    /// @dev SINGLE MULTIPLIER: only one multiplier is meaningful now; the parameter
-    ///      list is kept 2-wide (rather than collapsing call sites) so the diff
-    ///      against the historical dual-multiplier signature stays obvious.
+    /// @dev Expected UsdOku from depositing `usdcAmount` at multiplier `mult`.
     function _expectedUsdMinted(uint256 usdcAmount, uint256 mult) internal pure returns (uint256) {
         uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
         uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, mult);
@@ -38,8 +34,8 @@ contract LitePSMFuzzTest is BaseTest {
 
     // ============ mintUsdOku Rounding Invariants ============
 
-    /// @notice mintUsdOku must never revert on rounding for any (usdcAmount, okuMMultiplier).
-    ///         Confirms the historic OutputBelowMinimum failure mode is gone.
+    /// @notice mintUsdOku must never revert on rounding (e.g. `OutputBelowMinimum` from
+    ///         wrap) for any (usdcAmount, okuMMultiplier).
     function testFuzz_MintUsdOku_NoRevertOnRounding(
         uint256 usdcAmount,
         uint256 okuMMultiplier
@@ -70,15 +66,8 @@ contract LitePSMFuzzTest is BaseTest {
     }
 
     /// @notice mintUsdOku at a varying elevated shared multiplier.
-    /// @dev PREVIOUSLY (dual-multiplier design) this fuzzed okuMMultiplier and
-    ///      usdMultiplier as two INDEPENDENT targets to exercise their
-    ///      cross-rate rounding interaction. Under the single-multiplier design
-    ///      there is only one value: elevating it and then trying to move it to a
-    ///      second, independently-fuzzed (and possibly lower) target via
-    ///      `_setOkuMMultiplierAndRoll` would revert `MultiplierCannotDecrease`.
-    ///      A single fuzzed elevation still exercises the same rounding path,
-    ///      since `_expectedUsdMinted` independently takes an okuMMult and a
-    ///      usdMult argument — they're just guaranteed equal now.
+    /// @dev The multiplier is reached via rate accrual, so the exact value is read back
+    ///      rather than assumed.
     function testFuzz_MintUsdOku_AtElevatedMultiplier(
         uint256 usdcAmount,
         uint256 multTarget

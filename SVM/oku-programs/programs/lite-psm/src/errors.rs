@@ -109,7 +109,7 @@ pub enum LitePsmError {
     #[msg("USDC mint must have exactly 6 decimals")]
     InvalidUsdcDecimals,
 
-    /// Mint or redeem output rounded down to zero.
+    /// Mint output rounded down to zero (redeem output cannot).
     #[msg("Output amount too small (rounds to zero)")]
     AmountTooSmall,
 

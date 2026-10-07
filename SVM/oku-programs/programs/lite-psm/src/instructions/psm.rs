@@ -99,8 +99,8 @@ pub fn redeem_oku_m(
     require!(raw_oku_m_amount > 0, LitePsmError::ZeroAmount);
 
     let multiplier = multiplier::at(&ctx.accounts.config, clock.unix_timestamp)?;
+    // No zero-output check: multiplier >= PRECISION and OkuM/USDC share 6 decimals, so usdc_amount >= raw_oku_m_amount > 0.
     let usdc_amount = raw_to_dollars(raw_oku_m_amount, multiplier)?;
-    require!(usdc_amount > 0, LitePsmError::AmountTooSmall);
     require!(usdc_amount >= min_usdc_out, LitePsmError::SlippageExceeded);
 
     // Custom error instead of the opaque SPL insufficient-funds one.

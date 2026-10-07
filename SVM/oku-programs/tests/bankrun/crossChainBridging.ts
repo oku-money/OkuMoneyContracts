@@ -459,7 +459,7 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
       .signers([bob])
       .rpc();
     const bobOkuMAfter = await ataAmount(bobOkuMAta, TOKEN_2022_PROGRAM_ID);
-    // Exact: 100 USDC at the live multiplier. `> 0` passed on a single unit.
+    // Exact: 100 USDC at the live multiplier. `> 0` would pass on a single unit.
     const mult = await computeCanonicalMultiplier(h, psm, psmConfigPda);
     const expected = (100_000_000n * 10n ** 18n) / mult;
     expect(
@@ -468,9 +468,7 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
     ).to.equal(expected.toString());
 
     // The DIRECT mint, by contrast, IS gated -- Bob holds no `direct_minter`
-    // role. Previously this was "proven" by reading back config fields the
-    // fixture had written, which demonstrates nothing about an authority
-    // boundary. Exercise the boundary instead.
+    // role. Exercise the authority boundary itself.
     await expectBankrunError(
       () =>
         psm.methods

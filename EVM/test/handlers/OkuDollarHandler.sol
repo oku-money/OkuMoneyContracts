@@ -14,12 +14,6 @@ import {TestConstants} from "../shared/Constants.sol";
  *
  *         The handler must be granted OKUM_REBASER on the OkuMoney instance so it can
  *         drive the shared multiplier — see VaultInvariants.setUp.
- *
- * @dev REMOVED (single-multiplier refactor): depositReserves / withdrawSurplus actions
- *      (collateralization is 1.0 by construction, so there is no surplus and nothing to
- *      top up), setMinCollateralRatio (no min-ratio config exists), and
- *      setUsdYieldRate / setNextUsdYieldRate (OkuDollar has no rate of its own; the
- *      equivalents now live on OkuMoney as setOkuMYieldRate / setNextOkuMYieldRate).
  */
 contract OkuDollarHandler is Test {
     OkuMoney public okuMoney;
@@ -142,7 +136,7 @@ contract OkuDollarHandler is Test {
         }
     }
 
-    /// @notice OkuMoney multiplier rebase. Per-call cap raised to 10% to stress
+    /// @notice OkuMoney multiplier rebase. Per-call cap of 10% stresses
     ///         truncation/dust branches at non-trivial multipliers.
     function rebase(uint256 priceIncrease) external {
         ghostRebaseCalls++;
@@ -150,7 +144,7 @@ contract OkuDollarHandler is Test {
         if (currentPrice >= MAX_FUZZ_PRICE) return;
 
         uint256 minIncrease = currentPrice / 10_000;
-        uint256 maxIncrease = currentPrice / 10; // 10% per call (raised from 2%)
+        uint256 maxIncrease = currentPrice / 10; // 10% per call
         uint256 increase = bound(priceIncrease, minIncrease, maxIncrease);
         uint256 newPrice = currentPrice + increase;
         if (newPrice > MAX_FUZZ_PRICE) newPrice = MAX_FUZZ_PRICE;
@@ -163,15 +157,8 @@ contract OkuDollarHandler is Test {
         }
     }
 
-    // REMOVED (single-multiplier refactor): depositReserves / withdrawSurplus /
-    // setMinCollateralRatio handler actions. Under the single-multiplier design the
-    // vault holds exactly the OkuM backing its shares (1:1), so there is no surplus
-    // to withdraw, no reserve top-up to perform, and no min-ratio to configure.
-    // Donations are handled by `rescueDonation` (see VAULT_RESCUER), which is a
-    // one-shot admin escape hatch rather than an interesting fuzz action.
-
     // ============ Yield-rate management ============
-    // The rate lives on OkuMoney now — OkuDollar's `usdMultiplier()` just reads it.
+    // The rate lives on OkuMoney; OkuDollar's `usdMultiplier()` just reads it.
 
     function setOkuMYieldRate(uint256 rate, uint256 endOffset) external {
         ghostSetYieldRateCalls++;
@@ -207,15 +194,9 @@ contract OkuDollarHandler is Test {
 
     // ============ Time Progression ============
     //
-    // Without time advancement, the multiplier stays at PRECISION no matter what
-    // rate is set, because `rpow(rate, 0, PRECISION) == PRECISION`. This masked the
-    // LitePSM `redeemUsdOku` rounding-asymmetry bug from all invariant runs.
-    // Advancing the clock here lets the multiplier actually compound, exercising the
-    // full state space the production contracts experience.
-    //
-    // No reserve rebalancing is needed any more: under the single multiplier, shares
-    // track raw OkuM 1:1, so accrual moves reserves and obligations in lockstep and
-    // the vault can never drift out of backing.
+    // Without time advancement the multiplier stays at PRECISION whatever the rate
+    // (`rpow(rate, 0, PRECISION) == PRECISION`), hiding rounding asymmetries.
+    // Shares track raw OkuM 1:1, so accrual needs no reserve rebalancing.
 
     uint256 public ghostWarpCalls;
     uint256 public ghostTotalElapsed;
@@ -254,7 +235,7 @@ contract OkuDollarHandler is Test {
         return a < b ? a : b;
     }
 
-    /// @notice Wrap-call counter retained for backward-compat with VaultInvariants.
+    /// @notice Alias for `ghostWrapCalls`.
     function ghostWrapCallCount() external view returns (uint256) {
         return ghostWrapCalls;
     }

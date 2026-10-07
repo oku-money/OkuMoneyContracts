@@ -5,31 +5,6 @@ import {Test} from "forge-std/Test.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {MathLibHarness} from "../mocks/MathLibHarness.sol";
 
-/// @notice Verbatim copy of the PRE-migration MathLib arithmetic (plain
-///         `(a * b) / c`). Exists solely so the migration tests below can
-///         demonstrate, in-suite, the precise input range where the new
-///         `Math.mulDiv`-based implementation succeeds and the old plain
-///         arithmetic would have reverted. If the production MathLib ever
-///         regressed to plain `(a * b) / c`, the migration tests would fail
-///         because the production code would revert on the same inputs this
-///         shadow contract reverts on.
-contract OldMathShadow {
-    uint256 internal constant PRECISION = 1e18;
-
-    function okuMToDollars(uint256 a, uint256 b) external pure returns (uint256) {
-        return (a * b) / PRECISION;
-    }
-
-    function dollarsToOkuM(uint256 a, uint256 b) external pure returns (uint256) {
-        return (a * PRECISION) / b;
-    }
-
-    function unwrapSharesCeil(uint256 usdAmount, uint256 usdMult) external pure returns (uint256) {
-        // Pre-migration ceiling-div pattern from OkuDollar.unwrap.
-        return ((usdAmount * PRECISION) + usdMult - 1) / usdMult;
-    }
-}
-
 /**
  * @title MathLibTest
  * @notice Branch-coverage tests for `MathLib`. Drives the `rpow` assembly
@@ -39,8 +14,7 @@ contract OldMathShadow {
  *           * `x == 0, n  > 0` -> z := 0
  *           * inner-loop `mul(z, x)` overflow revert
  *         Also pins the unit-conversion helpers at both even and non-even
- *         multipliers so a future refactor cannot silently re-introduce
- *         off-by-one drift.
+ *         multipliers to catch off-by-one drift.
  * @dev `rpow` is MakerDAO's battle-tested exponentiation; these tests exist
  *      purely for branch coverage of the assembly and to document the
  *      mathematical invariants in unit form.
@@ -49,11 +23,9 @@ contract MathLibTest is Test {
     uint256 internal constant PRECISION = 1e18;
 
     MathLibHarness internal h;
-    OldMathShadow internal old;
 
     function setUp() public {
         h = new MathLibHarness();
-        old = new OldMathShadow();
     }
 
     // ============ rpow zero-base branches ============
@@ -176,32 +148,16 @@ contract MathLibTest is Test {
         assertEq(h.dollarsToUsdc(dollars, dm), usdc);
     }
 
-    // REMOVED (single-multiplier collapse): test_WrappedSharesFromOkuM_MatchesOkuMToWrappedUsd
-    // — `wrappedSharesFromOkuM` / `okuMToWrappedUsd` were deleted from MathLib. Under
-    // the single-multiplier design `wrap`'s share formula is the identity
-    // (mulDiv(a, m, m) == a) and its dollar output is exactly `okuMToDollars`, so
-    // there is no separate two-multiplier helper left to pin an identity between.
-
-    // ============ mulDiv migration: intermediate-overflow safety ============
+    // ============ Intermediate-overflow safety ============
     //
-    // These tests verify the central refactor invariant: `MathLib` conversions
-    // now use OpenZeppelin's 512-bit `Math.mulDiv`, so the intermediate product
-    // `a * b` may exceed `type(uint256).max` provided the final result
-    // `(a * b) / c` still fits in 256 bits. The previous implementation
-    // (`(a * b) / c` with plain Solidity arithmetic) reverted on the
-    // intermediate multiplication for any `a * b > 2^256`.
-    //
-    // Each test below is constructed so that:
-    //   * `a * b` strictly overflows `uint256`
-    //   * `(a * b) / c` fits in `uint256` (so `mulDiv` returns a valid result)
-    // Therefore each test PASSES under the new implementation and would have
-    // REVERTED under the pre-mulDiv implementation. These tests fail-locked the
-    // migration: removing the `Math.mulDiv` call would re-introduce the revert
-    // and the test would fail.
+    // `MathLib` conversions use OpenZeppelin's 512-bit `Math.mulDiv`, so the
+    // intermediate product `a * b` may exceed `type(uint256).max` provided the
+    // final result `(a * b) / c` fits in 256 bits. Each input below makes `a * b`
+    // overflow uint256 while the quotient still fits.
 
     /// @notice `okuMToDollars` succeeds when `okuMAmount * okuMMultiplier` exceeds
-    ///         `uint256.max`. Pre-mulDiv this reverted on the intermediate multiply.
-    function test_OkuMToDollars_IntermediateOverflow_NewImplSucceeds() public view {
+    ///         `uint256.max`.
+    function test_OkuMToDollars_NoIntermediateOverflow() public view {
         // a * b = 2^150 * 2^150 = 2^300 > 2^256 (would overflow plain `*`)
         // result = 2^300 / 1e18 ≈ 2^240 (fits in uint256)
         uint256 a = 2 ** 150;
@@ -214,8 +170,8 @@ contract MathLibTest is Test {
     }
 
     /// @notice `dollarsToOkuM` succeeds when `dollarValue * PRECISION` exceeds
-    ///         `uint256.max`. Pre-mulDiv this reverted.
-    function test_DollarsToOkuM_IntermediateOverflow_NewImplSucceeds() public view {
+    ///         `uint256.max`.
+    function test_DollarsToOkuM_NoIntermediateOverflow() public view {
         // dollarValue * 1e18 must overflow. dollarValue = 2^240 gives 2^240 * 1e18
         // which is ~ 2^240 * 2^60 = 2^300, well past 2^256.
         uint256 dollarValue = 2 ** 240;
@@ -224,93 +180,20 @@ contract MathLibTest is Test {
         assertEq(result, dollarValue);
     }
 
-    // REMOVED (single-multiplier collapse): test_WrappedSharesFromOkuM_IntermediateOverflow_NewImplSucceeds
-    // and test_OkuMToWrappedUsd_IntermediateOverflow_NewImplSucceeds — both pinned
-    // the deleted two-multiplier helpers.
-
-    /// @notice Side-by-side: NEW `okuMToDollars` succeeds while the SHADOW of
-    ///         the OLD `(a * b) / PRECISION` arithmetic REVERTS on the same
-    ///         input. This test would FAIL on the pre-migration implementation
-    ///         (because production `okuMToDollars` would revert just like the
-    ///         shadow), and PASSES on the post-migration implementation.
-    function test_OkuMToDollars_OldReverts_NewSucceeds() public {
-        uint256 a = 2 ** 150;
-        uint256 b = 2 ** 150;
-
-        // OLD implementation (plain `*` then `/`) reverts on the intermediate
-        // multiply with Panic(0x11) — Solidity 0.8 arithmetic overflow.
-        vm.expectRevert();
-        old.okuMToDollars(a, b);
-
-        // NEW implementation (Math.mulDiv) returns a valid result.
-        uint256 result = h.okuMToDollars(a, b);
-        assertEq(result, Math.mulDiv(a, b, PRECISION, Math.Rounding.Floor));
-        assertGt(result, 0);
-    }
-
-    /// @notice Side-by-side: NEW `dollarsToOkuM` succeeds while OLD reverts.
-    function test_DollarsToOkuM_OldReverts_NewSucceeds() public {
-        uint256 dollarValue = 2 ** 240;
-        uint256 okuMMult = PRECISION;
-
-        vm.expectRevert();
-        old.dollarsToOkuM(dollarValue, okuMMult);
-
-        uint256 result = h.dollarsToOkuM(dollarValue, okuMMult);
-        assertEq(result, dollarValue);
-    }
-
-    // REMOVED (single-multiplier collapse): test_WrappedSharesFromOkuM_OldReverts_NewSucceeds
-    // — pinned the deleted `wrappedSharesFromOkuM` helper.
-
-    /// @notice Side-by-side for the ONLY ceil site in the protocol
-    ///         (`OkuDollar.unwrap`'s `sharesToBurn`). The OLD ceil pattern
-    ///         `((usdAmount * PRECISION) + usdMult - 1) / usdMult` reverts on
-    ///         the intermediate `usdAmount * PRECISION` when `usdAmount` is
-    ///         large. The NEW `Math.mulDiv(_, _, _, Ceil)` succeeds.
-    /// @dev Confirms parity of ceil semantics for in-range inputs and overflow
-    ///      safety for out-of-range inputs.
-    function test_UnwrapSharesCeil_OldReverts_NewSucceeds() public {
-        // Pick usdAmount so that usdAmount * PRECISION overflows uint256, but
-        // the final result usdAmount * PRECISION / usdMult fits.
-        //   usdAmount = 2^240; usdAmount * 1e18 ≈ 2^300 (overflow)
-        //   usdMult   = 2^120; result ≈ 2^240 / 2^60 = 2^180 (fits)
-        uint256 usdAmount = 2 ** 240;
-        uint256 usdMult = 2 ** 120;
-
-        // OLD ceil pattern reverts on the intermediate multiply.
-        vm.expectRevert();
-        old.unwrapSharesCeil(usdAmount, usdMult);
-
-        // NEW: Math.mulDiv with Ceil rounding succeeds.
-        uint256 newResult = Math.mulDiv(usdAmount, PRECISION, usdMult, Math.Rounding.Ceil);
-        assertGt(newResult, 0);
-
-        // Parity check: on small in-range inputs, OLD and NEW produce
-        // bit-identical results. This locks in behavioral equivalence for the
-        // protocol's actual operating range.
-        uint256 smallUsd = 100e18;
-        uint256 smallMult = 11e17; // 1.1
-        uint256 oldCeil = old.unwrapSharesCeil(smallUsd, smallMult);
-        uint256 newCeil = Math.mulDiv(smallUsd, PRECISION, smallMult, Math.Rounding.Ceil);
-        assertEq(oldCeil, newCeil, "Ceil semantics must match for in-range inputs");
-    }
-
-    /// @notice Fuzz-pinned equivalence: for every (a, b, c) tuple that does
-    ///         NOT trigger overflow in the old arithmetic, the OLD and NEW
-    ///         implementations produce bit-identical results. This proves the
-    ///         migration is behaviorally equivalent for all realistic protocol
-    ///         inputs while strictly expanding the safe input range.
-    function testFuzz_OldNewEquivalence_InRange(uint256 a, uint256 b) public view {
-        // Constrain to the range where the OLD arithmetic doesn't overflow:
-        //   a * b <= type(uint256).max  ==>  a <= type(uint256).max / b
+    /// @notice Wherever `a * b` fits in uint256, `okuMToDollars` is bit-identical
+    ///         to plain floor arithmetic `(a * b) / PRECISION`.
+    function testFuzz_OkuMToDollars_MatchesPlainArithmetic_InRange(
+        uint256 a,
+        uint256 b
+    )
+        public
+        view
+    {
+        // Constrain to a * b <= type(uint256).max  ==>  a <= type(uint256).max / b
         b = bound(b, 1, PRECISION * 1e12); // up to 1e30 — well above MAX_MULTIPLIER
-        if (b == 0) return;
         a = bound(a, 0, type(uint256).max / b);
 
-        uint256 oldResult = old.okuMToDollars(a, b);
-        uint256 newResult = h.okuMToDollars(a, b);
-        assertEq(oldResult, newResult, "Old and new must agree in the safe input range");
+        assertEq(h.okuMToDollars(a, b), (a * b) / PRECISION, "must match plain arithmetic");
     }
 
     // ============ compoundFor / computeMultiplier ============
@@ -348,12 +231,9 @@ contract MathLibTest is Test {
     ///         and the initializer zero rateEnd when halted; setOkuMYieldRate
     ///         rejects a non-zero endTimestamp for a halted rate; and
     ///         setNextOkuMYieldRate needs rateEnd != 0 to arm at all).
-    /// @dev Regression pin for a DELETED defensive fallback. It compounded the
-    ///      successor from `rateEnd`, not `max(anchor, rateEnd)` as branch 2 does,
-    ///      so on the very input it claimed to guard (`anchor > rateEnd`) it
-    ///      applied yield across `[rateEnd, anchor]` — a span preceding the
-    ///      snapshot and already baked into `base`. It was removed rather than
-    ///      made symmetric; this test exists so it cannot creep back.
+    /// @dev Branch 1 must not compound a successor: doing so from `rateEnd` when
+    ///      `anchor > rateEnd` would apply yield across `[rateEnd, anchor]`, a span
+    ///      already baked into `base`.
     function test_ComputeMultiplier_Branch1_HaltedWithArmedSuccessor_StillFlatBase() public view {
         uint256 base = 1e18;
         uint256 rateEnd = 1000;
@@ -366,7 +246,7 @@ contract MathLibTest is Test {
             base,
             "halted rate must not accrue a successor"
         );
-        // anchor > rateEnd — the input the deleted fallback double-counted.
+        // anchor > rateEnd — compounding a successor here would double-count.
         assertEq(
             h.computeMultiplier(base, PRECISION, 1500, rateEnd, pendingRate, pendingRateEnd, 1800),
             base,

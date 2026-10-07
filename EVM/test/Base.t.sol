@@ -16,8 +16,8 @@ import {Deploy} from "./shared/Deploy.sol";
 /**
  * @title BaseTest
  * @notice Base test contract with deployment helpers, actors, and utility functions
- * @dev Updated for OkuMoney non-rebasing redesign. OkuMoney is a standard ERC-20 with
- *      okuMMultiplier() tracking the dollar value per token separately from balanceOf().
+ * @dev OkuMoney is a standard (non-rebasing) ERC-20; okuMMultiplier() tracks the dollar
+ *      value per token separately from balanceOf().
  *      See Constants.sol for terminology legend.
  *
  *      Uses shared scaffolding:
@@ -44,7 +44,7 @@ abstract contract BaseTest is Test, Actors {
     bytes32 public constant OKUM_PAUSER = TestRoles.OKUM_PAUSER;
     bytes32 public constant OKUM_UNPAUSER = TestRoles.OKUM_UNPAUSER;
     bytes32 public constant OKUM_MINTER = TestRoles.OKUM_MINTER;
-    /// @dev Cycle 4 (EVM-15): burn-only role.
+    /// @dev Burn-only role, separate from OKUM_MINTER.
     bytes32 public constant OKUM_BURNER = TestRoles.OKUM_BURNER;
     bytes32 public constant OKUM_REBASER = TestRoles.OKUM_REBASER;
     bytes32 public constant OKUM_BLACKLISTER = TestRoles.OKUM_BLACKLISTER;
@@ -57,8 +57,6 @@ abstract contract BaseTest is Test, Actors {
     bytes32 public constant VAULT_PAUSER = TestRoles.VAULT_PAUSER;
     bytes32 public constant VAULT_UNPAUSER = TestRoles.VAULT_UNPAUSER;
     bytes32 public constant VAULT_RESCUER = TestRoles.VAULT_RESCUER;
-    // REMOVED (single-multiplier refactor): VAULT_REBASER, VAULT_RESERVE_MANAGER,
-    // VAULT_ADMIN — see TestRoles.
 
     // LitePSM roles (PSM_ prefix)
     bytes32 public constant PSM_UPGRADER = TestRoles.PSM_UPGRADER;
@@ -104,9 +102,7 @@ abstract contract BaseTest is Test, Actors {
         vm.startPrank(admin);
 
         // OkuMoney roles - Granular RBAC (OKUM_ prefix)
-        // Cycle 4 (EVM-15): OKUM_BURNER split from OKUM_MINTER. Mint
-        // and burn now require explicit grants; tests grant both
-        // together because every minter in this setup is also a burner.
+        // Mint and burn are separate roles; every minter in this setup is also a burner.
         okuMoney.grantRole(OKUM_PAUSER, pauser);
         okuMoney.grantRole(OKUM_UNPAUSER, unpauser);
         okuMoney.grantRole(OKUM_MINTER, minter);
@@ -120,8 +116,6 @@ abstract contract BaseTest is Test, Actors {
         okuMoney.grantRole(OKUM_ALLOWANCE_MANAGER, allowanceManager);
 
         // OkuDollar vault roles (VAULT_ prefix)
-        // REMOVED (single-multiplier refactor): VAULT_REBASER / VAULT_RESERVE_MANAGER
-        // grants — those roles no longer exist.
         okuDollar.grantRole(VAULT_RESCUER, vaultRescuer);
         okuDollar.grantRole(VAULT_PAUSER, vaultPauser);
         okuDollar.grantRole(VAULT_UNPAUSER, vaultUnpauser);
@@ -200,8 +194,7 @@ abstract contract BaseTest is Test, Actors {
     }
 
     /// @notice Bound fuzz input to reasonable okuMMultiplier (strictly above current, up to 2x).
-    /// @dev Tightened from 10x to 2x for more realistic scenarios.
-    ///      `setOkuMMultiplier` requires strict increase, so the lower bound is
+    /// @dev `setOkuMMultiplier` requires strict increase, so the lower bound is
     ///      `current + 1`. Tests that need the no-op semantics should call the
     ///      contract directly and assert the revert.
     function _boundOkuMMultiplier(uint256 mult) internal view returns (uint256) {
@@ -231,11 +224,9 @@ abstract contract BaseTest is Test, Actors {
     }
 
     /// @notice Stamp `lastYieldDistributionBlock` on OkuMoney for the current block.
-    /// @dev REPLACES `distributeYield(...)`, which was deleted in the streaming-accrual
-    ///      refactor. `setOkuMMultiplier` is now the ONLY function that stamps the
-    ///      sandwich-guard block (continuous accrual creates no step, so
-    ///      `setOkuMYieldRate` deliberately does not stamp). Bumps the multiplier by
-    ///      the smallest legal increment, since a non-increasing value reverts.
+    /// @dev `setOkuMMultiplier` is the only function that stamps the sandwich-guard
+    ///      block (`setOkuMYieldRate` creates no step, so it does not stamp). Bumps the
+    ///      multiplier by the smallest legal increment, since a non-increasing value reverts.
     function _stampYieldLockBlock() internal {
         // Read BEFORE the prank: `vm.prank` applies to the next call, and an inline
         // `okuMoney.okuMMultiplier()` argument would consume it as a staticcall,
@@ -257,21 +248,10 @@ abstract contract BaseTest is Test, Actors {
     /// @notice Advance `secondsToAccrue` of real compounding at the CURRENTLY
     ///         active rate, re-anchoring as often as the rate-window bound
     ///         requires.
-    /// @dev A single `setOkuMYieldRate` window may not exceed
-    ///      `Constants.MAX_RATE_WINDOW` (90 days) — see that constant for why
-    ///      an unbounded window is unrecoverable. Horizons longer than that
-    ///      must therefore be walked in chunks, re-anchoring at each boundary.
-    ///
-    ///      This is not a workaround for the bound; it is what production
-    ///      does. The epoch model re-anchors at every boundary, so a 25-year
-    ///      fixture built from ~101 chained windows exercises the real code
-    ///      path, whereas the single 100-year window these tests used before
-    ///      exercised a shape the contracts will never see in production.
-    ///
-    ///      Re-anchoring is value-preserving by construction (each write
-    ///      snapshots the multiplier reached so far into the new base), so the
-    ///      endpoint matches a hypothetical single long window to within
-    ///      per-anchor rounding dust.
+    /// @dev A single `setOkuMYieldRate` window may not exceed `MAX_RATE_WINDOW`, so
+    ///      longer horizons are walked in chunks, re-anchoring at each boundary as
+    ///      production does. Re-anchoring snapshots the multiplier into the new base,
+    ///      so the endpoint matches one long window to within per-anchor rounding dust.
     function _accrueAtCurrentRate(uint256 secondsToAccrue) internal {
         uint256 rate = okuMoney.okuMRatePerSecond();
         require(rate > PRECISION, "no active yielding rate to accrue at");
@@ -288,9 +268,8 @@ abstract contract BaseTest is Test, Actors {
     }
 
     /// @notice Elevate the (single) multiplier to at least `targetMultiplier`.
-    /// @dev SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` is exactly
-    ///      `okuMoney.okuMMultiplier()`, so this drives the OkuMoney rate schedule.
-    ///      Retains the historical name because many tests call it.
+    /// @dev `okuDollar.usdMultiplier()` is exactly `okuMoney.okuMMultiplier()`, so this
+    ///      drives the OkuMoney rate schedule.
     ///
     ///      Uses `setOkuMYieldRate` + `vm.warp` rather than the discrete
     ///      `setOkuMMultiplier` override so no `lastYieldDistributionBlock` stamp is
@@ -300,21 +279,9 @@ abstract contract BaseTest is Test, Actors {
         uint256 current = okuMoney.okuMMultiplier();
         if (targetMultiplier <= current) return;
 
-        // Accrue at MAX_RATE in windows of at most `Constants.MAX_RATE_WINDOW`,
-        // re-anchoring whenever the current window is exhausted.
-        //
-        // This helper used to open one 5-year window, which the contracts now
-        // reject (`RateWindowTooLong`) — a single unbounded window can drive
-        // `MathLib.rpow` into overflow, and once `okuMMultiplier()` reverts
-        // every recovery path reverts with it. Chunking is also what production
-        // actually does: the epoch model re-anchors at every boundary, so this
-        // is now a more faithful fixture than the single long window was, not
-        // merely a workaround for the new bound.
-        //
-        // Re-anchoring is value-preserving by construction — each
-        // `setOkuMYieldRate` snapshots the multiplier reached so far into the
-        // new base — so compounding across N chunks lands at the same place as
-        // one long window, modulo per-anchor rounding dust.
+        // Accrue at MAX_RATE in windows of at most `MAX_RATE_WINDOW` (longer windows
+        // revert with `RateWindowTooLong`), re-anchoring whenever one is exhausted.
+        // Re-anchoring is value-preserving modulo per-anchor rounding dust.
         uint256 elapsed = 1;
         uint256 totalElapsed = 0;
         uint256 windowRemaining = 0;

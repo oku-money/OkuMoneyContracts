@@ -564,7 +564,7 @@ async function svmRedeemOkuM(ctx: SvmCtx, okuMAmount: bigint): Promise<bigint> {
   );
   const delta = usdcAfter - usdcBefore;
   if (delta === 0n) {
-    // The program reverts (InsufficientBuffer / AmountTooSmall) rather than
+    // The program reverts (InsufficientBuffer) rather than
     // paying out nothing, so a zero delta means the balance read is stale.
     throw new Error('[SVM] redeemOkuM confirmed but the USDC balance did not change (stale RPC read?)');
   }

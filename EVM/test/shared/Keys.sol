@@ -18,10 +18,7 @@ library TestKeys {
     /// @notice Default user2 signing key.
     uint256 internal constant USER2_PK = 0xB0B1E;
 
-    /// @notice Orchestrator signing key. Originally used for OkuBridge EIP-712
-    /// BridgeRequest signatures (removed in the noBridge refactor). Retained
-    /// because the off-chain orchestrator concept persists (it just no longer
-    /// signs on-chain payloads) and existing test scaffolding still references it.
+    /// @notice Orchestrator signing key (off-chain orchestrator signer).
     uint256 internal constant ORCHESTRATOR_PK = 0xC0FFEE;
 
     /// @notice An "always wrong" signing key for negative signature tests.

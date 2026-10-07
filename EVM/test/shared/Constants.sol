@@ -28,9 +28,6 @@ library TestConstants {
     ///      `src/lib/Constants.sol` propagates to every fixture automatically.
     uint256 public constant MAX_RATE_WINDOW = SrcConstants.MAX_RATE_WINDOW;
 
-    // REMOVED (single-multiplier refactor): MIN_COLLATERAL_RATIO_FLOOR re-export —
-    // see src/lib/Constants.sol.
-
     // ============ Test-Only Constants ============
 
     /// @notice Default max supply for test deployments (1 billion tokens)
@@ -41,10 +38,10 @@ library TestConstants {
 
     // ============ Fuzz Bounds ============
 
-    /// @notice Maximum multiplier increase per fuzz step (2x current, was 10x)
+    /// @notice Maximum multiplier increase per fuzz step (2x current)
     uint256 public constant MAX_MULTIPLIER_FACTOR = 2;
 
-    /// @notice Maximum price cap for fuzz testing (5x precision, was 1e24)
+    /// @notice Maximum price cap for fuzz testing (5x precision)
     uint256 public constant MAX_FUZZ_PRICE = PRECISION * 5;
 
     /// @notice Minimum fuzz amount for token operations

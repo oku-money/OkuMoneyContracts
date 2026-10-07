@@ -233,9 +233,7 @@ describe("scripts/utils/yieldRate", () => {
                 const monthlySized = 40_000; // 0.4% of V, i.e. a 30-day-shaped target
                 const used = excessPerSecond(monthlySized) / maxExcess;
                 // ~2x margin, against the ~63x a correctly-sized daily figure
-                // enjoys. Two-sided and tight: the bracket [0.25, 1] was 2x slack
-                // either side of the actual ~0.5 and could not detect the margin
-                // halving again.
+                // enjoys. Two-sided and tight, so the margin halving again fails.
                 expect(used, "a monthly-sized figure in a daily window uses ~half the cap")
                     .to.be.closeTo(0.5, 0.05);
             });
@@ -393,14 +391,8 @@ describe("scripts/utils/yieldRate", () => {
         });
 
         it("carry threaded across epochs converges to the withheld amount, not to zero", () => {
-            // REPLACES a test that summed `reconcileActualPayout(t, a)` over four
-            // epochs and asserted the total equalled `sum(t) - sum(a)`. Since the
-            // function IS `t - a`, that is float associativity, not protocol
-            // behaviour -- and the test's own comment conceded "(tautological...)".
-            //
-            // The property actually worth pinning is what carry does when it is
-            // threaded back in: under a conservative factor the shortfall is
-            // deliberate and must settle at a fixed point, not accumulate.
+            // Under a conservative factor the shortfall is deliberate: carry
+            // threaded back in must settle at a fixed point, not accumulate.
             const realisedPerEpoch = 40_000;
             const measuredAvgValueUsd = 10_000_000;
             const windowSeconds = 86_400;
@@ -425,15 +417,9 @@ describe("scripts/utils/yieldRate", () => {
             // so the balance settles at `(1 - cf) x realised` = $4,000.
             const expectedFixedPoint = realisedPerEpoch * (1 - conservativeFactor);
 
-            // EVERY epoch from the first onward sits at that point -- a stronger
-            // claim than "the last two are close", which could not distinguish a
-            // fixed point from a slow drift that happened to pause.
-            //
-            // The band is 1e-3 USD (a hundredth of a cent) rather than exact: the
-            // published rate is quantised to an integer WAD by `floatRateToBigint`,
-            // so successive epochs land a fraction of a cent either side of the
-            // fixed point rather than exactly on it. Measured oscillation is
-            // ~1e-4; the bound is one order above that, and ~2.5e-7 relative.
+            // Every epoch (not just the last) is checked, so slow drift fails.
+            // 1e-3 USD band: WAD quantisation in `floatRateToBigint` makes carry
+            // oscillate ~1e-4 around the fixed point.
             for (let i = 1; i < carries.length; i++) {
                 expect(carries[i], `epoch ${i} carry must sit at the fixed point`)
                     .to.be.closeTo(expectedFixedPoint, 1e-3);

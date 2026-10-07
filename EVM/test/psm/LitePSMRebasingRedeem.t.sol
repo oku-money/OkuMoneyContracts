@@ -2,22 +2,17 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
-import {Errors} from "../../src/lib/Errors.sol";
-import {LitePSM} from "../../src/psm/LitePSM.sol";
-import {Constants} from "../../src/lib/Constants.sol";
-import {MathLib} from "../../src/lib/MathLib.sol";
 
 /**
  * @title LitePSMRebasingRedeemTest
- * @notice Regression suite for `LitePSM.redeemUsdOku` when
- *         `okuDollar.usdMultiplier() > 1e18` (i.e. yield is live and accruing).
+ * @notice Tests for `LitePSM.redeemUsdOku` when `okuDollar.usdMultiplier() > 1e18`
+ *         (i.e. yield is live and accruing).
  *
- * @dev Historical bug (Sepolia, May 2026): `redeemUsdOku` pulled UsdOku by nominal
- *      amount and then called `unwrap(amount)` with the same nominal value. Because
- *      `OkuDollar.transferFrom` floors the share conversion and `OkuDollar.unwrap`
- *      ceils the share burn, the PSM ended up holding 1 share less than `unwrap`
- *      demanded → `InsufficientBalance()`. The fix measures the actual received
- *      amount via a balance delta and passes that to `unwrap`.
+ * @dev `OkuDollar.transferFrom` floors the share conversion while `OkuDollar.unwrap`
+ *      ceils the share burn, so the PSM can receive 1 share less than a nominal
+ *      `unwrap(amount)` would demand. `redeemUsdOku` must therefore unwrap the
+ *      balance delta it actually received; these tests pin that a rebasing balance
+ *      never makes redeem revert with `InsufficientBalance()` or strand UsdOku.
  *
  *      Coverage axes (cross-product):
  *        * usdMultiplier states: 1e18 baseline, slightly elevated, mid-range,
@@ -30,9 +25,8 @@ import {MathLib} from "../../src/lib/MathLib.sol";
  *          within reachable bounds).
  *        * entry points: `redeemUsdOku`.
  *
- *      The reference rate used in long-horizon tests is the live Sepolia
- *      production rate (`1_000_000_001_546_176_000` ≈ 5% APY). Selected because
- *      this is the exact rate that exposed the latent bug in the field.
+ *      The reference rate in long-horizon tests is `1_000_000_001_546_176_000`
+ *      (≈ 5% APY), a realistic production rate.
  */
 contract LitePSMRebasingRedeemTest is BaseTest {
     // ============ Events ============
@@ -43,7 +37,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
 
     // ============ Rate Constants ============
 
-    /// @notice ~5% APY (live Sepolia rate). Per-second rate that compounds to ~1.05x in 365.25d.
+    /// @notice ~5% APY. Per-second rate that compounds to ~1.05x in 365.25d.
     uint256 internal constant RATE_5_PCT_APY = 1_000_000_001_546_176_000;
 
     /// @notice ~2% APY per-second rate.
@@ -55,8 +49,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     /// @notice ~10% APY per-second rate (stress).
     uint256 internal constant RATE_10_PCT_APY = 1_000_000_003_022_265_980;
 
-    /// @notice Tracks the dollar value of UsdOku stranded in the PSM after a redeem.
-    ///         Should always be ~0 (within 1 wei) for the bug to be considered fixed.
+    /// @notice Max dollar value of UsdOku a single redeem may strand in the PSM.
     uint256 internal constant MAX_STRANDED_DUST = 1; // wei of UsdOku
 
     // ============ Setup ============
@@ -73,14 +66,10 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     // ============ Helpers ============
 
     /// @notice Set the active yield rate for one maximal rate window.
-    /// @dev SINGLE MULTIPLIER: `okuDollar.usdMultiplier()` is exactly
-    ///      `okuMoney.okuMMultiplier()`, so the rate is set on OkuMoney via OKUM_REBASER.
-    ///
-    ///      This used to open a single 100-year window. A window may now not
-    ///      exceed `Constants.MAX_RATE_WINDOW` (90 days), so horizons beyond
-    ///      that are walked via `_accrueAtCurrentRate`, which re-anchors at the
-    ///      same rate every 90 days — matching how the epoch model actually
-    ///      drives these contracts.
+    /// @dev `okuDollar.usdMultiplier()` is exactly `okuMoney.okuMMultiplier()`, so the
+    ///      rate is set on OkuMoney via OKUM_REBASER. A window may not exceed
+    ///      `MAX_RATE_WINDOW` (90 days); longer horizons are walked via
+    ///      `_accrueAtCurrentRate`, which re-anchors at the same rate.
     function _setUsdRate(uint256 rate) internal {
         vm.prank(rebaser);
         okuMoney.setOkuMYieldRate(rate, block.timestamp + MAX_RATE_WINDOW);
@@ -112,18 +101,11 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         usdcReceived = usdc.balanceOf(user) - usdcBefore;
         strandedUsdOku = okuDollar.balanceOf(address(litePsm)) - strandedBefore;
 
-        // THE invariant every caller cares about, asserted once here rather than
-        // as `assertGt(usdcOut, 0)` at seven call sites -- which would have
-        // passed on a single wei at any multiplier.
-        //
         // usdOku is dollar-denominated, so redeeming `usdAmount` pays
-        // `usdAmount / 1e12` USDC REGARDLESS of the multiplier. That invariance
-        // is the whole point of the vault, and it is what these live-compounding
-        // scenarios exist to confirm still holds after years of accrual.
-        //
-        // Tolerance is 2 collateral units: `OkuDollar.transferFrom` floors the
-        // share conversion while `unwrap` ceils the burn, so the pair can differ
-        // by a wei before the 18->6 truncation (see `LitePSM.redeemUsdOku`).
+        // `usdAmount / 1e12` USDC regardless of the multiplier. Tolerance is 2
+        // collateral units: `transferFrom` floors the share conversion while
+        // `unwrap` ceils the burn, so the pair can differ by a wei before the
+        // 18->6 truncation (see `LitePSM.redeemUsdOku`).
         assertApproxEqAbs(
             usdcReceived,
             usdAmount / 1e12,
@@ -133,10 +115,10 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     }
 
     // ============================================================
-    // SECTION 1 — Baseline: usdMultiplier == 1e18 (the pre-rate world)
+    // SECTION 1 — Baseline: usdMultiplier == 1e18
     // ============================================================
 
-    /// @notice Sanity: at base multiplier, redeem still works (regression on the regression).
+    /// @notice Sanity: redeem works at the base multiplier.
     function test_RedeemUsdOku_AtBaseMultiplier_Succeeds() public {
         _mintUsdOkuViaPsm(user1, 1000e6);
         uint256 usdBal = okuDollar.balanceOf(user1);
@@ -149,25 +131,21 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     }
 
     // ============================================================
-    // SECTION 2 — Static elevated usdMultiplier (the exact bug condition)
+    // SECTION 2 — Static elevated usdMultiplier
     // ============================================================
 
-    /// @notice This is the exact failing case from Sepolia: usdMultiplier slightly
-    ///         above 1e18, redeem 1 UsdOku, expect success post-fix.
-    ///         Without the fix this reverts with `InsufficientBalance()`.
+    /// @notice usdMultiplier slightly above 1e18, redeem 1 UsdOku, expect success
+    ///         (the floor/ceil share mismatch must not surface as `InsufficientBalance()`).
     function test_RedeemUsdOku_AtSlightlyElevatedMultiplier_OneUsdOku() public {
         // Mint enough UsdOku BEFORE elevating to avoid mint-side rounding edge cases.
         _mintUsdOkuViaPsm(user1, 10_000e6); // 10k USDC -> ~10k UsdOku
         uint256 mintedBal = okuDollar.balanceOf(user1);
         assertGe(mintedBal, 10e18, "Need at least 10 UsdOku to redeem 1");
 
-        // Elevate the multiplier just barely above PRECISION.
-        // Sepolia at the time of the bug: 1_000_119_588_401_861_293 ≈ 1.0001196x.
-        _elevateUsdMultiplier(PRECISION + 1e14); // ~1.0001x — same order of magnitude as Sepolia
+        _elevateUsdMultiplier(PRECISION + 1e14); // ~1.0001x
 
         assertGt(okuDollar.usdMultiplier(), PRECISION, "Multiplier must be > 1e18");
 
-        // Redeem exactly 1 UsdOku — the exact amount that failed in Fordefi.
         (uint256 usdcOut, uint256 stranded) = _redeemAndMeasure(user1, 1e18);
 
         assertGt(usdcOut, 0, "Must receive USDC for 1 UsdOku redemption");
@@ -198,7 +176,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         assertLe(stranded, MAX_STRANDED_DUST, "PSM must not strand UsdOku shares");
     }
 
-    /// @notice 2x multiplier — the upper end of the historical fuzz bound for usdMult.
+    /// @notice 2x multiplier — the upper end of the redeem fuzz bound.
     function test_RedeemUsdOku_AtDoubleMultiplier() public {
         _mintUsdOkuViaPsm(user1, 100_000e6);
         _elevateUsdMultiplier(2 * PRECISION);
@@ -222,7 +200,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         _elevateUsdMultiplier(PRECISION + 5e16); // ~5% elevated
 
         // Smallest amount that produces >= 1 USDC unit out (otherwise AmountTooSmall
-        // is the expected revert from the OkuM redeem leg, not the bug under test).
+        // is the expected revert from the OkuM redeem leg, not the path under test).
         // At usdMult ≈ 1.05 and okuMMult = 1.0, 1e12 UsdOku → ~0.0000009 USDC → floor 0 -> reverts.
         // We start at amounts that produce strictly positive USDC out.
         uint256[5] memory amounts = [uint256(1e15), 1e16, 1e17, 1e18, 10e18];
@@ -261,8 +239,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     // The `_elevateUsdMultiplier` helper resets the rate to PRECISION after
     // reaching the target — so it produces a *frozen* elevated multiplier. The
     // tests in this section instead set the rate ONCE and let time pass so the
-    // multiplier is actively compounding at the moment of redeem. This is the
-    // exact state of the live Sepolia deployment.
+    // multiplier is actively compounding at the moment of redeem, as in production.
 
     /// @notice Short horizon — 1 second of accrual at 5% APY.
     function test_RedeemUsdOku_LiveCompounding_1Second() public {
@@ -294,7 +271,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         }
     }
 
-    /// @notice 1 year of compounding at 5% APY — Sepolia's first-anniversary scenario.
+    /// @notice 1 year of compounding at 5% APY.
     function test_RedeemUsdOku_LiveCompounding_OneYear() public {
         _mintUsdOkuViaPsm(user1, 100_000e6);
         _setUsdRate(RATE_5_PCT_APY);
@@ -416,12 +393,12 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     }
 
     // ============================================================
-    // SECTION 6 — Cross-product: okuMMultiplier × usdMultiplier
+    // SECTION 6 — Mint at an elevated multiplier, then redeem under live accrual
     // ============================================================
 
-    /// @notice Both multipliers elevated AND usd rate live. The single scenario
-    ///         most likely to surface dual-multiplier rounding interactions.
-    function test_RedeemUsdOku_DualLiveMultipliers() public {
+    /// @notice Mint at an elevated multiplier, then redeem after 2 years of live
+    ///         accrual, so mint- and redeem-side rounding both occur off-base.
+    function test_RedeemUsdOku_MintElevatedThenLiveAccrual() public {
         // Set okuMMultiplier to $1.05 first (rolls block internally).
         _setOkuMMultiplierAndRoll(105e16);
         // Mint UsdOku via PSM at the elevated okuMMultiplier.
@@ -431,7 +408,6 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         _setUsdRate(RATE_5_PCT_APY);
         _accrueAtCurrentRate(2 * 365 days);
 
-        // Both multipliers are now off-base.
         assertGt(okuMoney.okuMMultiplier(), PRECISION);
         assertGt(okuDollar.usdMultiplier(), PRECISION);
 
@@ -467,8 +443,8 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     }
 
     /// @notice After a successful redeem, the PSM must not retain spendable UsdOku
-    ///         that could be siphoned via a future caller. The fix guarantees this
-    ///         (it passes `received` to unwrap, which burns all received shares).
+    ///         that could be siphoned via a future caller (redeem passes `received`
+    ///         to unwrap, which burns all received shares).
     function test_RedeemUsdOku_PSMHoldsNoSpendableUsdOku_AfterRedeem() public {
         _mintUsdOkuViaPsm(user1, 100_000e6);
         _setUsdRate(RATE_5_PCT_APY);

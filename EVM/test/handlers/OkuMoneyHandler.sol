@@ -8,7 +8,7 @@ import {TestConstants} from "../shared/Constants.sol";
 /**
  * @title OkuMoneyHandler
  * @notice Handler contract for OkuMoney invariant testing
- * @dev Updated with realistic fuzz bounds:
+ * @dev Fuzz bounds:
  *      - Price capped at PRECISION * 5 (5x, ~500% yield)
  *      - vm.roll(block.number + 1) after rebase to avoid yield distribution lock
  */
@@ -144,7 +144,7 @@ contract OkuMoneyHandler is Test {
         }
     }
 
-    /// @notice Update OkuM price (rebase). Per-call cap raised from 2% to 10% so
+    /// @notice Update OkuM price (rebase). Per-call cap of 10% so
     ///         invariant runs reach the 5x global price cap quickly enough to stress
     ///         the truncation/dust branches.
     function rebase(uint256 priceIncrease) external {
@@ -162,11 +162,9 @@ contract OkuMoneyHandler is Test {
         vm.prank(rebaser);
         try okuMoney.setOkuMMultiplier(newPrice) {
             ghostLastWasRebase = true;
-            // Deliberately does NOT update ghostLastOkuMMultiplier here. The
-            // ghost is the PREVIOUS observation, recorded in afterInvariant
-            // after the assertion has run; writing it here made the ghost equal
-            // the value just written, so the monotonicity invariant compared a
-            // number against itself and could not fail.
+            // Deliberately does NOT update ghostLastOkuMMultiplier: the ghost must
+            // hold the PREVIOUS observation (recorded in afterInvariant) or the
+            // monotonicity invariant would compare a value against itself.
             vm.roll(block.number + 1);
         } catch {
             ghostRebaseRevertCount++;
@@ -174,9 +172,7 @@ contract OkuMoneyHandler is Test {
     }
 
     /// @notice Drive the STREAMING rate — the production accrual path.
-    /// @dev Without this the invariant suite only ever moved the multiplier via
-    ///      `setOkuMMultiplier`, the emergency override, leaving the mechanism
-    ///      that actually runs in production unexercised.
+    /// @dev Complements `rebase`, which uses the `setOkuMMultiplier` emergency override.
     function setStreamingRate(uint256 rateSeed, uint256 warpSeed) external {
         uint256 rate = bound(rateSeed, PRECISION + 1, PRECISION + 1e10);
         uint256 window = bound(warpSeed, 1 hours, 30 days);

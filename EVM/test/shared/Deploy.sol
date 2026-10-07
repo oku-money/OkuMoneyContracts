@@ -44,8 +44,7 @@ library Deploy {
     /// @param admin_ Admin address
     /// @return proxy The deployed proxy contract
     /// @return impl The implementation contract
-    /// @dev The `minCollateralRatio_` parameter was dropped in the single-multiplier
-    ///      refactor: collateralization is exactly 1.0 by construction.
+    /// @dev No collateral-ratio parameter: collateralization is exactly 1.0 by construction.
     function deployOkuDollar(
         address okuMoney_,
         address admin_

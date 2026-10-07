@@ -42,14 +42,14 @@ describe("scripts/utils/epochArtifact", () => {
         written.length = 0;
     });
 
-    it("artifactKey combines epochId and phase — the fix for the epochId-only collision", () => {
+    it("artifactKey combines epochId and phase so the two phases never collide", () => {
         expect(artifactKey("2026-01", "stage-settlement")).to.equal("2026-01-stage-settlement");
         expect(artifactKey("2026-01", "roll-epoch")).to.equal("2026-01-roll-epoch");
         // The two phases of ONE epoch must produce DIFFERENT keys.
         expect(artifactKey("2026-01", "stage-settlement")).to.not.equal(artifactKey("2026-01", "roll-epoch"));
     });
 
-    it("REGRESSION (defect #2): both phases of the SAME epochId can be saved without collision", () => {
+    it("both phases of the SAME epochId can be saved without collision", () => {
         const epochId = "test-epoch-artifact-nocollide";
         const stage = makeArtifact({ epochId, phase: "stage-settlement" });
         const roll = makeArtifact({ epochId, phase: "roll-epoch" });
@@ -57,7 +57,7 @@ describe("scripts/utils/epochArtifact", () => {
         written.push(artifactPath(epochId, "stage-settlement"), artifactPath(epochId, "roll-epoch"));
 
         expect(() => saveArtifact(stage)).to.not.throw();
-        expect(() => saveArtifact(roll)).to.not.throw(); // used to throw: "Artifact already exists"
+        expect(() => saveArtifact(roll)).to.not.throw(); // distinct phase => distinct key, no "already exists"
 
         expect(loadArtifact(epochId, "stage-settlement").phase).to.equal("stage-settlement");
         expect(loadArtifact(epochId, "roll-epoch").phase).to.equal("roll-epoch");

@@ -79,9 +79,8 @@ describe("scripts/utils/globalValue", () => {
             // 2 of 25 hourly samples).
             const selected = samplesInWindow(0, 24 * 3600, tmpPath);
             const twa = timeWeightedAverage(selected);
-            // The first two bounds were true by construction -- a weighted mean of
-            // values in [10M, 10.5M] necessarily lands between them. The answer is
-            // computable: 22h at 10M, 1h at 10.25M, 1h at 10.5M over a 24h window.
+            // Bounding within [10M, 10.5M] would be true by construction; the exact
+            // answer is computable: 22h at 10M, 1h at 10.25M, 1h at 10.5M over 24h.
             const expectedTwa = (22 * 10_000_000 + 1 * 10_250_000 + 1 * 10_500_000) / 24;
             expect(twa, "time-weighted average is exactly the trapezoid").to.be.closeTo(expectedTwa, 1);
         });

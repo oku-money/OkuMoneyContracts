@@ -113,12 +113,8 @@ export interface StartBankrunOptions {
  *
  * Bankrun loads the compiled artifact, not the source. Editing a program and
  * re-running mocha without an intervening `anchor build` therefore tests the
- * PREVIOUS binary, silently and with every test still green.
- *
- * This is not hypothetical: it once made a correct fix look broken, and the
- * conclusion drawn from that run ("the fix doesn't work") was wrong. `npm run
- * test:bankrun` now builds first, but anyone invoking mocha directly — which is
- * the natural thing to do when iterating on a single suite — would still hit it.
+ * PREVIOUS binary, silently and with every test still green. `npm run
+ * test:bankrun` builds first; this guard covers invoking mocha directly.
  */
 function assertProgramArtifactIsFresh(): void {
   const so = path.join(__dirname, '../../target/deploy/lite_psm.so');
@@ -133,10 +129,8 @@ function assertProgramArtifactIsFresh(): void {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       // `crates/*/tests/` holds integration tests compiled as separate
-      // binaries; they never enter `lite_psm.so`. Including them made editing
-      // a test file report the PROGRAM as stale, which `anchor build` cannot
-      // clear (cargo correctly declines to relink an unchanged program) — a
-      // false positive that blocks the suite with no way forward.
+      // binaries; they never enter `lite_psm.so`, and `anchor build` would not
+      // relink for them, so counting them would be an unclearable false stale.
       if (entry.isDirectory()) {
         if (entry.name === 'tests' || entry.name === 'fuzz') continue;
         walk(full);
@@ -193,8 +187,8 @@ export async function startBankrun(
   );
   const provider = new BankrunProvider(context);
 
-  // Auto-bump slot wrapper. Replaces `provider.sendAndConfirm` with a
-  // version that advances the bankrun slot by 1 before delegating.
+  // Auto-bump slot wrapper. Wraps `provider.sendAndConfirm` so it
+  // advances the bankrun slot by 1 before delegating.
   // Default-on; tests that need to inspect slot semantics directly can
   // opt out with `autoBumpSlot: false`.
   if (opts.autoBumpSlot !== false) {
@@ -466,7 +460,7 @@ export async function createMintViaBankrun(
 
 /**
  * Mint `amount` tokens to `destination` ATA, signing as `authority`.
- * Replaces `@solana/spl-token::mintTo`, which is `Connection`-bound.
+ * Bankrun stand-in for `@solana/spl-token::mintTo`, which is `Connection`-bound.
  */
 export async function mintToViaBankrun(
   h: BankrunHarness,
@@ -564,8 +558,7 @@ export interface DisplayMultiplierState {
  *
  * ## This is not the canonical multiplier
  *
- * Since the streaming-accrual port the extension is a **write-only display
- * mirror**: the program pushes values into it for wallets and never reads them
+ * The extension is a **write-only display mirror**: the program pushes values into it for wallets and never reads them
  * back. It lags the canonical multiplier by up to one `DISPLAY_SYNC_INTERVAL`
  * and is only guaranteed to satisfy `display <= canonical`.
  *
@@ -606,9 +599,8 @@ export async function readDisplayMultiplier(
       const unixTimestamp = Number(clock.unixTimestamp);
 
       // Exactly `ScaledUiAmountConfig::current_multiplier` — this is what a
-      // wallet renders. Note it does NOT have the zero-init guard the old
-      // on-chain `read_multiplier` carried; that helper is gone, and the
-      // program now initialises the extension to 1.0 at init.
+      // wallet renders. No zero-init guard: the program initialises the
+      // extension to 1.0 at init.
       const effective = unixTimestamp >= effectiveTs ? newMultiplier : multiplier;
 
       return { multiplier, newMultiplier, effectiveTs, effective };

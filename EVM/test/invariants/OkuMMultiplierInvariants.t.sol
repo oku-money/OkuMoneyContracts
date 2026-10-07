@@ -7,8 +7,7 @@ import {OkuMoneyHandler} from "../handlers/OkuMoneyHandler.sol";
 /**
  * @title OkuMPriceInvariantsTest
  * @notice Invariant tests for OkuMoney okuMMultiplier() monotonicity and balance consistency
- * @dev Updated for non-rebasing OkuMoney redesign. Replaces old ShareConversionInvariants.
- *      OkuMoney is a standard ERC-20: balanceOf() returns raw token amounts.
+ * @dev OkuMoney is a standard ERC-20: balanceOf() returns raw token amounts.
  *      okuMMultiplier() tracks multiplier appreciation separately and must never decrease.
  */
 contract OkuMPriceInvariantsTest is BaseTest {
@@ -29,8 +28,7 @@ contract OkuMPriceInvariantsTest is BaseTest {
     /**
      * @notice Actor balances never exceed totalSupply.
      * @dev Deliberately `<=`, not `==`: addresses outside the actor set (the
-     *      PSM, the minter) also hold OkuM, so equality would not
-     *      hold. Named for what it asserts.
+     *      PSM, the minter) also hold OkuM, so equality would not hold.
      */
     function invariant_ActorBalancesDoNotExceedTotalSupply() public view {
         address[] memory actors = handler.getActors();

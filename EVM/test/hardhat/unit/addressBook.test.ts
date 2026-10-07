@@ -114,7 +114,7 @@ describe("scripts/utils/addressBook", () => {
         });
 
         it("leaves the TRACKED file byte-identical across a pure fork run", () => {
-            // The actual bug: a dry-run / fork deploy must not dirty git state.
+            // A dry-run / fork deploy must not dirty git state.
             const before = fs.readFileSync(TRACKED, "utf8");
 
             saveAddress("fork:base", "OkuMoney", "0x5555555555555555555555555555555555555555");

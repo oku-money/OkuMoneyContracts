@@ -5,7 +5,8 @@
  * directly, re-implementing this driver's sequence rather than exercising it.
  *
  * Under test: argument validation, the already-confirmed early return, the
- * dry-run path, and the receipt write-back.
+ * dry-run path, the receipt write-back, and the pre-submission binding checks
+ * (chain identity, expiry, expected pre-state, already-applied recovery).
  */
 
 import { expect } from "chai";
@@ -14,6 +15,9 @@ import {
   applyScheduleToChain,
   parseApplyArgs,
   RateApplier,
+  ChainState,
+  ApplyDeps,
+  ALREADY_APPLIED,
 } from "../../../scripts/operator/applyScheduleSingleChain";
 import {
   saveArtifact,
@@ -23,14 +27,33 @@ import {
 import type { NetworkContext } from "../../../scripts/utils/networkContext";
 
 const BOOK_KEY = "sepolia";
+const CHAIN_ID = 11155111;
+const ADDR = "0x00000000000000000000000000000000000000Aa";
+const NOW = 10_000;
+
+const PRE_STATE = {
+  rate: "1000000000100000000",
+  rateEnd: 1500,
+  pendingRate: "1000000000300000000",
+  pendingRateEnd: 1800,
+  baseMultiplier: "1010000000000000000",
+  lastAccrualTime: 900,
+};
 
 function makeArtifact(overrides: Partial<EpochScheduleArtifact> = {}): EpochScheduleArtifact {
   return {
-    artifactVersion: 1,
+    artifactVersion: 2,
     epochId: `apply-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
     phase: "roll-epoch",
     derivedAtSec: 1000,
+    expiresAtSec: NOW + 3600,
     referenceChain: BOOK_KEY,
+    targetChains: [BOOK_KEY, "solana"],
+    targets: {
+      [BOOK_KEY]: { kind: "evm", chainId: CHAIN_ID, okuMoney: ADDR },
+      solana: { kind: "svm", cluster: "devnet" },
+    },
+    expectedPreState: PRE_STATE,
     schedule: {
       rate: "1000000000158549",
       rateEnd: 2000,
@@ -62,8 +85,13 @@ describe("scripts/operator/applyScheduleSingleChain", () => {
   let applier: RateApplier;
   let envBackup: NodeJS.ProcessEnv;
   let argvBackup: string[];
+  /** What the stubbed chain reports; tests mutate it. */
+  let live: ChainState;
+  let deps: ApplyDeps;
 
   beforeEach(() => {
+    live = { chainId: CHAIN_ID, address: ADDR, schedule: { ...PRE_STATE } };
+    deps = { readChain: async () => live, findTx: async () => "0xfound", nowSec: NOW };
     calls = [];
     applier = async (_c, _s, opts) => {
       calls.push({ ...opts });
@@ -150,7 +178,7 @@ describe("scripts/operator/applyScheduleSingleChain", () => {
   it("applies the artifact's WAD integers verbatim and records the receipt", async () => {
     const a = save(makeArtifact());
 
-    const outcome = await applyScheduleToChain(a, ctx, {} as any, false, applier);
+    const outcome = await applyScheduleToChain(a, ctx, {} as any, false, applier, deps);
 
     expect(outcome).to.equal("recorded");
     expect(calls).to.have.lengthOf(1);
@@ -166,6 +194,9 @@ describe("scripts/operator/applyScheduleSingleChain", () => {
     const onDisk = JSON.parse(fs.readFileSync(artifactPath(a.epochId, a.phase), "utf-8"));
     expect(onDisk.receipts[BOOK_KEY].txHash).to.equal("0xdeadbeef");
     expect(onDisk.receipts[BOOK_KEY].confirmedAtSec).to.be.a("number");
+    // Bound to the identity it was recorded against.
+    expect(onDisk.receipts[BOOK_KEY].chainId).to.equal(CHAIN_ID);
+    expect(onDisk.receipts[BOOK_KEY].address).to.equal(ADDR);
   });
 
   /**
@@ -177,11 +208,11 @@ describe("scripts/operator/applyScheduleSingleChain", () => {
   it("skips a chain that already has a confirmed receipt, without calling the chain", async () => {
     const a = save(
       makeArtifact({
-        receipts: { [BOOK_KEY]: { txHash: "0xalready", confirmedAtSec: 123 } },
+        receipts: { [BOOK_KEY]: { txHash: "0xalready", confirmedAtSec: 123, chainId: CHAIN_ID, address: ADDR } },
       })
     );
 
-    const outcome = await applyScheduleToChain(a, ctx, {} as any, false, applier);
+    const outcome = await applyScheduleToChain(a, ctx, {} as any, false, applier, deps);
 
     expect(outcome).to.equal("already-confirmed");
     expect(calls).to.have.lengthOf(0);
@@ -199,7 +230,7 @@ describe("scripts/operator/applyScheduleSingleChain", () => {
   it("propagates dryRun and writes no receipt", async () => {
     const a = save(makeArtifact());
 
-    const outcome = await applyScheduleToChain(a, ctx, {} as any, true, applier);
+    const outcome = await applyScheduleToChain(a, ctx, {} as any, true, applier, deps);
 
     expect(outcome).to.equal("dry-run");
     expect(calls[0].dryRun).to.equal(true);
@@ -215,7 +246,7 @@ describe("scripts/operator/applyScheduleSingleChain", () => {
       confirmedPendingRate: opts.nextRate,
     });
 
-    await applyScheduleToChain(a, ctx, {} as any, false, noHash);
+    await applyScheduleToChain(a, ctx, {} as any, false, noHash, deps);
 
     const onDisk = JSON.parse(fs.readFileSync(artifactPath(a.epochId, a.phase), "utf-8"));
     expect(onDisk.receipts[BOOK_KEY].txHash).to.equal("unknown");
@@ -231,10 +262,129 @@ describe("scripts/operator/applyScheduleSingleChain", () => {
       chainConfig: {} as any,
     };
 
-    await applyScheduleToChain(a, forkCtx, {} as any, false, applier);
+    await applyScheduleToChain(a, forkCtx, {} as any, false, applier, deps);
 
     const onDisk = JSON.parse(fs.readFileSync(artifactPath(a.epochId, a.phase), "utf-8"));
     expect(onDisk.receipts).to.have.property(`fork:${BOOK_KEY}`);
     expect(onDisk.receipts).to.not.have.property(BOOK_KEY);
+  });
+
+  // ------------------------------------------------- binding / recovery
+
+  /** Explicit rejection capture (no chai-as-promised in this package). */
+  async function rejection(p: Promise<unknown>): Promise<Error> {
+    try {
+      await p;
+    } catch (e: any) {
+      return e;
+    }
+    throw new Error("expected the promise to reject, but it resolved");
+  }
+
+  it("refuses a saved receipt recorded for a different chainId/address (and does not re-apply)", async () => {
+    const a = save(
+      makeArtifact({ receipts: { [BOOK_KEY]: { txHash: "0xother", confirmedAtSec: 1, chainId: 1, address: ADDR } } })
+    );
+    const err = await rejection(applyScheduleToChain(a, ctx, {} as any, false, applier, deps));
+    expect(err.message).to.match(/Refusing to honour/);
+    expect(calls).to.have.lengthOf(0);
+  });
+
+  it("refuses a legacy receipt with no recorded identity", async () => {
+    const a = save(makeArtifact({ receipts: { [BOOK_KEY]: { txHash: "0xlegacy", confirmedAtSec: 1 } } }));
+    expect((await rejection(applyScheduleToChain(a, ctx, {} as any, false, applier, deps))).message).to.match(
+      /Refusing to honour/
+    );
+  });
+
+  it("refuses on a chainId mismatch", async () => {
+    live.chainId = 1;
+    const a = save(makeArtifact());
+    expect((await rejection(applyScheduleToChain(a, ctx, {} as any, false, applier, deps))).message).to.match(
+      /identity mismatch/
+    );
+    expect(calls).to.have.lengthOf(0);
+  });
+
+  it("refuses on an OkuMoney address mismatch (address book changed since derivation)", async () => {
+    live.address = "0x00000000000000000000000000000000000000Bb";
+    const a = save(makeArtifact());
+    expect((await rejection(applyScheduleToChain(a, ctx, {} as any, false, applier, deps))).message).to.match(
+      /identity mismatch/
+    );
+    expect(calls).to.have.lengthOf(0);
+  });
+
+  it("accepts an address that differs only in checksum case", async () => {
+    live.address = ADDR.toLowerCase();
+    const a = save(makeArtifact());
+    expect(await applyScheduleToChain(a, ctx, {} as any, false, applier, deps)).to.equal("recorded");
+  });
+
+  it("refuses an expired artifact", async () => {
+    const a = save(makeArtifact({ expiresAtSec: NOW - 1 }));
+    expect((await rejection(applyScheduleToChain(a, ctx, {} as any, false, applier, deps))).message).to.match(
+      /EXPIRED/
+    );
+    expect(calls).to.have.lengthOf(0);
+  });
+
+  it("refuses a chain that is not a committed target", async () => {
+    const a = save(makeArtifact({ targetChains: ["solana"], targets: { solana: { kind: "svm", cluster: "devnet" } } }));
+    expect((await rejection(applyScheduleToChain(a, ctx, {} as any, false, applier, deps))).message).to.match(
+      /not an EVM target committed/
+    );
+  });
+
+  it("refuses a version-1 (unbound) artifact", async () => {
+    const legacy = { ...makeArtifact(), artifactVersion: 1 } as any;
+    delete legacy.targetChains;
+    expect((await rejection(applyScheduleToChain(legacy, ctx, {} as any, false, applier, deps))).message).to.match(
+      /Re-derive/
+    );
+  });
+
+  it("refuses when the on-chain schedule moved since derivation", async () => {
+    live.schedule.pendingRate = "1000000000999999999";
+    const a = save(makeArtifact());
+    const err = await rejection(applyScheduleToChain(a, ctx, {} as any, false, applier, deps));
+    expect(err.message).to.match(/expected pre-state/);
+    expect(err.message).to.match(/pendingRate/);
+    expect(calls).to.have.lengthOf(0);
+  });
+
+  it("compares anchor fields on the reference chain only", async () => {
+    live.schedule.lastAccrualTime = 901; // a re-anchor happened since derivation
+    const ref = save(makeArtifact());
+    expect((await rejection(applyScheduleToChain(ref, ctx, {} as any, false, applier, deps))).message).to.match(
+      /lastAccrualTime/
+    );
+    // On a non-reference chain the anchor legitimately differs (own block.timestamp).
+    const other = save(makeArtifact({ referenceChain: "baseSepolia" }));
+    expect(await applyScheduleToChain(other, ctx, {} as any, false, applier, deps)).to.equal("recorded");
+  });
+
+  it("recovers (records, does not resend) when the chain already carries the target schedule", async () => {
+    const a = save(makeArtifact());
+    live.schedule = {
+      ...live.schedule,
+      rate: a.schedule.rate,
+      rateEnd: a.schedule.rateEnd,
+      pendingRate: a.schedule.nextRate,
+      pendingRateEnd: a.schedule.nextRateEnd,
+    };
+    const outcome = await applyScheduleToChain(a, ctx, {} as any, false, applier, deps);
+    expect(outcome).to.equal("recovered");
+    expect(calls, "must not resend — a resend re-anchors at a later timestamp").to.have.lengthOf(0);
+    const r = JSON.parse(fs.readFileSync(artifactPath(a.epochId, a.phase), "utf-8")).receipts[BOOK_KEY];
+    expect(r).to.include({ txHash: "0xfound", recovered: true, chainId: CHAIN_ID, address: ADDR });
+  });
+
+  it("marks a recovered receipt <already-applied> when the tx cannot be located", async () => {
+    const a = save(makeArtifact());
+    live.schedule = { ...live.schedule, rate: a.schedule.rate, rateEnd: a.schedule.rateEnd, pendingRate: a.schedule.nextRate, pendingRateEnd: a.schedule.nextRateEnd };
+    await applyScheduleToChain(a, ctx, {} as any, false, applier, { ...deps, findTx: async () => undefined });
+    const r = JSON.parse(fs.readFileSync(artifactPath(a.epochId, a.phase), "utf-8")).receipts[BOOK_KEY];
+    expect(r.txHash).to.equal(ALREADY_APPLIED);
   });
 });

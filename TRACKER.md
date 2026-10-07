@@ -57,20 +57,47 @@ backend and is **out of scope for this repo**. This repo's job is to make sure
 every lever and control the backend needs is present and reachable on-chain —
 not to make the orchestration scripts under `EVM/scripts/operator/` and
 `EVM/scripts/config/` production-ready. Those scripts, `carryLedger.json`, and
-`globalValueSamples.json` are an internal-testing proof of concept, not a
-production-representative implementation; do not harden them against this
-being a production design. Design: [`EVM/docs/epoch-accounting.md`](EVM/docs/epoch-accounting.md).
+`globalValueSamples.json` remain an internal-testing proof of concept, not a
+production-representative implementation, but they are hardened against
+audit findings P-01..P-07:
+
+- **P-01** `sampleGlobalValueUsd` throws unless every chain in
+  `expectedValueChains()` is read; samples record their chain set and
+  `samplesInWindow` rejects samples taken against a different set.
+- **P-02** artifacts commit a sorted `targetChains`; `broadcastSchedule.ts`
+  uses it, refuses a differing `CHAINS`, and finalizes (carry ledger) only when
+  every committed target has an identity-bound receipt.
+- **P-03** artifacts bind per-target chainId+OkuMoney address (SVM:
+  cluster+program id), the reference chain's pre-state, and an expiry
+  (`ARTIFACT_TTL_SECONDS`, default 24h); `applyScheduleSingleChain.ts` and the
+  broadcaster's SVM leg refuse on mismatch. SVM pre-state is checked only when
+  the SVM read env is set (the SVM child verifies nothing).
+- **P-04** roll derivations record the reference `okuMMultiplier()` as the
+  epoch's `epochStartMultiplier`; reconciliation uses `current / start - 1` and
+  refuses entries without it. V̄ there is still a single spot sample.
+- **P-05** `windowSamples` (yield-tooling) requires the window start covered
+  (interpolated) and caps sample gaps (`DEFAULT_MAX_SAMPLE_GAP_SEC` = 6h);
+  `distributedUsdOverWindow` and `samplesInWindow` both apply it.
+- **P-06** a chain already at the artifact's target gets a `recovered` receipt
+  (tx found via `NextOkuMYieldRateSet` logs, else `<already-applied>`) instead
+  of a resend; artifact, sample and ledger writes are tmp+rename.
+- **P-07** `checkMultiplierDrift.ts` resolves the expected fleet first and
+  exits 2 ("INCOMPLETE COVERAGE") if any expected chain is unreadable.
+
+Design: [`EVM/docs/epoch-accounting.md`](EVM/docs/epoch-accounting.md).
 
 Things a contributor could not learn from the code alone:
 
 - **V̄ is the denominator of the rate derivation**, so a chain silently
   dropping out of the sample set makes every derived rate come out *too
-  high*. `SVM_EXPECTED=true` turns that silent failure into a hard error
-  (`checkMultiplierDrift.ts`, `globalValue.ts`) — do not remove it or make it
-  default-off.
+  high*. Completeness is enforced for every expected chain (EVM and SVM).
+  SVM is expected when configured or `SVM_EXPECTED=true`; with neither it is
+  excluded from V̄ (with a warning) while still a broadcast target — set
+  `SVM_EXPECTED=true` once SVM carries supply, and do not remove the flag.
 - **V̄'s denominator set and the broadcast's recipient set must be the same
-  set.** `EVM/scripts/config/epochChains.ts` (`participatingChains()`) is the
-  single source of truth; all call sites route through it, including explicit
+  set** (modulo the SVM exclusion above).
+  `EVM/scripts/config/epochChains.ts` (`participatingChains()`) is the single
+  source of truth; all call sites route through it, including explicit
   `CHAINS=` lists.
 - **Env-var names at the `broadcastSchedule.ts` → subprocess boundary are
   generated** by `cli.ts`'s camelCase→SCREAMING_SNAKE transform and appear
@@ -81,9 +108,10 @@ Things a contributor could not learn from the code alone:
 - **SVM `set-yield-rate.ts` can crash after the write has landed.** Its
   post-submission summary evaluates the multiplier at the local clock, which on
   devnet can sit behind the on-chain anchor and throw. `broadcastSchedule.ts`
-  then reports `[solana] FAILED` although the schedule is live. Check on-chain
-  state with `admin:read-schedule` before assuming the write failed or re-sending.
-  Not fixed; PoC scripts.
+  then reports `[solana] FAILED` although the schedule is live. With the SVM
+  read env set, a re-run detects the target schedule and records a `recovered`
+  receipt instead of re-sending; without it, check on-chain state with
+  `admin:read-schedule` before re-sending.
 
 ### Early-shock detection — out of scope, unimplemented `[both]`
 

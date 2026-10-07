@@ -5,6 +5,7 @@ import {
     spreadBps,
     classifyAccrual,
     isExpiringSoon,
+    assessCoverage,
 } from "../../../scripts/utils/driftChecks";
 import {
     EPOCH_ANCHOR_UNIX,
@@ -149,6 +150,27 @@ describe("driftChecks", () => {
 
         it("does not fire for an already-elapsed boundary (that is a halt, not a warning)", () => {
             expect(isExpiringSoon(now - 1n, now, warn)).to.equal(false);
+        });
+    });
+
+    describe("assessCoverage (P-07: agreement requires every expected chain)", () => {
+        it("is complete only when every expected chain was read", () => {
+            expect(assessCoverage(["a", "b"], ["b", "a"])).to.deep.equal({ complete: true, missing: [] });
+        });
+
+        it("one readable chain out of several is INCOMPLETE, not agreement", () => {
+            const r = assessCoverage(["sepolia", "baseSepolia", "solana"], ["sepolia"], {
+                baseSepolia: "no OkuMoney address in the address book",
+            });
+            expect(r.complete).to.equal(false);
+            expect(r.missing).to.deep.equal([
+                "baseSepolia (no OkuMoney address in the address book)",
+                "solana (no reading)",
+            ]);
+        });
+
+        it("ignores readings for chains outside the expected fleet", () => {
+            expect(assessCoverage(["a"], ["a", "z"]).complete).to.equal(true);
         });
     });
 });

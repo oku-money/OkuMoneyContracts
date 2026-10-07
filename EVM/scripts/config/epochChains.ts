@@ -82,6 +82,51 @@ export function participatingChains(opts: ParticipatingChainsOpts = {}): string[
   return requested;
 }
 
+/** Sorted, de-duplicated copy — the canonical form chain sets are committed
+ *  and compared in (artifact targets, V̄ sample chain sets). */
+export function canonicalChainSet(chains: readonly string[]): string[] {
+  return [...new Set(chains)].sort();
+}
+
+/** `true` when two chain lists name exactly the same set. */
+export function sameChainSet(a: readonly string[], b: readonly string[]): boolean {
+  const ca = canonicalChainSet(a);
+  const cb = canonicalChainSet(b);
+  return ca.length === cb.length && ca.every((c, i) => c === cb[i]);
+}
+
+/** `true` when all three env vars the SVM reader needs are set. */
+export function svmReadConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !!(env.SVM_RPC_URL && env.SVM_LITE_PSM_PROGRAM_ID && env.SVM_OKU_M_MINT);
+}
+
+export interface ExpectedValueChainsOpts extends ParticipatingChainsOpts {
+  /** Defaults to `SVM_EXPECTED === "true"`. */
+  svmExpected?: boolean;
+  /** Defaults to {@link svmReadConfigured}. */
+  svmConfigured?: boolean;
+}
+
+/**
+ * The chain set a V̄ sample MUST cover — every chain in it must be read, or
+ * the sample is refused (an omitted chain lowers the denominator and inflates
+ * the derived rate).
+ *
+ * `participatingChains()` minus SVM only when SVM is neither configured
+ * (`SVM_RPC_URL` + `SVM_LITE_PSM_PROGRAM_ID` + `SVM_OKU_M_MINT`) nor declared
+ * via `SVM_EXPECTED=true` — the pre-existing "SVM is legitimately absent"
+ * opt-out. Configured-but-unreadable SVM is a hard error, same as an EVM chain.
+ * Returned in canonical (sorted) form; samples persist it and
+ * `samplesInWindow` rejects samples recorded against a different set.
+ */
+export function expectedValueChains(opts: ExpectedValueChainsOpts = {}): string[] {
+  const chains = participatingChains(opts);
+  const svmExpected = opts.svmExpected ?? process.env.SVM_EXPECTED === "true";
+  const svmConfigured = opts.svmConfigured ?? svmReadConfigured();
+  const keepSvm = svmExpected || svmConfigured;
+  return canonicalChainSet(chains.filter((c) => c !== SVM_CHAIN_KEY || keepSvm));
+}
+
 /** Parse the `CHAINS=a,b,c` env-var convention shared by
  *  `sampleGlobalValue.ts` / `checkMultiplierDrift.ts`. Returns `undefined`
  *  (meaning "use the default") if unset. */

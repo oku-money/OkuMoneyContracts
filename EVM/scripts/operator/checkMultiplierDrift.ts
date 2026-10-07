@@ -26,8 +26,19 @@
  *   npx hardhat run scripts/operator/checkMultiplierDrift.ts
  *   TOLERANCE_BPS=1 npx hardhat run scripts/operator/checkMultiplierDrift.ts
  *
+ * Coverage: the EXPECTED fleet is resolved first (`CHAINS`, else
+ * `participatingChains()`; SVM per `expectedValueChains()` — included when
+ * configured or SVM_EXPECTED=true). Any expected chain that has no address, no
+ * RPC, or fails to read makes the run fail with "INCOMPLETE COVERAGE"
+ * (exit 2; exit 1 is reserved for detected drift/misconfiguration) — agreement
+ * among a readable subset is never reported as fleet agreement.
+ *
  * Env:
- *   CHAINS=base,arbitrum,...   chains to compare (default: all in the address book)
+ *   CHAINS=sepolia,baseSepolia,...  the expected fleet (default: participatingChains()).
+ *                              Validated against known chain names; mainnets are
+ *                              allowed without YES_MAINNET since this is read-only.
+ *                              List a non-participating chain (e.g. a stale
+ *                              pre-streaming deployment) here to check it too.
  *   TOLERANCE_BPS=<n>          max tolerated multiplier spread, basis points (default 1)
  *   EXPIRY_WARN_HOURS=<n>      warn when rateEnd is nearer than this (default 4).
  *                              Keep this well below one epoch length, or it
@@ -51,8 +62,8 @@ import { summarizeLedger } from "../utils/carryLedger";
 import { CHAIN_METADATA } from "../config/chains";
 import { readSvmSchedule } from "../utils/svmValue";
 import { SVM_CHAIN_KEY } from "../utils/globalValue";
-import { parseChainsEnv } from "../config/epochChains";
-import { distanceToGrid, classifyAccrual, isExpiringSoon } from "../utils/driftChecks";
+import { parseChainsEnv, participatingChains, expectedValueChains } from "../config/epochChains";
+import { distanceToGrid, classifyAccrual, isExpiringSoon, assessCoverage } from "../utils/driftChecks";
 import { effectiveRate as mirrorEffectiveRate, PRECISION } from "@okumoney/yield-tooling";
 import {
   EPOCH_ANCHOR_UNIX as DEFAULT_EPOCH_ANCHOR_UNIX,
@@ -112,122 +123,88 @@ type Reading = {
   computedOffChain?: boolean;
 };
 
-async function readChain(name: string, rpcUrl: string): Promise<Reading | null> {
-  try {
-    const addr = loadAddress(name, "OkuMoney");
-    if (!addr) return null;
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
-    const c = new ethers.Contract(addr, ABI, provider);
-    const [multiplier, rate, effectiveRate, rateEnd, pending, pendingRateEnd, totalSupply] =
-      await Promise.all([
-        c.okuMMultiplier(),
-        c.okuMRatePerSecond(),
-        c.okuMEffectiveRatePerSecond(),
-        c.okuMRateEnd(),
-        c.okuMPendingRatePerSecond(),
-        c.okuMPendingRateEnd(),
-        c.totalSupply(),
-      ]);
-    return {
-      chain: name,
-      multiplier,
-      rate,
-      effectiveRate,
-      rateEnd,
-      pending,
-      pendingRateEnd,
-      totalSupply,
-      evaluatedAtSec: Math.floor(Date.now() / 1000),
-    };
-  } catch (e: any) {
-    logger.warning(`${name}: read failed — ${e.message ?? e}`);
-    return null;
-  }
+/** Read one EVM chain; throws with the reason (no RPC, no address, read error). */
+async function readChain(name: string): Promise<Reading> {
+  const rpcUrl = CHAIN_METADATA[name]?.rpcUrl;
+  if (!rpcUrl) throw new Error("no rpcUrl configured");
+  const addr = loadAddress(name, "OkuMoney");
+  if (!addr) throw new Error("no OkuMoney address in the address book");
+  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const c = new ethers.Contract(addr, ABI, provider);
+  const [multiplier, rate, effectiveRate, rateEnd, pending, pendingRateEnd, totalSupply] =
+    await Promise.all([
+      c.okuMMultiplier(),
+      c.okuMRatePerSecond(),
+      c.okuMEffectiveRatePerSecond(),
+      c.okuMRateEnd(),
+      c.okuMPendingRatePerSecond(),
+      c.okuMPendingRateEnd(),
+      c.totalSupply(),
+    ]);
+  return {
+    chain: name,
+    multiplier,
+    rate,
+    effectiveRate,
+    rateEnd,
+    pending,
+    pendingRateEnd,
+    totalSupply,
+    evaluatedAtSec: Math.floor(Date.now() / 1000),
+  };
 }
 
 /**
- * Read SVM's schedule and recompute its multiplier.
- *
- * `SVM_EXPECTED=true` makes a missing/unreadable SVM a HARD ERROR rather than
- * a warning — matching `globalValue.ts`'s `readSvmConfigured`. Without it, an
- * unset `SVM_RPC_URL` in a cron job would print "All chains in agreement"
- * while SVM is entirely unchecked, which is worse than no monitor at all: it
- * actively reports false confidence. Set the flag once SVM carries supply.
+ * Read SVM's schedule and recompute its multiplier. Only called when SVM is in
+ * the expected fleet (configured, or `SVM_EXPECTED=true`), so every failure
+ * throws and is reported as incomplete coverage — never as agreement.
  */
-async function readSvm(): Promise<Reading | null> {
+async function readSvm(): Promise<Reading> {
   const rpcUrl = process.env.SVM_RPC_URL;
   const programId = process.env.SVM_LITE_PSM_PROGRAM_ID;
   const okuMMint = process.env.SVM_OKU_M_MINT;
-  const expected = process.env.SVM_EXPECTED === "true";
 
   if (!rpcUrl || !programId || !okuMMint) {
-    const detail =
-      "SVM not configured (need SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT).";
-    if (expected) {
-      throw new Error(`${detail} SVM_EXPECTED=true, so this is a hard error, not a warning.`);
-    }
-    logger.warning(`${detail} It is NOT being checked for drift. Set SVM_EXPECTED=true once SVM carries supply.`);
-    return null;
+    throw new Error(
+      "SVM_EXPECTED=true but SVM is not configured (need SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT)"
+    );
   }
 
-  try {
-    const reading = await readSvmSchedule(rpcUrl, programId, okuMMint);
-    if (!reading) {
-      if (expected) throw new Error("SVM configured and expected, but the schedule read returned nothing.");
-      return null;
-    }
-    return {
-      chain: SVM_CHAIN_KEY,
-      multiplier: reading.multiplier,
-      rate: reading.schedule.ratePerSecond,
-      effectiveRate: mirrorEffectiveRate(reading.schedule, BigInt(reading.chainTimeSec)),
-      rateEnd: reading.schedule.rateEnd,
-      pending: reading.schedule.pendingRatePerSecond,
-      pendingRateEnd: reading.schedule.pendingRateEnd,
-      totalSupply: reading.rawSupply,
-      evaluatedAtSec: reading.chainTimeSec,
-      computedOffChain: true,
-    };
-  } catch (e: any) {
-    if (expected) throw e; // do not swallow when the caller demanded SVM be checked
-    logger.warning(`${SVM_CHAIN_KEY}: read failed — ${e.message ?? e}`);
-    return null;
-  }
+  const reading = await readSvmSchedule(rpcUrl, programId, okuMMint);
+  if (!reading) throw new Error("schedule read returned nothing (PsmConfig missing or layout changed)");
+  return {
+    chain: SVM_CHAIN_KEY,
+    multiplier: reading.multiplier,
+    rate: reading.schedule.ratePerSecond,
+    effectiveRate: mirrorEffectiveRate(reading.schedule, BigInt(reading.chainTimeSec)),
+    rateEnd: reading.schedule.rateEnd,
+    pending: reading.schedule.pendingRatePerSecond,
+    pendingRateEnd: reading.schedule.pendingRateEnd,
+    totalSupply: reading.rawSupply,
+    evaluatedAtSec: reading.chainTimeSec,
+    computedOffChain: true,
+  };
 }
 
 async function main() {
   logger.header("Cross-chain multiplier drift check");
 
-  // DELIBERATELY scans every chain in CHAIN_METADATA by default, NOT
-  // `config/epochChains.ts::participatingChains()` like the V̄ sampler and
-  // the schedule broadcaster do.
-  //
-  // Those two must agree on one narrow set, because a mismatch between the
-  // denominator and the rate's recipients corrupts the published rate. This
-  // is a read-only diagnostic with the opposite requirement: its whole job is
-  // to notice a chain running a multiplier it shouldn't be — including a
-  // chain that is NOT in the participating set (e.g. a stale pre-streaming
-  // mainnet deployment still carrying supply). Narrowing it to the
-  // participating set would blind it to precisely the drift worth finding.
-  // `parseChainsEnv` treats an empty `CHAINS=` as "unset", not as an empty
-  // scope that would filter every chain out.
+  // Resolve the EXPECTED fleet first: `CHAINS` if set (names validated; the
+  // mainnet scope gate is waived because this is read-only), else the
+  // participating set the sampler and broadcaster use. Every chain in it must
+  // produce a reading or the run reports INCOMPLETE COVERAGE — previously
+  // unreadable chains were filtered out and one readable chain sufficed for
+  // "All chains in agreement". To also check a non-participating deployment
+  // (e.g. a stale pre-streaming mainnet), list it in CHAINS explicitly.
+  // `parseChainsEnv` treats an empty `CHAINS=` as "unset".
   const requested = parseChainsEnv(process.env.CHAINS);
-  const targets = Object.entries(CHAIN_METADATA).filter(
-    ([name]) => !requested || requested.includes(name)
-  );
-
-  const evmReadings = (
-    await Promise.all(targets.map(([name, cfg]) => (cfg.rpcUrl ? readChain(name, cfg.rpcUrl) : null)))
-  ).filter((r): r is Reading => r !== null);
-
-  const includeSvm = !requested || requested.includes(SVM_CHAIN_KEY);
+  const fleet = participatingChains({ requested, yesMainnet: true });
 
   // `SVM_EXPECTED=true` means "SVM carries supply; never report agreement
-  // without checking it". A CHAINS filter that omits SVM would skip
-  // `readSvm()` entirely and silently bypass that guard, reporting false
-  // confidence. CHAINS is a scope knob, not an override for a declared
+  // without checking it". A CHAINS filter that omits SVM would silently
+  // bypass that guard. CHAINS is a scope knob, not an override for a declared
   // invariant, so this is a hard error rather than a warning.
-  if (!includeSvm && process.env.SVM_EXPECTED === "true") {
+  if (!fleet.includes(SVM_CHAIN_KEY) && process.env.SVM_EXPECTED === "true") {
     throw new Error(
       `SVM_EXPECTED=true but CHAINS=${process.env.CHAINS} excludes ` +
         `"${SVM_CHAIN_KEY}", so SVM would not be checked at all. Either add ` +
@@ -236,13 +213,41 @@ async function main() {
     );
   }
 
-  const svmReading = includeSvm ? await readSvm() : null;
-  const readings = svmReading ? [...evmReadings, svmReading] : evmReadings;
-
-  if (readings.length === 0) {
-    logger.error("No chains readable — check CHAINS and the address book");
-    process.exit(1);
+  // SVM is expected when configured or SVM_EXPECTED=true (same rule as V̄).
+  const expected = expectedValueChains({ requested: fleet, yesMainnet: true });
+  if (fleet.includes(SVM_CHAIN_KEY) && !expected.includes(SVM_CHAIN_KEY)) {
+    logger.warning(
+      "SVM not configured (need SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT) and " +
+        "SVM_EXPECTED is unset — SVM is NOT being checked for drift. Set SVM_EXPECTED=true once SVM carries supply."
+    );
   }
+  logger.info(`Expected fleet: ${expected.join(", ")}`);
+
+  const problems: Record<string, string> = {};
+  const readings = (
+    await Promise.all(
+      expected.map(async (name) => {
+        try {
+          return name === SVM_CHAIN_KEY ? await readSvm() : await readChain(name);
+        } catch (e: any) {
+          problems[name] = e.message ?? String(e);
+          logger.error(`${name}: UNREADABLE — ${problems[name]}`);
+          return null;
+        }
+      })
+    )
+  ).filter((r): r is Reading => r !== null);
+
+  const coverage = assessCoverage(expected, readings.map((r) => r.chain), problems);
+  const reportIncomplete = () => {
+    logger.error(
+      `INCOMPLETE COVERAGE: ${coverage.missing.length}/${expected.length} expected chain(s) unreadable — ` +
+        `${coverage.missing.join("; ")}. Agreement among the rest is NOT fleet agreement.`
+    );
+    process.exit(2);
+  };
+
+  if (readings.length === 0) reportIncomplete();
 
   for (const r of readings) {
     logger.info(
@@ -411,10 +416,12 @@ async function main() {
   }
 
   if (failed) {
-    logger.error("Drift check FAILED");
+    logger.error(`Drift check FAILED${coverage.complete ? "" : " (and coverage is INCOMPLETE — see below)"}`);
+    if (!coverage.complete) logger.error(`Unreadable: ${coverage.missing.join("; ")}`);
     process.exit(1);
   }
-  logger.success("All chains in agreement");
+  if (!coverage.complete) reportIncomplete();
+  logger.success(`All ${expected.length} expected chains in agreement (${expected.join(", ")})`);
 }
 
 if (require.main === module) {

@@ -79,3 +79,29 @@ export function classifyAccrual(args: {
 export function isExpiringSoon(runsOutAt: bigint, now: bigint, warnWindowSec: bigint): boolean {
   return runsOutAt !== 0n && runsOutAt > now && runsOutAt - now < warnWindowSec;
 }
+
+export interface CoverageResult {
+  /** Every expected chain produced a reading. */
+  complete: boolean;
+  /** Expected chains with no reading, each with its reason, sorted. */
+  missing: string[];
+}
+
+/**
+ * Coverage of the expected fleet. "All chains in agreement" is only a valid
+ * conclusion when EVERY expected chain was read: agreement among the readable
+ * subset says nothing about the unreadable rest (with one readable chain it
+ * is vacuous). `problems` maps chain -> why it produced no reading.
+ */
+export function assessCoverage(
+  expected: string[],
+  readable: string[],
+  problems: Record<string, string> = {}
+): CoverageResult {
+  const got = new Set(readable);
+  const missing = expected
+    .filter((c) => !got.has(c))
+    .map((c) => `${c} (${problems[c] ?? "no reading"})`)
+    .sort();
+  return { complete: missing.length === 0, missing };
+}

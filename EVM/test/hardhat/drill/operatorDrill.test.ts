@@ -48,7 +48,9 @@ import { runVaultOp } from "../../../scripts/operator/vaultOps";
 import { appendSample, loadSamples } from "../../../scripts/utils/globalValue";
 import { deriveStageSettlement, deriveRollEpoch } from "../../../scripts/operator/deriveEpochSchedule";
 import { loadArtifact } from "../../../scripts/utils/epochArtifact";
+import { applyScheduleToChain } from "../../../scripts/operator/applyScheduleSingleChain";
 import { summarizeLedger, upsertLedgerEntry, backfillReconciliation, buildLedgerEntry, loadLedger } from "../../../scripts/utils/carryLedger";
+import { reconcileActualPayout } from "@okumoney/yield-tooling";
 
 const ADDRESS_BOOK_PATH = path.join(__dirname, "../../../scripts/config/addresses.json");
 // Gitignored reference-implementation stores. They MUST be cleared before
@@ -140,6 +142,32 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         await usdc.mint(await admin.getAddress(), 1_000_000_000_000n);
     });
 
+    /** The single-chain drill's epoch scope: just the forked chain. Every
+     *  derivation is passed this so its committed target set, chain binding
+     *  and V̄ chain set all describe the one chain that actually exists here. */
+    const drillChains = () => [ctx.networkName];
+
+    /** Append a V̄ sample covering exactly `drillChains()` at the current block. */
+    async function appendDrillSample(valueUsd: number) {
+        appendSample({
+            timestampSec: await time.latest(),
+            valueUsd,
+            perChain: { [ctx.networkName]: valueUsd },
+            chains: drillChains(),
+        });
+    }
+
+    /** Advance `totalHours` in `stepHours` steps, sampling after each — V̄
+     *  windows must have no gap above the 6h default max. */
+    async function advanceSampling(totalHours: number, stepHours: number) {
+        for (let h = 0; h < totalHours; h += stepHours) {
+            await time.increase(stepHours * 3600);
+            const supply = Number(ethers.formatEther(await okuMoney.totalSupply()));
+            const mult = Number(await okuMoney.okuMMultiplier()) / 1e18;
+            await appendDrillSample(supply * mult);
+        }
+    }
+
     after(async () => {
         if (addressBookBackup !== null) fs.writeFileSync(ADDRESS_BOOK_PATH, addressBookBackup);
         else if (fs.existsSync(ADDRESS_BOOK_PATH)) fs.unlinkSync(ADDRESS_BOOK_PATH);
@@ -213,13 +241,14 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const valueUsd = Number(ethers.formatEther(supply)) * (Number(mult) / 1e18);
         const timestampSec = await time.latest();
         const before = loadSamples(GLOBAL_VALUE_SAMPLES_PATH).length;
-        appendSample({ timestampSec, valueUsd, perChain: { [ctx.bookKey]: valueUsd } });
+        appendSample({ timestampSec, valueUsd, perChain: { [ctx.networkName]: valueUsd }, chains: drillChains() });
         const after = loadSamples(GLOBAL_VALUE_SAMPLES_PATH);
         expect(after.length).to.equal(before + 1);
         const written = after[after.length - 1];
         expect(written.timestampSec).to.equal(timestampSec);
         expect(written.valueUsd).to.equal(valueUsd);
-        expect(written.perChain[ctx.bookKey]).to.equal(valueUsd);
+        expect(written.perChain[ctx.networkName]).to.equal(valueUsd);
+        expect(written.chains).to.deep.equal(drillChains());
     });
 
     it("setOkuMYieldRate: direct mode activates streaming accrual", async () => {
@@ -246,7 +275,21 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             rate: PRECISION + 10n ** 8n,
             endTimestamp: rateEnd,
         });
-        await time.increase(16 * 3600); // 16h into the 22.4h base window
+        // Seed the V(t) store. `deriveStageSettlement` hard-errors on an empty
+        // sample set rather than deriving a rate from an unmeasured denominator,
+        // and requires the window START (the anchor) to be covered and no gap
+        // above 6h — so sample at the anchor, then every 4h.
+        //
+        // Anchor read from the contract, not recomputed: the window starts at
+        // `okuMLastAccrualTime`, which is the block the rate tx mined in, not
+        // the timestamp observed just before sending it.
+        const anchorSec = Number(await okuMoney.okuMLastAccrualTime());
+        expect(await time.latest()).to.equal(anchorSec);
+        {
+            const s0 = Number(ethers.formatEther(await okuMoney.totalSupply()));
+            await appendDrillSample(s0 * (Number(await okuMoney.okuMMultiplier()) / 1e18));
+        }
+        await advanceSampling(16, 4); // 16h into the 22.4h base window
 
         // Target set generously ABOVE what the tiny base rate alone could
         // have distributed over the full window, so settlement has real,
@@ -258,44 +301,46 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         // per-24h ceiling (a larger target would clamp at MAX_RATE in a 24h window).
         const realisedYieldUsd = supply * 0.0005;
 
-        // Seed the V(t) store. `deriveStageSettlement` hard-errors on an empty
-        // sample set rather than deriving a rate from an unmeasured denominator.
-        // Two samples spanning the elapsed base window are the minimum for a
-        // time-weighted average.
-        const multNow = Number(await okuMoney.okuMMultiplier()) / 1e18;
-        // Anchor read from the contract, not recomputed: the window starts at
-        // `okuMLastAccrualTime`, which is the block the rate tx mined in, not
-        // the timestamp observed just before sending it.
-        const anchorSec = Number(await okuMoney.okuMLastAccrualTime());
-        appendSample({
-            timestampSec: anchorSec,
-            valueUsd: supply * multNow,
-            perChain: { [ctx.bookKey]: supply * multNow },
-        });
-        appendSample({
-            timestampSec: await time.latest(),
-            valueUsd: supply * multNow,
-            perChain: { [ctx.bookKey]: supply * multNow },
-        });
-
         const pendingEnd = rateEnd + BigInt(5760); // one 24h-epoch settlement window (1/15)
         const artifact = await deriveStageSettlement(ctx, admin, {
             epochId: `drill-stage-${Date.now()}`,
             realisedYieldUsd,
             pendingEndTimestamp: pendingEnd,
+            chains: drillChains(),
         });
         expect(BigInt(artifact.schedule.nextRate)).to.be.greaterThan(PRECISION);
+        // Bound at derivation: committed targets, this chain's identity, pre-state, expiry.
+        expect(artifact.targetChains).to.deep.equal(drillChains());
+        expect(artifact.targets[ctx.networkName]).to.deep.equal({
+            kind: "evm",
+            chainId: ctx.chainConfig.chainId,
+            okuMoney: await okuMoney.getAddress(),
+        });
+        expect(artifact.expectedPreState.lastAccrualTime).to.equal(anchorSec);
+        expect(artifact.expectedPreState.rate).to.equal((PRECISION + 10n ** 8n).toString());
+        expect(artifact.expiresAtSec).to.be.greaterThan(Math.floor(Date.now() / 1000));
 
         // Derivation and submission are separate steps in the production
         // pipeline (derive once, fan out to every chain); the drill submits the
-        // artifact here the same way `applyScheduleSingleChain.ts` does.
-        await runSetOkuMYieldRate(ctx, admin, {
-            mode: "withSuccessor",
-            rate: BigInt(artifact.schedule.rate),
-            endTimestamp: BigInt(artifact.schedule.rateEnd),
-            nextRate: BigInt(artifact.schedule.nextRate),
-            pendingEndTimestamp: BigInt(artifact.schedule.nextRateEnd),
-        });
+        // artifact through `applyScheduleSingleChain.ts`'s real entry point,
+        // with its real chain reader (identity + pre-state checks on-chain).
+        expect(await applyScheduleToChain(artifact, ctx, admin, false)).to.equal("recorded");
+        const firstReceipt = loadArtifact(artifact.epochId, "stage-settlement").receipts[ctx.bookKey] as any;
+        expect(firstReceipt.chainId).to.equal(ctx.chainConfig.chainId);
+
+        // Crash-after-confirm simulation (P-06): the receipt is lost, the tx
+        // is not. A retry must recover the receipt — finding the original tx
+        // via its NextOkuMYieldRateSet log — and must NOT resend (a resend
+        // would re-anchor the multiplier at a later timestamp).
+        const anchorAfterApply = await okuMoney.okuMLastAccrualTime();
+        const lost = loadArtifact(artifact.epochId, "stage-settlement");
+        delete lost.receipts[ctx.bookKey];
+        await time.increase(60);
+        expect(await applyScheduleToChain(lost, ctx, admin, false)).to.equal("recovered");
+        expect(await okuMoney.okuMLastAccrualTime(), "no re-anchor").to.equal(anchorAfterApply);
+        const recovered = loadArtifact(artifact.epochId, "stage-settlement").receipts[ctx.bookKey] as any;
+        expect(recovered.recovered).to.equal(true);
+        expect(recovered.txHash).to.equal(firstReceipt.txHash);
         // The settlement rate must actually be armed as the successor on-chain.
         expect(await okuMoney.okuMPendingRatePerSecond()).to.be.greaterThan(PRECISION);
         expect(await okuMoney.okuMPendingRateEnd()).to.equal(pendingEnd);
@@ -325,8 +370,11 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             // exercised here for the same reason the globalValue test above
             // isn't — see runEpoch.ts's `globalValueUsdOverride` doc.
             globalValueUsdOverride: supply * mult,
+            chains: drillChains(),
         });
         expect(BigInt(artifact.schedule.nextRate)).to.be.greaterThan(10n ** 18n);
+        // The roll records the multiplier at the start of the epoch it opens.
+        expect(BigInt(artifact.meta.epochStartMultiplier!)).to.equal(await okuMoney.okuMMultiplier());
 
         await runSetOkuMYieldRate(ctx, admin, {
             mode: "withSuccessor",
@@ -351,13 +399,13 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         await runSetOkuMYieldRate(ctx, admin, { mode: "direct", rate: PRECISION + 10n ** 8n, endTimestamp: rateEnd });
 
         const supplyAtAnchor = Number(ethers.formatEther(await okuMoney.totalSupply()));
-        const multAtAnchor = Number(await okuMoney.okuMMultiplier()) / 1e18;
-        appendSample({ timestampSec: await time.latest(), valueUsd: supplyAtAnchor * multAtAnchor, perChain: {} });
+        const multAtAnchorWad = await okuMoney.okuMMultiplier();
+        const multAtAnchor = Number(multAtAnchorWad) / 1e18;
+        await appendDrillSample(supplyAtAnchor * multAtAnchor);
 
-        await time.increase(16 * 3600); // 16h into the 22.4h base window
+        await advanceSampling(16, 4); // 16h into the 22.4h base window
         const supplyNow = Number(ethers.formatEther(await okuMoney.totalSupply()));
         const multNow = Number(await okuMoney.okuMMultiplier()) / 1e18;
-        appendSample({ timestampSec: await time.latest(), valueUsd: supplyNow * multNow, perChain: {} });
 
         // `deriveRollEpoch` does not touch the carry ledger, so it is empty here.
         // Seed a prior epoch whose carry-in DIFFERS from its carry-forward, so
@@ -374,6 +422,10 @@ describe("Operator drill: exercise every lever on a clean local chain", function
                 // carryForwardUsd 400 != carryInUsd 250, which is what makes
                 // `currentEpochCarryInUsd` and `outstandingCarryUsd` differ.
                 result: { ratePerSecond: 1_000_000_000_000_000_000n, carryForwardUsd: 400 },
+                // The seed epoch "opened" at the anchor; the roll below
+                // reconciles its growth from here (P-04), not from the
+                // stage-settlement re-anchor in between.
+                epochStartMultiplier: multAtAnchorWad.toString(),
             })
         );
 
@@ -394,6 +446,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             epochId: EPOCH_A,
             realisedYieldUsd,
             pendingEndTimestamp: pendingEnd,
+            chains: drillChains(),
         });
         expect(stageArtifact.phase).to.equal("stage-settlement");
         // Must equal `currentEpochCarryInUsd` (the carry baked into whatever
@@ -429,6 +482,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             nextEndTimestamp: BigInt(await time.latest()) + BigInt(5760),
             epochLengthSec: 86400,
             globalValueUsdOverride: supplyAtRoll * multAtRoll,
+            chains: drillChains(),
         });
         expect(rollArtifactA.phase).to.equal("roll-epoch");
         // The ledger's latest entry BEFORE this derivation (the seed) is what
@@ -458,6 +512,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
                 measuredAvgValueUsd: rollArtifactA.meta.globalValueUsd,
                 conservativeFactor: rollArtifactA.meta.conservativeFactor,
                 result: { ratePerSecond: BigInt(rollArtifactA.schedule.nextRate), carryForwardUsd: rollArtifactA.meta.carryForwardUsd },
+                epochStartMultiplier: rollArtifactA.meta.epochStartMultiplier,
             })
         );
         let summary = summarizeLedger();
@@ -483,6 +538,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
             nextEndTimestamp: BigInt(await time.latest()) + BigInt(5760),
             epochLengthSec: 86400,
             globalValueUsdOverride: supplyAtRollB * multAtRollB,
+            chains: drillChains(),
         });
         // Epoch B's carryInUsd is epoch A's
         // RECONCILED carry (ex-post actual-vs-target), NOT epoch A's
@@ -490,6 +546,17 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         // sources, per carryLedger.ts's module doc.
         expect(rollArtifactB.meta.priorEpochId).to.equal(EPOCH_A);
         expect(rollArtifactB.meta.carryForwardUsd).to.equal(0); // epoch B's own, unknown until it's reconciled next
+        // P-04: epoch A's actual payout is its growth from ITS start multiplier
+        // (recorded at roll A), across every re-anchor since — not
+        // current/okuMBaseMultiplier, which only spans the last segment.
+        const startA = BigInt(rollArtifactA.meta.epochStartMultiplier!);
+        const multBWad = BigInt(rollArtifactB.meta.epochStartMultiplier!); // = multiplier at roll B
+        const growthA = Number((multBWad * 10n ** 18n) / startA - 10n ** 18n) / 1e18;
+        const expectedCarryB = reconcileActualPayout(
+            rollArtifactA.meta.realisedYieldUsd + rollArtifactA.meta.carryInUsd,
+            rollArtifactA.meta.globalValueUsd * growthA
+        );
+        expect(rollArtifactB.meta.carryInUsd).to.be.closeTo(expectedCarryB, 1e-9);
 
         // Simulate broadcastSchedule.ts's post-confirmation sequence again:
         // backfill epoch A FIRST, then insert epoch B.
@@ -502,6 +569,7 @@ describe("Operator drill: exercise every lever on a clean local chain", function
                 measuredAvgValueUsd: rollArtifactB.meta.globalValueUsd,
                 conservativeFactor: rollArtifactB.meta.conservativeFactor,
                 result: { ratePerSecond: BigInt(rollArtifactB.schedule.nextRate), carryForwardUsd: rollArtifactB.meta.carryForwardUsd },
+                epochStartMultiplier: rollArtifactB.meta.epochStartMultiplier,
             })
         );
 

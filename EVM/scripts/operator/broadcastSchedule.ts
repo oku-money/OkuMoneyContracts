@@ -14,18 +14,41 @@
  * re-read the artifact and SKIP any chain with a successful receipt, so a
  * partial failure is recoverable by re-running the same command.
  *
+ * The target set is the artifact's COMMITTED `targetChains` (fixed at
+ * derivation), never re-resolved here: a `CHAINS` env that differs from it is
+ * refused, so a re-run cannot quietly drop a failed chain and finalize.
+ *
  * The carry ledger is written HERE, once — not in `deriveEpochSchedule.ts`,
- * and not per chain. It fires after every chain (EVM and SVM) has a successful
- * receipt for a `roll-epoch` artifact: one epoch, one ledger entry.
+ * and not per chain. It fires only once EVERY committed target (EVM and SVM)
+ * has a receipt for a `roll-epoch` artifact: one epoch, one ledger entry.
  */
 
 import { execFileSync } from "child_process";
 import * as path from "path";
 import { logger } from "../utils/logger";
 import { runMain, parseArg, isDryRun, isYesMainnet } from "../utils/cli";
-import { loadArtifact, saveArtifactInPlace, EpochScheduleArtifact, EpochPhase } from "../utils/epochArtifact";
+import {
+  loadArtifact,
+  saveArtifactInPlace,
+  assertArtifactBound,
+  assertNotExpired,
+  isConfirmedReceipt,
+  preStateMismatches,
+  scheduleMatchesTarget,
+  ALREADY_APPLIED,
+  EpochScheduleArtifact,
+  EpochPhase,
+  ScheduleFields,
+} from "../utils/epochArtifact";
 import { upsertLedgerEntry, buildLedgerEntry, backfillReconciliation } from "../utils/carryLedger";
-import { participatingChains, parseChainsEnv, SVM_CHAIN_KEY } from "../config/epochChains";
+import {
+  participatingChains,
+  parseChainsEnv,
+  sameChainSet,
+  svmReadConfigured,
+  SVM_CHAIN_KEY,
+} from "../config/epochChains";
+import { readSvmSchedule } from "../utils/svmValue";
 
 // NOTE: must NOT import anything from `deriveEpochSchedule.ts` (which pulls in
 // `ethers` from `"hardhat"`) — this driver runs standalone under plain `tsx`,
@@ -60,11 +83,37 @@ const defaultRunner: SubprocessRunner = (command, args, opts) => {
   return out;
 };
 
+/** Reads SVM's current schedule fields, or `null` when it cannot be read
+ *  (unconfigured). Injectable for tests. */
+export type SvmScheduleReader = () => Promise<ScheduleFields | null>;
+
+/** Default SVM reader: `svmValue.ts::readSvmSchedule` when the SVM read env
+ *  (SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT) is set, else `null`.
+ *  A configured-but-failing read throws. */
+const defaultSvmReader: SvmScheduleReader = async () => {
+  if (!svmReadConfigured()) return null;
+  const reading = await readSvmSchedule(
+    process.env.SVM_RPC_URL!,
+    process.env.SVM_LITE_PSM_PROGRAM_ID!,
+    process.env.SVM_OKU_M_MINT!
+  );
+  if (!reading) throw new Error("SVM schedule read returned nothing (PsmConfig missing or layout changed)");
+  const s = reading.schedule;
+  return {
+    rate: s.ratePerSecond.toString(),
+    rateEnd: Number(s.rateEnd),
+    pendingRate: s.pendingRatePerSecond.toString(),
+    pendingRateEnd: Number(s.pendingRateEnd),
+  };
+};
+
 export interface BroadcastOpts {
   epochId: string;
   phase: EpochPhase;
   dryRun: boolean;
-  /** Explicit chain scope; defaults to `participatingChains()`. */
+  /** Optional `CHAINS` scope. Must name exactly the artifact's committed
+   *  `targetChains` (any order) or the broadcast is refused; the committed
+   *  set is what is actually used. */
   chains?: string[];
   /** Second gate on including a mainnet in the epoch SCOPE — see
    *  `config/epochChains.ts`. Defaults to `isYesMainnet()`. */
@@ -74,17 +123,46 @@ export interface BroadcastOpts {
   /** Test seam: override the carry-ledger path so tests don't touch the
    *  operator's real local ledger. */
   ledgerPath?: string;
+  /** Test seam — see {@link SvmScheduleReader}. */
+  readSvm?: SvmScheduleReader;
+  /** Test seam: wall-clock seconds for the expiry check. */
+  nowSec?: number;
 }
 
-function targets(chains: string[] | undefined, yesMainnet: boolean): string[] {
-  // Single source of truth shared with the V̄ sampler — see
-  // `config/epochChains.ts`'s module doc for why these must never diverge.
-  return participatingChains({ requested: chains, yesMainnet });
+/**
+ * The committed target set, re-validated (unknown names, mainnet gate) and
+ * cross-checked against an explicit `CHAINS` scope, which must be the same set.
+ */
+function targets(artifact: EpochScheduleArtifact, chains: string[] | undefined, yesMainnet: boolean): string[] {
+  if (chains) {
+    participatingChains({ requested: chains, yesMainnet }); // validation only
+    if (!sameChainSet(chains, artifact.targetChains)) {
+      throw new Error(
+        `CHAINS=${chains.join(",")} differs from the artifact's committed target set ` +
+          `[${artifact.targetChains.join(", ")}]. The target set is fixed at derivation; ` +
+          "unset CHAINS (or pass exactly that set), or re-derive with a different scope."
+      );
+    }
+  }
+  return participatingChains({ requested: [...artifact.targetChains], yesMainnet });
 }
 
+/**
+ * A receipt counts only if it was recorded for the identity the artifact
+ * committed for that chain (EVM: chainId + OkuMoney address; SVM: cluster,
+ * plus program id when both sides recorded one). An unmatched receipt is not
+ * honoured: the chain is re-dispatched, and the EVM child refuses on the
+ * identity mismatch rather than re-applying blindly.
+ */
 function alreadyConfirmed(artifact: EpochScheduleArtifact, chain: string): boolean {
   const r = artifact.receipts[chain];
-  return !!r && "txHash" in r;
+  if (!isConfirmedReceipt(r)) return false;
+  const t = artifact.targets[chain];
+  if (!t) return false;
+  if (t.kind === "evm") {
+    return r.chainId === t.chainId && !!r.address && r.address.toLowerCase() === t.okuMoney.toLowerCase();
+  }
+  return r.cluster === t.cluster && (!t.programId || !r.address || r.address === t.programId);
 }
 
 function applyToEvmChain(
@@ -115,8 +193,83 @@ function applyToEvmChain(
   run("npx", [...args], { cwd: path.join(__dirname, "../.."), env });
 }
 
-function applyToSvm(epochId: string, phase: EpochPhase, dryRun: boolean, run: SubprocessRunner): void {
+/**
+ * SVM leg. Checks made HERE, before spawning, because the SVM child
+ * (`SVM/oku-programs/scripts/admin/set-yield-rate.ts`) takes only the schedule
+ * integers and verifies none of: expiry, cluster/program identity, or that
+ * the on-chain schedule still equals the artifact's pre-state.
+ *
+ *   - expiry: always enforced;
+ *   - cluster: the cluster we would pass (`SVM_NETWORK`, default devnet) must
+ *     equal the committed one; program id: if both the artifact and
+ *     `SVM_LITE_PSM_PROGRAM_ID` carry one they must match. NOTE the child
+ *     resolves the program from its OWN deployment record, not this env var,
+ *     so this is a consistency check on the operator's env, not a binding of
+ *     what the child will call;
+ *   - pre-state / already-applied: only when the SVM read env is configured
+ *     (`readSvm` returns non-null). Then an SVM already at the target gets a
+ *     `recovered` receipt and NO resend, and an SVM at neither the pre-state
+ *     nor the target is refused. When it is NOT configured, SVM pre-state is
+ *     UNVERIFIED (warned) — set SVM_RPC_URL / SVM_LITE_PSM_PROGRAM_ID /
+ *     SVM_OKU_M_MINT to close that gap.
+ * Anchor fields (base multiplier / last accrual time) are never compared on
+ * SVM: it is never the reference chain.
+ */
+async function applyToSvm(
+  epochId: string,
+  phase: EpochPhase,
+  dryRun: boolean,
+  run: SubprocessRunner,
+  readSvm: SvmScheduleReader,
+  nowSec: number | undefined
+): Promise<void> {
   const artifact = loadArtifact(epochId, phase);
+  const target = artifact.targets[SVM_CHAIN_KEY];
+  if (!target || target.kind !== "svm") throw new Error("artifact has no SVM target identity");
+  assertNotExpired(artifact, nowSec);
+
+  const cluster = process.env.SVM_NETWORK ?? "devnet";
+  if (cluster !== target.cluster) {
+    throw new Error(`SVM cluster mismatch: artifact bound ${target.cluster}, SVM_NETWORK resolves to ${cluster}`);
+  }
+  const envProgram = process.env.SVM_LITE_PSM_PROGRAM_ID;
+  if (target.programId && envProgram && envProgram !== target.programId) {
+    throw new Error(
+      `SVM program mismatch: artifact bound ${target.programId}, SVM_LITE_PSM_PROGRAM_ID=${envProgram}`
+    );
+  }
+
+  const live = await readSvm();
+  if (live === null) {
+    logger.warning(
+      "[solana] SVM read env not configured — cannot verify SVM's pre-state or detect an " +
+        "already-applied schedule before sending (the SVM child does not verify either)."
+    );
+  } else if (scheduleMatchesTarget(live, artifact)) {
+    if (dryRun) {
+      logger.success("[solana] DRY_RUN — schedule already at target; would record a recovered receipt");
+      return;
+    }
+    artifact.receipts[SVM_CHAIN_KEY] = {
+      txHash: ALREADY_APPLIED,
+      confirmedAtSec: Math.floor(Date.now() / 1000),
+      cluster: target.cluster,
+      ...(target.programId ? { address: target.programId } : {}),
+      recovered: true,
+    };
+    saveArtifactInPlace(artifact);
+    logger.success("[solana] schedule already at target — recovered receipt recorded, nothing resent");
+    return;
+  } else {
+    const mismatches = preStateMismatches(live, artifact, false);
+    if (mismatches.length > 0) {
+      throw new Error(
+        `SVM schedule no longer matches the artifact's expected pre-state (nor its target): ` +
+          `${mismatches.join("; ")}. Re-derive.`
+      );
+    }
+  }
+
   const svmDir = path.join(__dirname, "../../../SVM/oku-programs");
   const args = [
     "tsx",
@@ -151,7 +304,12 @@ function applyToSvm(epochId: string, phase: EpochPhase, dryRun: boolean, run: Su
           "to record a receipt. Re-run; if it keeps happening, check the SVM log above."
       );
     }
-    artifact.receipts[SVM_CHAIN_KEY] = { txHash: sig, confirmedAtSec: Math.floor(Date.now() / 1000) };
+    artifact.receipts[SVM_CHAIN_KEY] = {
+      txHash: sig,
+      confirmedAtSec: Math.floor(Date.now() / 1000),
+      cluster: target.cluster,
+      ...(target.programId ? { address: target.programId } : {}),
+    };
     saveArtifactInPlace(artifact);
   }
 }
@@ -161,12 +319,20 @@ export async function broadcastArtifact(opts: BroadcastOpts): Promise<void> {
   const run = opts.run ?? defaultRunner;
   const yesMainnet = opts.yesMainnet ?? isYesMainnet();
 
+  const readSvm = opts.readSvm ?? defaultSvmReader;
+
   let artifact = loadArtifact(epochId, phase);
+  assertArtifactBound(artifact);
   logger.header(`Broadcasting epoch ${epochId} (${artifact.phase})`);
   logger.info(`rate=${artifact.schedule.rate} end=${artifact.schedule.rateEnd}`);
   logger.info(`nextRate=${artifact.schedule.nextRate} nextEnd=${artifact.schedule.nextRateEnd}`);
 
-  const chainList = targets(opts.chains, yesMainnet);
+  const chainList = targets(artifact, opts.chains, yesMainnet);
+  logger.info(`Committed targets: ${chainList.join(", ")}`);
+  // Refuse to start SUBMITTING from an expired artifact; finalizing one whose
+  // targets have all already confirmed is still allowed.
+  if (chainList.some((c) => !alreadyConfirmed(artifact, c))) assertNotExpired(artifact, opts.nowSec);
+
   const failures: string[] = [];
   for (const chain of chainList) {
     artifact = loadArtifact(epochId, phase); // re-read: the subprocess just mutated it
@@ -175,9 +341,9 @@ export async function broadcastArtifact(opts: BroadcastOpts): Promise<void> {
       continue;
     }
     try {
-      if (chain === SVM_CHAIN_KEY) applyToSvm(epochId, phase, dryRun, run);
+      if (chain === SVM_CHAIN_KEY) await applyToSvm(epochId, phase, dryRun, run, readSvm, opts.nowSec);
       else applyToEvmChain(chain, epochId, phase, dryRun, run);
-      logger.success(`[${chain}] confirmed`);
+      logger.success(`[${chain}] done`);
     } catch (e: any) {
       logger.error(`[${chain}] FAILED: ${e.message ?? e}`);
       failures.push(chain);
@@ -195,9 +361,19 @@ export async function broadcastArtifact(opts: BroadcastOpts): Promise<void> {
     return;
   }
 
+  // Finalize only when EVERY committed target has a receipt (bound to its
+  // committed identity). A subprocess exiting 0 is not proof of a receipt.
+  artifact = loadArtifact(epochId, phase);
+  const missing = artifact.targetChains.filter((c) => !alreadyConfirmed(artifact, c));
+  if (missing.length > 0) {
+    throw new Error(
+      `Broadcast incomplete: no receipt for committed target(s) ${missing.join(", ")}. ` +
+        "Not finalizing (carry ledger untouched); re-run this command."
+    );
+  }
+
   // Carry ledger: written exactly once, here, only for roll-epoch artifacts —
   // stage-settlement doesn't close an epoch, so it has nothing to record.
-  artifact = loadArtifact(epochId, phase);
   if (artifact.phase === "roll-epoch") {
     // Backfill the PRIOR epoch's reconciliation FIRST — deriveRollEpoch
     // computed it (ex-post reconcileActualPayout) and threaded it into THIS
@@ -217,6 +393,7 @@ export async function broadcastArtifact(opts: BroadcastOpts): Promise<void> {
       measuredAvgValueUsd: artifact.meta.globalValueUsd,
       conservativeFactor: artifact.meta.conservativeFactor,
       result: { ratePerSecond: BigInt(artifact.schedule.nextRate), carryForwardUsd: artifact.meta.carryForwardUsd },
+      epochStartMultiplier: artifact.meta.epochStartMultiplier,
     });
     upsertLedgerEntry(entry, opts.ledgerPath);
     logger.success(`Carry ledger entry written for epochId=${epochId} (reconciliation pending until next roll)`);

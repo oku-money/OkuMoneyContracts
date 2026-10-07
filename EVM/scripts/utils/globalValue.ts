@@ -34,14 +34,25 @@ import { ethers } from "ethers";
 import { loadAddress } from "./addressBook";
 import { logger } from "./logger";
 import { CHAIN_METADATA } from "../config/chains";
-import { distributedUsdOverWindow, RateSegment } from "./epochDistribution";
+import {
+  distributedUsdOverWindow,
+  windowSamples,
+  RateSegment,
+  WindowSampleOpts,
+} from "./epochDistribution";
 import { readSvmValueUsd } from "./svmValue";
-import { participatingChains, SVM_CHAIN_KEY } from "../config/epochChains";
+import {
+  expectedValueChains,
+  participatingChains,
+  canonicalChainSet,
+  sameChainSet,
+  SVM_CHAIN_KEY,
+} from "../config/epochChains";
 import { isYesMainnet } from "./cli";
 
 const ABI = ["function totalSupply() view returns (uint256)", "function okuMMultiplier() view returns (uint256)"];
 
-/** One time-stamped sample of the SUMMED global value across all readable chains. */
+/** One time-stamped sample of the SUMMED global value across EVERY expected chain. */
 export interface GlobalValueSample {
   /** Unix seconds. */
   timestampSec: number;
@@ -49,8 +60,13 @@ export interface GlobalValueSample {
    *  Precision loss converting from `uint256` wei-scale is intentional and
    *  acceptable — see {@link toUsdNumber}. */
   valueUsd: number;
-  /** Per-chain breakdown, for diagnostics (not consumed by the average itself). */
+  /** Per-chain breakdown. Its KEY SET is the chain set the sample covers and
+   *  is validated by {@link samplesInWindow} against the current expected set. */
   perChain: Record<string, number>;
+  /** The expected chain set (canonical/sorted) this sample was taken against.
+   *  Absent on samples persisted before chain-set recording; those are
+   *  validated by `perChain`'s key set alone. */
+  chains?: string[];
 }
 
 /**
@@ -64,79 +80,73 @@ function toUsdNumber(raw: bigint, decimals = 18): number {
   return Number(raw) / 10 ** decimals;
 }
 
-/** Read one chain's current dollar value of OkuM: `totalSupply() * multiplier / 1e18`. */
-async function readChainValueUsd(name: string, rpcUrl: string): Promise<number | null> {
-  try {
-    const addr = loadAddress(name, "OkuMoney");
-    if (!addr) return null;
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
-    const c = new ethers.Contract(addr, ABI, provider);
-    const [totalSupply, multiplier]: [bigint, bigint] = await Promise.all([
-      c.totalSupply(),
-      c.okuMMultiplier(),
-    ]);
-    const valueRaw = (totalSupply * multiplier) / 10n ** 18n; // still 18-decimal-scaled
-    return toUsdNumber(valueRaw);
-  } catch (e: any) {
-    logger.warning(`${name}: value read failed — ${e.message ?? e}`);
-    return null;
-  }
+/** Read one chain's current dollar value of OkuM: `totalSupply() * multiplier / 1e18`.
+ *  Throws with the reason on any failure (no address, no RPC, read error). */
+async function readChainValueUsd(name: string): Promise<number> {
+  const rpcUrl = CHAIN_METADATA[name]?.rpcUrl;
+  if (!rpcUrl) throw new Error("no rpcUrl configured");
+  const addr = loadAddress(name, "OkuMoney");
+  if (!addr) throw new Error("no OkuMoney address in the address book");
+  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const c = new ethers.Contract(addr, ABI, provider);
+  const [totalSupply, multiplier]: [bigint, bigint] = await Promise.all([
+    c.totalSupply(),
+    c.okuMMultiplier(),
+  ]);
+  const valueRaw = (totalSupply * multiplier) / 10n ** 18n; // still 18-decimal-scaled
+  return toUsdNumber(valueRaw);
 }
 
 /**
- * Poll every configured chain once and return the summed global-value sample.
- * Chains that fail to respond are OMITTED from the sum (not treated as zero) —
- * a transient RPC failure must not manufacture a fake AUM drop. Callers should
- * treat a sample with missing chains as lower-confidence (see `perChain`).
+ * Poll every EXPECTED chain once and return the summed global-value sample.
+ *
+ * The expected set is `config/epochChains.ts::expectedValueChains()` — the
+ * participating set (the SAME set `broadcastSchedule.ts` fans a derived rate
+ * out to, including explicit `CHAINS=` lists, which go through the same
+ * validation) minus SVM only when SVM is neither configured nor
+ * `SVM_EXPECTED=true`.
+ *
+ * ALL-OR-NOTHING: if any expected chain (EVM or SVM) has no address, no RPC,
+ * or fails to read, this THROWS rather than returning a partial sum. A
+ * missing chain is not "lower confidence" — it lowers V̄, the denominator of
+ * every derived rate, and over-pays yield fleet-wide. There is no opt-out
+ * beyond the SVM one above; narrow `CHAINS` deliberately (and consistently
+ * with the broadcast) if a chain is genuinely out of the epoch.
+ *
+ * The returned sample records the expected set in `chains` so
+ * {@link samplesInWindow} can refuse samples taken against a different set.
  */
 export async function sampleGlobalValueUsd(chains?: string[]): Promise<GlobalValueSample> {
-  // Scope resolves through `participatingChains()` (config/epochChains.ts) —
-  // the SAME set `broadcastSchedule.ts` fans a derived rate out to — NOT
-  // every key in `CHAIN_METADATA` (which includes mainnets this protocol
-  // isn't live on for the MVP). V̄'s denominator and the broadcast's
-  // recipient set must never diverge; see epochChains.ts's module doc.
-  //
-  // An explicit `chains` list MUST be routed through the SAME validation
-  // rather than trusted verbatim: `CHAINS=base,bsc` would otherwise add two
-  // mainnets to V̄'s denominator while `broadcastSchedule.ts` refuses them,
-  // inflating V̄ relative to the set actually receiving the rate.
-  const resolvedChains = participatingChains({
-    requested: chains,
-    yesMainnet: isYesMainnet(),
-  });
-  const targets = Object.entries(CHAIN_METADATA).filter(([name]) => resolvedChains.includes(name));
+  const scope = { requested: chains, yesMainnet: isYesMainnet() };
+  const expected = expectedValueChains(scope);
+  if (expected.length === 0) throw new Error("sampleGlobalValueUsd: expected chain set is empty");
+  warnIfSvmExcluded(participatingChains(scope), expected);
 
-  const results = await Promise.all(
-    targets.map(async ([name, cfg]) => {
-      if (!cfg.rpcUrl) return null;
-      const valueUsd = await readChainValueUsd(name, cfg.rpcUrl);
-      return valueUsd === null ? null : ([name, valueUsd] as const);
+  const failures: string[] = [];
+  const perChain: Record<string, number> = {};
+  await Promise.all(
+    expected.map(async (name) => {
+      try {
+        perChain[name] =
+          name === SVM_CHAIN_KEY ? await readSvmRequired() : await readChainValueUsd(name);
+      } catch (e: any) {
+        failures.push(`${name}: ${e.message ?? e}`);
+      }
     })
   );
 
-  const perChain: Record<string, number> = {};
-  let total = 0;
-  for (const r of results) {
-    if (r === null) continue;
-    const [name, valueUsd] = r;
-    perChain[name] = valueUsd;
-    total += valueUsd;
+  if (failures.length > 0) {
+    throw new Error(
+      `Global value sample INCOMPLETE — refusing to emit a partial sum (a missing chain ` +
+        `lowers V̄ and inflates every derived rate). Expected [${expected.join(", ")}]; ` +
+        `unreadable: ${failures.sort().join("; ")}`
+    );
   }
 
-  // SVM. Read separately because Solana has no view functions — the canonical
-  // multiplier is recomputed off-chain from `PsmConfig` via the shared mirror
-  // of the on-chain math. Omitted (not zeroed) if unreadable, same as any EVM
-  // chain: a transient RPC failure must never shrink V, because that would
-  // over-pay yield.
-  if (resolvedChains.includes(SVM_CHAIN_KEY)) {
-    const svm = await readSvmConfigured();
-    if (svm !== null) {
-      perChain[SVM_CHAIN_KEY] = svm;
-      total += svm;
-    }
-  }
-
-  return { timestampSec: Math.floor(Date.now() / 1000), valueUsd: total, perChain };
+  const ordered: Record<string, number> = {};
+  for (const name of expected) ordered[name] = perChain[name];
+  const total = expected.reduce((sum, name) => sum + ordered[name], 0);
+  return { timestampSec: Math.floor(Date.now() / 1000), valueUsd: total, perChain: ordered, chains: expected };
 }
 
 /** Key used for SVM in {@link GlobalValueSample.perChain}. Re-exported from
@@ -145,49 +155,42 @@ export async function sampleGlobalValueUsd(chains?: string[]): Promise<GlobalVal
 export { SVM_CHAIN_KEY };
 
 /**
- * Read SVM's contribution using environment-provided endpoints.
+ * Read SVM's contribution using environment-provided endpoints. Only called
+ * when SVM is in the expected set (configured, or `SVM_EXPECTED=true`), so
+ * every failure — including "expected but not configured" — throws.
  *
- * Throws rather than warns when `SVM_EXPECTED=true`. V(t) is the DENOMINATOR
- * of every derived rate (`rate ≈ realisedYield / (V̄ x window)`), so a chain
- * omitted from V makes the derived rate too HIGH and the protocol
- * over-distributes: SVM holding 20% of supply and silently excluded means V̄
+ * V(t) is the DENOMINATOR of every derived rate (`rate ≈ realisedYield /
+ * (V̄ x window)`): SVM holding 20% of supply and silently excluded means V̄
  * 20% low and the rate 25% high, every epoch, with nothing failing.
- *
- * The flag exists because "SVM is absent" is a legitimate state pre-launch and
- * must stay distinguishable from "SVM is misconfigured". Set it the moment SVM
- * carries supply.
+ * `SVM_EXPECTED` keeps "SVM is absent" (pre-launch, legitimately excluded by
+ * `expectedValueChains`) distinguishable from "SVM is misconfigured".
  */
-async function readSvmConfigured(): Promise<number | null> {
+async function readSvmRequired(): Promise<number> {
   const rpcUrl = process.env.SVM_RPC_URL;
   const programId = process.env.SVM_LITE_PSM_PROGRAM_ID;
   const okuMMint = process.env.SVM_OKU_M_MINT;
-  const expected = process.env.SVM_EXPECTED === "true";
-
   if (!rpcUrl || !programId || !okuMMint) {
-    const detail =
-      "SVM not configured (need SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT). " +
-      "Its supply would be EXCLUDED from V(t), making any rate derived from this " +
-      "sample too high.";
-    if (expected) {
-      throw new Error(
-        `${detail} SVM_EXPECTED=true, so this is a hard error rather than a warning.`
-      );
-    }
-    logger.warning(`${detail} Set SVM_EXPECTED=true once SVM carries supply.`);
-    return null;
-  }
-
-  const reading = await readSvmValueUsd(rpcUrl, programId, okuMMint);
-  if (reading === null && expected) {
-    // Configured but unreadable. Omitting it would silently inflate the rate,
-    // so with SVM_EXPECTED set we refuse to produce a sample at all — better
-    // no sample than a quietly wrong one.
     throw new Error(
-      "SVM is configured and expected, but its value could not be read. Refusing " +
-        "to emit a global-value sample that would omit it and inflate the derived rate."
+      "SVM_EXPECTED=true but SVM is not configured (need SVM_RPC_URL, " +
+        "SVM_LITE_PSM_PROGRAM_ID, SVM_OKU_M_MINT)"
     );
   }
-  return reading === null ? null : reading.valueUsd;
+  const reading = await readSvmValueUsd(rpcUrl, programId, okuMMint);
+  if (reading === null) throw new Error("SVM is configured but its value could not be read");
+  return reading.valueUsd;
+}
+
+/** Warn (once per call site) when the participating set includes SVM but the
+ *  V̄ expected set excludes it — the broadcast still targets SVM while its
+ *  supply is outside the denominator. */
+export function warnIfSvmExcluded(participating: string[], expected: string[]): void {
+  if (participating.includes(SVM_CHAIN_KEY) && !expected.includes(SVM_CHAIN_KEY)) {
+    logger.warning(
+      "SVM is participating but neither configured (SVM_RPC_URL, SVM_LITE_PSM_PROGRAM_ID, " +
+        "SVM_OKU_M_MINT) nor SVM_EXPECTED=true — its supply is EXCLUDED from V̄. Set " +
+        "SVM_EXPECTED=true once SVM carries supply."
+    );
+  }
 }
 
 const DEFAULT_STORE_PATH = path.join(__dirname, "../config/globalValueSamples.json");
@@ -196,7 +199,23 @@ const DEFAULT_STORE_PATH = path.join(__dirname, "../config/globalValueSamples.js
 export function appendSample(sample: GlobalValueSample, storePath = DEFAULT_STORE_PATH): void {
   const existing = loadSamples(storePath);
   existing.push(sample);
-  fs.writeFileSync(storePath, JSON.stringify(existing, null, 2) + "\n");
+  // tmp + rename: a crash mid-write must not truncate the whole history.
+  const tmp = `${storePath}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(existing, null, 2) + "\n");
+  fs.renameSync(tmp, storePath);
+}
+
+/** The chain set a persisted sample covers: `perChain`'s keys, cross-checked
+ *  against the recorded `chains` when present. */
+function sampleChainSet(s: GlobalValueSample): string[] {
+  const keys = canonicalChainSet(Object.keys(s.perChain ?? {}));
+  if (s.chains && !sameChainSet(s.chains, keys)) {
+    throw new Error(
+      `Sample at ${s.timestampSec} is internally inconsistent: recorded chains ` +
+        `[${canonicalChainSet(s.chains).join(", ")}] but perChain covers [${keys.join(", ")}]`
+    );
+  }
+  return keys;
 }
 
 /** Load all persisted samples, oldest first. Returns `[]` if the store doesn't exist yet. */
@@ -208,30 +227,56 @@ export function loadSamples(storePath = DEFAULT_STORE_PATH): GlobalValueSample[]
 }
 
 /**
- * Select persisted samples within `[startSec, endSec]` (inclusive), sorted
- * chronologically, ready to pass to `timeWeightedAverage` from `yieldRate.ts`.
- * Throws if fewer than 2 samples fall in the window — `timeWeightedAverage`
- * cannot integrate over 0 or 1 points, and a window with too few samples is a
- * signal the sampling cadence is too coarse for the window being measured.
+ * Select persisted samples covering `[startSec, endSec]`, sorted
+ * chronologically, ready to pass to `timeWeightedAverage` (`yieldRate.ts`) or
+ * `distributedUsdOverWindow`.
+ *
+ * Same coverage rules as `epochDistribution.ts::windowSamples` (which this
+ * delegates to): the window START must be covered by a sample at/before it
+ * (the returned series begins exactly at `startSec`, interpolated if needed),
+ * no gap may exceed `opts.maxGapSec` (default 6h), and at least 2 points must
+ * remain.
+ *
+ * CHAIN SET: every sample used (including the pre-window one covering the
+ * start) must cover exactly `expectedChains` — normally
+ * `config/epochChains.ts::expectedValueChains()`. A sample taken against a
+ * different set (a chain missing, or a since-removed chain present) measured
+ * a different denominator and is rejected rather than averaged in.
  */
 export function samplesInWindow(
   startSec: number,
   endSec: number,
-  storePath = DEFAULT_STORE_PATH
+  expectedChains: string[],
+  storePath = DEFAULT_STORE_PATH,
+  opts: WindowSampleOpts = {}
 ): { timestampSec: number; valueUsd: number }[] {
-  const all = loadSamples(storePath)
-    .filter((s) => s.timestampSec >= startSec && s.timestampSec <= endSec)
-    .sort((a, b) => a.timestampSec - b.timestampSec)
-    .map((s) => ({ timestampSec: s.timestampSec, valueUsd: s.valueUsd }));
+  const expected = canonicalChainSet(expectedChains);
+  if (expected.length === 0) throw new Error("samplesInWindow: expectedChains is empty");
 
-  if (all.length < 2) {
+  const all = loadSamples(storePath).sort((a, b) => a.timestampSec - b.timestampSec);
+  let firstUsed = -1;
+  for (let i = 0; i < all.length && all[i].timestampSec <= startSec; i++) firstUsed = i;
+  const used = all.filter((s, i) => i >= Math.max(firstUsed, 0) && s.timestampSec <= endSec);
+
+  const mismatched = used.filter((s) => !sameChainSet(sampleChainSet(s), expected));
+  if (mismatched.length > 0) {
+    const first = mismatched[0];
     throw new Error(
-      `Only ${all.length} sample(s) found in window [${startSec}, ${endSec}] — ` +
-        "need at least 2 to compute a time-weighted average. Increase sampling " +
-        "frequency or widen the window."
+      `${mismatched.length} sample(s) covering window [${startSec}, ${endSec}] were taken ` +
+        `against a different chain set than the current expected set [${expected.join(", ")}] — ` +
+        `e.g. the sample at ${first.timestampSec} covers [${sampleChainSet(first).join(", ")}]. ` +
+        "Refusing to mix denominators; resample (sampleGlobalValue.ts) with the current set."
     );
   }
-  return all;
+
+  const plain = used.map((s) => ({ timestampSec: s.timestampSec, valueUsd: s.valueUsd }));
+  try {
+    return windowSamples(plain, startSec, endSec, opts);
+  } catch (e: any) {
+    throw new Error(
+      `samplesInWindow: ${e.message}. Increase sampling frequency or check the sampler is running.`
+    );
+  }
 }
 
 /**
@@ -276,8 +321,10 @@ export function cumulativeDistributedUsd(
   segments: RateSegment[],
   startSec: number,
   endSec: number,
-  storePath = DEFAULT_STORE_PATH
+  expectedChains: string[],
+  storePath = DEFAULT_STORE_PATH,
+  opts: WindowSampleOpts = {}
 ): number {
-  const samples = samplesInWindow(startSec, endSec, storePath);
-  return distributedUsdOverWindow(segments, samples, startSec, endSec);
+  const samples = samplesInWindow(startSec, endSec, expectedChains, storePath, opts);
+  return distributedUsdOverWindow(segments, samples, startSec, endSec, opts);
 }

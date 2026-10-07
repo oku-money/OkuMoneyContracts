@@ -14,6 +14,12 @@
  * A missing V̄ sample store is a hard error, including in `stage-settlement`:
  * deriving a real rate from an unmeasured V̄ is exactly the failure this file
  * exists to prevent, not something to paper over.
+ *
+ * Every artifact is BOUND at derivation (see `buildBinding`): the sorted
+ * committed target set, each target's chainId+OkuMoney address (EVM) or
+ * cluster+program id (SVM), the reference chain's schedule as the expected
+ * pre-state, and an expiry (`ARTIFACT_TTL_SECONDS`, default 24h). The
+ * broadcaster and per-chain applier refuse to submit outside that binding.
  */
 
 import { ethers } from "hardhat";
@@ -36,16 +42,26 @@ import {
   describeRate,
   reconcileActualPayout,
 } from "@okumoney/yield-tooling";
-import { sampleGlobalValueUsd, samplesInWindow, valueAt } from "../utils/globalValue";
-import { summarizeLedger } from "../utils/carryLedger";
-import { participatingChains, parseChainsEnv } from "../config/epochChains";
+import { sampleGlobalValueUsd, samplesInWindow, valueAt, warnIfSvmExcluded } from "../utils/globalValue";
+import { summarizeLedger, actualPaidUsd } from "../utils/carryLedger";
+import {
+  participatingChains,
+  parseChainsEnv,
+  expectedValueChains,
+  canonicalChainSet,
+  SVM_CHAIN_KEY,
+} from "../config/epochChains";
+import { CHAIN_METADATA } from "../config/chains";
 import {
   EpochScheduleArtifact,
+  ArtifactTarget,
+  OnChainSchedule,
   saveArtifact,
   loadArtifact,
   saveArtifactInPlace,
   artifactPath,
   artifactKey,
+  artifactTtlSeconds,
   EpochPhase,
 } from "../utils/epochArtifact";
 
@@ -54,14 +70,27 @@ import {
 export { EpochScheduleArtifact, saveArtifact, loadArtifact, saveArtifactInPlace, artifactPath, artifactKey, EpochPhase };
 
 async function readSchedule(okuM: any) {
-  const [rateBn, anchorBn, rateEndBn, baseMultBn, multiplierBn] = await Promise.all([
+  const [rateBn, anchorBn, rateEndBn, baseMultBn, multiplierBn, pendingBn, pendingEndBn, effectiveBn] = await Promise.all([
     okuM.okuMRatePerSecond(),
     okuM.okuMLastAccrualTime(),
     okuM.okuMRateEnd(),
     okuM.okuMBaseMultiplier(),
     okuM.okuMMultiplier(),
+    okuM.okuMPendingRatePerSecond(),
+    okuM.okuMPendingRateEnd(),
+    okuM.okuMEffectiveRatePerSecond(),
   ]);
+  const preState: OnChainSchedule = {
+    rate: (rateBn as bigint).toString(),
+    rateEnd: Number(rateEndBn),
+    pendingRate: (pendingBn as bigint).toString(),
+    pendingRateEnd: Number(pendingEndBn),
+    baseMultiplier: (baseMultBn as bigint).toString(),
+    lastAccrualTime: Number(anchorBn),
+  };
   return {
+    preState,
+    multiplierBig: multiplierBn as bigint,
     // EXACT on-chain value, preserved as a bigint. `rateFloat` below is a lossy
     // convenience view for the float-based derivation maths; it must NOT be
     // used to reconstruct a rate for submission. Near 1e18 a JS number's ULP is
@@ -70,6 +99,10 @@ async function readSchedule(okuM: any) {
     // every chain, so a re-anchor that claims to preserve the running rate
     // would in fact perturb it fleet-wide.
     rateBig: rateBn as bigint,
+    // What is accruing NOW: the stored rate until `okuMRateEnd`, then the
+    // armed successor (then PRECISION). `rateBig` is raw storage and goes stale
+    // once the window has handed over.
+    effectiveRateBig: effectiveBn as bigint,
     rateFloat: Number(rateBn) / 1e18,
     anchorSec: Number(anchorBn),
     rateEndSec: Number(rateEndBn),
@@ -84,12 +117,61 @@ async function referenceOkuM(ctx: NetworkContext, signer: Signer) {
   return (await getDeployedContract("OkuMoney", addr)).connect(signer);
 }
 
+/**
+ * The artifact's chain binding: the committed (sorted) target set, each
+ * target's identity, the reference chain's pre-state, and the expiry.
+ *
+ * EVM targets record `chainId` (CHAIN_METADATA) and the OkuMoney address (the
+ * reference chain's from `ctx.bookKey`, so a fork derivation binds the fork's
+ * contract; every other target's from its own address-book entry). A target
+ * with no address is a derivation error, not something to discover mid-
+ * broadcast. SVM records its cluster (`SVM_NETWORK`, default devnet — what the
+ * broadcaster passes to the SVM leg) and `SVM_LITE_PSM_PROGRAM_ID` if set.
+ */
+function buildBinding(
+  ctx: NetworkContext,
+  preState: OnChainSchedule,
+  chains: string[] | undefined
+): Pick<EpochScheduleArtifact, "targetChains" | "targets" | "expectedPreState" | "expiresAtSec"> {
+  const targetChains = canonicalChainSet(participatingChains({ requested: chains, yesMainnet: isYesMainnet() }));
+  const targets: Record<string, ArtifactTarget> = {};
+  for (const name of targetChains) {
+    if (name === SVM_CHAIN_KEY) {
+      const programId = process.env.SVM_LITE_PSM_PROGRAM_ID;
+      targets[name] = {
+        kind: "svm",
+        cluster: process.env.SVM_NETWORK ?? "devnet",
+        ...(programId ? { programId } : {}),
+      };
+      continue;
+    }
+    let addr: string | undefined;
+    try {
+      addr = loadAddress(name === ctx.networkName ? ctx.bookKey : name, "OkuMoney");
+    } catch {
+      addr = undefined;
+    }
+    if (!addr) throw new Error(`Cannot bind target ${name}: no OkuMoney address in the address book`);
+    targets[name] = { kind: "evm", chainId: CHAIN_METADATA[name].chainId, okuMoney: addr };
+  }
+  return {
+    targetChains,
+    targets,
+    expectedPreState: preState,
+    expiresAtSec: Math.floor(Date.now() / 1000) + artifactTtlSeconds(),
+  };
+}
+
 export interface DeriveStageSettlementOpts {
   epochId: string;
   realisedYieldUsd: number;
   pendingEndTimestamp: bigint;
   conservativeFactor?: number;
   carryInUsd?: number;
+  /** Target / V̄ chain scope — defaults to `participatingChains()`. Fixes both
+   *  the artifact's committed target set and the chain set every V̄ sample
+   *  in the window must cover (`expectedValueChains()`). */
+  chains?: string[];
 }
 
 /** Derive the `stage-settlement` schedule and write its artifact. Submits nothing. */
@@ -123,8 +205,14 @@ export async function deriveStageSettlement(
 
   // GLOBAL samples only. No local-supply fallback: if the V̄ store has no
   // samples in this window, that is a real gap in measurement and must fail
-  // loudly rather than derive a rate from one chain's supply.
-  const samples = samplesInWindow(schedule.anchorSec, now);
+  // loudly rather than derive a rate from one chain's supply. Every sample
+  // used must cover exactly the current expected chain set, the window start
+  // must be covered, and no gap may exceed the default max (see
+  // `samplesInWindow`).
+  const scope = { requested: opts.chains, yesMainnet: isYesMainnet() };
+  const valueChains = expectedValueChains(scope);
+  warnIfSvmExcluded(participatingChains(scope), valueChains);
+  const samples = samplesInWindow(schedule.anchorSec, now, valueChains);
   const distributedSoFarUsd = distributedUsdOverWindow([segment], samples, schedule.anchorSec, now);
   const forecastValueUsd = valueAt(samples, now);
   const settlementLenSec = Number(opts.pendingEndTimestamp) - schedule.rateEndSec;
@@ -158,11 +246,12 @@ export async function deriveStageSettlement(
   logger.info(`Derived settlement rate: ${describeRate(nextRate)}`);
 
   const artifact: EpochScheduleArtifact = {
-    artifactVersion: 1,
+    artifactVersion: 2,
     epochId: opts.epochId,
     phase: "stage-settlement",
     derivedAtSec: now,
     referenceChain: ctx.bookKey,
+    ...buildBinding(ctx, schedule.preState, opts.chains),
     schedule: {
       rate: rate.toString(),
       rateEnd: schedule.rateEndSec,
@@ -226,12 +315,13 @@ export async function deriveRollEpoch(
   // and scoped to the SAME chain set the broadcaster will target
   // (`participatingChains()`), not every chain in CHAIN_METADATA. A wider
   // sample set than the broadcast reaches would inflate V̄ with chains that
-  // never receive this rate.
-  const chains = opts.chains ?? participatingChains();
+  // never receive this rate. `sampleGlobalValueUsd` throws unless EVERY
+  // expected chain was read.
+  const chains = participatingChains({ requested: opts.chains, yesMainnet: isYesMainnet() });
   const globalNow =
     opts.globalValueUsdOverride !== undefined
       ? { valueUsd: opts.globalValueUsdOverride, timestampSec: 0, perChain: {} }
-      : await sampleGlobalValueUsd(chains);
+      : await sampleGlobalValueUsd(opts.chains);
   if (globalNow.valueUsd <= 0) {
     throw new Error(
       "Global value sample is 0 or unreadable — refusing to derive a rate " +
@@ -249,15 +339,22 @@ export async function deriveRollEpoch(
   if (priorSummary.latestEntry) {
     priorEpochId = priorSummary.latestEntry.epochId;
     const priorTargetUsd = priorSummary.latestEntry.realisedYieldUsd + priorSummary.latestEntry.carryInUsd;
-    // Ex-post reconciliation also needs the GLOBAL delta, not the reference
-    // chain's local delta — approximate via the reference chain's multiplier
-    // change (identical on every chain by construction) times GLOBAL value at
-    // measurement time, which is what the ledger entry actually recorded.
-    const priorMeasuredAvgValueUsd = priorSummary.latestEntry.measuredAvgValueUsd;
-    const actualPaidUsd =
-      priorMeasuredAvgValueUsd * (schedule.currentMultiplierFloat / schedule.baseMultiplierFloat - 1);
-    reconciledCarryUsd = reconcileActualPayout(priorTargetUsd, actualPaidUsd);
-    logger.info(`Ex-post reconciliation of ${priorEpochId}: target=$${priorTargetUsd.toFixed(2)} actual=$${actualPaidUsd.toFixed(2)} reconciledCarry=$${reconciledCarryUsd.toFixed(2)}`);
+    // Ex-post reconciliation needs the GLOBAL delta, not the reference
+    // chain's local delta — approximated as the reference chain's multiplier
+    // growth over the WHOLE prior epoch (identical on every chain by
+    // construction) times the GLOBAL value the ledger entry recorded.
+    //
+    // Growth is `current / epochStartMultiplier - 1`, where the start value
+    // was recorded at the roll that opened the prior epoch. NOT
+    // `current / okuMBaseMultiplier`: the base re-anchors on every schedule
+    // write (stage-settlement AND roll), so that ratio covers only the last
+    // segment. `actualPaidUsd` refuses entries without a start multiplier.
+    //
+    // KNOWN LIMITATION: `measuredAvgValueUsd` is the single spot V̄ sampled at
+    // that roll, not a time-weighted average over the epoch.
+    const actualPaid = actualPaidUsd(priorSummary.latestEntry, schedule.multiplierBig);
+    reconciledCarryUsd = reconcileActualPayout(priorTargetUsd, actualPaid);
+    logger.info(`Ex-post reconciliation of ${priorEpochId}: target=$${priorTargetUsd.toFixed(2)} actual=$${actualPaid.toFixed(2)} reconciledCarry=$${reconciledCarryUsd.toFixed(2)}`);
   }
 
   const grid: EpochGrid = { epochStartSec: schedule.rateEndSec, epochLengthSec: opts.epochLengthSec, settlementFraction };
@@ -273,10 +370,12 @@ export async function deriveRollEpoch(
   logger.info(`Next epoch adjusted target: $${nextAdjustedTargetUsd.toFixed(2)} (global V=$${globalNow.valueUsd.toFixed(2)}, chains=${chains.join(",")})`);
 
   // Re-anchoring the already-running settlement rate at its own value, not
-  // re-deriving it — this is the currently active on-chain rate, used verbatim
-  // as a bigint (see `readSchedule`: round-tripping it through a JS float would
-  // perturb it by up to ~128 wei on every chain at once).
-  const rate = schedule.rateBig;
+  // re-deriving it — this is the currently ACTIVE on-chain rate (the effective
+  // rate: if the roll lands after `okuMRateEnd`, the successor is what is
+  // running, not the stored base rate), used verbatim as a bigint (see
+  // `readSchedule`: round-tripping it through a JS float would perturb it by up
+  // to ~128 wei on every chain at once).
+  const rate = schedule.effectiveRateBig;
   // MUST clamp. This is the production multi-chain roll path: `broadcastSchedule`
   // fans this artifact out to every chain, so an out-of-range rate does not fail
   // on one chain — it reverts `RateTooHigh` on ALL of them simultaneously, in the
@@ -287,11 +386,12 @@ export async function deriveRollEpoch(
   logger.info(`Derived next base rate:     ${describeRate(nextRateBig)}`);
 
   const artifact: EpochScheduleArtifact = {
-    artifactVersion: 1,
+    artifactVersion: 2,
     epochId: opts.epochId,
     phase: "roll-epoch",
     derivedAtSec: Math.floor(Date.now() / 1000),
     referenceChain: ctx.bookKey,
+    ...buildBinding(ctx, schedule.preState, opts.chains),
     schedule: {
       rate: rate.toString(),
       rateEnd: Number(opts.nextEndTimestamp),
@@ -312,6 +412,8 @@ export async function deriveRollEpoch(
       carryForwardUsd: 0,
       globalValueUsd: globalNow.valueUsd,
       priorEpochId,
+      // Start of the epoch this roll opens; the NEXT roll reconciles against it.
+      epochStartMultiplier: schedule.multiplierBig.toString(),
     },
     receipts: {},
   };
@@ -343,6 +445,7 @@ if (require.main === module) {
         pendingEndTimestamp: BigInt(pendingEndTimestamp),
         conservativeFactor: parseArg("conservativeFactor") ? Number(parseArg("conservativeFactor")) : undefined,
         carryInUsd: parseArg("carryInUsd") ? Number(parseArg("carryInUsd")) : undefined,
+        chains,
       });
     } else if (phase === "roll-epoch") {
       const nextRealisedYieldUsd = Number(parseArg("nextRealisedYieldUsd"));

@@ -7,16 +7,38 @@ import {
     saveArtifact,
     loadArtifact,
     saveArtifactInPlace,
+    assertArtifactBound,
+    assertNotExpired,
+    scheduleMatchesTarget,
+    preStateMismatches,
+    artifactTtlSeconds,
+    DEFAULT_ARTIFACT_TTL_SECONDS,
     EpochScheduleArtifact,
 } from "../../../scripts/utils/epochArtifact";
 
+const PRE_STATE = {
+    rate: "1000000000100000000",
+    rateEnd: 2000,
+    pendingRate: "1000000000000000000",
+    pendingRateEnd: 0,
+    baseMultiplier: "1010000000000000000",
+    lastAccrualTime: 900,
+};
+
 function makeArtifact(overrides: Partial<EpochScheduleArtifact> = {}): EpochScheduleArtifact {
     return {
-        artifactVersion: 1,
+        artifactVersion: 2,
         epochId: "test-epoch-artifact-1",
         phase: "roll-epoch",
         derivedAtSec: 1000,
+        expiresAtSec: 1000 + DEFAULT_ARTIFACT_TTL_SECONDS,
         referenceChain: "sepolia",
+        targetChains: ["sepolia", "solana"],
+        targets: {
+            sepolia: { kind: "evm", chainId: 11155111, okuMoney: "0x0000000000000000000000000000000000000001" },
+            solana: { kind: "svm", cluster: "devnet" },
+        },
+        expectedPreState: PRE_STATE,
         schedule: { rate: "1000000000158549", rateEnd: 2000, nextRate: "1000000000200000", nextRateEnd: 3000 },
         meta: {
             realisedYieldUsd: 40_000,
@@ -109,5 +131,54 @@ describe("scripts/utils/epochArtifact", () => {
         const p2 = artifactPath("2026-01", "roll-epoch");
         expect(p1).to.equal(p2);
         expect(path.basename(p1)).to.equal("2026-01-roll-epoch.json");
+    });
+
+    describe("chain binding (P-02/P-03/P-06 helpers)", () => {
+        it("assertArtifactBound refuses a version-1 / unbound artifact with a re-derive hint", () => {
+            const legacy = { ...makeArtifact(), artifactVersion: 1 } as any;
+            delete legacy.targetChains;
+            expect(() => assertArtifactBound(legacy)).to.throw(/Re-derive/);
+            const noIdentity = makeArtifact({ targets: { sepolia: makeArtifact().targets.sepolia } });
+            expect(() => assertArtifactBound(noIdentity)).to.throw(/no identity recorded for target solana/);
+            expect(() => assertArtifactBound(makeArtifact())).to.not.throw();
+        });
+
+        it("assertNotExpired passes up to expiresAtSec and refuses after", () => {
+            const a = makeArtifact({ expiresAtSec: 5000 });
+            expect(() => assertNotExpired(a, 5000)).to.not.throw();
+            expect(() => assertNotExpired(a, 5001)).to.throw(/EXPIRED/);
+        });
+
+        it("artifactTtlSeconds defaults to 24h and honours ARTIFACT_TTL_SECONDS", () => {
+            expect(artifactTtlSeconds({})).to.equal(24 * 3600);
+            expect(artifactTtlSeconds({ ARTIFACT_TTL_SECONDS: "600" })).to.equal(600);
+            expect(() => artifactTtlSeconds({ ARTIFACT_TTL_SECONDS: "-1" })).to.throw(/positive integer/);
+        });
+
+        it("scheduleMatchesTarget compares rate/rateEnd/pending/pendingEnd against the artifact's target", () => {
+            const a = makeArtifact();
+            const atTarget = { rate: a.schedule.rate, rateEnd: a.schedule.rateEnd, pendingRate: a.schedule.nextRate, pendingRateEnd: a.schedule.nextRateEnd };
+            expect(scheduleMatchesTarget(atTarget, a)).to.equal(true);
+            expect(scheduleMatchesTarget({ ...atTarget, pendingRateEnd: 1 }, a)).to.equal(false);
+            expect(scheduleMatchesTarget(PRE_STATE, a)).to.equal(false);
+        });
+
+        it("preStateMismatches compares anchor fields only when asked (reference chain)", () => {
+            const a = makeArtifact();
+            const otherChainAnchors = { ...PRE_STATE, baseMultiplier: "1010000000000000001", lastAccrualTime: 901 };
+            expect(preStateMismatches(otherChainAnchors, a, false)).to.deep.equal([]);
+            expect(preStateMismatches(otherChainAnchors, a, true)).to.have.length(2);
+            expect(preStateMismatches({ ...PRE_STATE, rate: "1" }, a, false)[0]).to.match(/^rate:/);
+        });
+
+        it("saveArtifactInPlace leaves no tmp file behind (atomic write)", () => {
+            const artifact = makeArtifact({ epochId: "test-epoch-artifact-atomic" });
+            const p = artifactPath(artifact.epochId, artifact.phase);
+            written.push(p);
+            saveArtifact(artifact);
+            saveArtifactInPlace(artifact);
+            const leftovers = fs.readdirSync(path.dirname(p)).filter((f) => f.startsWith(path.basename(p) + ".tmp"));
+            expect(leftovers).to.deep.equal([]);
+        });
     });
 });

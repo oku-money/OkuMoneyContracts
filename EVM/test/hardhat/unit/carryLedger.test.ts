@@ -8,6 +8,7 @@ import {
     summarizeLedger,
     buildLedgerEntry,
     backfillReconciliation,
+    actualPaidUsd,
     CarryLedgerEntry,
 } from "../../../scripts/utils/carryLedger";
 import { realisedYieldToRatePerSecond } from "../../../scripts/utils/yieldRate";
@@ -214,5 +215,43 @@ describe("scripts/utils/carryLedger", () => {
         );
         const summary = summarizeLedger(tmpPath);
         expect(summary.currentEpochCarryInUsd).to.equal(reconciledForEpoch1);
+    });
+
+    // ── P-04: actual paid growth spans the WHOLE epoch ─────────────────────
+
+    describe("actualPaidUsd", () => {
+        const WAD = 10n ** 18n;
+
+        it("measures growth from the epoch-start multiplier, not from a mid-epoch re-anchor", () => {
+            // Epoch opened at m=1.00; a stage-settlement write re-anchored the
+            // contract's base at m=1.008; the roll now reads m=1.01. The
+            // epoch paid 1% on V̄, not the ~0.2% the last segment shows.
+            const entry = baseEntry({ measuredAvgValueUsd: 1_000_000, epochStartMultiplier: WAD.toString() });
+            const current = (WAD * 101n) / 100n;
+            expect(actualPaidUsd(entry, current)).to.be.closeTo(10_000, 1e-6);
+            const lastSegmentOnly = 1_000_000 * (1.01 / 1.008 - 1);
+            expect(actualPaidUsd(entry, current)).to.not.be.closeTo(lastSegmentOnly, 1);
+        });
+
+        it("refuses (no bootstrap path) when the entry has no epochStartMultiplier", () => {
+            expect(() => actualPaidUsd(baseEntry({}), WAD)).to.throw(/no epochStartMultiplier/);
+        });
+
+        it("buildLedgerEntry carries epochStartMultiplier, and upsert treats a different one as a different derivation", () => {
+            const mk = (m: string) =>
+                buildLedgerEntry({
+                    epochId: "e",
+                    realisedYieldUsd: 1,
+                    carryInUsd: 0,
+                    measuredAvgValueUsd: 1,
+                    conservativeFactor: 1,
+                    result: { ratePerSecond: WAD, carryForwardUsd: 0 },
+                    timestampSec: 1,
+                    epochStartMultiplier: m,
+                });
+            expect(mk("123").epochStartMultiplier).to.equal("123");
+            upsertLedgerEntry(mk("123"), tmpPath);
+            expect(() => upsertLedgerEntry(mk("124"), tmpPath)).to.throw(/DIFFERENT/);
+        });
     });
 });

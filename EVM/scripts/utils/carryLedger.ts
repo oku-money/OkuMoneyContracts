@@ -73,6 +73,14 @@ export interface CarryLedgerEntry {
    *  value that becomes the NEXT entry's `carryInUsd`. `undefined` means not
    *  yet reconciled (still open, or the next roll hasn't happened). */
   reconciledCarryUsd?: number;
+  /** The reference chain's `okuMMultiplier()` (WAD decimal string) when the
+   *  roll that OPENED this epoch was derived. The next roll reconciles this
+   *  epoch's actual payout as `V̄ * (currentMultiplier / epochStartMultiplier - 1)`.
+   *  It cannot use the contract's `okuMBaseMultiplier`: that re-anchors on
+   *  EVERY schedule write (stage-settlement and roll), so `current / base`
+   *  only spans the last segment. Absent on legacy entries; the next roll
+   *  refuses to reconcile an entry without it. */
+  epochStartMultiplier?: string;
 }
 
 /** Build a ledger entry from a {@link realisedYieldToRatePerSecond} call's inputs + result. */
@@ -84,6 +92,7 @@ export function buildLedgerEntry(params: {
   conservativeFactor: number;
   result: RateWithCarry;
   timestampSec?: number;
+  epochStartMultiplier?: string;
 }): CarryLedgerEntry {
   return {
     epochId: params.epochId,
@@ -94,7 +103,44 @@ export function buildLedgerEntry(params: {
     conservativeFactor: params.conservativeFactor,
     ratePerSecond: params.result.ratePerSecond.toString(),
     carryForwardUsd: params.result.carryForwardUsd,
+    ...(params.epochStartMultiplier !== undefined ? { epochStartMultiplier: params.epochStartMultiplier } : {}),
   };
+}
+
+/**
+ * Actual dollars an epoch paid, for ex-post reconciliation at the next roll:
+ * `measuredAvgValueUsd * (currentMultiplier / epochStartMultiplier - 1)`.
+ *
+ * Throws if the entry has no `epochStartMultiplier` (legacy / first epoch):
+ * there is no bootstrap path, and falling back to `okuMBaseMultiplier` would
+ * silently measure only the last schedule segment.
+ *
+ * KNOWN LIMITATION (deliberately not fixed in this PoC): `measuredAvgValueUsd`
+ * is the single spot V̄ sampled at the roll that opened the epoch, not a
+ * time-weighted average over the epoch, so supply changes during the epoch
+ * are not reflected.
+ */
+export function actualPaidUsd(entry: CarryLedgerEntry, currentMultiplierWad: bigint): number {
+  if (!entry.epochStartMultiplier) {
+    throw new Error(
+      `Cannot reconcile epochId=${entry.epochId}: its ledger entry has no epochStartMultiplier ` +
+        "(recorded by roll-epoch derivations since chain-binding; absent on legacy entries). " +
+        "There is no bootstrap path — add the reference chain's okuMMultiplier() at that " +
+        "epoch's roll to the ledger entry deliberately, or start a fresh ledger."
+    );
+  }
+  const start = BigInt(entry.epochStartMultiplier);
+  if (start <= 0n) throw new Error(`epochId=${entry.epochId}: epochStartMultiplier must be > 0`);
+  // Ratio in bigint first (1e18-scaled), then to float: avoids float loss on
+  // two ~1e18 magnitudes whose ratio differs from 1 by ~1e-5.
+  const growthWad = (currentMultiplierWad * 10n ** 18n) / start - 10n ** 18n;
+  return entry.measuredAvgValueUsd * (Number(growthWad) / 1e18);
+}
+
+function writeLedger(ledgerPath: string, ledger: CarryLedgerEntry[]): void {
+  const tmp = `${ledgerPath}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(ledger, null, 2) + "\n");
+  fs.renameSync(tmp, ledgerPath);
 }
 
 const DEFAULT_LEDGER_PATH = path.join(__dirname, "../config/carryLedger.json");
@@ -120,7 +166,8 @@ export function upsertLedgerEntry(entry: CarryLedgerEntry, ledgerPath = DEFAULT_
       prior.carryInUsd === entry.carryInUsd &&
       prior.measuredAvgValueUsd === entry.measuredAvgValueUsd &&
       prior.conservativeFactor === entry.conservativeFactor &&
-      prior.ratePerSecond === entry.ratePerSecond;
+      prior.ratePerSecond === entry.ratePerSecond &&
+      prior.epochStartMultiplier === entry.epochStartMultiplier;
     if (!sameDerivation) {
       throw new Error(
         `upsertLedgerEntry: epochId=${entry.epochId} already has a DIFFERENT ` +
@@ -135,7 +182,7 @@ export function upsertLedgerEntry(entry: CarryLedgerEntry, ledgerPath = DEFAULT_
     // ever produced at derivation time, before the NEXT roll backfills it).
     existing[idx] = { ...entry, reconciledCarryUsd: prior.reconciledCarryUsd };
   }
-  fs.writeFileSync(ledgerPath, JSON.stringify(existing, null, 2) + "\n");
+  writeLedger(ledgerPath, existing);
 }
 
 /**
@@ -168,7 +215,7 @@ export function backfillReconciliation(
     );
   }
   existing[idx] = { ...existing[idx], reconciledCarryUsd };
-  fs.writeFileSync(ledgerPath, JSON.stringify(existing, null, 2) + "\n");
+  writeLedger(ledgerPath, existing);
 }
 
 /** Load the full ledger, oldest first. Returns `[]` if it doesn't exist yet. */

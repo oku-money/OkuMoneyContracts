@@ -332,4 +332,25 @@ contract MathLibTest is Test {
         uint256 result = h.computeMultiplier(base, PRECISION + 1e11, 1000, 2000, PRECISION, 0, 1000);
         assertEq(result, base);
     }
+
+    // `_overhang` is defensive against schedules OkuMoney's writers never produce;
+    // these pin its behaviour so a writer bug degrades gracefully instead of reverting.
+
+    /// Anchor after `rateEnd` (writers forbid): the successor compounds from the anchor.
+    function test_ComputeMultiplier_OverhangStartsAtAnchorWhenAnchorAfterRateEnd() public view {
+        uint256 base = 12_345e14;
+        uint256 rate = PRECISION + 1e11;
+        uint256 pending = PRECISION + 2e11;
+        uint256 result = h.computeMultiplier(base, rate, 3000, 2000, pending, 0, 4000);
+        assertEq(result, h.compoundFor(base, pending, 1000));
+    }
+
+    /// Successor that ended before `rateEnd` (writers forbid): it adds nothing.
+    function test_ComputeMultiplier_NoOverhangWhenPendingEndBeforeRateEnd() public view {
+        uint256 base = 12_345e14;
+        uint256 rate = PRECISION + 1e11;
+        uint256 pending = PRECISION + 2e11;
+        uint256 result = h.computeMultiplier(base, rate, 1000, 2000, pending, 1500, 3000);
+        assertEq(result, h.compoundFor(base, rate, 1000));
+    }
 }

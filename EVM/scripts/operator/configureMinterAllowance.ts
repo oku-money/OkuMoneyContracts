@@ -36,6 +36,7 @@ export interface ConfigureMinterAllowanceResult {
   txHash?: string;
 }
 
+/** Set (replace) a minter's remaining OkuMoney allowance. */
 export async function runConfigureMinterAllowance(
   ctx: NetworkContext,
   signer: Signer,

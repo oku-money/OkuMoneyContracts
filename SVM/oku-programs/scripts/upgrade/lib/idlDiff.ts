@@ -77,6 +77,7 @@ export interface IdlDiff {
   clientChanges: string[];
 }
 
+/** Compare the deployed IDL with the new one; see the module header for the two severities. */
 export function diffIdl(baseline: any, current: any): IdlDiff {
   const layoutBreaks: string[] = [];
   const clientChanges: string[] = [];

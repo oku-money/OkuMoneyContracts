@@ -85,6 +85,7 @@ export interface SetOkuMYieldRateResult {
   confirmedPendingRate: bigint;
 }
 
+/** Write the rate schedule: `direct` (active rate), `stage` (successor only) or `withSuccessor` (both, atomically). */
 export async function runSetOkuMYieldRate(
   ctx: NetworkContext,
   signer: Signer,

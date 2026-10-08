@@ -92,6 +92,7 @@ export function anchorSection(network: string): string {
   return 'localnet';
 }
 
+/** Read every identity source from the workspace for `checkProgramIdentity`. */
 export function gatherIdentity(args: {
   root: string;
   network: string;

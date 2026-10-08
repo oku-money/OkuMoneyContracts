@@ -34,6 +34,7 @@ export interface WithdrawBufferResult {
   txHash?: string;
 }
 
+/** Withdraw USDC from the LitePSM buffer to `recipient` (default: the signer). */
 export async function runWithdrawBuffer(
   ctx: NetworkContext,
   signer: Signer,

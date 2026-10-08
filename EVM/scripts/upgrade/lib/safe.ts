@@ -28,6 +28,7 @@ export interface SafeBatch {
   transactions: Array<SafeTx & { contractMethod: null; contractInputsValues: null }>;
 }
 
+/** Wrap raw calls in the JSON format the Safe Transaction Builder imports. */
 export function buildSafeBatch(args: {
   chainId: bigint | number;
   safe: string;

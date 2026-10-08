@@ -70,6 +70,7 @@ export interface SetOkuMMultiplierResult {
   txHash?: string;
 }
 
+/** Emergency override: jump the multiplier up and halt the schedule. Publish a schedule afterwards. */
 export async function runSetOkuMMultiplier(
   ctx: NetworkContext,
   signer: Signer,

@@ -35,6 +35,7 @@ export interface UnpauseResult {
   txHash?: string;
 }
 
+/** Unpause one contract; no-op if not paused. */
 export async function runUnpause(
   ctx: NetworkContext,
   signer: Signer,

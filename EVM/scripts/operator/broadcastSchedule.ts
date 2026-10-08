@@ -314,6 +314,11 @@ async function applyToSvm(
   }
 }
 
+/**
+ * Apply one derived artifact to every committed target chain (EVM, then SVM),
+ * skipping chains that already have a receipt, and finalize the carry ledger
+ * only once every target is confirmed.
+ */
 export async function broadcastArtifact(opts: BroadcastOpts): Promise<void> {
   const { epochId, phase, dryRun } = opts;
   const run = opts.run ?? defaultRunner;

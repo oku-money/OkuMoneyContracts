@@ -45,6 +45,7 @@ export interface PauseResult {
   txHash?: string;
 }
 
+/** Pause one contract (OkuMoney, OkuDollar or LitePSM); no-op if already paused. */
 export async function runPause(
   ctx: NetworkContext,
   signer: Signer,

@@ -1,6 +1,10 @@
 /**
  * Unpause the PSM. Wraps `lite_psm::unpause` (unpauser-gated; on mainnet
  * this should be the cold multisig).
+ *
+ * Usage:
+ *   NETWORK=devnet tsx scripts/admin/unpause-psm.ts [--dry-run]
+ *   NETWORK=mainnet-beta tsx scripts/admin/unpause-psm.ts --yes-i-mean-it-on-mainnet
  */
 
 import * as anchor from '@anchor-lang/core';

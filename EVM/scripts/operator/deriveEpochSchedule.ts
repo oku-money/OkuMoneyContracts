@@ -20,6 +20,14 @@
  * cluster+program id (SVM), the reference chain's schedule as the expected
  * pre-state, and an expiry (`ARTIFACT_TTL_SECONDS`, default 24h). The
  * broadcaster and per-chain applier refuse to submit outside that binding.
+ *
+ * Usage (env vars, as every EVM operator script):
+ *   PHASE=stage-settlement EPOCH_ID=<id> REALISED_YIELD_USD=<usd> PENDING_END_TIMESTAMP=<unix> \
+ *     npx hardhat run scripts/operator/deriveEpochSchedule.ts --network <reference chain>
+ *   PHASE=roll-epoch EPOCH_ID=<id> NEXT_REALISED_YIELD_USD=<usd> NEXT_END_TIMESTAMP=<unix> \
+ *     EPOCH_LENGTH_SEC=<s> npx hardhat run scripts/operator/deriveEpochSchedule.ts --network <chain>
+ * Optional: CHAINS, CONSERVATIVE_FACTOR, CARRY_IN_USD, SETTLEMENT_FRACTION,
+ * BASE_WINDOW_FRACTION. Then broadcast with broadcastSchedule.ts.
  */
 
 import { ethers } from "hardhat";

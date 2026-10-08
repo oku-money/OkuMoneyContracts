@@ -33,6 +33,7 @@ export interface DepositBufferResult {
   txHash?: string;
 }
 
+/** Approve and deposit USDC into the LitePSM redemption buffer. */
 export async function runDepositBuffer(
   ctx: NetworkContext,
   signer: Signer,

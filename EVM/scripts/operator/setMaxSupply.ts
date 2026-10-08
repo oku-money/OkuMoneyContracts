@@ -33,6 +33,7 @@ export interface SetMaxSupplyResult {
   txHash?: string;
 }
 
+/** Change OkuMoney's supply cap (must stay >= current supply). */
 export async function runSetMaxSupply(
   ctx: NetworkContext,
   signer: Signer,

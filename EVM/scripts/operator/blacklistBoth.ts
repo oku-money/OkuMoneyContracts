@@ -72,6 +72,7 @@ async function applyOne(
   logger.success(`  [${label}] ${action} tx: ${receipt.hash}`);
 }
 
+/** Blacklist (or unblacklist) `account` on OkuMoney and OkuDollar together; skips a side already in the target state. */
 export async function runBlacklistBoth(
   ctx: NetworkContext,
   signer: Signer,

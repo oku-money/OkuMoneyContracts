@@ -546,6 +546,7 @@ function parseMode(): UpgradeMode {
   return m;
 }
 
+/** Entry point for all three modes; see the module header. */
 export async function runUpgrade(opts: RunUpgradeOptions = {}): Promise<UpgradeResult> {
   const ctx = await resolveNetworkContext();
   const { networkName, isFork, chainConfig } = ctx;

@@ -280,6 +280,7 @@ export function deployerInitRoles(): Array<{ contractName: string; roleName: Rol
 // Main
 // ============================================================================
 
+/** Distribute roles to the cold/warm/orchestrator keys, then strip every role from the deployer. */
 export async function runGrantRolesMainnet(): Promise<void> {
   DRY_RUN = isDryRun();
   const ctx = await resolveNetworkContext();

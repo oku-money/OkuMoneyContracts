@@ -1,6 +1,9 @@
 #!/usr/bin/env tsx
 /**
- * Check wallet balance across networks
+ * Print the deployer wallet (WALLET_PATH) and its SOL balance on the selected
+ * network, plus which RPC is in use. Read-only.
+ *
+ * Usage: NETWORK=devnet npm run wallet:check
  */
 
 import { Connection, LAMPORTS_PER_SOL } from '@solana/web3.js';

@@ -51,6 +51,7 @@ export interface VaultOpOpts {
   dryRun?: boolean;
 }
 
+/** Run one OkuDollar vault action (wrap/unwrap, ERC-4626 deposit/mint/withdraw/redeem, rescue). */
 export async function runVaultOp(
   ctx: NetworkContext,
   signer: Signer,

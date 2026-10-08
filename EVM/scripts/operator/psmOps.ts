@@ -40,6 +40,7 @@ export interface PsmOpResult {
   txHash?: string;
 }
 
+/** Run one PSM action (mint/redeem OkuM or UsdOku, or burn) for the signer, approving what it needs. */
 export async function runPsmOp(
   ctx: NetworkContext,
   signer: Signer,

@@ -42,9 +42,15 @@ pub enum LitePsmError {
     #[msg("Arithmetic overflow")]
     Overflow,
 
+    /// A zero amount was passed. Also returned if the multiplier is zero, which
+    /// no schedule can produce.
     #[msg("Amount must be greater than zero")]
     ZeroAmount,
 
+    /// A user or buffer operation landed in the same slot as an emergency
+    /// multiplier override (`set_okum_multiplier`). The message predates the
+    /// streaming schedule (routine rate writes do NOT trigger it); kept for
+    /// IDL stability. Retry in the next slot. EVM: OverrideInProgress
     #[msg("Cannot perform operation in same slot as yield distribution")]
     OverrideInProgress,
 
@@ -76,12 +82,17 @@ pub enum LitePsmError {
     #[msg("Rate window exceeds the maximum permitted length (90 days)")]
     RateWindowTooLong,
 
+    /// `set_next_okum_yield_rate` with no active window (halted schedule).
+    /// EVM: NoRateEndSet
     #[msg("Cannot stage a successor: no active rate window is set")]
     NoRateEndSet,
 
+    /// The active window has already ended, so the successor would never be the
+    /// one taking over. EVM: RateAlreadyExpired
     #[msg("Cannot stage a successor: the active rate window has already expired")]
     RateAlreadyExpired,
 
+    /// EVM: PendingEndNotAfterRateEnd
     #[msg("Successor expiry must be strictly after the active rate end")]
     PendingEndNotAfterRateEnd,
 
@@ -94,6 +105,8 @@ pub enum LitePsmError {
     #[msg("Multiplier could not be computed from the current rate schedule")]
     MultiplierOutOfRange,
 
+    /// The Token-2022 `ScaledUiAmount` update CPI failed (display mirror only).
+    /// No EVM equivalent.
     #[msg("Failed to update ScaledUiAmount multiplier")]
     MultiplierUpdateFailed,
 
@@ -106,6 +119,8 @@ pub enum LitePsmError {
     #[msg("Caller is not the pending role admin")]
     NotPendingRoleAdmin,
 
+    /// `initialize` was given a USDC mint without `USDC_DECIMALS` decimals.
+    /// EVM: UsdcDecimalsTooLarge (EVM accepts any decimals up to 18)
     #[msg("USDC mint must have exactly 6 decimals")]
     InvalidUsdcDecimals,
 

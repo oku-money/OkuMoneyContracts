@@ -1,3 +1,5 @@
+//! Accounts for the one-time `initialize`.
+
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -14,6 +16,8 @@ fn program_data_address() -> Pubkey {
     anchor_lang::solana_program::bpf_loader_upgradeable::get_program_data_address(&crate::ID)
 }
 
+/// Accounts for `initialize`: create the config PDA, the USDC vault and the OkuM
+/// mint. Callable once, by the program's upgrade authority.
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     /// Becomes `config.role_admin`. Must be the program's upgrade authority
@@ -35,6 +39,7 @@ pub struct Initialize<'info> {
     )]
     pub program_data: Account<'info, ProgramData>,
 
+    /// The singleton config PDA, created here (seed `psm_config`).
     #[account(
         init,
         payer = role_admin,

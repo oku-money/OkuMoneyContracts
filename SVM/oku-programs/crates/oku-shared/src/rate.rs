@@ -98,10 +98,14 @@ pub const fn rpow(x: u128, n: u64) -> Option<u128> {
         return Some(if n == 0 { PRECISION } else { 0 });
     }
 
+    // Start the result at x^(lowest bit of n): 1.0 or x.
     let mut z = if n % 2 == 0 { PRECISION } else { x };
     let mut x = x;
     let mut n = n / 2;
 
+    // For each remaining bit of n: square x (x^2, x^4, x^8, ...), and multiply
+    // it into the result when that bit is set. Every product is rounded half-up
+    // at 1e18, exactly as the Solidity version.
     while n != 0 {
         x = try_opt!(mul_div_wad_half_up(x, x));
         if n % 2 != 0 {

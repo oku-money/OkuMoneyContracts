@@ -1,3 +1,6 @@
+//! Accounts for the user-facing PSM instructions (mint, redeem) and the
+//! buffer moves (deposit, withdraw).
+
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -8,11 +11,16 @@ use anchor_spl::{
     token_interface::{Mint as MintInterface, TokenAccount as TokenAccountInterface},
 };
 
+/// Accounts for `mint_oku_m`: a user pays USDC into the vault and receives OkuM.
 #[derive(Accounts)]
 pub struct MintOkuM<'info> {
+    /// Pays the USDC, receives the OkuM, and pays rent if their OkuM account is
+    /// created here. Permissionless.
     #[account(mut)]
     pub user: Signer<'info>,
 
+    /// The singleton config PDA. Writable because the PSM mint allowance is drawn
+    /// down on every mint.
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -75,18 +83,23 @@ pub struct MintOkuM<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Accounts for `redeem_oku_m`: a user burns OkuM and receives USDC from the vault.
 #[derive(Accounts)]
 pub struct RedeemOkuM<'info> {
+    /// Burns the OkuM, receives the USDC, and pays rent if their USDC account is
+    /// created here. Permissionless.
     #[account(mut)]
     pub user: Signer<'info>,
 
+    /// The singleton config PDA. Read-only: a redeem changes no config state (it
+    /// only signs the vault transfer).
     #[account(
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// USDC mint
+    /// USDC mint (pinned to the configured one)
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
@@ -99,7 +112,8 @@ pub struct RedeemOkuM<'info> {
     )]
     pub oku_m_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// User's USDC account
+    /// User's USDC account, receives the payout. Created if missing so a user
+    /// who has never held USDC can still redeem.
     #[account(
         init_if_needed,
         payer = user,
@@ -109,7 +123,7 @@ pub struct RedeemOkuM<'info> {
     )]
     pub user_usdc_ata: Box<Account<'info, TokenAccount>>,
 
-    /// User's OkuM account
+    /// User's OkuM account; source of the burn
     #[account(
         mut,
         associated_token::mint = oku_m_mint,
@@ -118,7 +132,8 @@ pub struct RedeemOkuM<'info> {
     )]
     pub user_oku_m_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// PSM's USDC vault
+    /// PSM's USDC vault; source of the payout. Typed (deserialized) because the
+    /// handler reads its balance for the `InsufficientBuffer` check.
     #[account(
         mut,
         address = config.vault_usdc
@@ -131,10 +146,13 @@ pub struct RedeemOkuM<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Accounts for `deposit_buffer`: the buffer depositor adds USDC to the vault.
 #[derive(Accounts)]
 pub struct DepositBuffer<'info> {
+    /// The configured `buffer_depositor` (enforced by `has_one` on `config`).
     pub buffer_depositor: Signer<'info>,
 
+    /// The singleton config PDA; read-only here.
     #[account(
         seeds = [PsmConfig::SEED],
         bump = config.bump,
@@ -158,16 +176,20 @@ pub struct DepositBuffer<'info> {
     )]
     pub vault_usdc: Account<'info, TokenAccount>,
 
+    /// USDC mint, for `transfer_checked`.
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Account<'info, Mint>,
 
     pub token_program: Program<'info, Token>,
 }
 
+/// Accounts for `withdraw_buffer`: the buffer withdrawer takes USDC out of the vault.
 #[derive(Accounts)]
 pub struct WithdrawBuffer<'info> {
+    /// The configured `buffer_withdrawer` (enforced by `has_one` on `config`).
     pub buffer_withdrawer: Signer<'info>,
 
+    /// The singleton config PDA; read-only here. It owns the vault and signs the transfer out.
     #[account(
         seeds = [PsmConfig::SEED],
         bump = config.bump,
@@ -190,6 +212,7 @@ pub struct WithdrawBuffer<'info> {
     )]
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
+    /// USDC mint, for `transfer_checked`.
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 

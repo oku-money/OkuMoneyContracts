@@ -16,6 +16,9 @@ use anchor_spl::token_2022_extensions::spl_token_metadata_interface;
 use anchor_spl::token_interface;
 use spl_token_metadata_interface::state::Field;
 
+/// Stop mint, redeem, direct mint/burn and buffer moves (`pauser` only).
+/// Freeze/thaw and rate decreases keep working. Not blocked by the override
+/// slot: pausing must always be possible.
 pub fn pause(ctx: Context<Pause>) -> Result<()> {
     let config = &mut ctx.accounts.config;
     require!(!config.is_paused, LitePsmError::AlreadyPaused);
@@ -28,6 +31,7 @@ pub fn pause(ctx: Context<Pause>) -> Result<()> {
     Ok(())
 }
 
+/// Resume normal operation (`unpauser` only). Fails if not paused.
 pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
     let config = &mut ctx.accounts.config;
     require!(config.is_paused, LitePsmError::NotPaused);
@@ -40,7 +44,8 @@ pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
     Ok(())
 }
 
-/// Refuses a cap below current supply, which would silently brick every mint.
+/// Set the maximum OkuM supply, in raw units (`cap_manager` only). Refuses a
+/// cap below current supply, which would silently brick every mint.
 pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<()> {
     let current_supply = ctx.accounts.oku_m_mint.supply;
     require!(
@@ -61,6 +66,10 @@ pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<(
     Ok(())
 }
 
+/// Set how much more OkuM the PSM may mint through `mint_oku_m`
+/// (`allowance_manager` only). It REPLACES the allowance (it does not add to it), and is
+/// allowed while paused so an incident can cut the allowance to zero. The
+/// value is not bounded: the supply cap still applies at mint time.
 pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
     let old_allowance = config.minter_allowance;
@@ -75,6 +84,11 @@ pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Resu
     Ok(())
 }
 
+/// Set how much more OkuM the `direct_minter` may mint through
+/// `mint_oku_m_direct` (`allowance_manager` only). Zero is the off-switch for
+/// direct minting. It REPLACES the allowance (it does not add to it), and is
+/// allowed while paused so an incident can cut the allowance to zero. The
+/// value is not bounded: the supply cap still applies at mint time.
 pub fn set_direct_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
     let old_allowance = config.direct_minter_allowance;
@@ -89,6 +103,10 @@ pub fn set_direct_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) 
     Ok(())
 }
 
+/// Set how much more OkuM the `direct_burner` may burn through
+/// `burn_oku_m_direct` (`allowance_manager` only). It REPLACES the allowance (it does not add to it), and is
+/// allowed while paused so an incident can cut the allowance to zero. The
+/// value is not bounded: the supply cap still applies at mint time.
 pub fn set_direct_burner_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
     let old_allowance = config.direct_burner_allowance;
@@ -103,11 +121,16 @@ pub fn set_direct_burner_allowance(ctx: Context<AllowanceManager>, amount: u64) 
     Ok(())
 }
 
+/// Freeze one OkuM token account so it can neither send nor receive
+/// (`freezer` only). This covers that account only, not the wallet: the owner's
+/// other OkuM accounts are unaffected.
+///
 /// Deliberately not pause-gated: compliance actions must work during an incident.
 pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
     let config = &ctx.accounts.config;
     let target_owner = ctx.accounts.target_oku_m_ata.owner;
 
+    // The config PDA is the mint's freeze authority, so it signs the CPI.
     let bump_seed = [config.bump];
     let seeds = PsmConfig::signer_seeds(&bump_seed);
     let signer = &[&seeds[..]];
@@ -130,8 +153,10 @@ pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
     Ok(())
 }
 
-/// Deliberately not pause-gated, like `freeze_account`.
+/// Unfreeze an OkuM token account (`unfreezer` only). Deliberately not
+/// pause-gated, like `freeze_account`.
 pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
+    // The config PDA is the mint's freeze authority, so it signs the CPI.
     let bump_seed = [ctx.accounts.config.bump];
     let seeds = PsmConfig::signer_seeds(&bump_seed);
     let signer = &[&seeds[..]];
@@ -154,6 +179,8 @@ pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
     Ok(())
 }
 
+/// Hand one of the 12 PSM roles to a new key (`role_admin` only).
+///
 /// Non-`RoleAdmin` roles commit immediately. `RoleAdmin` is a two-step
 /// propose/accept (like `Ownable2Step`): this writes `pending_role_admin` and
 /// `accept_role_admin` commits it, so a typo cannot lock out the meta-role.
@@ -222,6 +249,9 @@ pub fn set_authority(
     Ok(())
 }
 
+/// Second step of a `role_admin` handover: the proposed admin signs to take
+/// over, and the pending slot is cleared.
+///
 /// Emits the canonical `AuthorityUpdatedEvent` so indexers need not special-case
 /// the two-step path.
 pub fn accept_role_admin(ctx: Context<AcceptRoleAdmin>) -> Result<()> {
@@ -255,6 +285,8 @@ pub fn accept_role_admin(ctx: Context<AcceptRoleAdmin>) -> Result<()> {
     Ok(())
 }
 
+/// Withdraw a pending `role_admin` proposal before it is accepted (`role_admin`
+/// only). Uses the `SetAuthority` accounts: the signer must be the current admin.
 pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
     let config = &mut ctx.accounts.config;
 
@@ -274,6 +306,9 @@ pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
     Ok(())
 }
 
+/// Reset the mint's Token-2022 name and symbol to the canonical OkuM values
+/// (`role_admin` only).
+///
 /// Name/symbol come from `OKU_M_METADATA_*` so they cannot drift from `initialize`.
 /// The config PDA is the metadata update authority and signs both CPIs.
 pub fn update_token_metadata(ctx: Context<UpdateTokenMetadata>) -> Result<()> {

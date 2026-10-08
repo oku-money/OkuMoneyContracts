@@ -6,6 +6,7 @@
 
 use crate::constants::PRECISION;
 
+/// Mask for the low 64 bits of a `u128` (splits operands into 64-bit limbs).
 const M64: u128 = 0xFFFF_FFFF_FFFF_FFFF;
 
 /// `PRECISION` as a `u64`.

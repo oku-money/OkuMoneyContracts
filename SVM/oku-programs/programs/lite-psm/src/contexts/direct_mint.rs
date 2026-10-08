@@ -1,3 +1,5 @@
+//! Accounts for `mint_oku_m_direct`.
+
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -7,12 +9,16 @@ use anchor_spl::{
     token_interface::{Mint as MintInterface, TokenAccount as TokenAccountInterface},
 };
 
+/// Accounts for `mint_oku_m_direct`: the direct minter mints new OkuM to any
+/// recipient, with no USDC involved.
 #[derive(Accounts)]
 pub struct MintOkuMDirect<'info> {
     /// Also pays for recipient ATA creation.
     #[account(mut)]
     pub direct_minter: Signer<'info>,
 
+    /// The singleton config PDA. Writable because the direct-mint allowance is
+    /// drawn down; `has_one` makes the signer the configured `direct_minter`.
     #[account(
         mut,
         seeds = [PsmConfig::SEED],

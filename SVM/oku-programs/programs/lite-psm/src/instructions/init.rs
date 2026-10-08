@@ -1,3 +1,6 @@
+//! One-time program setup: create the OkuM mint and the `PsmConfig` PDA and
+//! assign every role.
+
 use crate::constants::{OKU_M_METADATA_NAME, OKU_M_METADATA_SYMBOL, TOKEN_DECIMALS};
 use crate::contexts::Initialize;
 use crate::errors::LitePsmError;
@@ -28,20 +31,32 @@ pub struct InitializeParams {
     pub max_supply: u64,
     /// Initial `mint_oku_m` allowance in raw OkuM units (6 decimals).
     pub minter_allowance: u64,
+    /// Can pause the PSM.
     pub pauser: Pubkey,
+    /// Can unpause the PSM.
     pub unpauser: Pubkey,
+    /// Can freeze OkuM token accounts.
     pub freezer: Pubkey,
+    /// Can thaw OkuM token accounts.
     pub unfreezer: Pubkey,
+    /// Can add USDC to the redemption vault.
     pub buffer_depositor: Pubkey,
+    /// Can take USDC out of the redemption vault.
     pub buffer_withdrawer: Pubkey,
+    /// Can change the supply cap.
     pub cap_manager: Pubkey,
+    /// Can reset the mint / direct-mint / direct-burn allowances.
     pub allowance_manager: Pubkey,
+    /// Sets the yield-rate schedule and the emergency multiplier override.
     pub rebaser: Pubkey,
     /// Token-2022 metadata URI for the OkuM mint.
     pub oku_m_uri: String,
 }
 
 impl InitializeParams {
+    /// The 9 role keys set at init, for validation. `direct_minter` and
+    /// `direct_burner` are not here: they start disabled (zero key) and are
+    /// assigned later with `set_authority`.
     fn granular_authorities(&self) -> [Pubkey; 9] {
         [
             self.pauser,
@@ -228,14 +243,22 @@ struct InitKeys {
     vault_usdc: Pubkey,
 }
 
+/// One-time setup: validate the role keys, create the OkuM mint (with its
+/// Token-2022 extensions), and write the `PsmConfig` with a halted rate schedule
+/// (multiplier 1.0). The signer becomes `role_admin`.
+///
 /// Callable only by the program's upgrade authority (enforced on the `Initialize`
 /// context, which documents the land-grab it prevents).
 pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<()> {
     let bump = ctx.bumps.config;
     let role_admin = ctx.accounts.role_admin.key();
+    // 1. Every granular role must be a real key and not the admin itself.
     validate_granular_authorities(&params, &role_admin)?;
 
+    // 2. Create the mint by hand (Anchor's `init` cannot add these extensions).
     create_oku_m_mint(ctx.accounts, bump, &params.oku_m_uri)?;
+
+    // 3. Record the wiring, roles, caps and the starting schedule in the config.
 
     let keys = InitKeys {
         bump,

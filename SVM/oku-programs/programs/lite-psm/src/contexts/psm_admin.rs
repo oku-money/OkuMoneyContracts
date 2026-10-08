@@ -1,3 +1,7 @@
+//! Accounts for the admin instructions. Several structs are named after the
+//! role they check rather than the instruction, because more than one
+//! instruction shares them (noted on each).
+
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -6,10 +10,13 @@ use anchor_spl::{
     token_interface::{Mint as MintInterface, TokenAccount as TokenAccountInterface},
 };
 
+/// Accounts for `pause`: the pauser flips the config's pause flag.
 #[derive(Accounts)]
 pub struct Pause<'info> {
+    /// The configured `pauser`.
     pub pauser: Signer<'info>,
 
+    /// The singleton config PDA (writable: the pause flag).
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -19,10 +26,13 @@ pub struct Pause<'info> {
     pub config: Account<'info, PsmConfig>,
 }
 
+/// Accounts for `unpause`.
 #[derive(Accounts)]
 pub struct Unpause<'info> {
+    /// The configured `unpauser`.
     pub unpauser: Signer<'info>,
 
+    /// The singleton config PDA (writable: the pause flag).
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -32,10 +42,13 @@ pub struct Unpause<'info> {
     pub config: Account<'info, PsmConfig>,
 }
 
+/// Accounts for `set_max_supply`, checked against the `cap_manager` role.
 #[derive(Accounts)]
 pub struct CapManager<'info> {
+    /// The configured `cap_manager`.
     pub cap_manager: Signer<'info>,
 
+    /// The singleton config PDA (writable: `max_supply`).
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -54,10 +67,14 @@ pub struct CapManager<'info> {
     pub token_2022_program: Program<'info, Token2022>,
 }
 
+/// Accounts shared by `set_minter_allowance`, `set_direct_minter_allowance` and
+/// `set_direct_burner_allowance`, checked against the `allowance_manager` role.
 #[derive(Accounts)]
 pub struct AllowanceManager<'info> {
+    /// The configured `allowance_manager`.
     pub allowance_manager: Signer<'info>,
 
+    /// The singleton config PDA (writable: the allowances).
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -67,11 +84,13 @@ pub struct AllowanceManager<'info> {
     pub config: Account<'info, PsmConfig>,
 }
 
+/// Accounts for `freeze_account`. The config PDA is the mint's freeze authority.
 #[derive(Accounts)]
 pub struct FreezeAccount<'info> {
     /// Works while paused.
     pub freezer: Signer<'info>,
 
+    /// The singleton config PDA; read-only here. Signs the freeze as freeze authority.
     #[account(
         seeds = [PsmConfig::SEED],
         bump = config.bump,
@@ -97,11 +116,13 @@ pub struct FreezeAccount<'info> {
     pub token_2022_program: Program<'info, Token2022>,
 }
 
+/// Accounts for `thaw_account`. The config PDA is the mint's freeze authority.
 #[derive(Accounts)]
 pub struct ThawAccount<'info> {
     /// Works while paused.
     pub unfreezer: Signer<'info>,
 
+    /// The singleton config PDA; read-only here. Signs the thaw as freeze authority.
     #[account(
         seeds = [PsmConfig::SEED],
         bump = config.bump,
@@ -127,10 +148,14 @@ pub struct ThawAccount<'info> {
     pub token_2022_program: Program<'info, Token2022>,
 }
 
+/// Accounts shared by `set_authority` and `cancel_role_admin_transfer`; the
+/// signer must be the current `role_admin`.
 #[derive(Accounts)]
 pub struct SetAuthority<'info> {
+    /// The current `role_admin`.
     pub role_admin: Signer<'info>,
 
+    /// The singleton config PDA (writable: role keys / `pending_role_admin`).
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -140,10 +165,14 @@ pub struct SetAuthority<'info> {
     pub config: Account<'info, PsmConfig>,
 }
 
+/// Accounts for `update_token_metadata`. The config PDA is the metadata update
+/// authority.
 #[derive(Accounts)]
 pub struct UpdateTokenMetadata<'info> {
+    /// The current `role_admin`.
     pub role_admin: Signer<'info>,
 
+    /// The singleton config PDA; read-only here. Signs as metadata update authority.
     #[account(
         seeds = [PsmConfig::SEED],
         bump = config.bump,
@@ -170,6 +199,7 @@ pub struct AcceptRoleAdmin<'info> {
     /// Must match `config.pending_role_admin`.
     pub new_role_admin: Signer<'info>,
 
+    /// The singleton config PDA (writable: `role_admin`, `pending_role_admin`).
     #[account(
         mut,
         seeds = [PsmConfig::SEED],

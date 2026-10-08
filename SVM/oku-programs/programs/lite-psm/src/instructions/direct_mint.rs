@@ -12,11 +12,20 @@ use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
 
+/// Mint `raw_amount` OkuM straight to `recipient`, with no USDC paid in.
+///
+/// Used for the fiat on-ramp and the EVM->SVM bridge leg, where the backing
+/// dollars are held off-chain. Only the `direct_minter` can call it, and every
+/// call draws down its `direct_minter_allowance`, so the allowance manager
+/// bounds how much can ever be minted this way.
 pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, raw_amount: u64) -> Result<()> {
+    // No minting in the slot of an emergency multiplier override, or while paused.
     check_yield_lock(&ctx.accounts.config)?;
     require!(!ctx.accounts.config.is_paused, LitePsmError::Paused);
     require!(raw_amount > 0, LitePsmError::ZeroAmount);
 
+    // Stay under the global supply cap, then use up the minter's allowance
+    // (fails if the allowance is too small).
     let new_total_supply = check_supply_cap(
         ctx.accounts.oku_m_mint.supply,
         raw_amount,
@@ -24,6 +33,7 @@ pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, raw_amount: u64) -> Resul
     )?;
     consume_allowance(&mut ctx.accounts.config.direct_minter_allowance, raw_amount)?;
 
+    // The config PDA is the mint authority, so it signs the mint with its seeds.
     let bump_seed = [ctx.accounts.config.bump];
     let seeds = PsmConfig::signer_seeds(&bump_seed);
     let signer = &[&seeds[..]];

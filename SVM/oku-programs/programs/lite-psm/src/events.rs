@@ -38,27 +38,34 @@ pub struct RedeemEvent {
     pub raw_oku_m_amount: u64,
     /// USDC paid out (6 decimals)
     pub usdc_amount: u64,
+    /// Dollar value of the OkuM burned; always equal to `usdc_amount`
     pub dollar_value: u64,
     /// Canonical multiplier from the rate schedule (not the display mirror)
     pub multiplier: u128,
+    /// OkuM supply after the burn (6 decimals)
     pub new_total_supply: u64,
 }
 
 /// Emitted on a buffer deposit. EVM: `BufferDeposited`.
 #[event]
 pub struct BufferDepositEvent {
+    /// The `buffer_depositor` that sent the USDC. Named `orchestrator` because
+    /// the orchestrator holds that role in v1; kept for IDL stability.
     pub orchestrator: Pubkey,
     /// USDC deposited (6 decimals)
     pub amount: u64,
+    /// Vault USDC balance after the deposit (6 decimals)
     pub new_buffer_balance: u64,
 }
 
 /// Emitted on a buffer withdrawal. EVM: `BufferWithdrawn`.
 #[event]
 pub struct BufferWithdrawEvent {
+    /// The `buffer_withdrawer` that received the USDC
     pub actor: Pubkey,
     /// USDC withdrawn (6 decimals)
     pub amount: u64,
+    /// Vault USDC balance after the withdrawal (6 decimals)
     pub new_buffer_balance: u64,
 }
 
@@ -133,9 +140,13 @@ pub struct DirectBurnEvent {
 /// halts the schedule). EVM: `OkuMMultiplierUpdated`.
 #[event]
 pub struct MultiplierUpdated {
+    /// Canonical multiplier just before the override, WAD-scaled
     pub old_multiplier: u128,
+    /// Multiplier forced by the override, WAD-scaled
     pub new_multiplier: u128,
+    /// OkuM supply at the override (6 decimals)
     pub total_supply: u64,
+    /// Unix time of the override
     pub timestamp: i64,
 }
 
@@ -172,8 +183,11 @@ pub struct PendingYieldRateUpdated {
 /// No EVM event of this name (EVM emits `UIMultiplierUpdateCancelled`).
 #[event]
 pub struct PendingRateCancelled {
+    /// The successor rate that will no longer take over, WAD-scaled
     pub cancelled_rate: u64,
+    /// That successor's own expiry
     pub cancelled_pending_rate_end: i64,
+    /// Unix time of the cancelling write
     pub timestamp: i64,
 }
 

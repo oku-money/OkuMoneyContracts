@@ -1,3 +1,5 @@
+//! Accounts for the rate-schedule instructions and the display-mirror crank.
+
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -9,8 +11,10 @@ use anchor_spl::token_interface::Mint as MintInterface;
 /// at epoch boundaries.
 #[derive(Accounts)]
 pub struct SetYieldRate<'info> {
+    /// The configured `rebaser`.
     pub rebaser: Signer<'info>,
 
+    /// The singleton config PDA (writable: the rate schedule).
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -24,8 +28,10 @@ pub struct SetYieldRate<'info> {
 /// leaving it to the crank could let the mirror read above canonical.
 #[derive(Accounts)]
 pub struct SetOkuMMultiplier<'info> {
+    /// The configured `rebaser`.
     pub rebaser: Signer<'info>,
 
+    /// The singleton config PDA (writable: the schedule is collapsed).
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -34,6 +40,7 @@ pub struct SetOkuMMultiplier<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
+    /// OkuM mint; its `ScaledUiAmount` display multiplier is rewritten.
     #[account(
         mut,
         address = config.oku_m_mint,
@@ -51,6 +58,8 @@ pub struct SyncDisplayMultiplier<'info> {
     /// Anyone.
     pub cranker: Signer<'info>,
 
+    /// The singleton config PDA (writable: `last_display_sync_ts`). Signs the
+    /// mirror update as `ScaledUiAmount` authority.
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -58,6 +67,7 @@ pub struct SyncDisplayMultiplier<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
+    /// OkuM mint; its `ScaledUiAmount` display multiplier is rewritten.
     #[account(
         mut,
         address = config.oku_m_mint,

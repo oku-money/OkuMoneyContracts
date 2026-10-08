@@ -15,6 +15,8 @@ use oku_shared::{MAX_MULTIPLIER, MAX_RATE, MAX_RATE_WINDOW_SECONDS, PRECISION};
 /// Stored rate meaning "not accruing" (`PRECISION`, i.e. 1.0 per second).
 const NO_YIELD_RATE: u64 = PRECISION as u64;
 
+/// `PRECISION <= rate <= MAX_RATE`. On its own for a successor (whose window is
+/// checked against the active one instead); via `validate_rate_window` otherwise.
 fn validate_rate_bounds(rate: u64) -> Result<()> {
     let rate = rate as u128;
     require!(rate >= PRECISION, LitePsmError::InvalidRate);
@@ -51,11 +53,14 @@ fn reanchor(config: &mut PsmConfig, now_ts: i64) -> Result<u128> {
     Ok(snapshot)
 }
 
+/// Disarm the staged successor (rate back to "no yield", no end).
 fn clear_successor(config: &mut PsmConfig) {
     config.okum_pending_rate_per_second = NO_YIELD_RATE;
     config.okum_pending_rate_end = 0;
 }
 
+/// Flat schedule: no active yield, no window, no successor. The multiplier
+/// stays at whatever the caller anchored it to (emergency override).
 fn halt_schedule(config: &mut PsmConfig) {
     config.okum_rate_per_second = NO_YIELD_RATE;
     config.okum_rate_end = 0;
@@ -92,6 +97,10 @@ fn apply_active_rate(
     check_pause_gate(config, new_rate, now_ts)?;
 
     let old_rate = config.okum_rate_per_second;
+    // Order matters: the cancel event must describe the successor as it was
+    // armed (before `clear_successor` below), and the re-anchor must read the
+    // multiplier under the OLD schedule (before the new rate is written), so
+    // the curve is continuous at this instant.
     emit_pending_cancelled_if_armed(config, now_ts);
     let snapshot = reanchor(config, now_ts)?;
 

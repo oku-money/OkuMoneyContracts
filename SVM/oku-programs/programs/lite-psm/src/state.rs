@@ -10,6 +10,7 @@ use anchor_lang::prelude::*;
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
+    /// PDA bump, stored so signer seeds need no re-derivation
     pub bump: u8,
 
     // ===== Granular authorities, one per action =====
@@ -36,6 +37,7 @@ pub struct PsmConfig {
     pub rebaser: Pubkey,
 
     // ===== Token references =====
+    /// USDC mint (standard SPL Token, `USDC_DECIMALS` decimals)
     pub usdc_mint: Pubkey,
     /// Token-2022 mint with `ScaledUiAmount`; that extension is a write-only
     /// display mirror, never read for pricing
@@ -48,6 +50,7 @@ pub struct PsmConfig {
     pub max_supply: u64,
     /// Remaining mint allowance (6 decimals), reset by `allowance_manager`
     pub minter_allowance: u64,
+    /// Set by `pause`, cleared by `unpause`; blocks every value-moving path
     pub is_paused: bool,
 
     /// Slot of the last emergency override (`set_okum_multiplier`); user
@@ -103,6 +106,7 @@ pub struct PsmConfig {
 }
 
 impl PsmConfig {
+    /// PDA seed of the singleton config account.
     pub const SEED: &'static [u8] = b"psm_config";
 
     /// 8-byte discriminator + `InitSpace`.

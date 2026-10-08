@@ -42,10 +42,13 @@ library MathLib {
                 default { z := 0 }
             }
             default {
+                // Start the result at x^(lowest bit of n): 1.0 (b) or x.
                 switch mod(n, 2)
                 case 0 { z := b }
                 default { z := x }
-                let half := div(b, 2)
+                let half := div(b, 2) // added before each divide: half-up rounding
+                // For each remaining bit of n: square x, and multiply it into z when the bit
+                // is set. Every multiply checks for overflow and reverts on it.
                 for { n := div(n, 2) } n { n := div(n, 2) } {
                     let xx := mul(x, x)
                     if iszero(eq(div(xx, x), x)) { revert(0, 0) }

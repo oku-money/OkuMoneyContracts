@@ -63,10 +63,13 @@ contract OkuDollar is
 
     /// @custom:storage-location erc7201:okumoney.storage.OkuDollar
     struct OkuDollarStorage {
+        // The backing token; set once in `initialize`.
         IOkuMoney okuMoney;
         // Internal accounting units, NOT ERC-4626 "shares" (see contract NatSpec);
         // numerically equal to raw OkuM deposited.
         mapping(address => uint256) usdShares;
+        // Sum of every `usdShares` entry = the OkuM that backs all UsdOku. Anything the
+        // vault holds above this is a donation (see `rescueDonation`).
         uint256 totalUsdShares;
         // Separate from OkuMoney's list; a blacklisted address cannot hold or move UsdOku.
         mapping(address => bool) isBlacklisted;
@@ -153,6 +156,8 @@ contract OkuDollar is
         return _blacklisted(account);
     }
 
+    /// @dev Blocked on either list. OkuDollar honours OkuMoney's blacklist (an external
+    ///      read) so a single OkuMoney blacklisting also freezes the address's UsdOku.
     function _blacklisted(address account) internal view returns (bool) {
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         return $.isBlacklisted[account] || $.okuMoney.isBlacklisted(account);
@@ -168,7 +173,11 @@ contract OkuDollar is
     }
 
     // ============ ERC20 Overrides (USD Share-based) ============
+    // Balances are stored as shares and reported in dollars, so they grow as the
+    // multiplier grows without any transfer (a rebasing token).
 
+    /// @notice Total UsdOku in dollars: all shares at the current multiplier, rounded down.
+    /// @dev Can exceed the sum of `balanceOf` by < 1 wei per holder (each floors separately).
     function totalSupply()
         public
         view
@@ -178,6 +187,8 @@ contract OkuDollar is
         return _toDollars(_getOkuDollarStorage().totalUsdShares, usdMultiplier());
     }
 
+    /// @notice `account`'s UsdOku in dollars: its shares at the current multiplier,
+    ///         rounded down. Grows over time with no transfer.
     function balanceOf(address account)
         public
         view
@@ -187,6 +198,10 @@ contract OkuDollar is
         return _toDollars(_getOkuDollarStorage().usdShares[account], usdMultiplier());
     }
 
+    /// @notice Send `amount` dollars of UsdOku. Moves the equivalent shares, rounded down,
+    ///         so the recipient may receive up to 1 wei less than `amount`.
+    /// @dev Pause-gated; both sides are blacklist-checked in `_transferUsdShares`. Reverts
+    ///      `AmountTooSmall` if a non-zero `amount` is worth zero shares.
     function transfer(
         address to,
         uint256 amount
@@ -264,6 +279,7 @@ contract OkuDollar is
         return Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
     }
 
+    /// @dev See {_toShares}.
     function _toDollars(uint256 shares, uint256 multiplier) private pure returns (uint256) {
         return Math.mulDiv(shares, multiplier, Constants.PRECISION, Math.Rounding.Floor);
     }
@@ -368,12 +384,17 @@ contract OkuDollar is
         uint256 multiplier = $.okuMoney.okuMMultiplier();
         if (actualReceived == 0) revert Errors.AmountTooSmall();
 
+        // Dollars minted = OkuM received at the current multiplier; enforce the caller's
+        // minimum.
         usdMinted = MathLib.okuMToDollars(actualReceived, multiplier);
         if (usdMinted < minAmountOut) revert OutputBelowMinimum(usdMinted, minAmountOut);
 
+        // Credit the receiver one share per raw OkuM received.
         $.totalUsdShares += actualReceived;
         $.usdShares[receiver] += actualReceived;
 
+        // ERC-20 `Transfer` (mint, in dollars), our share-level `TransferValue`, the
+        // protocol `Wrapped`, and ERC-4626 `Deposit`: each audience has its own event.
         emit Transfer(address(0), receiver, usdMinted);
         emit TransferValue(address(0), receiver, actualReceived, usdMinted);
         // The two multiplier params are identical; kept for indexer/ABI stability.
@@ -427,14 +448,17 @@ contract OkuDollar is
             Math.mulDiv(usdAmount, Constants.PRECISION, multiplier, Math.Rounding.Ceil);
         if ($.usdShares[owner] < sharesToBurn) revert Errors.InsufficientBalance();
 
+        // Defensive: reserves back every share, so this should never fire.
         uint256 reserves = IERC20(address($.okuMoney)).balanceOf(address(this));
         if (reserves < okuMReturned) revert InsufficientReserves();
 
+        // Burn the shares before sending OkuM (checks-effects-interactions).
         $.totalUsdShares -= sharesToBurn;
         $.usdShares[owner] -= sharesToBurn;
 
         IERC20(address($.okuMoney)).safeTransfer(receiver, okuMReturned);
 
+        // Same four audiences as `wrap`. `Transfer.value` is the dollar amount requested.
         emit Transfer(owner, address(0), usdAmount);
         emit TransferValue(owner, address(0), sharesToBurn, usdAmount);
         emit Unwrapped(owner, receiver, usdAmount, okuMReturned, multiplier, multiplier);
@@ -493,6 +517,7 @@ contract OkuDollar is
         return balanceOf(owner);
     }
 
+    /// @notice Dollars of UsdOku `deposit(assets)` would mint now (= {convertToShares}).
     function previewDeposit(uint256 assets) public view returns (uint256) {
         return convertToShares(assets);
     }
@@ -507,11 +532,15 @@ contract OkuDollar is
         return Math.mulDiv(assets, usdMultiplier(), Constants.PRECISION, Math.Rounding.Ceil);
     }
 
+    /// @notice OkuM `redeem(shares)` would return now (= {convertToAssets}).
     function previewRedeem(uint256 shares) public view returns (uint256) {
         return convertToAssets(shares);
     }
 
     /// @notice Deposit `assets` OkuM, minting UsdOku to `receiver`.
+    /// @param assets   OkuM to deposit (18 decimals).
+    /// @param receiver Address credited with the UsdOku.
+    /// @return Dollars of UsdOku minted.
     /// @dev Alias for {wrap} with `minAmountOut == 0`; prefer {wrap}. Carries no modifiers:
     ///      `wrap` already enforces them, and `nonReentrant` here would re-enter its guard.
     function deposit(uint256 assets, address receiver) external returns (uint256) {
@@ -520,6 +549,9 @@ contract OkuDollar is
 
     /// @notice Mint `shares` dollars of UsdOku to `receiver`.
     /// @dev See {deposit}; no modifiers here either.
+    /// @param shares   Dollars of UsdOku wanted.
+    /// @param receiver Address credited with the UsdOku.
+    /// @return OkuM pulled from the caller ({previewMint}, rounded up).
     function mint(uint256 shares, address receiver) external returns (uint256) {
         uint256 assets = previewMint(shares);
         wrap(assets, receiver, 0);
@@ -527,6 +559,10 @@ contract OkuDollar is
     }
 
     /// @notice Withdraw `assets` OkuM to `receiver`, burning `owner`'s UsdOku.
+    /// @param assets   OkuM to receive (18 decimals).
+    /// @param receiver Recipient of the OkuM.
+    /// @param owner    Holder whose UsdOku is burned; a different caller spends `owner`'s
+    ///                 allowance.
     /// @return shares The number of UsdOku shares burned.
     /// @dev Returns SHARES burned, per EIP-4626; `_redeemShares` returns assets, discarded here.
     function withdraw(
@@ -546,6 +582,11 @@ contract OkuDollar is
     }
 
     /// @notice Redeem `shares` dollars of UsdOku from `owner` for OkuM to `receiver`.
+    /// @param shares   Dollars of UsdOku to burn.
+    /// @param receiver Recipient of the OkuM.
+    /// @param owner    Holder whose UsdOku is burned; a different caller spends `owner`'s
+    ///                 allowance.
+    /// @return OkuM sent to `receiver`.
     function redeem(
         uint256 shares,
         address receiver,
@@ -612,10 +653,12 @@ contract OkuDollar is
         if (receiver == address(0)) revert Errors.ZeroAddress();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
+        // Only the surplus above what backs outstanding shares can leave.
         uint256 backing = $.totalUsdShares;
         uint256 held = totalOkuMReserves();
         if (held <= backing) revert NoDonationAvailable();
 
+        // Safe: `held > backing` was just checked.
         uint256 available;
         unchecked {
             available = held - backing;

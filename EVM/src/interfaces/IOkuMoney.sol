@@ -20,8 +20,11 @@ interface IOkuMoney is IERC20 {
     /// @dev Computed continuously from the rate schedule; not a stored value.
     function okuMMultiplier() external view returns (uint256);
     /// @notice Set the active yield rate, re-anchoring the accrual base.
+    /// @param newRate      Per-second rate, 1e18-scaled; 1e18 halts accrual.
+    /// @param endTimestamp When the rate expires; must be 0 when halting, future otherwise.
     function setOkuMYieldRate(uint256 newRate, uint256 endTimestamp) external;
     /// @notice Pre-stage the successor rate that activates after the active rate's end.
+    /// @param pendingEndTimestamp When the successor itself expires.
     function setNextOkuMYieldRate(uint256 newRate, uint256 pendingEndTimestamp) external;
     /// @notice Atomically re-anchor the active rate AND stage its successor.
     function setOkuMYieldRateWithSuccessor(

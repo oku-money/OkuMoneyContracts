@@ -48,6 +48,8 @@ contract OkuMoney is
     struct OkuMoneyStorage {
         mapping(address => uint256) minterAllowance; // Circle FiatToken pattern
         uint256 maxSupply; // supply cap in raw token units
+        // Addresses barred from sending, receiving or being minted to. OkuDollar also
+        // consults this list.
         mapping(address => bool) isBlacklisted;
     }
 
@@ -127,6 +129,7 @@ contract OkuMoney is
         return _getOkuMoneyStorage().isBlacklisted[account];
     }
 
+    /// @inheritdoc OkuMoneyRateSchedule
     function _supplyForOverrideEvent() internal view override returns (uint256) {
         return totalSupply();
     }

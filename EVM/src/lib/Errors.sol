@@ -20,8 +20,14 @@ library Errors {
     error MultiplierCannotDecrease();
 
     // Blacklist (OkuMoney and OkuDollar keep separate lists).
+    /// @notice The acting address is blacklisted: the sender of a transfer, the minter's
+    ///         recipient, a permit owner, or the spender in `transferFrom`.
     error SenderBlacklisted();
+    /// @notice The receiving address is blacklisted: a transfer recipient, or the spender
+    ///         being approved in `approve` / `permit`.
     error RecipientBlacklisted();
+    /// @notice `blacklist` was called for an address already on the list.
     error AlreadyBlacklisted();
+    /// @notice `unblacklist` was called for an address not on the list.
     error NotBlacklisted();
 }

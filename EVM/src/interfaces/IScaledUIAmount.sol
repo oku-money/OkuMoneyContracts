@@ -23,11 +23,16 @@ pragma solidity 0.8.28;
  */
 interface IScaledUIAmount {
     /// @notice Emitted when the UI multiplier schedule is updated.
+    /// @param oldMultiplier        UI multiplier before the update
+    /// @param newMultiplier        UI multiplier after it (equal on a pure rate change)
+    /// @param effectiveAtTimestamp When the new value applies (`block.timestamp` here)
     event UIMultiplierUpdated(
         uint256 oldMultiplier, uint256 newMultiplier, uint256 effectiveAtTimestamp
     );
 
     /// @notice Emitted when a scheduled UI multiplier update is cancelled or superseded.
+    /// @param cancelledMultiplier  The projected value that will no longer apply
+    /// @param cancelledEffectiveAt When it would have applied
     event UIMultiplierUpdateCancelled(uint256 cancelledMultiplier, uint256 cancelledEffectiveAt);
 
     /// @notice Current UI multiplier, 18 decimals (1e18 = 1.0).

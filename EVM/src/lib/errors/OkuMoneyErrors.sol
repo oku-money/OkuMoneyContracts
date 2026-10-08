@@ -6,8 +6,11 @@ pragma solidity 0.8.28;
  * @notice Errors specific to OkuMoney and its rate schedule; shared ones live in {Errors}.
  */
 abstract contract OkuMoneyErrors {
+    /// @notice A mint would push `totalSupply` above `maxSupply`.
     error ExceedsSupplyCap();
+    /// @notice `setMaxSupply` was given a value below the current `totalSupply`.
     error BelowCurrentSupply();
+    /// @notice A mint exceeds the calling minter's remaining allowance.
     error ExceedsAllowance();
     /// @dev Above `Constants.MAX_MULTIPLIER` ($1,000,000); keeps downstream math overflow-safe.
     error MultiplierTooHigh();

@@ -39,10 +39,17 @@ abstract contract OkuMoneyEvents {
     ///                    overhang if it is left unattended past `activatesAt`)
     event NextOkuMYieldRateSet(uint256 newRate, uint256 activatesAt, uint256 expiresAt);
 
+    /// @notice A minter's remaining allowance was set by `configureMinterAllowance`.
+    /// @param minter       The minter (LitePSM in practice)
+    /// @param oldAllowance Remaining allowance before the call
+    /// @param newAllowance Allowance now (replaces, does not add)
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
     );
+    /// @notice The supply cap was changed by `setMaxSupply`.
     event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
+    /// @notice `account` was added to OkuMoney's blacklist.
     event Blacklisted(address indexed account);
+    /// @notice `account` was removed from OkuMoney's blacklist.
     event Unblacklisted(address indexed account);
 }

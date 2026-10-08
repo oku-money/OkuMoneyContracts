@@ -9,6 +9,7 @@ interface IOkuDollar {
     /// @notice Underlying asset (OkuMoney address). ERC-4626 `asset()`.
     function asset() external view returns (address);
     /// @notice Wrap OkuMoney into OkuDollar.
+    /// @param minAmountOut Revert if fewer dollars would be minted (0 disables).
     function wrap(
         uint256 okuMAmount,
         address receiver,

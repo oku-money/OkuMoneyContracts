@@ -195,6 +195,10 @@ abstract contract OkuMoneyRateSchedule is
     ///      a failure after the first leaves no successor (it clears any pending rate) and
     ///      accrual silently halts at `endTimestamp`; here both land or neither does.
     ///      Pure composition of the shared bodies: every check, event and gate applies in order.
+    /// @param newRate          Active per-second rate, 1e18-scaled (`PRECISION` = no yield).
+    /// @param endTimestamp     When the active rate expires (unix seconds, in the future).
+    /// @param nextRate         Successor rate that takes over at `endTimestamp`.
+    /// @param nextEndTimestamp When the successor expires (after `endTimestamp`).
     function setOkuMYieldRateWithSuccessor(
         uint256 newRate,
         uint256 endTimestamp,
@@ -227,8 +231,11 @@ abstract contract OkuMoneyRateSchedule is
         if (newMultiplier <= currentMultiplier) revert Errors.MultiplierCannotDecrease();
         if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
 
+        // Announce the cancelled successor (if any) while it is still in storage.
         _emitPendingRateCancelledIfArmed($);
 
+        // Stamp the block so same-block PSM/vault paths revert, then jump the base to the
+        // new value with no accrual until a rate is set again.
         $.lastYieldDistributionBlock = block.number;
         _haltSchedule($, newMultiplier);
 
@@ -267,6 +274,8 @@ abstract contract OkuMoneyRateSchedule is
     // forge-lint: disable-next-item(block-timestamp,reentrancy-events,unsafe-typecast)
     // Reason: the schedule is defined in wall-clock seconds by design; validator skew (~seconds) is negligible against hour-scale windows. No untrusted external call precedes any emit; uint64(PRECISION) is a compile-time constant that fits.
     function _setOkuMYieldRate(uint256 newRate, uint256 endTimestamp) private {
+        // Validate: a halt (rate == PRECISION) carries no window; a yielding rate needs a
+        // future window no longer than MAX_RATE_WINDOW.
         _requireRateInRange(newRate);
         if (newRate == Constants.PRECISION) {
             if (endTimestamp != 0) revert EndTimestampNotAllowed();
@@ -280,10 +289,14 @@ abstract contract OkuMoneyRateSchedule is
         RateScheduleStorage storage $ = _getRateScheduleStorage();
         uint256 oldRate = $.okuMRatePerSecond;
         _requireNoIncreaseWhilePaused(newRate);
+        // Read the multiplier under the OLD schedule, before any write: it becomes the new
+        // base, so the curve is continuous at this instant (no yield gained or lost).
         uint256 snapshot = okuMMultiplier();
 
+        // Announce the successor being discarded while it is still in storage.
         _emitPendingRateCancelledIfArmed($);
 
+        // Re-anchor at now with the new rate and window; any staged successor is cleared.
         $.okuMBaseMultiplier = SafeCast.toUint96(snapshot);
         $.okuMLastAccrualTime = SafeCast.toUint48(block.timestamp);
         $.okuMRatePerSecond = SafeCast.toUint64(newRate);
@@ -304,6 +317,7 @@ abstract contract OkuMoneyRateSchedule is
         _requireRateInRange(newRate);
 
         RateScheduleStorage storage $ = _getRateScheduleStorage();
+        // A successor needs a live active window to follow, and must end after it.
         uint256 rateEnd = $.okuMRateEnd;
         if (rateEnd == 0) revert NoRateEndSet();
         if (block.timestamp >= rateEnd) revert RateAlreadyExpired();
@@ -314,14 +328,17 @@ abstract contract OkuMoneyRateSchedule is
         }
         _requireNoIncreaseWhilePaused(newRate);
 
+        // Replacing an armed successor counts as cancelling it.
         _emitPendingRateCancelledIfArmed($);
 
+        // Only the successor is written; the active rate and base are untouched.
         $.okuMPendingRatePerSecond = SafeCast.toUint64(newRate);
         $.okuMPendingRateEnd = SafeCast.toUint48(pendingEndTimestamp);
 
         emit NextOkuMYieldRateSet(newRate, rateEnd, pendingEndTimestamp);
     }
 
+    /// @dev `PRECISION <= newRate <= MAX_RATE`: no negative yield, and a bounded rpow input.
     function _requireRateInRange(uint256 newRate) private pure {
         if (newRate < Constants.PRECISION) revert InvalidRate();
         if (newRate > Constants.MAX_RATE) revert RateTooHigh();

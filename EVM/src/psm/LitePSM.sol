@@ -57,6 +57,7 @@ contract LitePSM is
 
     /// @custom:storage-location erc7201:okumoney.storage.LitePSM
     struct LitePSMStorage {
+        // Wiring, set once in `initialize` and never changed.
         IOkuMoney okuMoney;
         IOkuDollar okuDollar;
         IERC20 usdc;
@@ -79,6 +80,11 @@ contract LitePSM is
         _disableInitializers();
     }
 
+    /// @notice One-time setup behind the proxy: wire the PSM to its tokens and give the
+    ///         admin every PSM role.
+    /// @param _okuMoney  The OkuMoney proxy the PSM mints and burns.
+    /// @param _okuDollar The OkuDollar proxy; must wrap `_okuMoney` (checked).
+    /// @param _usdc      The collateral token; at most 18 decimals (checked).
     /// @param _admin Receives the full PSM role set; see {OkuMoney.initialize}.
     function initialize(
         address _okuMoney,
@@ -93,6 +99,8 @@ contract LitePSM is
         if (_okuDollar == address(0)) revert Errors.ZeroAddress();
         if (_usdc == address(0)) revert Errors.ZeroAddress();
         if (_admin == address(0)) revert Errors.ZeroAddress();
+        // OkuDollar must wrap this OkuMoney, or every UsdOku path would price against a
+        // different multiplier than the one it mints with.
         if (IOkuDollar(_okuDollar).asset() != _okuMoney) revert AssetMismatch();
 
         __AccessControl_init();
@@ -104,6 +112,8 @@ contract LitePSM is
         $.okuDollar = IOkuDollar(_okuDollar);
         $.usdc = IERC20(_usdc);
 
+        // Scale factor from USDC units to 18-decimal dollars, computed once
+        // (10**12 for 6-decimal USDC).
         uint8 usdcDecimals = IERC20Metadata(_usdc).decimals();
         if (usdcDecimals > Constants.MAX_USDC_DECIMALS) revert UsdcDecimalsTooLarge(usdcDecimals);
         $.usdcDecimalMultiplier = 10 ** (uint256(Constants.OKU_M_DECIMALS) - uint256(usdcDecimals));
@@ -157,6 +167,8 @@ contract LitePSM is
         LitePSMStorage storage $ = _getLitePSMStorage();
         (uint256 okuMAmount, uint256 okuMMult) = _quoteMint($, usdcAmount);
 
+        // Take the USDC, then mint to the caller. No explicit blacklist check here:
+        // `OkuMoney.mint` rejects a blacklisted recipient itself.
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         $.okuMoney.mint(msg.sender, okuMAmount);
 
@@ -181,6 +193,7 @@ contract LitePSM is
         uint256 okuMMult;
         (usdcAmount, okuMMult) = _quoteRedeem($, okuMAmount);
 
+        // Pull the OkuM into the PSM, burn it, then pay out USDC from the buffer.
         IERC20(address($.okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
         $.okuMoney.burn(okuMAmount);
         $.usdc.safeTransfer(msg.sender, usdcAmount);
@@ -212,6 +225,10 @@ contract LitePSM is
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         $.okuMoney.mint(address(this), okuMAmount);
 
+        // Wrap the freshly minted OkuM for the user: approve exactly this amount, wrap
+        // (with `expectedUsdMinted` as the minimum out), then clear the approval so no
+        // standing allowance is left on the PSM. `forceApprove` handles tokens that
+        // reject changing a non-zero allowance.
         IERC20 okuMoneyToken = IERC20(address($.okuMoney));
         okuMoneyToken.forceApprove(address($.okuDollar), okuMAmount);
         uint256 usdMinted = $.okuDollar.wrap(okuMAmount, msg.sender, expectedUsdMinted);
@@ -259,6 +276,9 @@ contract LitePSM is
 
     // ============ Quotes ============
 
+    /// @dev OkuM owed for `usdcAmount` at the current multiplier, rounded down:
+    ///      USDC -> 18-decimal dollars -> OkuM. Reverts on a zero input or a zero result
+    ///      (so USDC is never taken for nothing).
     function _quoteMint(
         LitePSMStorage storage $,
         uint256 usdcAmount
@@ -296,18 +316,25 @@ contract LitePSM is
 
     // ============ Admin ============
 
-    /// @notice Pause minting, redeeming and buffer withdrawals.
+    /// @notice Pause every user path (mint and redeem, OkuM and UsdOku) and both buffer
+    ///         moves.
     function pause() external onlyRole(Roles.PSM_PAUSER) {
         _pause();
     }
 
+    /// @notice Resume the paths `pause` stopped.
     function unpause() external onlyRole(Roles.PSM_UNPAUSER) {
         _unpause();
     }
 
     /// @notice Withdraw USDC from the buffer. No USDC leaves while paused.
+    /// @dev Trusted role: checked only against the buffer balance, not against
+    ///      outstanding OkuM. Not `nonReentrant`: it makes a single transfer of the
+    ///      configured USDC as its last step.
+    /// @param to     Recipient of the USDC.
+    /// @param amount USDC to send (native decimals).
     // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
+    // Reason: the only external calls are to the configured USDC (balance read, then the transfer as the last step); the event reports values fixed before the transfer.
     function withdrawUsdc(
         address to,
         uint256 amount
@@ -326,6 +353,7 @@ contract LitePSM is
     }
 
     /// @notice Deposit USDC into the redemption buffer.
+    /// @param amount USDC to pull from the caller (native decimals); needs prior approval.
     // forge-lint: disable-next-item(reentrancy-events)
     // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function depositBuffer(uint256 amount)

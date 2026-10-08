@@ -12,8 +12,12 @@ import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
  *      not blocked. See README § Accepted Risks (discrete-tick MEV).
  */
 abstract contract OverrideBlockGuard {
+    /// @notice The call landed in the same block as an emergency multiplier override.
+    ///         Retry in a later block.
     error OverrideInProgress();
 
+    /// @dev Reverts if `setOkuMMultiplier` ran earlier in this block. Reads OkuMoney's
+    ///      `lastYieldDistributionBlock` (an external call on every guarded path).
     modifier whenNoOverrideThisBlock() {
         if (block.number == _overrideBlockOkuMoney().lastYieldDistributionBlock()) {
             revert OverrideInProgress();

@@ -19,6 +19,7 @@ import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Ini
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {OkuDollarErrors} from "../../src/lib/errors/OkuDollarErrors.sol";
+import {OkuDollarHarness} from "../mocks/OkuDollarHarness.sol";
 
 /**
  * @title OkuDollarTest
@@ -2494,5 +2495,23 @@ contract OkuDollarTest is BaseTest {
             Constants.MAX_MULTIPLIER,
             "balanceOf must price at the saturated multiplier, not revert"
         );
+    }
+
+    /// `transfer` passes `msg.sender` and `transferFrom` spends an allowance first, so
+    /// neither can reach the zero-sender guard; drive it through a harness.
+    function test_TransferUsdShares_RevertsOnZeroSender() public {
+        OkuDollarHarness impl = new OkuDollarHarness();
+        OkuDollarHarness h = OkuDollarHarness(
+            address(
+                new ERC1967Proxy(
+                    address(impl),
+                    abi.encodeCall(
+                        impl.initialize, (address(okuMoney), "OkuDollar", "usdOku", admin)
+                    )
+                )
+            )
+        );
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        h.exposedTransferUsdShares(address(0), user1, 1, PRECISION);
     }
 }

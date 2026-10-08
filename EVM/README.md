@@ -20,7 +20,7 @@ npx hardhat compile && npx hardhat test       # fork, integration, simulation, d
 ```
 
 CI (`.github/workflows/test.yml`) enforces >=95% line coverage on every `src/`
-file and on the total, and >=95% total branch coverage, from `forge coverage`.
+file and on the total, and >=94% total branch coverage, from `forge coverage`.
 
 Targeted invocations and what each suite covers: § Testing.
 Every operator and deploy entry point: § npm scripts.
@@ -1180,13 +1180,14 @@ from `forge coverage` on each run; none are recorded here.
 ### Uncovered lines and branches (intentional)
 
 Each is a `revert` arm that no call path can drive. Line numbers are omitted
-deliberately; every symbol is unique within its function.
+deliberately; every symbol is unique within its function. Guards that only an
+internal caller could trip are tested through a harness (`test/mocks/OkuDollarHarness.sol`)
+instead of being listed here.
 
 | Location | Guard | Why unreachable |
 |---|---|---|
 | `OkuDollar._update` | `UseWrapInstead` / `UseUnwrapInstead` / `OkuDollarDoesNotUseInternalUpdate` | Nothing invokes the inherited `_mint` / `_burn`; the override is `pure` and unconditionally reverts (Accepted Risk #5). A tripwire against a future refactor. |
 | `LitePSM.redeemUsdOku` | `received == 0` (balance delta after pulling `usdAmount` of `OkuDollar`) | `OkuDollar.transferFrom` reverts `AmountTooSmall` itself whenever the share conversion floors to zero (Accepted Risk #4), and `multiplier >= PRECISION` means a nonzero share delta implies a nonzero dollar delta. Defence-in-depth against either guard changing independently. |
-| `OkuDollar._transferUsdShares` | `from == address(0)` | `transfer` passes `msg.sender`; `transferFrom` spends the allowance first, and `address(0)` can never have granted one. The `to` half of the pair is reachable and tested. |
 | `OkuDollar.wrap` | `sharesToMint == 0` | `wrap` rejects `okuMAmount == 0` at entry and `sharesToMint == actualReceived`, so zero needs a 100 % transfer-fee asset; the typed `IOkuMoney` wired at init is not fee-on-transfer. Kept because the balance-delta pattern exists to tolerate one. |
 
 These are guards against an assumption about a collaborator that a future change

@@ -47,11 +47,8 @@ pub enum LitePsmError {
     #[msg("Amount must be greater than zero")]
     ZeroAmount,
 
-    /// A user or buffer operation landed in the same slot as an emergency
-    /// multiplier override (`set_okum_multiplier`). The message predates the
-    /// streaming schedule (routine rate writes do NOT trigger it); kept for
-    /// IDL stability. Retry in the next slot. EVM: OverrideInProgress
-    #[msg("Cannot perform operation in same slot as yield distribution")]
+    /// Retry in the next slot. EVM: OverrideInProgress
+    #[msg("Cannot perform operation in the same slot as a multiplier override")]
     OverrideInProgress,
 
     /// Also rejects a no-op override, which would stamp the yield lock without

@@ -19,7 +19,7 @@ pragma solidity 0.8.28;
  * FORMULAS:
  *   USDC   -> OkuM    okuMAmount = (usdcAmount * decimalMultiplier) * PRECISION / okuMMultiplier
  *   OkuM   -> USDC    usdcAmount = (okuMAmount * okuMMultiplier / PRECISION) / decimalMultiplier
- *   OkuM   -> shares  shares     = okuMAmount * okuMMultiplier / usdMultiplier
+ *   OkuM   -> shares  shares     = okuMAmount (1:1; both tokens share one multiplier)
  *   UsdOku -> OkuM    okuMAmount = usdAmount * PRECISION / okuMMultiplier
  */
 library Constants {

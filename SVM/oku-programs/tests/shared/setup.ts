@@ -66,7 +66,7 @@ export const coldMultisig = Keypair.generate();
 export const warmMultisig = Keypair.generate();
 
 /** PSM orchestrator — automated operations. PSM roles:
- *  bufferDepositor, rebaser. This same key also drives cross-chain
+ *  bufferDepositor, rateManager. This same key also drives cross-chain
  *  transfers off-chain by calling `mint_oku_m` / `redeem_oku_m` on each
  *  side. */
 export const psmOrchestrator = Keypair.generate();
@@ -144,7 +144,7 @@ export async function initializePsm(
       bufferWithdrawer: coldMultisig.publicKey,
       capManager: coldMultisig.publicKey,
       allowanceManager: coldMultisig.publicKey,
-      rebaser: psmOrchestrator.publicKey,
+      rateManager: psmOrchestrator.publicKey,
       okuMUri: "",
     })
     .accountsPartial({

@@ -21,9 +21,8 @@ library Roles {
     /// @dev Separate from `OKUM_MINTER` so burn can be locked down independently.
     bytes32 public constant OKUM_BURNER = keccak256("OKUM_BURNER");
     /// @dev Sets the yield-rate schedule (`setOkuMYieldRate`, `setNextOkuMYieldRate`,
-    ///      `setOkuMYieldRateWithSuccessor`) and the emergency `setOkuMMultiplier`. The name is
-    ///      historical: OkuM balances never rebase, only the multiplier grows.
-    bytes32 public constant OKUM_REBASER = keccak256("OKUM_REBASER");
+    ///      `setOkuMYieldRateWithSuccessor`) and the emergency `setOkuMMultiplier`.
+    bytes32 public constant OKUM_RATE_MANAGER = keccak256("OKUM_RATE_MANAGER");
     /// @dev Can blacklist an address (on whichever contract grants it).
     bytes32 public constant OKUM_BLACKLISTER = keccak256("OKUM_BLACKLISTER");
     /// @dev Can remove an address from the blacklist.

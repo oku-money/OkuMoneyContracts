@@ -12,14 +12,14 @@ import {TestConstants} from "../shared/Constants.sol";
  * @notice Stateful handler for OkuDollar invariant testing — exercises wrap, unwrap,
  *         transfer, discrete rebase, and the (single) yield-rate schedule.
  *
- *         The handler must be granted OKUM_REBASER on the OkuMoney instance so it can
+ *         The handler must be granted OKUM_RATE_MANAGER on the OkuMoney instance so it can
  *         drive the shared multiplier — see VaultInvariants.setUp.
  */
 contract OkuDollarHandler is Test {
     OkuMoney public okuMoney;
     OkuDollar public okuDollar;
     address public minter;
-    address public rebaser;
+    address public rateManager;
 
     address[] public actors;
     mapping(address => bool) public isActor;
@@ -48,11 +48,11 @@ contract OkuDollarHandler is Test {
     uint256 public ghostSetNextYieldRateCalls;
     uint256 public ghostSetNextYieldRateReverts;
 
-    constructor(OkuMoney _okuMoney, OkuDollar _okuDollar, address _minter, address _rebaser) {
+    constructor(OkuMoney _okuMoney, OkuDollar _okuDollar, address _minter, address _rateManager) {
         okuMoney = _okuMoney;
         okuDollar = _okuDollar;
         minter = _minter;
-        rebaser = _rebaser;
+        rateManager = _rateManager;
 
         _addActor(makeAddr("vaultActor1"));
         _addActor(makeAddr("vaultActor2"));
@@ -149,7 +149,7 @@ contract OkuDollarHandler is Test {
         uint256 newPrice = currentPrice + increase;
         if (newPrice > MAX_FUZZ_PRICE) newPrice = MAX_FUZZ_PRICE;
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         try okuMoney.setOkuMMultiplier(newPrice) {
             vm.roll(block.number + 1);
         } catch {
@@ -169,7 +169,7 @@ contract OkuDollarHandler is Test {
         // rate requires a bounded future window — see setOkuMYieldRate's NatSpec.
         uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + endOffset;
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         try okuMoney.setOkuMYieldRate(rate, endTimestamp) {}
         catch {
             ghostSetYieldRateReverts++;
@@ -185,7 +185,7 @@ contract OkuDollarHandler is Test {
         uint256 endTs = okuMoney.okuMRateEnd();
         if (endTs == 0 || block.timestamp >= endTs) return;
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         try okuMoney.setNextOkuMYieldRate(rate, endTs + pendingEndOffset) {}
         catch {
             ghostSetNextYieldRateReverts++;

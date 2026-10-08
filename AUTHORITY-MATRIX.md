@@ -44,10 +44,10 @@ bounds stay on-chain; business policy moves to the backend.
 
 | # | Path | Contract | Role | Blast radius | Guards | Rev? |
 |---|---|---|---|---|---|---|
-| E1 | `setOkuMMultiplier` | `OkuMoney` | `OKUM_REBASER` | **Raise multiplier up to 1e24 — a 1,000,000× inflation of every balance, redeemable against the PSM buffer** | `whenNotPaused`, strictly-increasing, ≤ `MAX_MULTIPLIER` | **No** |
-| E2 | `setOkuMYieldRate` | `OkuMoney` | `OKUM_REBASER` | Stream ≤ `MAX_RATE` for ≤ 90 d (≈ 2.18× per window) | rate + window bounds; pause-gated **only** on increase vs *effective* rate | **No** |
-| E3 | `setNextOkuMYieldRate` | `OkuMoney` | `OKUM_REBASER` | Arm successor, same bounds | as above, successor window bounded independently | **No** |
-| E4 | `setOkuMYieldRateWithSuccessor` | `OkuMoney` | `OKUM_REBASER` | E2 + E3 atomically | as above | **No** |
+| E1 | `setOkuMMultiplier` | `OkuMoney` | `OKUM_RATE_MANAGER` | **Raise multiplier up to 1e24 — a 1,000,000× inflation of every balance, redeemable against the PSM buffer** | `whenNotPaused`, strictly-increasing, ≤ `MAX_MULTIPLIER` | **No** |
+| E2 | `setOkuMYieldRate` | `OkuMoney` | `OKUM_RATE_MANAGER` | Stream ≤ `MAX_RATE` for ≤ 90 d (≈ 2.18× per window) | rate + window bounds; pause-gated **only** on increase vs *effective* rate | **No** |
+| E3 | `setNextOkuMYieldRate` | `OkuMoney` | `OKUM_RATE_MANAGER` | Arm successor, same bounds | as above, successor window bounded independently | **No** |
+| E4 | `setOkuMYieldRateWithSuccessor` | `OkuMoney` | `OKUM_RATE_MANAGER` | E2 + E3 atomically | as above | **No** |
 | E5 | `mint` | `OkuMoney` | `OKUM_MINTER` | Mint to `min(maxSupply − supply, minterAllowance)` | `whenNotPaused`, supply cap, per-minter allowance, sender + recipient blacklist | **No** |
 | E6 | `burn` | `OkuMoney` | `OKUM_BURNER` | Burn caller's own balance only | sender blacklist; **no pause gate — works while paused, deliberately** | No |
 | E7 | `configureMinterAllowance` | `OkuMoney` | `OKUM_ALLOWANCE_MANAGER` | Set **any** minter's allowance, incl. its own, to `type(uint256).max` | none beyond the role | Yes |
@@ -80,10 +80,10 @@ Roles are **pubkeys stored on `PsmConfig`**, enforced by Anchor `has_one`, not a
 
 | # | Instruction | Role | Blast radius | Guards | Rev? |
 |---|---|---|---|---|---|
-| S1 | `set_okum_multiplier` | `rebaser` | **Same 1,000,000× ceiling as E1** — plus a **mandatory Token-2022 CPI**: the emergency lever aborts if `ScaledUiAmount::update_multiplier` fails | pause, yield-lock, strictly-increasing, ≤ `MAX_MULTIPLIER` | **No** |
-| S2 | `set_okum_yield_rate` | `rebaser` | As E2 | rate + window bounds; pause-gated only on increase vs effective rate | **No** |
-| S3 | `set_next_okum_yield_rate` | `rebaser` | As E3 | as above | **No** |
-| S4 | `set_okum_yield_rate_with_successor` | `rebaser` | As E4 | as above | **No** |
+| S1 | `set_okum_multiplier` | `rate_manager` | **Same 1,000,000× ceiling as E1** — plus a **mandatory Token-2022 CPI**: the emergency lever aborts if `ScaledUiAmount::update_multiplier` fails | pause, yield-lock, strictly-increasing, ≤ `MAX_MULTIPLIER` | **No** |
+| S2 | `set_okum_yield_rate` | `rate_manager` | As E2 | rate + window bounds; pause-gated only on increase vs effective rate | **No** |
+| S3 | `set_next_okum_yield_rate` | `rate_manager` | As E3 | as above | **No** |
+| S4 | `set_okum_yield_rate_with_successor` | `rate_manager` | As E4 | as above | **No** |
 | S5 | `mint_oku_m_direct` | `direct_minter` | **Mint with NO collateral** — bounded only by `max_supply` and `direct_minter_allowance`. No EVM equivalent. | pause, yield-lock, cap, allowance | **No** |
 | S6 | `burn_oku_m_direct` | `direct_burner` | Burn from own ATA | pause, yield-lock, allowance | **No** |
 | S7 | `withdraw_buffer` | `buffer_withdrawer` | **Drain the vault. Only check is `vault_balance >= amount`** — no solvency test. Same blast radius as E18. | pause **and** yield-lock; destination must be the withdrawer's own USDC account | **No** |
@@ -98,9 +98,8 @@ Roles are **pubkeys stored on `PsmConfig`**, enforced by Anchor `has_one`, not a
 | S16 | `set_authority` | `role_admin` | Rotate any other role — **commits immediately**; only `RoleAdmin` is two-step | rejects `Pubkey::default()`; forbids assigning a granular role to `role_admin` | Yes |
 | S17 | `accept_role_admin` | `pending_role_admin` | Complete the two-step handover | Ownable2Step-equivalent | — |
 | S18 | `cancel_role_admin_transfer` | `role_admin` | Abort a pending handover | — | — |
-| S19 | `update_token_metadata` | `role_admin` | Rename the live token (two raw `invoke_signed`) | — | Yes |
-| S20 | `initialize` | `role_admin` = **BPF upgrade authority** | Creates `PsmConfig`, the single OkuM mint and the USDC vault ATA | ties `role_admin` to `ProgramData` upgrade authority — **good, non-obvious anti-land-grab control** | — |
-| S21 | Program upgrade | BPF upgrade authority | **Replace all program logic** | none | **No** |
+| S19 | `initialize` | `role_admin` = **BPF upgrade authority** | Creates `PsmConfig`, the single OkuM mint and the USDC vault ATA | ties `role_admin` to `ProgramData` upgrade authority — **good, non-obvious anti-land-grab control** | — |
+| S20 | Program upgrade | BPF upgrade authority | **Replace all program logic** | none | **No** |
 
 **SVM permissionless:** `mint_oku_m`, `redeem_oku_m` (pause + yield-lock + slippage
 `min_usdc_out`), and `sync_display_multiplier` — correctly permissionless, since its
@@ -110,7 +109,7 @@ output is a pure function of existing state.
 
 ## 3. Findings, ordered by severity
 
-**A. A single `OKUM_REBASER` / `rebaser` key can inflate the multiplier 1,000,000× (E1, S1).**
+**A. A single `OKUM_RATE_MANAGER` / `rate_manager` key can inflate the multiplier 1,000,000× (E1, S1).**
 Only constraints are "strictly greater", the `1e24` ceiling, and `whenNotPaused`. **No
 timelock, no rate-of-change limit, no multisig requirement in code.** Any holder can then
 redeem the inflated value against the PSM. This is the single largest unguarded lever on
@@ -177,7 +176,7 @@ Testnet vs mainnet shape, per §3-D:
   design**. The deployer retains `DEFAULT_ADMIN_ROLE` and all `*_UPGRADER` roles. This is a
   deliberate waiver for internal testing; `grantRoles.ts` refuses mainnet.
 - **Mainnet:** `grantRolesMainnet.ts` splits the same powers across cold / warm / orchestrator
-  keys and revokes only the deployer's `DEFAULT_ADMIN_ROLE`; the deployer's remaining
-  granular roles must be removed separately (`README.md` § Mainnet ceremony). On SVM the
+  keys, has the deployer renounce every granular role, revokes its `DEFAULT_ADMIN_ROLE`
+  last, and asserts it holds nothing (`README.md` § Mainnet ceremony). On SVM the
   granular roles are set to their final holders at `initialize`, while `role_admin` starts
   on the deployer and moves by the two-step handover (S16–S18).

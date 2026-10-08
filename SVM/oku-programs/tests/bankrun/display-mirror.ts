@@ -91,7 +91,7 @@ describe("display mirror (ScaledUiAmount)", () => {
   const setRate = async (rate: bigint, endTs: number) =>
     psm.methods
       .setOkumYieldRate(new BN(rate.toString()), new BN(endTs))
-      .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+      .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
       .signers([orchestrator])
       .rpc();
 
@@ -290,10 +290,10 @@ describe("display mirror (ScaledUiAmount)", () => {
     const after = await psm.account.psmConfig.fetch(psmConfigPda);
 
     expect(
-      (after as any).lastYieldDistributionSlot.toString(),
+      (after as any).lastOverrideSlot.toString(),
       "display sync must not engage the sandwich lock — it would make the PSM " +
         "unavailable for one slot per sync interval for no security benefit",
-    ).to.equal((before as any).lastYieldDistributionSlot.toString());
+    ).to.equal((before as any).lastOverrideSlot.toString());
   });
 
   it("records the sync timestamp for staleness tracking", async () => {
@@ -324,7 +324,7 @@ describe("display mirror (ScaledUiAmount)", () => {
     await psm.methods
       .setOkumMultiplier(new BN(target.toString()))
       .accountsPartial({
-        rebaser: orchestrator.publicKey,
+        rateManager: orchestrator.publicKey,
         config: psmConfigPda,
         okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -358,7 +358,7 @@ describe("display mirror (ScaledUiAmount)", () => {
     await psm.methods
       .setOkumMultiplier(new BN((current + 10_000n).toString()))
       .accountsPartial({
-        rebaser: orchestrator.publicKey,
+        rateManager: orchestrator.publicKey,
         config: psmConfigPda,
         okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -367,7 +367,7 @@ describe("display mirror (ScaledUiAmount)", () => {
       .rpc();
 
     const cfg: any = await psm.account.psmConfig.fetch(psmConfigPda);
-    expect(cfg.lastYieldDistributionSlot.toNumber()).to.be.greaterThan(0);
+    expect(cfg.lastOverrideSlot.toNumber()).to.be.greaterThan(0);
     expect(cfg.okumRateEnd.toNumber()).to.equal(0, "override must halt the schedule");
     expect(cfg.okumRatePerSecond.toString()).to.equal(PRECISION.toString());
 

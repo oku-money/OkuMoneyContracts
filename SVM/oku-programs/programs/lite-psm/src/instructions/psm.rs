@@ -209,7 +209,7 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
     let new_buffer_balance = ctx.accounts.vault_usdc.amount;
 
     emit!(BufferDepositEvent {
-        orchestrator: ctx.accounts.buffer_depositor.key(),
+        depositor: ctx.accounts.buffer_depositor.key(),
         amount,
         new_buffer_balance,
     });

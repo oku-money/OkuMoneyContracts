@@ -165,33 +165,6 @@ pub struct SetAuthority<'info> {
     pub config: Account<'info, PsmConfig>,
 }
 
-/// Accounts for `update_token_metadata`. The config PDA is the metadata update
-/// authority.
-#[derive(Accounts)]
-pub struct UpdateTokenMetadata<'info> {
-    /// The current `role_admin`.
-    pub role_admin: Signer<'info>,
-
-    /// The singleton config PDA; read-only here. Signs as metadata update authority.
-    #[account(
-        seeds = [PsmConfig::SEED],
-        bump = config.bump,
-        has_one = role_admin @ LitePsmError::Unauthorized
-    )]
-    pub config: Account<'info, PsmConfig>,
-
-    /// OkuM mint (Token-2022); also the metadata account, since the pointer
-    /// targets the mint itself.
-    #[account(
-        mut,
-        address = config.oku_m_mint,
-        mint::token_program = token_2022_program,
-    )]
-    pub oku_m_mint: InterfaceAccount<'info, MintInterface>,
-
-    pub token_2022_program: Program<'info, Token2022>,
-}
-
 /// The signer is the proposed admin, not the current one. The match against
 /// `pending_role_admin` is checked in the handler (it may be the zero pubkey).
 #[derive(Accounts)]

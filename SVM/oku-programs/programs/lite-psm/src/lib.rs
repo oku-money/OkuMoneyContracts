@@ -33,11 +33,11 @@ declare_id!("4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN");
 #[cfg(not(feature = "no-entrypoint"))]
 solana_security_txt::security_txt! {
     name: "OkuMoney Lite-PSM",
-    project_url: "https://github.com/anomalyco/okuMoney",
-    contacts: "uri:https://github.com/anomalyco/okuMoney/security/advisories/new",
-    policy: "https://github.com/anomalyco/okuMoney/blob/main/SECURITY.md",
+    project_url: "https://github.com/oku-money/OkuMoneyContracts",
+    contacts: "uri:https://github.com/oku-money/OkuMoneyContracts/security/advisories/new",
+    policy: "https://github.com/oku-money/OkuMoneyContracts/security/policy",
     preferred_languages: "en",
-    source_code: "https://github.com/anomalyco/okuMoney"
+    source_code: "https://github.com/oku-money/OkuMoneyContracts"
 }
 
 #[program]
@@ -59,14 +59,15 @@ pub mod lite_psm {
         instructions::psm::mint_oku_m(ctx, usdc_amount)
     }
 
-    /// Mint OkuM without USDC (`direct_minter` only; fiat on-ramp). Consumes the
-    /// direct-minter allowance and respects the supply cap.
+    /// Mint OkuM without USDC (`direct_minter` only; fiat on-ramp and the SVM->SVM
+    /// bridge destination leg). Consumes the direct-minter allowance and respects
+    /// the supply cap.
     pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, raw_amount: u64) -> Result<()> {
         instructions::direct_mint::mint_oku_m_direct(ctx, raw_amount)
     }
 
     /// Burn the caller's OkuM without a USDC payout (`direct_burner` only; the
-    /// SVM->EVM bridge leg). Consumes the direct-burner allowance.
+    /// source leg of a bridge out of this chain). Consumes the direct-burner allowance.
     pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, raw_amount: u64) -> Result<()> {
         instructions::direct_burn::burn_oku_m_direct(ctx, raw_amount)
     }
@@ -158,14 +159,7 @@ pub mod lite_psm {
         instructions::psm_admin::cancel_role_admin_transfer(ctx)
     }
 
-    /// Reset the mint's Token-2022 name/symbol to the canonical OkuM identity
-    /// (`role_admin` only). The "usdOku" dollar view is the display multiplier
-    /// and is unaffected.
-    pub fn update_token_metadata(ctx: Context<UpdateTokenMetadata>) -> Result<()> {
-        instructions::psm_admin::update_token_metadata(ctx)
-    }
-
-    /// Set the active per-second rate and its window (`rebaser` only). Re-anchors
+    /// Set the active per-second rate and its window (`rate_manager` only). Re-anchors
     /// the base multiplier and clears any staged successor. `end_timestamp` must
     /// be `0` for a halt (`PRECISION`) and in the future otherwise.
     pub fn set_okum_yield_rate(
@@ -177,7 +171,7 @@ pub mod lite_psm {
     }
 
     /// Stage the successor rate that takes over at the current `okum_rate_end`
-    /// with no transaction at the boundary (`rebaser` only).
+    /// with no transaction at the boundary (`rate_manager` only).
     pub fn set_next_okum_yield_rate(
         ctx: Context<SetYieldRate>,
         new_rate: u64,
@@ -186,7 +180,7 @@ pub mod lite_psm {
         instructions::yield_ops::set_next_okum_yield_rate(ctx, new_rate, pending_end_timestamp)
     }
 
-    /// Set the active rate and stage its successor atomically (`rebaser` only);
+    /// Set the active rate and stage its successor atomically (`rate_manager` only);
     /// the epoch orchestrator's instruction.
     pub fn set_okum_yield_rate_with_successor(
         ctx: Context<SetYieldRate>,
@@ -204,7 +198,7 @@ pub mod lite_psm {
         )
     }
 
-    /// EMERGENCY (`rebaser` only): force the multiplier (WAD-scaled) to a strictly
+    /// EMERGENCY (`rate_manager` only): force the multiplier (WAD-scaled) to a strictly
     /// higher value and halt accrual. The only instruction that engages the
     /// same-slot yield lock.
     pub fn set_okum_multiplier(

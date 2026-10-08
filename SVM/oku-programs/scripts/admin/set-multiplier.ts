@@ -1,5 +1,5 @@
 /**
- * Emergency-override multiplier set (rebaser-only): `set_okum_multiplier`.
+ * Emergency-override multiplier set (rateManager-only): `set_okum_multiplier`.
  * NOT part of the normal flow (see `set-yield-rate.ts`); use it to re-anchor a
  * chain that fell BEHIND the fleet (see `checkMultiplierDrift.ts`).
  *
@@ -46,7 +46,7 @@ async function main() {
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
   const cfg: any = await program.account.psmConfig.fetch(psmConfig);
-  const rebaser = resolveRoleSigner(provider, cfg, 'rebaser');
+  const rateManager = resolveRoleSigner(provider, cfg, 'rateManager');
   const schedule = scheduleFromConfig(cfg);
   const nowSec = Math.floor(Date.now() / 1000);
   const current = computeMultiplier(schedule, BigInt(nowSec));
@@ -75,7 +75,7 @@ async function main() {
   logger.info(
     summaryBlock('set multiplier', {
       'config PDA': psmConfig.toBase58(),
-      'signer (rebaser)': describeRoleSigner('rebaser', rebaser),
+      'signer (rateManager)': describeRoleSigner('rateManager', rateManager),
       'current multiplier (wad)': current.toString(),
       'target multiplier (wad)': target.toString(),
       'delta': `+${deltaBps} bps`,
@@ -95,12 +95,12 @@ async function main() {
   const sig = await program.methods
     .setOkumMultiplier(new BN(target.toString()))
     .accountsPartial({
-      rebaser: rebaser.authority,
+      rateManager: rateManager.authority,
       config: psmConfig,
       okuMMint: new PublicKey(deployment.tokens!.okuM),
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
-    .signers(rebaser.signers)
+    .signers(rateManager.signers)
     .rpc();
   logger.success(`tx: ${sig}`);
 

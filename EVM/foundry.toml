@@ -56,6 +56,9 @@ number_underscore = "thousands"
 
 # Lint configuration
 [lint]
-exclude_lints = ["asm-keccak256"]
+# reentrancy-events: every external call in src/ is to the configured USDC or the protocol's
+#   own OkuMoney/OkuDollar (no callbacks), and the flagged emits report values fixed before it.
+# block-timestamp: the rate schedule is defined in wall-clock seconds by design.
+exclude_lints = ["asm-keccak256", "reentrancy-events", "block-timestamp"]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

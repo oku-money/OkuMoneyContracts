@@ -156,8 +156,6 @@ contract LitePSM is
     /// @dev `okuMAmount = usdcValue18 * PRECISION / okuMMultiplier`, floored (the caller
     ///      forfeits at most one raw OkuM unit).
     /// @param usdcAmount USDC to deposit (native decimals).
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function mintOkuM(uint256 usdcAmount)
         external
         nonReentrant
@@ -179,8 +177,6 @@ contract LitePSM is
     /// @dev `usdcAmount = okuMAmount * okuMMultiplier / PRECISION`, scaled to USDC decimals.
     /// @param okuMAmount OkuMoney to redeem (18 decimals).
     /// @return usdcAmount USDC paid to the caller.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function redeemOkuM(uint256 okuMAmount)
         external
         nonReentrant
@@ -204,11 +200,8 @@ contract LitePSM is
     // ============ OkuDollar ============
 
     /// @notice Mint OkuDollar by depositing USDC (USDC -> OkuM -> wrap).
-    /// @dev `minAmountOut` passed to {OkuDollar.wrap} is the exact share-formula output,
-    ///      guarding the wrap leg (e.g. against a fee-on-transfer OkuM).
+    /// @dev Passes the exact expected output as {OkuDollar.wrap}'s `minAmountOut`.
     /// @param usdcAmount USDC to deposit (native decimals).
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function mintUsdOku(uint256 usdcAmount)
         external
         nonReentrant
@@ -217,7 +210,7 @@ contract LitePSM is
     {
         LitePSMStorage storage $ = _getLitePSMStorage();
         (uint256 okuMAmount, uint256 okuMMult) = _quoteMint($, usdcAmount);
-        // OkuM is minted to the PSM, so OkuMoney's own blacklist check never sees the user.
+        // `OkuDollar.wrap` would also reject the user; this fails first, clearly.
         if ($.okuMoney.isBlacklisted(msg.sender)) revert UserBlacklisted(msg.sender);
 
         uint256 expectedUsdMinted = MathLib.okuMToDollars(okuMAmount, okuMMult);
@@ -241,8 +234,6 @@ contract LitePSM is
     /// @dev Reverts if the vault is undercollateralized (unwrap fails).
     /// @param usdAmount OkuDollar to redeem (dollar terms, 18 decimals).
     /// @return usdcOut USDC paid to the caller.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function redeemUsdOku(uint256 usdAmount)
         external
         nonReentrant
@@ -252,7 +243,7 @@ contract LitePSM is
     {
         if (usdAmount == 0) revert Errors.ZeroAmount();
         LitePSMStorage storage $ = _getLitePSMStorage();
-        // The OkuM leg never touches the user's OkuMoney balance, so check here.
+        // `OkuDollar.transferFrom` would also reject the user; this fails first, clearly.
         if ($.okuMoney.isBlacklisted(msg.sender)) revert UserBlacklisted(msg.sender);
 
         // Unwrap the measured balance delta, not `usdAmount`: `transferFrom` floors the
@@ -333,8 +324,6 @@ contract LitePSM is
     ///      configured USDC as its last step.
     /// @param to     Recipient of the USDC.
     /// @param amount USDC to send (native decimals).
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: the only external calls are to the configured USDC (balance read, then the transfer as the last step); the event reports values fixed before the transfer.
     function withdrawUsdc(
         address to,
         uint256 amount
@@ -354,8 +343,6 @@ contract LitePSM is
 
     /// @notice Deposit USDC into the redemption buffer.
     /// @param amount USDC to pull from the caller (native decimals); needs prior approval.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: nonReentrant; the only external calls are to the configured USDC and protocol OkuMoney/OkuDollar, and the event reports values fixed before them.
     function depositBuffer(uint256 amount)
         external
         nonReentrant

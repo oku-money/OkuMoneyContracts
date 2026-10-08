@@ -160,7 +160,7 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
         // The rate lives on OkuMoney; `usdMultiplier()` reads it. A window may not
         // exceed MAX_RATE_WINDOW (90 days), so the horizon is walked as chained
         // re-anchors at the same rate (see `_accrueAtCurrentRate`).
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(1_000_000_001_546_176_000, block.timestamp + MAX_RATE_WINDOW); // ~5% APY
         _accrueAtCurrentRate(elapsedSeconds);
 

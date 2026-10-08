@@ -40,7 +40,7 @@ export type PsmRole =
   | 'bufferWithdrawer'
   | 'capManager'
   | 'allowanceManager'
-  | 'rebaser'
+  | 'rateManager'
   | 'directMinter'
   | 'directBurner';
 

@@ -58,7 +58,7 @@ async function onChainAuthorities(
   return {
     coldMultisig: cfg.roleAdmin.toBase58(),
     warmMultisig: cfg.pauser.toBase58(),
-    orchestrator: cfg.rebaser.toBase58(),
+    orchestrator: cfg.rateManager.toBase58(),
   };
 }
 

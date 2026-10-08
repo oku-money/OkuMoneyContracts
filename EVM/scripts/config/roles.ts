@@ -18,7 +18,7 @@ export const ROLES = {
   OKUM_MINTER: keccak256(toUtf8Bytes("OKUM_MINTER")),
   // LitePSM must hold OKUM_BURNER to call `OkuMoney.burn(...)` on redeem.
   OKUM_BURNER: keccak256(toUtf8Bytes("OKUM_BURNER")),
-  OKUM_REBASER: keccak256(toUtf8Bytes("OKUM_REBASER")),
+  OKUM_RATE_MANAGER: keccak256(toUtf8Bytes("OKUM_RATE_MANAGER")),
   OKUM_BLACKLISTER: keccak256(toUtf8Bytes("OKUM_BLACKLISTER")),
   OKUM_UNBLACKLISTER: keccak256(toUtf8Bytes("OKUM_UNBLACKLISTER")),
   OKUM_CAP_MANAGER: keccak256(toUtf8Bytes("OKUM_CAP_MANAGER")),

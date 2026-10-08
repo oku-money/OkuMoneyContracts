@@ -14,7 +14,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
  */
 contract ReentrantOkuMoney is ERC20 {
     uint256 public okuMMultiplier = 1e18;
-    uint256 public lastYieldDistributionBlock;
+    uint256 public lastOverrideBlock;
     mapping(address => uint256) public minterAllowance;
     mapping(address => bool) public isBlacklisted;
 
@@ -63,9 +63,9 @@ contract ReentrantOkuMoney is ERC20 {
 
     /// @notice Stamps the sandwich-guard block, mirroring the real
     ///         `OkuMoney.setOkuMMultiplier` discrete override.
-    /// @dev Lets guard tests stamp `lastYieldDistributionBlock` without moving the multiplier.
+    /// @dev Lets guard tests stamp `lastOverrideBlock` without moving the multiplier.
     function stampYieldBlock() external {
-        lastYieldDistributionBlock = block.number;
+        lastOverrideBlock = block.number;
     }
 
     function configureMinterAllowance(address minter_, uint256 allowance_) external {

@@ -59,7 +59,7 @@ function str(v: unknown): string {
 
 const AUTHORITY_FIELDS = [
   'roleAdmin', 'pendingRoleAdmin', 'pauser', 'unpauser', 'freezer', 'unfreezer',
-  'bufferDepositor', 'bufferWithdrawer', 'capManager', 'allowanceManager', 'rebaser',
+  'bufferDepositor', 'bufferWithdrawer', 'capManager', 'allowanceManager', 'rateManager',
   'directMinter', 'directBurner',
 ];
 const SCHEDULE_FIELDS = [
@@ -138,7 +138,7 @@ export async function readLitePsmState(
   put('minterAllowance', cfg.minterAllowance, 'volatile');
   put('directMinterAllowance', cfg.directMinterAllowance, 'volatile');
   put('directBurnerAllowance', cfg.directBurnerAllowance, 'volatile');
-  put('lastYieldDistributionSlot', cfg.lastYieldDistributionSlot, 'volatile');
+  put('lastOverrideSlot', cfg.lastOverrideSlot, 'volatile');
   put('lastDisplaySyncTs', cfg.lastDisplaySyncTs, 'volatile');
 
   // OkuM mint: the config PDA must hold every authority on it.

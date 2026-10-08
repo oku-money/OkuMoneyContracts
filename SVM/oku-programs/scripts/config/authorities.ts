@@ -49,7 +49,7 @@ export interface AuthorityConfig {
     bufferWithdrawer: PublicKey;
     capManager: PublicKey;
     allowanceManager: PublicKey;
-    rebaser: PublicKey;
+    rateManager: PublicKey;
     /** Fiat gateway: mints OkuM without USDC. `PublicKey.default` = disabled. */
     directMinter: PublicKey;
     /** Bridge backend: burns OkuM without USDC payout. `PublicKey.default` = disabled. */
@@ -91,7 +91,7 @@ function allRolesToOperatorKey(
       bufferWithdrawer: operator,
       capManager: operator,
       allowanceManager: operator,
-      rebaser: operator,
+      rateManager: operator,
       // directMinter/directBurner model third-party operators (see grant-roles.ts).
       directMinter: new PublicKey(DEFAULT_DIRECT_MINTER),
       directBurner: new PublicKey(DEFAULT_DIRECT_MINTER),
@@ -142,7 +142,7 @@ export function loadAuthorities(
       bufferWithdrawer: coldMultisig,
       capManager: coldMultisig,
       allowanceManager: coldMultisig,
-      rebaser: orchestrator,
+      rateManager: orchestrator,
       directMinter,
       directBurner,
     },

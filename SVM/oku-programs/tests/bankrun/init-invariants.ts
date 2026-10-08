@@ -122,7 +122,7 @@ describe("init invariants (OkuM mint extensions)", () => {
       bufferWithdrawer: cold,
       capManager: cold,
       allowanceManager: cold,
-      rebaser: orchestrator,
+      rateManager: orchestrator,
       okuMUri: "",
     };
   }
@@ -195,7 +195,7 @@ describe("init invariants (OkuM mint extensions)", () => {
       }
     });
 
-    it("rejects a zero-pubkey granular authority (rebaser)", async () => {
+    it("rejects a zero-pubkey granular authority (rateManager)", async () => {
       h = await startBankrun();
       program = h.program;
       payer = h.payer;
@@ -204,11 +204,11 @@ describe("init invariants (OkuM mint extensions)", () => {
       const cold = Keypair.generate().publicKey;
       const orchestrator = Keypair.generate().publicKey;
       const params = baseParams(warm, cold, orchestrator);
-      params.rebaser = PublicKey.default;
+      params.rateManager = PublicKey.default;
 
       try {
         await attemptInitialize(params);
-        expect.fail("Should have rejected zero-pubkey rebaser");
+        expect.fail("Should have rejected zero-pubkey rateManager");
       } catch (err: any) {
         expect(err?.error?.errorCode?.code).to.equal("InvalidAuthority");
       }

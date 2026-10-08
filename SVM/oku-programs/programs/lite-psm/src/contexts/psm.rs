@@ -45,10 +45,7 @@ pub struct MintOkuM<'info> {
     )]
     pub oku_m_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// User's USDC account. `token::` rather than `associated_token::` skips the
-    /// ~1.5k CU ATA derivation, which buys nothing here: the account is never
-    /// created and `transfer_checked` validates it. Kept typed (not unchecked)
-    /// so a client's wrong-account error names this field.
+    /// User's USDC account; any account the user owns (it is never created here).
     #[account(
         mut,
         token::mint = usdc_mint,

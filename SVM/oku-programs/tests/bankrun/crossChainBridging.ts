@@ -390,7 +390,7 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
     const nowTs = Number((await getClock(h)).unixTimestamp);
     await psm.methods
       .setOkumYieldRate(new BN(ratePerSecondForApy(2.0).toString()), new BN(nowTs + 30 * 86_400))
-      .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+      .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
       .signers([orchestrator])
       .rpc();
     await warpBy(h, 2 * 86_400);

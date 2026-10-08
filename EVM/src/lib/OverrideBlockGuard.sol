@@ -17,9 +17,9 @@ abstract contract OverrideBlockGuard {
     error OverrideInProgress();
 
     /// @dev Reverts if `setOkuMMultiplier` ran earlier in this block. Reads OkuMoney's
-    ///      `lastYieldDistributionBlock` (an external call on every guarded path).
+    ///      `lastOverrideBlock` (an external call on every guarded path).
     modifier whenNoOverrideThisBlock() {
-        if (block.number == _overrideBlockOkuMoney().lastYieldDistributionBlock()) {
+        if (block.number == _overrideBlockOkuMoney().lastOverrideBlock()) {
             revert OverrideInProgress();
         }
         _;

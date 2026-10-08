@@ -225,7 +225,7 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         const dangerous = [
             ROLES.OKUM_MINTER,
             ROLES.OKUM_BURNER,
-            ROLES.OKUM_REBASER,
+            ROLES.OKUM_RATE_MANAGER,
             ROLES.OKUM_CAP_MANAGER,
             ROLES.OKUM_ALLOWANCE_MANAGER,
         ];

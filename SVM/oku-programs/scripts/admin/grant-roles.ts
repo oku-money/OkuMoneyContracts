@@ -4,7 +4,7 @@
  * Grants only:
  *   - directMinter      mint OkuM directly, capped by direct_minter_allowance
  *   - directBurner      burn OkuM directly, capped by direct_burner_allowance
- *   - rebaser           sets the yield-rate schedule / multiplier override
+ *   - rateManager           sets the yield-rate schedule / multiplier override
  *   - bufferDepositor   deposit into the USDC buffer
  *
  * NEVER grants roleAdmin (retaining it is the deployer's claw-back power via
@@ -89,7 +89,7 @@ const USDC_RECIPIENT = new PublicKey(
 const PSM_ROLES = [
   'directMinter',
   'directBurner',
-  'rebaser',
+  'rateManager',
   'bufferDepositor',
 ] as const;
 

@@ -36,7 +36,7 @@ describe("OkuDollar Vault Scenarios", () => {
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
     const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
-    const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
+    const OKUM_RATE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_RATE_MANAGER"))
     const OKUM_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_PAUSER"))
     const OKUM_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_UNPAUSER"))
     const OKUM_BLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BLACKLISTER"))
@@ -117,7 +117,7 @@ describe("OkuDollar Vault Scenarios", () => {
 
         // Grant RBAC roles to Frank (admin) for testing
         await okuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)
-        await okuMoney.connect(Frank).grantRole(OKUM_REBASER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(OKUM_RATE_MANAGER, frankAddr)
         await okuMoney.connect(Frank).grantRole(OKUM_PAUSER, frankAddr)
         await okuMoney.connect(Frank).grantRole(OKUM_UNPAUSER, frankAddr)
         await okuMoney.connect(Frank).grantRole(OKUM_BLACKLISTER, frankAddr)

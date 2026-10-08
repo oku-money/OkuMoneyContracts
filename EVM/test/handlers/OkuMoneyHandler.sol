@@ -15,7 +15,7 @@ import {TestConstants} from "../shared/Constants.sol";
 contract OkuMoneyHandler is Test {
     OkuMoney public okuMoney;
     address public minter;
-    address public rebaser;
+    address public rateManager;
     address public allowanceManager;
 
     // Tracking state for invariant verification
@@ -48,10 +48,15 @@ contract OkuMoneyHandler is Test {
     // Monotonic okuMMultiplier tracking
     uint256 public ghostLastOkuMMultiplier;
 
-    constructor(OkuMoney _okuMoney, address _minter, address _rebaser, address _allowanceManager) {
+    constructor(
+        OkuMoney _okuMoney,
+        address _minter,
+        address _rateManager,
+        address _allowanceManager
+    ) {
         okuMoney = _okuMoney;
         minter = _minter;
-        rebaser = _rebaser;
+        rateManager = _rateManager;
         allowanceManager = _allowanceManager;
 
         // Initialize actors
@@ -159,7 +164,7 @@ contract OkuMoneyHandler is Test {
         uint256 newPrice = currentPrice + increase;
         if (newPrice > MAX_FUZZ_PRICE) newPrice = MAX_FUZZ_PRICE;
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         try okuMoney.setOkuMMultiplier(newPrice) {
             ghostLastWasRebase = true;
             // Deliberately does NOT update ghostLastOkuMMultiplier: the ghost must
@@ -177,7 +182,7 @@ contract OkuMoneyHandler is Test {
         uint256 rate = bound(rateSeed, PRECISION + 1, PRECISION + 1e10);
         uint256 window = bound(warpSeed, 1 hours, 30 days);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         try okuMoney.setOkuMYieldRate(rate, block.timestamp + window) {
             // Advance into the window so accrual is actually observable.
             vm.warp(block.timestamp + window / 2);

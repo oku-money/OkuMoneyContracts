@@ -34,7 +34,7 @@ pub struct PsmConfig {
     pub allowance_manager: Pubkey,
     /// Sets the rate schedule and emergency multiplier override (display
     /// sync is permissionless)
-    pub rebaser: Pubkey,
+    pub rate_manager: Pubkey,
 
     // ===== Token references =====
     /// USDC mint (standard SPL Token, `USDC_DECIMALS` decimals)
@@ -54,9 +54,8 @@ pub struct PsmConfig {
     pub is_paused: bool,
 
     /// Slot of the last emergency override (`set_okum_multiplier`); user
-    /// operations are blocked in that slot. Not stamped by routine display
-    /// sync. Name kept for IDL stability.
-    pub last_yield_distribution_slot: u64,
+    /// operations are blocked in that slot.
+    pub last_override_slot: u64,
 
     // ===== Streaming accrual rate schedule (see `oku_shared::rate`) =====
     /// Multiplier snapshot at `okum_last_accrual_time`, WAD-scaled. Starts at

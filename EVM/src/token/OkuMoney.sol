@@ -98,7 +98,7 @@ contract OkuMoney is
         _grantRole(Roles.OKUM_UNPAUSER, _admin);
         _grantRole(Roles.OKUM_MINTER, _admin);
         _grantRole(Roles.OKUM_BURNER, _admin);
-        _grantRole(Roles.OKUM_REBASER, _admin);
+        _grantRole(Roles.OKUM_RATE_MANAGER, _admin);
         _grantRole(Roles.OKUM_BLACKLISTER, _admin);
         _grantRole(Roles.OKUM_UNBLACKLISTER, _admin);
         _grantRole(Roles.OKUM_CAP_MANAGER, _admin);
@@ -279,8 +279,6 @@ contract OkuMoney is
     /// @notice Set or update the minter allowance for `minter_`.
     /// @param minter_ Address whose allowance is being configured.
     /// @param newAllowance New allowance in raw token units.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: no external call precedes the emit (role check and storage writes only); false positive.
     function configureMinterAllowance(
         address minter_,
         uint256 newAllowance
@@ -299,8 +297,6 @@ contract OkuMoney is
 
     /// @notice Update the global supply cap.
     /// @param newMaxSupply New cap in raw token units (must be >= current totalSupply).
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: no external call precedes the emit (role check and storage writes only); false positive.
     function setMaxSupply(uint256 newMaxSupply) external onlyRole(Roles.OKUM_CAP_MANAGER) {
         if (newMaxSupply < totalSupply()) revert BelowCurrentSupply();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
@@ -313,8 +309,6 @@ contract OkuMoney is
 
     /// @notice Add `account` to the blacklist.
     /// @param account Address to blacklist.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: no external call precedes the emit (role check and storage writes only); false positive.
     function blacklist(address account) external onlyRole(Roles.OKUM_BLACKLISTER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if ($.isBlacklisted[account]) revert Errors.AlreadyBlacklisted();
@@ -324,8 +318,6 @@ contract OkuMoney is
 
     /// @notice Remove `account` from the blacklist.
     /// @param account Address to unblacklist.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: no external call precedes the emit (role check and storage writes only); false positive.
     function unblacklist(address account) external onlyRole(Roles.OKUM_UNBLACKLISTER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if (!$.isBlacklisted[account]) revert Errors.NotBlacklisted();

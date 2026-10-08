@@ -11,15 +11,15 @@ use anchor_spl::token_interface::Mint as MintInterface;
 /// at epoch boundaries.
 #[derive(Accounts)]
 pub struct SetYieldRate<'info> {
-    /// The configured `rebaser`.
-    pub rebaser: Signer<'info>,
+    /// The configured `rate_manager`.
+    pub rate_manager: Signer<'info>,
 
     /// The singleton config PDA (writable: the rate schedule).
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump,
-        has_one = rebaser @ LitePsmError::Unauthorized
+        has_one = rate_manager @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 }
@@ -28,15 +28,15 @@ pub struct SetYieldRate<'info> {
 /// leaving it to the crank could let the mirror read above canonical.
 #[derive(Accounts)]
 pub struct SetOkuMMultiplier<'info> {
-    /// The configured `rebaser`.
-    pub rebaser: Signer<'info>,
+    /// The configured `rate_manager`.
+    pub rate_manager: Signer<'info>,
 
     /// The singleton config PDA (writable: the schedule is collapsed).
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump,
-        has_one = rebaser @ LitePsmError::Unauthorized
+        has_one = rate_manager @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 

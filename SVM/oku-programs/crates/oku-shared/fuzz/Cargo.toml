@@ -15,12 +15,6 @@ oku-shared = { path = ".." }
 # cargo-fuzz's sanitizers (ASAN, UBSan) can catch overflows
 # rather than Rust's built-in panic, which would mask the bug.
 [[bin]]
-name = "mul_div_floor"
-path = "fuzz_targets/mul_div_floor.rs"
-test = false
-doc = false
-
-[[bin]]
 name = "raw_to_dollars"
 path = "fuzz_targets/raw_to_dollars.rs"
 test = false
@@ -29,15 +23,6 @@ doc = false
 [[bin]]
 name = "dollars_to_raw"
 path = "fuzz_targets/dollars_to_raw.rs"
-test = false
-doc = false
-
-# fuzz coverage for the `mul_div_ceil` primitive.
-# Same shape as `mul_div_floor` with the `+ (d-1)` numerator
-# adjustment that needs its own overflow-safety witness.
-[[bin]]
-name = "mul_div_ceil"
-path = "fuzz_targets/mul_div_ceil.rs"
 test = false
 doc = false
 

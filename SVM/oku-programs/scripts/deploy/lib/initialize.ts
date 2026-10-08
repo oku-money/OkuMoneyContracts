@@ -147,7 +147,7 @@ export async function initializePsm(
         bufferWithdrawer: authorities.psm.bufferWithdrawer,
         capManager: authorities.psm.capManager,
         allowanceManager: authorities.psm.allowanceManager,
-        rebaser: authorities.psm.rebaser,
+        rateManager: authorities.psm.rateManager,
         okuMUri: '', // metadata URI — empty for devnet, set in mainnet config
       })
       .accountsPartial({

@@ -135,7 +135,7 @@ describe("PsmConfig byte layout (contract with EVM/scripts/utils/svmValue.ts)", 
         new BN(nextRate.toString()),
         new BN(now + 41 * 86_400),
       )
-      .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: configPda })
+      .accountsPartial({ rateManager: psmOrchestrator.publicKey, config: configPda })
       .signers([psmOrchestrator])
       .rpc();
 

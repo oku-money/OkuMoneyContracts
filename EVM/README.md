@@ -417,7 +417,7 @@ code does not state is **which are negotiable**:
   re-denominates OkuM.
 - **`MAX_RATE` and `MAX_MULTIPLIER` are arbitrary**, in the precise sense that
   any number far above realistic yield trajectories would serve. They are
-  sanity bounds against a compromised rebaser key and against `rpow` overflow,
+  sanity bounds against a compromised rate manager key and against `rpow` overflow,
   not economic parameters.
 - **`MAX_RATE_WINDOW` (90 days) is load-bearing and tightly argued.** See the
   standing invariant in [`TRACKER.md`](../TRACKER.md): `rpow` overflows at ~15
@@ -439,7 +439,7 @@ exactly `okuMoney.okuMMultiplier()`; OkuDollar holds no rate state of its own.
 OkuM and usdOku therefore **necessarily earn identical yield**.
 
 ```
-OkuMoney.okuMMultiplier()          ← computed from the rate schedule (OKUM_REBASER)
+OkuMoney.okuMMultiplier()          ← computed from the rate schedule (OKUM_RATE_MANAGER)
         │
         └─► OkuDollar.usdMultiplier()   ← delegated, no independent state
 ```
@@ -454,7 +454,7 @@ Consequences:
   equal the raw OkuM deposited.
 - **Collateralization is exactly 1.0 by construction**: shares are only minted or
   burned 1:1 against real OkuM at the same `m`. There is no surplus to withdraw
-  and no ratio to configure, hence no vault rebaser, reserve-manager or admin
+  and no ratio to configure, hence no vault rate manager, reserve-manager or admin
   role; `OkuDollar`'s only asset-touching role is `VAULT_RESCUER`.
 - The vault is **structurally immune to the ERC-4626 inflation/donation attack**,
   because conversions use `m` rather than `totalAssets/totalSupply`. The corollary
@@ -489,7 +489,7 @@ NatSpec.
 
 **No discrete step ⇒ nothing to sandwich.** `setOkuMYieldRate` re-anchors the base
 to the *current* value, so the curve is continuous across the write; this is why
-it deliberately does not stamp `lastYieldDistributionBlock`.
+it deliberately does not stamp `lastOverrideBlock`.
 
 ### Cross-chain agreement comes for free
 
@@ -609,7 +609,7 @@ Accrual).
 
 **Layout**: the schedule lives in the abstract
 [`OkuMoneyRateSchedule.sol`](src/token/OkuMoneyRateSchedule.sol) (`okuMMultiplier()`,
-the rate setters, `setOkuMMultiplier`, `lastYieldDistributionBlock`, `uiMultiplier` /
+the rate setters, `setOkuMMultiplier`, `lastOverrideBlock`, `uiMultiplier` /
 `newUIMultiplier` / `effectiveAt`) so it can be reviewed on its own. `OkuMoney.sol` holds
 the ERC-20, supply cap, minter allowances, blacklist, pause and upgrade surface. Each
 has its own ERC-7201 namespace (`okumoney.storage.OkuMoneyRateSchedule`,
@@ -617,11 +617,11 @@ has its own ERC-7201 namespace (`okumoney.storage.OkuMoneyRateSchedule`,
 runtime-variable downcast goes through `SafeCast`, so an out-of-range value reverts
 rather than truncating.
 
-**Rate setters** (`OKUM_REBASER`): `setOkuMYieldRate`, `setNextOkuMYieldRate`,
+**Rate setters** (`OKUM_RATE_MANAGER`): `setOkuMYieldRate`, `setNextOkuMYieldRate`,
 and the atomic `setOkuMYieldRateWithSuccessor` stream yield; every window is
 mandatorily bounded and their rules live in the NatSpec. `setOkuMMultiplier` is
 the **emergency discrete override** and the sole reason
-`lastYieldDistributionBlock` and `OverrideBlockGuard` still exist. There is no
+`lastOverrideBlock` and `OverrideBlockGuard` still exist. There is no
 `distributeYield()` (§ Rear-Facing Epoch Accounting). Pause behaviour: § Pause
 Behavior.
 
@@ -680,7 +680,7 @@ returns exactly `okuMoney.okuMMultiplier()`, so
 `balanceOf(user) = usdShares[user] × usdMultiplier() / PRECISION` changes every
 second with no transaction. Storage is `struct OkuDollarStorage` (ERC-7201).
 There is no vault-side rate or reserve surface: yield is set on OkuMoney by
-`OKUM_REBASER`, and collateralization is 1.0 by construction.
+`OKUM_RATE_MANAGER`, and collateralization is 1.0 by construction.
 
 **Blacklist.** OkuDollar keeps its own blacklist (shared
 `OKUM_BLACKLISTER` / `OKUM_UNBLACKLISTER` role names, granted per contract)
@@ -795,7 +795,7 @@ EVM-side facts:
 Shared abstract ([`src/lib/OverrideBlockGuard.sol`](src/lib/OverrideBlockGuard.sol))
 inherited by `OkuDollar` and `LitePSM`. Continuous accrual has no step to
 sandwich, so it protects **only** the emergency override `setOkuMMultiplier`,
-which alone stamps `lastYieldDistributionBlock`: in that block every guarded
+which alone stamps `lastOverrideBlock`: in that block every guarded
 operation (mint/redeem, wrap/unwrap, buffer deposit/withdraw) reverts
 `OverrideInProgress`; transfers are unaffected. It is **forward-only**: a mint
 one block *before* the override plus a redeem one block after is not blocked.
@@ -836,7 +836,7 @@ roles to multisigs and bots via `grantRoles.ts` or `grantRolesMainnet.ts`.
 `OKUM_BLACKLISTER` / `OKUM_UNBLACKLISTER` but has its own AccessControl mappings,
 so each must be granted on OkuMoney **and** OkuDollar; one grant does not cover
 both tokens. The vault roles are `VAULT_UPGRADER`, `VAULT_PAUSER`,
-`VAULT_UNPAUSER` and `VAULT_RESCUER`; there is deliberately no vault rebaser or
+`VAULT_UNPAUSER` and `VAULT_RESCUER`; there is deliberately no vault rate manager or
 reserve-manager role (§ Dual-Token Shared-Multiplier Model).
 
 The two scripts are NOT interchangeable. They implement different threat models:
@@ -931,13 +931,18 @@ per-role blast radius: [`AUTHORITY-MATRIX.md`](../AUTHORITY-MATRIX.md).
 On-chain bounds on a single-call compromise: `MAX_MULTIPLIER` and `MAX_RATE`
 ceilings; monotonic guards (`MultiplierCannotDecrease`, `InvalidRate`,
 `RateAlreadyExpired`); and `whenNoOverrideThisBlock` around the emergency
-override. Because OkuDollar delegates its multiplier, `OKUM_REBASER` governs
+override. Because OkuDollar delegates its multiplier, `OKUM_RATE_MANAGER` governs
 **both** tokens' yield from one grant. Every operational role rotates to a
 multisig before mainnet launch.
 
+The rate setters and `setOkuMMultiplier` honour **OkuMoney's** pause, not the
+PSM's or vault's. Incident response pauses all three contracts together (the
+backend coordinates this across every chain); pausing only LitePSM leaves a
+compromised `OKUM_RATE_MANAGER` able to move the multiplier.
+
 ### 2. Vault reserve-extraction opsec — STRUCTURALLY IMPOSSIBLE
 
-No vault rebaser, reserve-manager or surplus-withdrawal surface exists, so there
+No vault rate manager, reserve-manager or surplus-withdrawal surface exists, so there
 is no rate-then-withdraw extraction (collateralization is 1.0 by construction;
 § Dual-Token Shared-Multiplier Model). The nearest surviving surface,
 `VAULT_RESCUER.rescueDonation`, is bounded below by `totalUsdShares` and cannot
@@ -1049,18 +1054,24 @@ value inflated by any outstanding donation. The vault does not use that ratio
 (conversions use the shared multiplier), so the true price stays $1.00; the ratio
 re-converges once `rescueDonation` clears the dust.
 
+**10d. LitePSM has no token-rescue path.** OkuM or UsdOku sent to the PSM directly
+is recoverable only by upgrade. `redeemUsdOku` can also leave up to one internal
+share of UsdOku on the PSM per call (`transferFrom` floors the shares moved, `unwrap`
+ceils the shares burned). Neither affects redemptions: the PSM never reads these
+balances.
+
 ### 11. Discrete-tick MEV survives only on the emergency override
 
 There is no discrete-tick sandwich vector on the normal yield path:
 `okuMMultiplier()` streams and `setOkuMYieldRate` re-anchors to the current value,
 so there is no step to straddle (§ Why streaming, not discrete ticks). The vector
 survives **only** on `setOkuMMultiplier`, the one function that creates a
-discontinuity, which is why `lastYieldDistributionBlock` and
+discontinuity, which is why `lastOverrideBlock` and
 `whenNoOverrideThisBlock` exist (§ OverrideBlockGuard).
 
 **Two distinct residuals, both unmitigated on-chain:**
 
-- **Cross-block manipulation by the override holder** (`OKUM_REBASER`): an insider
+- **Cross-block manipulation by the override holder** (`OKUM_RATE_MANAGER`): an insider
   positions ahead of their own call. Not mitigated on-chain, for the same reason
   as Risk 1.
 - **Third-party front-run of an honest override** — no role required. The guard is
@@ -1201,7 +1212,7 @@ belong here; they should be removed from `src/`.
 | `OkuDollar.rescueDonation` backing floor and role gate | `test/token/OkuDollar.t.sol` |
 | `OkuDollar` share rounding, blacklist, pause, wrap / unwrap | `test/token/OkuDollar.t.sol`, `test/token/OkuDollar.fuzz.t.sol` |
 | `LitePSM` redeem paths (buffer-covered vs. `InsufficientBuffer`, zero-output `AmountTooSmall`, `OkuMRedeemed` suppression, multi-decimal collateral) | `test/psm/LitePSM.t.sol`, `test/psm/LitePSMRebasingRedeem.t.sol`, `test/psm/LitePSM.fuzz.t.sol` |
-| `LitePSM` buffer functions are pause-gated and yield-locked | `test/psm/LitePSM.t.sol`: `test_DepositBuffer_RevertsWhenPaused`, `test_DepositBuffer_RevertsInYieldDistributionBlock`, `test_WithdrawUSDC_RevertsWhenPaused`, `test_WithdrawUSDC_RevertsInYieldDistributionBlock` |
+| `LitePSM` buffer functions are pause-gated and yield-locked | `test/psm/LitePSM.t.sol`: `test_DepositBuffer_RevertsWhenPaused`, `test_DepositBuffer_RevertsInOverrideBlock`, `test_WithdrawUSDC_RevertsWhenPaused`, `test_WithdrawUSDC_RevertsInOverrideBlock` |
 | Override front-run residual and its pause ceremony (Accepted Risk #11) | `test/psm/LitePSM.t.sol`: `test_SetOkuMMultiplier_PauseCeremony_ClosesFrontRunWindow` |
 | No PSM slippage parameter (Accepted Risk #13) | `test/psm/LitePSM.t.sol`: `test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier` |
 | Reentrancy through the PSM | `test/psm/Reentrancy.t.sol`, `test/lib/ReentrancyGuard.t.sol` |

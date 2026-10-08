@@ -566,7 +566,7 @@ async function stepSetOkuMYieldRate(ctx: TestCtx) {
   logger.section("Step 7: setOkuMYieldRate");
   // Yield is a streaming rate, not a discrete bump, so the deterministic
   // post-conditions are the schedule fields.
-  await ensureRole(ctx, ROLES.OKUM_REBASER, "OKUM_REBASER");
+  await ensureRole(ctx, ROLES.OKUM_RATE_MANAGER, "OKUM_RATE_MANAGER");
 
   const rate = apyToRatePerSecond(0.03); // 3% APY
   // Snap to the epoch grid, not `now + 86400`: the suite runs once per chain,

@@ -24,8 +24,8 @@ pub enum AuthorityRole {
     CapManager,
     /// Cold – set minter, direct-minter and direct-burner allowances. EVM: OKUM_ALLOWANCE_MANAGER
     AllowanceManager,
-    /// Orchestrator – set rate schedule / multiplier override (display sync is permissionless). EVM: OKUM_REBASER
-    Rebaser,
+    /// Orchestrator – set rate schedule / multiplier override (display sync is permissionless). EVM: OKUM_RATE_MANAGER
+    RateManager,
     /// Fiat gateway – direct mint without USDC. EVM: OKUM_MINTER
     DirectMinter,
     /// Bridge backend – direct burn without USDC payout. EVM: OKUM_BURNER

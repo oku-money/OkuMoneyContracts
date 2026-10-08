@@ -295,7 +295,7 @@ async function readState(ctx: TestContext) {
       'Buffer Withdrawer': (config.bufferWithdrawer as PublicKey).toBase58(),
       'Cap Manager': (config.capManager as PublicKey).toBase58(),
       'Allowance Manager': (config.allowanceManager as PublicKey).toBase58(),
-      'Rebaser': (config.rebaser as PublicKey).toBase58(),
+      'RateManager': (config.rateManager as PublicKey).toBase58(),
       'Direct Minter': ((config as any).directMinter as PublicKey).toBase58(),
       'Direct Burner': ((config as any).directBurner as PublicKey).toBase58(),
       'USDC Mint': (config.usdcMint as PublicKey).toBase58(),
@@ -627,7 +627,7 @@ async function testStreamingAccrual(ctx: TestContext) {
 
   const sig = await ctx.psm.methods
     .setOkumYieldRate(new BN(rate.toString()), new BN(endTs))
-    .accountsPartial({ rebaser: ctx.operator.publicKey, config: ctx.psmConfig })
+    .accountsPartial({ rateManager: ctx.operator.publicKey, config: ctx.psmConfig })
     .signers([ctx.operator])
     .rpc();
   logger.success(`set_okum_yield_rate: ${sig}`);
@@ -695,7 +695,7 @@ async function testStreamingAccrual(ctx: TestContext) {
     try {
       const haltSig = await ctx.psm.methods
         .setOkumYieldRate(new BN(PRECISION.toString()), new BN(0))
-        .accountsPartial({ rebaser: ctx.operator.publicKey, config: ctx.psmConfig })
+        .accountsPartial({ rateManager: ctx.operator.publicKey, config: ctx.psmConfig })
         .signers([ctx.operator])
         .rpc();
       logger.success(`halted accrual after test: ${haltSig}`);

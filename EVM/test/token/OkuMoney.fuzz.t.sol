@@ -136,7 +136,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 balanceBefore = okuMoney.balanceOf(user1);
         uint256 totalSupplyBefore = okuMoney.totalSupply();
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newPrice);
 
         // Balances must be completely unaffected
@@ -170,7 +170,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 balance1Before = okuMoney.balanceOf(user1);
         uint256 balance2Before = okuMoney.balanceOf(user2);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newPrice);
 
         assertEq(okuMoney.balanceOf(user1), balance1Before, "User1 balance unchanged");
@@ -195,7 +195,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 ratio1Before = (okuMoney.balanceOf(user1) * PRECISION) / okuMoney.totalSupply();
         uint256 ratio2Before = (okuMoney.balanceOf(user2) * PRECISION) / okuMoney.totalSupply();
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newPrice);
 
         uint256 ratio1After = (okuMoney.balanceOf(user1) * PRECISION) / okuMoney.totalSupply();
@@ -213,7 +213,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 currentPrice = okuMoney.okuMMultiplier();
         newPrice = _boundOkuMMultiplier(newPrice);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newPrice);
 
         assertGe(okuMoney.okuMMultiplier(), currentPrice, "okuMMultiplier must never decrease");
@@ -228,14 +228,14 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         // First price update
         uint256 price1 = priceBefore + increase1;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(price1);
 
         assertEq(okuMoney.okuMMultiplier(), price1, "Price after first update");
 
         // Second price update
         uint256 price2 = price1 + increase2;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(price2);
 
         assertEq(okuMoney.okuMMultiplier(), price2, "Price after second update");
@@ -249,14 +249,14 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 currentPrice = okuMoney.okuMMultiplier();
         uint256 higherPrice = currentPrice + increase;
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(higherPrice);
 
         // Try to set a lower price (any amount below current)
         decrease = bound(decrease, 1, higherPrice);
         uint256 lowerPrice = higherPrice - decrease;
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
         okuMoney.setOkuMMultiplier(lowerPrice);
     }
@@ -285,7 +285,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         // where the schedule halts at rateEnd — which these properties also cover.
         uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + MAX_RATE_WINDOW;
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(rate, endTimestamp);
         // Setting the rate re-anchors the base: the curve is continuous, no step.
         assertEq(okuMoney.okuMMultiplier(), before, "no step at the rate write");
@@ -312,7 +312,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         // `elapsed` may run past MAX_RATE_WINDOW, where the schedule halts at rateEnd.
         uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + MAX_RATE_WINDOW;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(rate, endTimestamp);
         vm.warp(block.timestamp + elapsed);
 
@@ -326,12 +326,12 @@ contract OkuMoneyFuzzTest is BaseTest {
             // In-range: must succeed. A halted rate (== PRECISION) requires
             // endTimestamp == 0; any yielding rate requires a bounded future window.
             uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + 30 days;
-            vm.prank(rebaser);
+            vm.prank(rateManager);
             okuMoney.setOkuMYieldRate(rate, endTimestamp);
             assertEq(okuMoney.okuMRatePerSecond(), rate);
             return;
         }
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(
             rate < PRECISION
                 ? OkuMoneyErrors.InvalidRate.selector
@@ -360,7 +360,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         warpAmount = bound(warpAmount, 0, 100 * 365 days);
         overrideBump = bound(overrideBump, 1, 1e24);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(rate, block.timestamp + endOffset);
 
         vm.warp(block.timestamp + warpAmount);
@@ -373,7 +373,7 @@ contract OkuMoneyFuzzTest is BaseTest {
             : current + overrideBump;
         if (newMultiplier <= current) return; // saturated at MAX_MULTIPLIER already
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newMultiplier);
 
         // Must not revert after the override either.
@@ -489,7 +489,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         _mintOkuMoney(user1, mintAmount);
 
         // Update okuMMultiplier (should not affect balances)
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newPrice);
 
         // Transfer some tokens
@@ -526,7 +526,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         _mintOkuMoney(user1, MAX_SUPPLY / 2);
 
         // Update okuMMultiplier
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newPrice);
 
         // Should still be able to mint up to the cap (totalSupply is unaffected by okuMMultiplier)
@@ -560,7 +560,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         assertEq(okuMoney.balanceOf(user1), firstMint, "User1 gets exact first mint");
 
         // Update okuMMultiplier
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newPrice);
 
         // Second mint at new price — user still gets exact token amount
@@ -600,7 +600,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         _mintOkuMoney(user1, mintAmount);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newPrice);
 
         // Balance unchanged (standard ERC-20)

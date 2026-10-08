@@ -26,8 +26,8 @@ jobs:
           submodules: recursive
 
       # Pinned: forge-lint gains new lints between releases, and an unpinned
-      # toolchain turned CI red on unchanged source. The inline
-      # `forge-lint: disable-next-item(...)` ids in src/ need >= 1.8. Bump
+      # toolchain turned CI red on unchanged source. The lint ids in src/ and
+      # foundry.toml's `exclude_lints` need >= 1.8. Bump
       # deliberately, re-running `forge lint src/ --deny warnings` locally.
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -320,16 +320,9 @@ jobs:
         run: cargo test --workspace --lib --quiet
 
       # ---------------------------------------------------------------------
-      # Kani: only the harnesses that discharge today. Four others
-      # (rate.rs::proof_compound_for_output_clamped,
-      # wad.rs::proof_div_wad_quotient_bound, both raw_to_dollars harnesses)
-      # do not terminate within 15 minutes — symbolic 256-bit arithmetic
-      # inside rpow/div_wad, not a loop-bound issue. Kept in-file as
-      # documentation, deliberately NOT added here; `--harness` is an
-      # allowlist, not a glob, so they cannot accidentally get pulled in.
-      # Always scope to --package oku-shared: the sibling `lite-psm` crate
-      # pulls in the full Anchor/Solana dependency graph, which Kani is not
-      # set up to codegen.
+      # Kani: every harness kept in oku-shared discharges in seconds. Scope to
+      # --package oku-shared: lite-psm pulls in the Anchor/Solana graph, which
+      # Kani is not set up to codegen.
       # ---------------------------------------------------------------------
       - name: Cache Kani
         uses: actions/cache@v4
@@ -347,12 +340,10 @@ jobs:
           cargo install --locked kani-verifier --version 0.67.0
           cargo kani setup
 
-      - name: Run Kani (cheap, discharging harnesses only)
+      - name: Run Kani
         timeout-minutes: 10
         run: |
-          cargo kani --package oku-shared \
-            --harness proof_mul_div_floor_correctness_bounded \
-            --harness proof_mul_div_floor_no_u128_overflow
+          cargo kani --package oku-shared
 
       - name: Cache cargo-llvm-cov binary
         uses: actions/cache@v4

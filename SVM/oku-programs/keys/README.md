@@ -11,7 +11,7 @@ and `.gitkeep` is gitignored (`**/keys/**/*.json`).
 | Key | Used for | Where read |
 |---|---|---|
 | deployer: `WALLET_PATH`, default `~/.config/solana/id.json` | Signs deploys and `initialize`; becomes `role_admin` and BPF upgrade authority | `scripts/utils/network.ts` |
-| `keys/devnet-authority.json` (override: `DEVNET_AUTHORITY_PATH`) | **Operator key** on localnet / devnet / forks. It is **not** the deployer; it holds the 9 granular roles (`pauser`, `unpauser`, `freezer`, `unfreezer`, `buffer_depositor`, `buffer_withdrawer`, `cap_manager`, `allowance_manager`, `rebaser`) | `scripts/config/authorities.ts::loadDevnetAuthority` |
+| `keys/devnet-authority.json` (override: `DEVNET_AUTHORITY_PATH`) | **Operator key** on localnet / devnet / forks. It is **not** the deployer; it holds the 9 granular roles (`pauser`, `unpauser`, `freezer`, `unfreezer`, `buffer_depositor`, `buffer_withdrawer`, `cap_manager`, `allowance_manager`, `rate_manager`) | `scripts/config/authorities.ts::loadDevnetAuthority` |
 
 `initialize` forces two keys: it requires `role_admin` to be the program's BPF upgrade authority (the
 deployer) and rejects any granular role equal to `role_admin`. So localnet/devnet needs the deployer
@@ -33,7 +33,7 @@ keys** from the environment, and the private keys (Squads vaults, KMS) never tou
 |---|---|---|
 | `MAINNET_COLD_MULTISIG` | yes | `unpauser`, `unfreezer`, `buffer_withdrawer`, `cap_manager`, `allowance_manager` (and the intended `role_admin`, see below) |
 | `MAINNET_WARM_MULTISIG` | yes | `pauser`, `freezer` |
-| `MAINNET_ORCHESTRATOR` | yes | `buffer_depositor`, `rebaser` |
+| `MAINNET_ORCHESTRATOR` | yes | `buffer_depositor`, `rate_manager` |
 | `MAINNET_DIRECT_MINTER` | optional | `direct_minter` (unset = disabled) |
 | `MAINNET_DIRECT_BURNER` | optional | `direct_burner` (unset = disabled) |
 

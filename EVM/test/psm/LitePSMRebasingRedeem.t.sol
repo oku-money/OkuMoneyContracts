@@ -67,11 +67,11 @@ contract LitePSMRebasingRedeemTest is BaseTest {
 
     /// @notice Set the active yield rate for one maximal rate window.
     /// @dev `okuDollar.usdMultiplier()` is exactly `okuMoney.okuMMultiplier()`, so the
-    ///      rate is set on OkuMoney via OKUM_REBASER. A window may not exceed
+    ///      rate is set on OkuMoney via OKUM_RATE_MANAGER. A window may not exceed
     ///      `MAX_RATE_WINDOW` (90 days); longer horizons are walked via
     ///      `_accrueAtCurrentRate`, which re-anchors at the same rate.
     function _setUsdRate(uint256 rate) internal {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(rate, block.timestamp + MAX_RATE_WINDOW);
     }
 

@@ -258,7 +258,7 @@ pub fn set_okum_multiplier(ctx: Context<SetOkuMMultiplier>, new_multiplier: u128
     config.okum_last_accrual_time = now_ts;
     halt_schedule(config);
 
-    config.last_yield_distribution_slot = clock.slot;
+    config.last_override_slot = clock.slot;
 
     // Not best-effort: if the display cannot follow the new value the override
     // must fail, or the mirror would read against a halted schedule.

@@ -46,7 +46,7 @@ abstract contract BaseTest is Test, Actors {
     bytes32 public constant OKUM_MINTER = TestRoles.OKUM_MINTER;
     /// @dev Burn-only role, separate from OKUM_MINTER.
     bytes32 public constant OKUM_BURNER = TestRoles.OKUM_BURNER;
-    bytes32 public constant OKUM_REBASER = TestRoles.OKUM_REBASER;
+    bytes32 public constant OKUM_RATE_MANAGER = TestRoles.OKUM_RATE_MANAGER;
     bytes32 public constant OKUM_BLACKLISTER = TestRoles.OKUM_BLACKLISTER;
     bytes32 public constant OKUM_UNBLACKLISTER = TestRoles.OKUM_UNBLACKLISTER;
     bytes32 public constant OKUM_CAP_MANAGER = TestRoles.OKUM_CAP_MANAGER;
@@ -109,7 +109,7 @@ abstract contract BaseTest is Test, Actors {
         okuMoney.grantRole(OKUM_BURNER, minter);
         okuMoney.grantRole(OKUM_MINTER, address(litePsm)); // PSM can mint
         okuMoney.grantRole(OKUM_BURNER, address(litePsm)); // PSM can burn
-        okuMoney.grantRole(OKUM_REBASER, rebaser);
+        okuMoney.grantRole(OKUM_RATE_MANAGER, rateManager);
         okuMoney.grantRole(OKUM_BLACKLISTER, blacklister);
         okuMoney.grantRole(OKUM_UNBLACKLISTER, unblacklister);
         okuMoney.grantRole(OKUM_CAP_MANAGER, capManager);
@@ -223,7 +223,7 @@ abstract contract BaseTest is Test, Actors {
         return a > b ? a : b;
     }
 
-    /// @notice Stamp `lastYieldDistributionBlock` on OkuMoney for the current block.
+    /// @notice Stamp `lastOverrideBlock` on OkuMoney for the current block.
     /// @dev `setOkuMMultiplier` is the only function that stamps the sandwich-guard
     ///      block (`setOkuMYieldRate` creates no step, so it does not stamp). Bumps the
     ///      multiplier by the smallest legal increment, since a non-increasing value reverts.
@@ -232,7 +232,7 @@ abstract contract BaseTest is Test, Actors {
         // `okuMoney.okuMMultiplier()` argument would consume it as a staticcall,
         // leaving `setOkuMMultiplier` to execute as the test contract (no role).
         uint256 next = okuMoney.okuMMultiplier() + 1;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(next);
     }
 
@@ -240,7 +240,7 @@ abstract contract BaseTest is Test, Actors {
     /// @dev Use this helper when testing multiplier-aware operations that would be blocked
     ///      in the same block as a multiplier change (sandwich attack prevention).
     function _setOkuMMultiplierAndRoll(uint256 newMultiplier) internal {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newMultiplier);
         vm.roll(block.number + 1);
     }
@@ -260,7 +260,7 @@ abstract contract BaseTest is Test, Actors {
         while (remaining > 0) {
             uint256 step = remaining > MAX_RATE_WINDOW ? MAX_RATE_WINDOW : remaining;
             // Re-anchor at the same rate for a window exactly covering `step`.
-            vm.prank(rebaser);
+            vm.prank(rateManager);
             okuMoney.setOkuMYieldRate(rate, block.timestamp + step);
             vm.warp(block.timestamp + step);
             remaining -= step;
@@ -272,7 +272,7 @@ abstract contract BaseTest is Test, Actors {
     ///      drives the OkuMoney rate schedule.
     ///
     ///      Uses `setOkuMYieldRate` + `vm.warp` rather than the discrete
-    ///      `setOkuMMultiplier` override so no `lastYieldDistributionBlock` stamp is
+    ///      `setOkuMMultiplier` override so no `lastOverrideBlock` stamp is
     ///      left behind (which would block PSM/vault ops for the rest of the block).
     function _elevateUsdMultiplier(uint256 targetMultiplier) internal {
         require(targetMultiplier >= PRECISION, "target below floor");
@@ -288,7 +288,7 @@ abstract contract BaseTest is Test, Actors {
 
         while (okuMoney.okuMMultiplier() < targetMultiplier) {
             if (windowRemaining == 0) {
-                vm.prank(rebaser);
+                vm.prank(rateManager);
                 okuMoney.setOkuMYieldRate(MAX_RATE, block.timestamp + MAX_RATE_WINDOW);
                 windowRemaining = MAX_RATE_WINDOW;
             }
@@ -305,7 +305,7 @@ abstract contract BaseTest is Test, Actors {
 
         // Snapshot the achieved multiplier and stop accrual so subsequent reads stay
         // stable. Halting always pairs with endTimestamp == 0.
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION, 0);
     }
 }

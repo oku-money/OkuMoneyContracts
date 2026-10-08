@@ -22,7 +22,7 @@ library TestRoles {
     bytes32 public constant OKUM_MINTER = SrcRoles.OKUM_MINTER;
     /// @dev Burn-only role, separate from `OKUM_MINTER`.
     bytes32 public constant OKUM_BURNER = SrcRoles.OKUM_BURNER;
-    bytes32 public constant OKUM_REBASER = SrcRoles.OKUM_REBASER;
+    bytes32 public constant OKUM_RATE_MANAGER = SrcRoles.OKUM_RATE_MANAGER;
     bytes32 public constant OKUM_BLACKLISTER = SrcRoles.OKUM_BLACKLISTER;
     bytes32 public constant OKUM_UNBLACKLISTER = SrcRoles.OKUM_UNBLACKLISTER;
     bytes32 public constant OKUM_CAP_MANAGER = SrcRoles.OKUM_CAP_MANAGER;
@@ -34,7 +34,7 @@ library TestRoles {
     bytes32 public constant VAULT_PAUSER = SrcRoles.VAULT_PAUSER;
     bytes32 public constant VAULT_UNPAUSER = SrcRoles.VAULT_UNPAUSER;
     bytes32 public constant VAULT_RESCUER = SrcRoles.VAULT_RESCUER;
-    // OkuDollar has no rate of its own; its multiplier is driven by OKUM_REBASER.
+    // OkuDollar has no rate of its own; its multiplier is driven by OKUM_RATE_MANAGER.
 
     // ============ LitePSM Roles (PSM_ prefix) ============
 

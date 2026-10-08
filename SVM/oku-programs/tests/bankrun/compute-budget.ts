@@ -192,7 +192,7 @@ describe("compute budget (streaming accrual hot paths)", () => {
   const setRate = async (rate: bigint, endTs: number) =>
     psm.methods
       .setOkumYieldRate(new BN(rate.toString()), new BN(endTs))
-      .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+      .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
       .signers([orchestrator])
       .rpc();
 
@@ -209,7 +209,7 @@ describe("compute budget (streaming accrual hot paths)", () => {
         new BN(nextRate.toString()),
         new BN(nextEndTs),
       )
-      .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+      .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
       .signers([orchestrator])
       .rpc();
 
@@ -478,7 +478,7 @@ describe("compute budget (streaming accrual hot paths)", () => {
         new BN(ratePerSecondForApy(0.08).toString()),
         new BN(start + 90 * DAY),
       )
-      .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+      .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
       .transaction();
     const rateSim = await simulateTx(h, rateTx, [orchestrator]);
     expect(rateSim.error).to.be.null;

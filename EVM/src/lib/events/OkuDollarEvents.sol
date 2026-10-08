@@ -21,15 +21,13 @@ abstract contract OkuDollarEvents {
     /// @param receiver Address credited with the OkuDollar
     /// @param okuMAmount OkuMoney deposited (18 decimals)
     /// @param usdMinted OkuDollar minted (18 decimals)
-    /// @param okuMMultiplier OkuMoney multiplier at time of wrap
-    /// @param usdMultiplier OkuDollar multiplier at time of wrap
+    /// @param multiplier Shared OkuM/UsdOku multiplier at time of wrap
     event Wrapped(
         address indexed user,
         address indexed receiver,
         uint256 okuMAmount,
         uint256 usdMinted,
-        uint256 okuMMultiplier,
-        uint256 usdMultiplier
+        uint256 multiplier
     );
 
     /// @notice Emitted when OkuDollar is unwrapped back to OkuMoney
@@ -37,15 +35,13 @@ abstract contract OkuDollarEvents {
     /// @param receiver Address receiving the OkuMoney
     /// @param usdAmount OkuDollar redeemed (18 decimals)
     /// @param okuMReturned OkuMoney returned (18 decimals)
-    /// @param okuMMultiplier OkuMoney multiplier at time of unwrap
-    /// @param usdMultiplier OkuDollar multiplier at time of unwrap
+    /// @param multiplier Shared OkuM/UsdOku multiplier at time of unwrap
     event Unwrapped(
         address indexed user,
         address indexed receiver,
         uint256 usdAmount,
         uint256 okuMReturned,
-        uint256 okuMMultiplier,
-        uint256 usdMultiplier
+        uint256 multiplier
     );
 
     // `Deposit` / `Withdraw` (ERC-4626, emitted by wrap()/unwrap()) come from the

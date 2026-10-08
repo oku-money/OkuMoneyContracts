@@ -106,7 +106,7 @@ describe("PSM coverage additions", () => {
 
     await psm.methods
       .setOkumYieldRate(new BN(ratePerSecondForApy(0.05).toString()), new BN(now + 30 * 86_400))
-      .accountsPartial({ rebaser: orchestrator.publicKey, config: configPda })
+      .accountsPartial({ rateManager: orchestrator.publicKey, config: configPda })
       .signers([orchestrator])
       .rpc();
 
@@ -170,7 +170,7 @@ describe("PSM coverage additions", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             capManager: coldMultisig.publicKey,
             allowanceManager: coldMultisig.publicKey,
-            rebaser: orchestrator.publicKey,
+            rateManager: orchestrator.publicKey,
           } as never)
           .accountsPartial({
             roleAdmin: payer.publicKey,

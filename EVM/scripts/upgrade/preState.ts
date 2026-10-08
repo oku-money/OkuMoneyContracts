@@ -59,7 +59,7 @@ const vol = (value: unknown): Field => ({ value: String(value), kind: "volatile"
 const CONTRACT_ROLES: Record<string, (keyof typeof ROLES)[]> = {
   OkuMoney: [
     "DEFAULT_ADMIN_ROLE", "OKUM_UPGRADER", "OKUM_PAUSER", "OKUM_UNPAUSER", "OKUM_MINTER",
-    "OKUM_BURNER", "OKUM_REBASER", "OKUM_BLACKLISTER", "OKUM_UNBLACKLISTER",
+    "OKUM_BURNER", "OKUM_RATE_MANAGER", "OKUM_BLACKLISTER", "OKUM_UNBLACKLISTER",
     "OKUM_CAP_MANAGER", "OKUM_ALLOWANCE_MANAGER",
   ],
   OkuDollar: [
@@ -124,7 +124,7 @@ export async function readOkuMoneyState(c: Contract, ctx: SnapshotContext): Prom
     okuMPendingRatePerSecond: inv(await c.okuMPendingRatePerSecond(o), SCHEDULE),
     okuMPendingRateEnd: inv(await c.okuMPendingRateEnd(o), SCHEDULE),
     // Written only by setOkuMMultiplier, which emits OkuMMultiplierUpdated.
-    lastYieldDistributionBlock: inv(await c.lastYieldDistributionBlock(o), ["OkuMMultiplierUpdated"]),
+    lastOverrideBlock: inv(await c.lastOverrideBlock(o), ["OkuMMultiplierUpdated"]),
     totalSupply: vol(await c.totalSupply(o)),
   };
   if (psm) {

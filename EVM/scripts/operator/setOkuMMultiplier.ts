@@ -1,18 +1,18 @@
 /**
- * Emergency discrete multiplier override (OKUM_REBASER role required).
+ * Emergency discrete multiplier override (OKUM_RATE_MANAGER role required).
  *
  * Calls `OkuMoney.setOkuMMultiplier(newMultiplier)` — the ESCAPE HATCH ONLY
  * path (see contract NatSpec). Unlike `setOkuMYieldRate`, this is a discrete
  * jump: it collapses the entire rate schedule to halted (active + pending
  * rate reset to PRECISION, both windows zeroed) and stamps
- * `lastYieldDistributionBlock`, which engages `OverrideBlockGuard` on every
+ * `lastOverrideBlock`, which engages `OverrideBlockGuard` on every
  * PSM/vault path for the rest of the block. An operator must call
  * `setOkuMYieldRate` afterward to resume streaming accrual.
  *
  * ============================================================================
  * MEV: THE GUARD ABOVE DOES NOT FULLY PROTECT THIS CALL — READ BEFORE RUNNING
  * ============================================================================
- * `OverrideBlockGuard` is forward-only: `lastYieldDistributionBlock` is
+ * `OverrideBlockGuard` is forward-only: `lastOverrideBlock` is
  * stamped INSIDE `setOkuMMultiplier`, so it blocks the SAME block (the
  * atomic round-trip) and everything AFTER it, but a transaction already
  * ordered BEFORE this one in the same block reads the pre-stamp value and is
@@ -83,7 +83,7 @@ export async function runSetOkuMMultiplier(
   const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer);
   const currentMultiplier = await okuMoney.okuMMultiplier();
 
-  logger.info(`Signer (rebaser):    ${await signer.getAddress()}`);
+  logger.info(`Signer (rateManager):    ${await signer.getAddress()}`);
   logger.info(`Current multiplier:  ${ethers.formatEther(currentMultiplier)}`);
   logger.info(`New multiplier:      ${ethers.formatEther(newMultiplier)}`);
   logger.warning(

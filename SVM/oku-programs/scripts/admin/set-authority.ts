@@ -4,7 +4,7 @@
  * Wraps `lite_psm::set_authority` (role_admin-gated). Twelve roles are
  * exposed: roleAdmin, pauser, unpauser, freezer, unfreezer,
  * bufferDepositor, bufferWithdrawer, capManager, allowanceManager,
- * rebaser, directMinter, directBurner.
+ * rateManager, directMinter, directBurner.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/set-authority.ts \
@@ -34,7 +34,7 @@ const ROLES = [
   'bufferWithdrawer',
   'capManager',
   'allowanceManager',
-  'rebaser',
+  'rateManager',
   'directMinter',
   'directBurner',
 ] as const;

@@ -359,7 +359,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const e1Now = Number((await getClock(ctx.h)).unixTimestamp);
       await ctx.psm.methods
         .setOkumYieldRate(new BN(ratePerSecondForApy(0.27).toString()), new BN(e1Now + 60 * DAY_SECS))
-        .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda })
+        .accountsPartial({ rateManager: psmOrchestrator.publicKey, config: ctx.configPda })
         .signers([psmOrchestrator]).rpc();
       await warpBy(ctx.h, DAY_SECS * 30); // 30 days
       await warpSlots(ctx.h, 1);
@@ -546,7 +546,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const e3Now = Number((await getClock(ctx.h)).unixTimestamp);
       await ctx.psm.methods
         .setOkumYieldRate(new BN(ratePerSecondForApy(0.13).toString()), new BN(e3Now + 60 * DAY_SECS))
-        .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda })
+        .accountsPartial({ rateManager: psmOrchestrator.publicKey, config: ctx.configPda })
         .signers([psmOrchestrator]).rpc();
       await warpBy(ctx.h, DAY_SECS * 30);
       await warpSlots(ctx.h, 1);
@@ -769,7 +769,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       // jump. Routine yield never engages it.
       const curMultiplierE7 = await computeCanonicalMultiplier(h, psm, configPda);
       await psm.methods.setOkumMultiplier(new BN((curMultiplierE7 + 1000n).toString()))
-        .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: configPda, okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
+        .accountsPartial({ rateManager: psmOrchestrator.publicKey, config: configPda, okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
         .signers([psmOrchestrator]).rpc();
 
       // Attempt mint in SAME slot -> should revert with OverrideInProgress

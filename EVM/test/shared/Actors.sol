@@ -21,7 +21,7 @@ abstract contract Actors is Test {
     address public pauser = makeAddr("pauser");
     address public unpauser = makeAddr("unpauser");
     address public minter = makeAddr("minter");
-    address public rebaser = makeAddr("rebaser");
+    address public rateManager = makeAddr("rateManager");
     address public blacklister = makeAddr("blacklister");
     address public unblacklister = makeAddr("unblacklister");
     address public capManager = makeAddr("capManager");

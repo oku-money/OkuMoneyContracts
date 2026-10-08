@@ -152,7 +152,7 @@ regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pic
 - **SVM IDL:** `ZeroOutput` removed (redeem output can never be zero);
   `MultiplierAboveMax` is `MultiplierTooHigh`. Error codes shift; match on names
   or regenerate the IDL.
-- **EVM storage layout:** OkuMoney's rate schedule and `lastYieldDistributionBlock`
+- **EVM storage layout:** OkuMoney's rate schedule and `lastOverrideBlock`
   moved to their own ERC-7201 namespace (`okumoney.storage.OkuMoneyRateSchedule`,
   in `OkuMoneyRateSchedule.sol`). This is incompatible with any existing proxy;
   it is acceptable only because this deploy is clean-slate. ABIs are unchanged.
@@ -189,8 +189,6 @@ regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pic
 
 Reviewed, understood, deliberately not fixed:
 
-- `update_token_metadata` has no rent payer (SVM) — a `name`/`symbol` rewrite
-  that grows the TLV has no account to fund the realloc.
 - Token-2022 CPI errors surface opaquely (SVM) — only `display_sync.rs`'s
   `update_multiplier` wraps its error; every other CPI call site propagates the
   raw SPL/Token-2022 error code via bare `?`.
@@ -239,15 +237,13 @@ Reviewed, understood, deliberately not fixed:
 
 ## ⚪ Post-launch / low priority
 
-### Kani: some harnesses remain undischarged `[SVM]`
+### Kani: the 256-bit math is not formally proven `[SVM]`
 
-CI runs only an explicit `--harness` allowlist of the cheap harnesses
-(`.github/workflows/test.yml`, `svm-cargo` job). The remaining harnesses in
-`oku-shared` (`rate.rs`, `wad.rs`, `math.rs`) do not terminate in a practical
-time: the cost is symbolic 256-bit arithmetic inside `rpow`/`div_wad`, not loop
-bounds. Discharging them needs a different formulation — proving the primitives
-separately and composing — not more time. Kept in-file as documentation (each
-says so) and deliberately NOT added to the allowlist.
+`oku-shared` keeps only harnesses that discharge in seconds; CI runs all of them.
+Properties over `rpow` / `div_wad` (symbolic 256-bit arithmetic) did not terminate
+within 5 minutes each and were removed rather than left as unproven claims. They are
+covered by unit, differential and fuzz tests instead. Proving them needs a different
+formulation (prove the primitives separately and compose), not more time.
 
 ### Differential corpus: revert-case coverage is thin `[both]`
 

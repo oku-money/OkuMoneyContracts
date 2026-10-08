@@ -1,6 +1,6 @@
 //! Permissioned direct burn (bridge / off-ramp): supply destruction with no USDC
-//! payout. Settlement happens off-chain, via `mint_oku_m` on the destination
-//! chain. Unlike EVM `burn()`, this is blocked while paused.
+//! payout. The destination leg is `mint_oku_m_direct` (SVM) or `LitePSM.mintOkuM`
+//! (EVM). Unlike EVM `burn()`, this is blocked while paused.
 
 use crate::contexts::direct_burn::BurnOkuMDirect;
 use crate::errors::LitePsmError;
@@ -12,8 +12,8 @@ use anchor_spl::token_interface;
 /// Burn `raw_amount` OkuM from the `direct_burner`'s own token account, with no
 /// USDC paid out.
 ///
-/// The SVM->EVM bridge leg: the value leaves Solana here and is re-minted on the
-/// destination chain off-chain. Only the `direct_burner` can call it, bounded by
+/// The source leg of a bridge out of this chain: the value leaves here and the
+/// orchestrator re-mints it on the destination. Only the `direct_burner` can call it, bounded by
 /// its `direct_burner_allowance`.
 pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, raw_amount: u64) -> Result<()> {
     // Same guards as every supply-changing path: override slot, pause, zero amount.

@@ -48,7 +48,7 @@ pub struct InitializeParams {
     /// Can reset the mint / direct-mint / direct-burn allowances.
     pub allowance_manager: Pubkey,
     /// Sets the yield-rate schedule and the emergency multiplier override.
-    pub rebaser: Pubkey,
+    pub rate_manager: Pubkey,
     /// Token-2022 metadata URI for the OkuM mint.
     pub oku_m_uri: String,
 }
@@ -67,7 +67,7 @@ impl InitializeParams {
             self.buffer_withdrawer,
             self.cap_manager,
             self.allowance_manager,
-            self.rebaser,
+            self.rate_manager,
         ]
     }
 }
@@ -211,7 +211,7 @@ fn write_initial_config(
     config.buffer_withdrawer = params.buffer_withdrawer;
     config.cap_manager = params.cap_manager;
     config.allowance_manager = params.allowance_manager;
-    config.rebaser = params.rebaser;
+    config.rate_manager = params.rate_manager;
 
     config.usdc_mint = keys.usdc_mint;
     config.oku_m_mint = keys.oku_m_mint;

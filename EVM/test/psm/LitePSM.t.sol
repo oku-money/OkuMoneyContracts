@@ -989,7 +989,7 @@ contract LitePSMTest is BaseTest {
         litePsm.depositBuffer(100e6);
     }
 
-    function test_DepositBuffer_RevertsInYieldDistributionBlock() public {
+    function test_DepositBuffer_RevertsInOverrideBlock() public {
         _mintUsdc(bufferDepositor, 100e6);
         _approveUsdc(bufferDepositor, address(litePsm), 100e6);
         _stampYieldLockBlock();
@@ -1069,8 +1069,8 @@ contract LitePSMTest is BaseTest {
 
     // ============ Yield Distribution Lock Tests (Sandwich Attack Prevention) ============
 
-    function test_MintOkuM_RevertsInYieldDistributionBlock() public {
-        // Distribute yield to set lastYieldDistributionBlock
+    function test_MintOkuM_RevertsInOverrideBlock() public {
+        // Distribute yield to set lastOverrideBlock
         _mintOkuMoney(user2, 10_000e18);
         _stampYieldLockBlock();
 
@@ -1084,10 +1084,10 @@ contract LitePSMTest is BaseTest {
     function test_MintOkuM_SucceedsInNextBlock() public {
         // Use setOkuMMultiplier (the only remaining discrete-stamp path) to avoid
         // slippage issues.
-        // (setOkuMMultiplier also sets lastYieldDistributionBlock). A strict
+        // (setOkuMMultiplier also sets lastOverrideBlock). A strict
         // increase of 1 wei is sufficient to trip the sandwich-lock stamp without
         // moving math materially.
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION + 1);
 
         // Roll to next block
@@ -1106,13 +1106,13 @@ contract LitePSMTest is BaseTest {
         );
     }
 
-    function test_RedeemOkuM_RevertsInYieldDistributionBlock() public {
+    function test_RedeemOkuM_RevertsInOverrideBlock() public {
         // Setup: user1 has OkuMoney
         _mintOkuMoney(user1, 100e18);
         vm.prank(user1);
         okuMoney.approve(address(litePsm), 100e18);
 
-        // Distribute yield to set lastYieldDistributionBlock
+        // Distribute yield to set lastOverrideBlock
         _stampYieldLockBlock();
 
         // Same block — redeemOkuM should revert
@@ -1141,7 +1141,7 @@ contract LitePSMTest is BaseTest {
         assertGt(usdc.balanceOf(user1), usdcBefore);
     }
 
-    function test_MintOkuDollar_RevertsInYieldDistributionBlock() public {
+    function test_MintOkuDollar_RevertsInOverrideBlock() public {
         // Distribute yield
         _mintOkuMoney(user2, 10_000e18);
         _stampYieldLockBlock();
@@ -1153,7 +1153,7 @@ contract LitePSMTest is BaseTest {
         litePsm.mintUsdOku(100e6);
     }
 
-    function test_RedeemOkuDollar_RevertsInYieldDistributionBlock() public {
+    function test_RedeemOkuDollar_RevertsInOverrideBlock() public {
         // Setup: user1 has okuDollar
         _mintUsdOku(user1, 100e18);
         vm.prank(user1);
@@ -1169,8 +1169,8 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_SetOkuMPrice_AlsoBlocksPSMOperations() public {
-        // setOkuMMultiplier also sets lastYieldDistributionBlock
-        vm.prank(rebaser);
+        // setOkuMMultiplier also sets lastOverrideBlock
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         // Same block — mintOkuM should revert
@@ -1181,9 +1181,9 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_YieldLock_NoEffectBeforeFirstDistribution() public {
-        // Before any yield distribution, lastYieldDistributionBlock is 0
+        // Before any yield distribution, lastOverrideBlock is 0
         // Operations should work normally
-        assertEq(okuMoney.lastYieldDistributionBlock(), 0);
+        assertEq(okuMoney.lastOverrideBlock(), 0);
 
         _approveUsdc(user1, address(litePsm), 100e6);
         vm.prank(user1);
@@ -1199,7 +1199,7 @@ contract LitePSMTest is BaseTest {
 
     /// @notice PINS THE DOCUMENTED LIMITATION, end to end: `OverrideBlockGuard` is
     ///         forward-only. A mint ordered BEFORE `setOkuMMultiplier` in the same
-    ///         block is not blocked — it reads `lastYieldDistributionBlock` before
+    ///         block is not blocked — it reads `lastOverrideBlock` before
     ///         the override writes it — and a redeem one block later is not blocked
     ///         either (the guard has already released). Together they capture the
     ///         entire discrete jump for one block of capital exposure.
@@ -1222,7 +1222,7 @@ contract LitePSMTest is BaseTest {
 
         // 2. The discrete jump itself, same block as the front-run mint.
         uint256 preMultiplier = okuMoney.okuMMultiplier();
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(preMultiplier * 2);
 
         // Confirm the guard IS armed for the rest of this block -- a same-block
@@ -1279,7 +1279,7 @@ contract LitePSMTest is BaseTest {
         //    workable at all: the emergency lever stays live while user-facing
         //    surfaces are frozen around it.
         uint256 preMultiplier = okuMoney.okuMMultiplier();
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(preMultiplier * 2);
         assertEq(
             okuMoney.okuMMultiplier(),
@@ -1310,7 +1310,7 @@ contract LitePSMTest is BaseTest {
         assertGt(usdc.balanceOf(user1), usdcBefore, "redemption succeeds normally once unpaused");
     }
 
-    function test_WithdrawUSDC_RevertsInYieldDistributionBlock() public {
+    function test_WithdrawUSDC_RevertsInOverrideBlock() public {
         _stampYieldLockBlock();
 
         vm.prank(bufferWithdrawer);

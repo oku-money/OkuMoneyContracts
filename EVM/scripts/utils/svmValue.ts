@@ -134,7 +134,7 @@ export async function readSvmValueUsd(
  * 425    8   max_supply
  * 433    8   minter_allowance
  * 441    1   is_paused
- * 442    8   last_yield_distribution_slot
+ * 442    8   last_override_slot
  * 450   16   okum_base_multiplier         (u128 LE)
  * 466    8   okum_rate_per_second         (u64  LE)
  * 474    8   okum_last_accrual_time       (i64  LE)

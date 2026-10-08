@@ -2,19 +2,16 @@
 //! `Pausable` / `AccessControl`; freeze and thaw follow Circle FiatToken's
 //! blacklister.
 
-use crate::constants::{OKU_M_METADATA_NAME, OKU_M_METADATA_SYMBOL};
 use crate::contexts::{
     AcceptRoleAdmin, AllowanceManager, CapManager, FreezeAccount, Pause, SetAuthority, ThawAccount,
-    Unpause, UpdateTokenMetadata,
+    Unpause,
 };
 use crate::errors::LitePsmError;
 use crate::events::*;
 use crate::roles::AuthorityRole;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
-use anchor_spl::token_2022_extensions::spl_token_metadata_interface;
 use anchor_spl::token_interface;
-use spl_token_metadata_interface::state::Field;
 
 /// Stop mint, redeem, direct mint/burn and buffer moves (`pauser` only).
 /// Freeze/thaw and rate decreases keep working. Not blocked by the override
@@ -104,9 +101,9 @@ pub fn set_direct_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) 
 }
 
 /// Set how much more OkuM the `direct_burner` may burn through
-/// `burn_oku_m_direct` (`allowance_manager` only). It REPLACES the allowance (it does not add to it), and is
-/// allowed while paused so an incident can cut the allowance to zero. The
-/// value is not bounded: the supply cap still applies at mint time.
+/// `burn_oku_m_direct` (`allowance_manager` only). It REPLACES the allowance
+/// (it does not add to it), and is allowed while paused so an incident can cut
+/// the allowance to zero.
 pub fn set_direct_burner_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
     let old_allowance = config.direct_burner_allowance;
@@ -235,7 +232,7 @@ pub fn set_authority(
         BufferWithdrawer  => buffer_withdrawer,
         CapManager        => cap_manager,
         AllowanceManager  => allowance_manager,
-        Rebaser           => rebaser,
+        RateManager           => rate_manager,
         DirectMinter      => direct_minter,
         DirectBurner      => direct_burner,
     };
@@ -301,58 +298,6 @@ pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
     emit!(RoleAdminTransferCancelledEvent {
         current_admin: config.role_admin,
         cancelled_pending,
-    });
-
-    Ok(())
-}
-
-/// Reset the mint's Token-2022 name and symbol to the canonical OkuM values
-/// (`role_admin` only).
-///
-/// Name/symbol come from `OKU_M_METADATA_*` so they cannot drift from `initialize`.
-/// The config PDA is the metadata update authority and signs both CPIs.
-pub fn update_token_metadata(ctx: Context<UpdateTokenMetadata>) -> Result<()> {
-    let bump_seed = [ctx.accounts.config.bump];
-    let config_key = ctx.accounts.config.key();
-    let mint_key = ctx.accounts.oku_m_mint.key();
-    let token_2022_id = ctx.accounts.token_2022_program.key();
-
-    let seeds = PsmConfig::signer_seeds(&bump_seed);
-    let signer_seeds = &[&seeds[..]];
-
-    let account_infos = &[
-        ctx.accounts.oku_m_mint.to_account_info(),
-        ctx.accounts.config.to_account_info(),
-    ];
-
-    anchor_lang::solana_program::program::invoke_signed(
-        &spl_token_metadata_interface::instruction::update_field(
-            &token_2022_id,
-            &mint_key,   // metadata account = mint (self)
-            &config_key, // update authority (signs via PDA)
-            Field::Name,
-            OKU_M_METADATA_NAME.to_string(),
-        ),
-        account_infos,
-        signer_seeds,
-    )?;
-
-    anchor_lang::solana_program::program::invoke_signed(
-        &spl_token_metadata_interface::instruction::update_field(
-            &token_2022_id,
-            &mint_key,
-            &config_key,
-            Field::Symbol,
-            OKU_M_METADATA_SYMBOL.to_string(),
-        ),
-        account_infos,
-        signer_seeds,
-    )?;
-
-    emit!(TokenMetadataUpdatedEvent {
-        mint: mint_key,
-        name: OKU_M_METADATA_NAME.to_string(),
-        symbol: OKU_M_METADATA_SYMBOL.to_string(),
     });
 
     Ok(())

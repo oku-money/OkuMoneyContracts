@@ -17,10 +17,10 @@ contract VaultInvariantsTest is BaseTest {
 
     function setUp() public override {
         super.setUp();
-        handler = new OkuDollarHandler(okuMoney, okuDollar, minter, rebaser);
+        handler = new OkuDollarHandler(okuMoney, okuDollar, minter, rateManager);
 
         // Grant roles required by the handler surface. The handler drives the shared
-        // multiplier by pranking `rebaser` (OKUM_REBASER, granted in BaseTest).
+        // multiplier by pranking `rateManager` (OKUM_RATE_MANAGER, granted in BaseTest).
         vm.startPrank(admin);
         okuDollar.grantRole(DEFAULT_ADMIN_ROLE, address(handler));
         vm.stopPrank();

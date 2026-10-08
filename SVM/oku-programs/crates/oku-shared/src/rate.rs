@@ -74,7 +74,7 @@ impl Schedule {
     /// The rate actually accruing now, which lags the stored `rate_per_second`
     /// once the active window has closed. The pause gate uses it so a stale
     /// stored rate cannot disguise an increase as a decrease.
-    /// Mirrors EVM `OkuMoney._effectiveRate`.
+    /// Mirrors EVM `OkuMoneyRateSchedule.okuMEffectiveRatePerSecond`.
     #[inline]
     pub fn effective_rate(&self, now_ts: i64) -> u128 {
         if self.rate_end != 0 && now_ts > self.rate_end {
@@ -526,64 +526,6 @@ mod proofs {
         let base: u128 = kani::any();
         let rate: u128 = kani::any();
         assert!(compound_for(base, rate, 0) == Some(base));
-    }
-
-    /// `compound_for` never returns above `MAX_MULTIPLIER` (the clamp holds).
-    #[kani::proof]
-    fn proof_compound_for_output_clamped() {
-        let base: u128 = kani::any();
-        let rate: u128 = kani::any();
-        let elapsed: u64 = kani::any();
-        kani::assume(base <= MAX_MULTIPLIER);
-        kani::assume(rate <= crate::constants::MAX_RATE);
-        kani::assume(elapsed <= crate::constants::MAX_RATE_WINDOW_SECONDS as u64);
-
-        // Assumptions are the reachable domain (rate and window rails). The
-        // `reachability` tests sample the same claim; this harness does not
-        // currently terminate under `cargo kani` (symbolic 256-bit math in `rpow`).
-        let out = compound_for(base, rate, elapsed);
-        assert!(
-            out.is_some(),
-            "compound_for returned None inside the reachable domain"
-        );
-        assert!(out.unwrap() <= MAX_MULTIPLIER);
-    }
-
-    /// A halted schedule is flat for every timestamp, over ANY `rate_end` /
-    /// `pending_rate` / `pending_rate_end` (not just the reachable shape).
-    /// The `>= 0` assumptions match the up-front negative-timestamp rejection.
-    #[kani::proof]
-    fn proof_halted_schedule_is_flat() {
-        let base: u128 = kani::any();
-        let rate: u128 = kani::any();
-        let anchor: i64 = kani::any();
-        let rate_end: i64 = kani::any();
-        let pending: u128 = kani::any();
-        let pending_rate_end: i64 = kani::any();
-        let now: i64 = kani::any();
-        kani::assume(rate <= PRECISION);
-        kani::assume(anchor >= 0 && rate_end >= 0 && pending_rate_end >= 0 && now >= 0);
-        assert!(
-            compute_multiplier(base, rate, anchor, rate_end, pending, pending_rate_end, now)
-                == Some(base)
-        );
-    }
-
-    /// A yielding rate can never shrink the base — monotonicity in value.
-    #[kani::proof]
-    fn proof_multiplier_never_below_base() {
-        let base: u128 = kani::any();
-        let rate: u128 = kani::any();
-        let anchor: i64 = kani::any();
-        let rate_end: i64 = kani::any();
-        let now: i64 = kani::any();
-        kani::assume(base <= MAX_MULTIPLIER);
-        kani::assume(rate >= PRECISION && rate <= crate::constants::MAX_RATE);
-        kani::assume(anchor >= 0 && rate_end >= 0 && now >= 0);
-        kani::assume(now >= anchor);
-        if let Some(v) = compute_multiplier(base, rate, anchor, rate_end, PRECISION, 0, now) {
-            assert!(v >= base || base > MAX_MULTIPLIER);
-        }
     }
 }
 

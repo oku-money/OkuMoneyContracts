@@ -28,8 +28,8 @@ contract HandlerSanityTest is BaseTest {
     function setUp() public override {
         super.setUp();
 
-        okuMoneyHandler = new OkuMoneyHandler(okuMoney, minter, rebaser, allowanceManager);
-        okuDollarHandler = new OkuDollarHandler(okuMoney, okuDollar, minter, rebaser);
+        okuMoneyHandler = new OkuMoneyHandler(okuMoney, minter, rateManager, allowanceManager);
+        okuDollarHandler = new OkuDollarHandler(okuMoney, okuDollar, minter, rateManager);
 
         // Target both handlers
         targetContract(address(okuMoneyHandler));

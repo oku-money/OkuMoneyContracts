@@ -137,11 +137,11 @@ async function runScenario(cfg: ScenarioConfig): Promise<ScenarioResult> {
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"));
     const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"));
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"));
-    const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"));
+    const OKUM_RATE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_RATE_MANAGER"));
     await okuMoney.grantRole(OKUM_MINTER, adminAddr);
     await okuMoney.grantRole(OKUM_BURNER, adminAddr);
     await okuMoney.grantRole(OKUM_ALLOWANCE_MANAGER, adminAddr);
-    await okuMoney.grantRole(OKUM_REBASER, adminAddr);
+    await okuMoney.grantRole(OKUM_RATE_MANAGER, adminAddr);
     await okuMoney.configureMinterAllowance(adminAddr, ethers.parseEther("100000000000"));
 
     const initialSupplyRaw = ethers.parseEther(cfg.initialSupplyTokens.toString());

@@ -616,7 +616,7 @@ export function expectedRoleGrants(): ExpectedRoleGrant[] {
     init("okuMoney", "OkuMoney", "OKUM_UPGRADER"),
     init("okuMoney", "OkuMoney", "OKUM_MINTER"),
     init("okuMoney", "OkuMoney", "OKUM_BURNER"),
-    init("okuMoney", "OkuMoney", "OKUM_REBASER"),
+    init("okuMoney", "OkuMoney", "OKUM_RATE_MANAGER"),
     init("okuMoney", "OkuMoney", "OKUM_ALLOWANCE_MANAGER"),
     init("okuMoney", "OkuMoney", "OKUM_PAUSER"),
     init("okuMoney", "OkuMoney", "OKUM_UNPAUSER"),

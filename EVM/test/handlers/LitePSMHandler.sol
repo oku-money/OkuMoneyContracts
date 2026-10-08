@@ -23,7 +23,7 @@ contract LitePSMHandler is Test {
     IOkuMoney public okuMoney;
     IOkuDollar public okuDollar;
     IERC20 public usdc;
-    address public rebaser;
+    address public rateManager;
     address public minter;
     address public blacklister;
     address public unblacklister;
@@ -82,7 +82,7 @@ contract LitePSMHandler is Test {
         IOkuMoney _okuMoney,
         IOkuDollar _okuDollar,
         IERC20 _usdc,
-        address _rebaser,
+        address _rateManager,
         address _minter,
         address[4] memory _compliance // blacklister, unblacklister, pauser, unpauser
     ) {
@@ -90,7 +90,7 @@ contract LitePSMHandler is Test {
         okuMoney = _okuMoney;
         okuDollar = _okuDollar;
         usdc = _usdc;
-        rebaser = _rebaser;
+        rateManager = _rateManager;
         minter = _minter;
         (blacklister, unblacklister, pauser, unpauser) =
         (_compliance[0], _compliance[1], _compliance[2], _compliance[3]);
@@ -257,7 +257,7 @@ contract LitePSMHandler is Test {
         uint256 newPrice = currentPrice + increase;
         if (newPrice > MAX_FUZZ_PRICE) newPrice = MAX_FUZZ_PRICE;
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         try okuMoney.setOkuMMultiplier(newPrice) {
             vm.roll(block.number + 1);
         } catch {}
@@ -327,14 +327,14 @@ contract LitePSMHandler is Test {
     /// @notice Drive `okuMRatePerSecond` so that subsequent `warpTime` calls compound
     ///         the (single) multiplier above PRECISION.
     /// @dev `okuDollar.usdMultiplier()` is exactly `okuMoney.okuMMultiplier()`, so the
-    ///      rate is set on OkuMoney via OKUM_REBASER.
+    ///      rate is set on OkuMoney via OKUM_RATE_MANAGER.
     function setUsdYieldRate(uint256 rate) external {
         ghostSetUsdYieldRateCalls++;
         rate = bound(rate, PRECISION, MAX_RATE);
         // A halted rate (== PRECISION) requires endTimestamp == 0; any yielding
         // rate requires a bounded future window.
         uint256 endTimestamp = rate == PRECISION ? 0 : block.timestamp + 90 days; // == MAX_RATE_WINDOW
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         try okuMoney.setOkuMYieldRate(rate, endTimestamp) {}
         catch {
             ghostSetUsdYieldRateReverts++;

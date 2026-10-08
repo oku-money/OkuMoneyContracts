@@ -151,7 +151,7 @@ describe("streaming accrual (continuous rate schedule)", () => {
   const setRate = async (rate: bigint, endTs: number) =>
     psm.methods
       .setOkumYieldRate(new BN(rate.toString()), new BN(endTs))
-      .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+      .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
       .signers([orchestrator])
       .rpc();
 
@@ -168,7 +168,7 @@ describe("streaming accrual (continuous rate schedule)", () => {
         new BN(nextRate.toString()),
         new BN(nextEndTs),
       )
-      .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+      .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
       .signers([orchestrator])
       .rpc();
 
@@ -509,7 +509,7 @@ describe("streaming accrual (continuous rate schedule)", () => {
       () =>
         psm.methods
           .setNextOkumYieldRate(new BN(ratePerSecondForApy(0.05).toString()), new BN(999_999_999))
-          .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+          .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
           .signers([orchestrator])
           .rpc(),
       "NoRateEndSet",
@@ -525,7 +525,7 @@ describe("streaming accrual (continuous rate schedule)", () => {
       () =>
         psm.methods
           .setNextOkumYieldRate(new BN(ratePerSecondForApy(0.05).toString()), new BN(rateEnd))
-          .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+          .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
           .signers([orchestrator])
           .rpc(),
       "PendingEndNotAfterRateEnd",
@@ -546,7 +546,7 @@ describe("streaming accrual (continuous rate schedule)", () => {
             new BN(ratePerSecondForApy(0.05).toString()),
             new BN(rateEnd + 30 * DAY),
           )
-          .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+          .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
           .signers([orchestrator])
           .rpc(),
       "RateAlreadyExpired",
@@ -624,7 +624,7 @@ describe("streaming accrual (continuous rate schedule)", () => {
     const t = await nowTs();
     const tx = await psm.methods
       .setOkumYieldRate(new BN(ratePerSecondForApy(0.06).toString()), new BN(t + 30 * DAY))
-      .accountsPartial({ rebaser: orchestrator.publicKey, config: psmConfigPda })
+      .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
       .transaction();
     const sim = await simulateTx(h, tx, [orchestrator]);
     const events = decodeEvents(psm, sim.logs);
@@ -641,13 +641,13 @@ describe("streaming accrual (continuous rate schedule)", () => {
     expect(cfg.pendingRateEnd).to.equal(0n);
   });
 
-  it("rejects a non-rebaser", async () => {
+  it("rejects a non-rateManager", async () => {
     const end = (await nowTs()) + DAY;
     await expectBankrunError(
       () =>
         psm.methods
           .setOkumYieldRate(new BN(ratePerSecondForApy(0.05).toString()), new BN(end))
-          .accountsPartial({ rebaser: user.publicKey, config: psmConfigPda })
+          .accountsPartial({ rateManager: user.publicKey, config: psmConfigPda })
           .signers([user])
           .rpc(),
       "Unauthorized",

@@ -63,7 +63,7 @@ is entirely the crank's job (see § Compute budget).
 
 On-chain identity is **OkuM** everywhere; the mint's `TokenMetadata` is `name: "OkuMoney",
 symbol: "OkuM"` (matching EVM `OkuMoney`), single-sourced as `OKU_M_METADATA_NAME` /
-`OKU_M_METADATA_SYMBOL` for `initialize` and `update_token_metadata` (`role_admin`). "usdOku" is **not**
+`OKU_M_METADATA_SYMBOL` and fixed at `initialize`. "usdOku" is **not**
 an on-chain symbol: it is the wallet's `raw * multiplier` rendering (EVM's `OkuDollar` wrapper
 collapses into this display layer), and labelling a raw number `usdOku` would falsely assert a $1 peg.
 Testers see **raw** (below-dollar when multiplier > 1) amounts in non-ScaledUiAmount explorers, raw
@@ -72,8 +72,11 @@ RPC (`amount`), `spl-token accounts`, transfer arguments and `supply`.
 ### Other SVM-specific choices
 
 - **Single-slot sandwich lock.** Only `set_okum_multiplier` (emergency override) stamps
-  `last_yield_distribution_slot`; PSM operations require `current_slot != last_yield_distribution_slot`.
-  Mirrors EVM `lastYieldDistributionBlock`.
+  `last_override_slot`; PSM operations require `current_slot != last_override_slot`.
+  Mirrors EVM `lastOverrideBlock`. Unlike EVM, the override is blocked by the program's
+  single pause flag, so EVM's pause-around-the-override ceremony (EVM Accepted Risk #11) cannot be
+  used here: a mint landing in an earlier slot ahead of an honest override is an accepted residual.
+  The pause flag still stops a compromised `rate_manager` from forcing the multiplier.
 - **Decimals.** `OkuM` has 6 decimals and USDC is hard-coded to 6 (`InvalidUsdcDecimals` at init);
   EVM `OkuMoney` has 18 and the PSM reads collateral decimals at init (≤ 18). The orchestrator
   rescales across chains.
@@ -82,9 +85,9 @@ RPC (`amount`), `spl-token accounts`, transfer arguments and `supply`.
 
 ```
 crates/oku-shared/
-  src/ lib.rs, constants.rs, math.rs, rate.rs, wad.rs, yield_lock.rs   (+ Kani harnesses in math.rs)
+  src/ lib.rs, constants.rs, math.rs, rate.rs, wad.rs, yield_lock.rs   (+ Kani harnesses in math.rs, rate.rs, wad.rs)
   tests/differential.rs    # replays the Solidity vector corpus
-  fuzz/fuzz_targets/       # compute_multiplier, dollars_to_raw, mul_div_ceil/floor, raw_to_dollars, wad_mul_div
+  fuzz/fuzz_targets/       # compute_multiplier, dollars_to_raw, raw_to_dollars, wad_mul_div
 programs/lite-psm/src/
   lib.rs                   # 24 instruction entry points
   state.rs                 # PsmConfig only (seed psm_config, LEN = 754)
@@ -92,7 +95,7 @@ programs/lite-psm/src/
   helpers/                 # multiplier (canonical), display_sync (mirror), yield_lock,
                            # math (Anchor-error wrappers), limits (check_supply_cap, consume_allowance)
   instructions/            # init, psm (mint/redeem/buffer), psm_admin (pause, freeze, set_authority,
-                           # role-admin accept/cancel, metadata, caps, allowances), yield_ops
+                           # role-admin accept/cancel, caps, allowances), yield_ops
                            # (rate writers, override, display crank), direct_mint, direct_burn
   contexts/                # per-instruction account contexts
 tests/                     # bankrun/ (+ scenarios/), shared/, fixtures/
@@ -109,12 +112,12 @@ The only state account (`PsmConfig::SEED`, mirrored in `scripts/utils/pdaHelpers
 pub struct PsmConfig {
     pub bump: u8,
     // 12 authorities: role_admin, pauser, unpauser, freezer, unfreezer, buffer_depositor,
-    //   buffer_withdrawer, cap_manager, allowance_manager, rebaser, direct_minter, direct_burner
+    //   buffer_withdrawer, cap_manager, allowance_manager, rate_manager, direct_minter, direct_burner
     // Token references: usdc_mint, oku_m_mint, vault_usdc
     // Limits: max_supply, minter_allowance, direct_minter_allowance, direct_burner_allowance, is_paused
     // Yield schedule (6 fields, as EVM): okum_base_multiplier, okum_rate_per_second,
     //   okum_last_accrual_time, okum_rate_end, okum_pending_rate_per_second, okum_pending_rate_end
-    // Sandwich lock: last_yield_distribution_slot
+    // Sandwich lock: last_override_slot
     // Display crank (observability only): last_display_sync_ts
     // Two-step RoleAdmin: pending_role_admin
     pub reserved: [u8; 128],   // tail padding
@@ -132,10 +135,10 @@ resize/migration instruction; if `reserved` is exhausted, write one against the 
 
 | Instruction | Role | EVM counterpart |
 |---|---|---|
-| `set_okum_yield_rate(new_rate, end_timestamp)` | rebaser | `setOkuMYieldRate` |
-| `set_next_okum_yield_rate(new_rate, pending_end)` | rebaser | `setNextOkuMYieldRate` (pre-stages the successor; takes over at `okum_rate_end` with no transaction) |
-| `set_okum_yield_rate_with_successor(rate, end, next_rate, next_end)` | rebaser | `setOkuMYieldRateWithSuccessor` (atomic; used by the epoch orchestrator) |
-| `set_okum_multiplier(new_multiplier)` | rebaser | `setOkuMMultiplier` — EMERGENCY: force the multiplier and halt the schedule; the only discrete jump, so the only one that stamps the sandwich lock |
+| `set_okum_yield_rate(new_rate, end_timestamp)` | rate_manager | `setOkuMYieldRate` |
+| `set_next_okum_yield_rate(new_rate, pending_end)` | rate_manager | `setNextOkuMYieldRate` (pre-stages the successor; takes over at `okum_rate_end` with no transaction) |
+| `set_okum_yield_rate_with_successor(rate, end, next_rate, next_end)` | rate_manager | `setOkuMYieldRateWithSuccessor` (atomic; used by the epoch orchestrator) |
+| `set_okum_multiplier(new_multiplier)` | rate_manager | `setOkuMMultiplier` — EMERGENCY: force the multiplier and halt the schedule; the only discrete jump, so the only one that stamps the sandwich lock |
 | `sync_display_multiplier()` | **permissionless** | none — value fully determined by on-chain state |
 
 Rates are WAD-scaled (1e18), as on EVM; neither stack has an on-chain "distribute N dollars"
@@ -275,7 +278,7 @@ Together these force the deployer and the operational roles onto **different key
    (and pick `usdc_mint`) between deploy and init.
 2. **No granular authority may equal `role_admin`** (nor the zero pubkey). `instructions/init.rs`
    checks all 9 (`pauser`, `unpauser`, `freezer`, `unfreezer`, `buffer_depositor`,
-   `buffer_withdrawer`, `cap_manager`, `allowance_manager`, `rebaser`) with `InvalidAuthority`
+   `buffer_withdrawer`, `cap_manager`, `allowance_manager`, `rate_manager`) with `InvalidAuthority`
    (6024), mirroring `set_authority`'s separation-of-duties guard.
 
 `initialize` takes no `role_admin` parameter: it is always the signing deployer. On devnet/localnet
@@ -313,7 +316,7 @@ Trust assumptions the SVM side makes deliberately; reviewers should not re-flag 
 1. **Operator-compromise is out of scope.** The threat model excludes a malicious cold multisig — see
    [`../README.md` § Signer trust implications](../README.md#signer-trust-implications). SVM
    consequence: `MAX_MULTIPLIER` and the per-role allowance caps are **math-sanity bounds**
-   (overflow-safe region, operator typos), not defence against a compromised rebaser key.
+   (overflow-safe region, operator typos), not defence against a compromised rate manager key.
 2. **No on-chain Proof-of-Reserves or oracle.** Same posture as EVM (`EVM/README.md` Accepted Risk
    "USDC peg monitoring — off-chain"): no PoR feed, no USDC-peg circuit breaker, no oracle relay.
 3. **SVM ↔ EVM parity residue.** Constants and `rpow` rounding are byte-identical; what remains:
@@ -441,20 +444,20 @@ Mainnet roles follow the Squads tiers in
 operation is often delegated to a coworker- or CI-owned key while governance retains ownership:
 `grant-roles.ts --delegate=<pubkey>` moves only the 4 operational roles.
 
-- **Operational** (delegable; allowance/cap-bounded): `direct_minter`, `direct_burner`, `rebaser`,
+- **Operational** (delegable; allowance/cap-bounded): `direct_minter`, `direct_burner`, `rate_manager`,
   `buffer_depositor`.
 - **Governance/safety** (keep): `pauser`, `unpauser`, `freezer`, `unfreezer`, `cap_manager`,
   `allowance_manager` (it caps the delegate's own roles), `buffer_withdrawer`.
 - **`role_admin`** stays with the owner: unconditional claw-back of every role in one tx each. The
   **BPF upgrade authority** is a separate axis (`admin:set-upgrade-authority`) and also stays.
 
-`grant-roles.ts` never touches the governance set or `role_admin`. **Ordering:** once `rebaser` and
+`grant-roles.ts` never touches the governance set or `role_admin`. **Ordering:** once `rate_manager` and
 `buffer_depositor` sit with a delegate you do not hold, `npm run test:onchain` cannot run its
 `streamingAccrual` and `redeem` steps — run the smoke test first, or claw the roles back.
 
 ### Orchestrator key and buffer
 
-The v1 orchestrator holds one KMS-backed Solana keypair with `buffer_depositor`, `rebaser`,
+The v1 orchestrator holds one KMS-backed Solana keypair with `buffer_depositor`, `rate_manager`,
 `direct_minter` and `direct_burner`, plus the matching EVM EOA roles
 ([`../README.md` § Orchestrator runbook](../README.md#orchestrator-runbook)). There is no on-chain
 bridge state, nonce or refund flow.
@@ -477,11 +480,10 @@ All under `scripts/admin/`. Each prints a summary before any state change, honou
 | `admin:set-minter-allowance` / `admin:set-direct-minter-allowance` / `admin:set-direct-burner-allowance` | `set_*_allowance` | `allowance_manager` |
 | `admin:mint-oku-m` / `admin:redeem-oku-m` | `mint_oku_m` / `redeem_oku_m` (bridge-leg CLIs) | permissionless / caller |
 | `admin:mint-oku-m-direct` | `mint_oku_m_direct` | `direct_minter` |
-| `admin:set-yield-rate` / `admin:set-multiplier` | rate writers / `set_okum_multiplier` (emergency) | `rebaser` |
+| `admin:set-yield-rate` / `admin:set-multiplier` | rate writers / `set_okum_multiplier` (emergency) | `rate_manager` |
 | `admin:read-schedule` / `admin:sync-display` | read-only (exits non-zero if accrual has HALTED) / `sync_display_multiplier` | none (permissionless) |
 | `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |
 | `admin:deposit-buffer` / `admin:withdraw-buffer` | `deposit_buffer` / `withdraw_buffer` | `buffer_depositor` / `buffer_withdrawer` |
-| `admin:update-metadata[:devnet]` | `update_token_metadata` | `role_admin` |
 | `admin:set-upgrade-authority` / `admin:close-programs` | `solana program set-upgrade-authority` (`--new-authority=<vault> --confirm=<vault>` / `--disable`; verifies the result on-chain) / `solana program close` (recover rent) | BPF upgrade authority |
 | `admin:accept-role-admin` / `admin:cancel-role-admin-transfer` | `accept_role_admin` / `cancel_role_admin_transfer` (`--emit` prints the instruction for a Squads vault transaction) | pending `role_admin` / `role_admin` |
 

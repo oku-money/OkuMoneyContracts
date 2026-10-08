@@ -63,7 +63,7 @@
       "name": "burn_oku_m_direct",
       "docs": [
         "Burn the caller's OkuM without a USDC payout (`direct_burner` only; the",
-        "SVM->EVM bridge leg). Consumes the direct-burner allowance."
+        "source leg of a bridge out of this chain). Consumes the direct-burner allowance."
       ],
       "discriminator": [
         202,
@@ -646,10 +646,7 @@
         {
           "name": "user_usdc_ata",
           "docs": [
-            "User's USDC account. `token::` rather than `associated_token::` skips the",
-            "~1.5k CU ATA derivation, which buys nothing here: the account is never",
-            "created and `transfer_checked` validates it. Kept typed (not unchecked)",
-            "so a client's wrong-account error names this field."
+            "User's USDC account; any account the user owns (it is never created here)."
           ],
           "writable": true
         },
@@ -750,8 +747,9 @@
     {
       "name": "mint_oku_m_direct",
       "docs": [
-        "Mint OkuM without USDC (`direct_minter` only; fiat on-ramp). Consumes the",
-        "direct-minter allowance and respects the supply cap."
+        "Mint OkuM without USDC (`direct_minter` only; fiat on-ramp and the SVM->SVM",
+        "bridge destination leg). Consumes the direct-minter allowance and respects",
+        "the supply cap."
       ],
       "discriminator": [
         76,
@@ -1500,7 +1498,7 @@
       "name": "set_next_okum_yield_rate",
       "docs": [
         "Stage the successor rate that takes over at the current `okum_rate_end`",
-        "with no transaction at the boundary (`rebaser` only)."
+        "with no transaction at the boundary (`rate_manager` only)."
       ],
       "discriminator": [
         92,
@@ -1514,9 +1512,9 @@
       ],
       "accounts": [
         {
-          "name": "rebaser",
+          "name": "rate_manager",
           "docs": [
-            "The configured `rebaser`."
+            "The configured `rate_manager`."
           ],
           "signer": true,
           "relations": [
@@ -1564,7 +1562,7 @@
     {
       "name": "set_okum_multiplier",
       "docs": [
-        "EMERGENCY (`rebaser` only): force the multiplier (WAD-scaled) to a strictly",
+        "EMERGENCY (`rate_manager` only): force the multiplier (WAD-scaled) to a strictly",
         "higher value and halt accrual. The only instruction that engages the",
         "same-slot yield lock."
       ],
@@ -1580,9 +1578,9 @@
       ],
       "accounts": [
         {
-          "name": "rebaser",
+          "name": "rate_manager",
           "docs": [
-            "The configured `rebaser`."
+            "The configured `rate_manager`."
           ],
           "signer": true,
           "relations": [
@@ -1637,7 +1635,7 @@
     {
       "name": "set_okum_yield_rate",
       "docs": [
-        "Set the active per-second rate and its window (`rebaser` only). Re-anchors",
+        "Set the active per-second rate and its window (`rate_manager` only). Re-anchors",
         "the base multiplier and clears any staged successor. `end_timestamp` must",
         "be `0` for a halt (`PRECISION`) and in the future otherwise."
       ],
@@ -1653,9 +1651,9 @@
       ],
       "accounts": [
         {
-          "name": "rebaser",
+          "name": "rate_manager",
           "docs": [
-            "The configured `rebaser`."
+            "The configured `rate_manager`."
           ],
           "signer": true,
           "relations": [
@@ -1703,7 +1701,7 @@
     {
       "name": "set_okum_yield_rate_with_successor",
       "docs": [
-        "Set the active rate and stage its successor atomically (`rebaser` only);",
+        "Set the active rate and stage its successor atomically (`rate_manager` only);",
         "the epoch orchestrator's instruction."
       ],
       "discriminator": [
@@ -1718,9 +1716,9 @@
       ],
       "accounts": [
         {
-          "name": "rebaser",
+          "name": "rate_manager",
           "docs": [
-            "The configured `rebaser`."
+            "The configured `rate_manager`."
           ],
           "signer": true,
           "relations": [
@@ -1960,74 +1958,6 @@
               }
             ]
           }
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "update_token_metadata",
-      "docs": [
-        "Reset the mint's Token-2022 name/symbol to the canonical OkuM identity",
-        "(`role_admin` only). The \"usdOku\" dollar view is the display multiplier",
-        "and is unaffected."
-      ],
-      "discriminator": [
-        243,
-        6,
-        8,
-        23,
-        126,
-        181,
-        251,
-        158
-      ],
-      "accounts": [
-        {
-          "name": "role_admin",
-          "docs": [
-            "The current `role_admin`."
-          ],
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "docs": [
-            "The singleton config PDA; read-only here. Signs as metadata update authority."
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_m_mint",
-          "docs": [
-            "OkuM mint (Token-2022); also the metadata account, since the pointer",
-            "targets the mint itself."
-          ],
-          "writable": true
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         }
       ],
       "args": []
@@ -2420,19 +2350,6 @@
       ]
     },
     {
-      "name": "TokenMetadataUpdatedEvent",
-      "discriminator": [
-        140,
-        96,
-        3,
-        20,
-        186,
-        208,
-        246,
-        153
-      ]
-    },
-    {
       "name": "UnpauseEvent",
       "discriminator": [
         134,
@@ -2518,7 +2435,7 @@
     {
       "code": 6011,
       "name": "OverrideInProgress",
-      "msg": "Cannot perform operation in same slot as yield distribution"
+      "msg": "Cannot perform operation in the same slot as a multiplier override"
     },
     {
       "code": 6012,
@@ -2648,7 +2565,7 @@
             "name": "AllowanceManager"
           },
           {
-            "name": "Rebaser"
+            "name": "RateManager"
           },
           {
             "name": "DirectMinter"
@@ -2662,8 +2579,8 @@
     {
       "name": "AuthorityUpdatedEvent",
       "docs": [
-        "Emitted when a role is updated. A `RoleAdmin` rotation fires it twice:",
-        "at proposal (`new_authority` = pending admin) and at acceptance."
+        "Emitted when a role is updated. A `RoleAdmin` rotation fires it only on",
+        "acceptance; the proposal emits `RoleAdminTransferProposedEvent`."
       ],
       "type": {
         "kind": "struct",
@@ -2696,10 +2613,9 @@
         "kind": "struct",
         "fields": [
           {
-            "name": "orchestrator",
+            "name": "depositor",
             "docs": [
-              "The `buffer_depositor` that sent the USDC. Named `orchestrator` because",
-              "the orchestrator holds that role in v1; kept for IDL stability."
+              "The `buffer_depositor` that sent the USDC"
             ],
             "type": "pubkey"
           },
@@ -3018,7 +2934,7 @@
             "type": "pubkey"
           },
           {
-            "name": "rebaser",
+            "name": "rate_manager",
             "docs": [
               "Sets the yield-rate schedule and the emergency multiplier override."
             ],
@@ -3334,7 +3250,7 @@
             "type": "pubkey"
           },
           {
-            "name": "rebaser",
+            "name": "rate_manager",
             "docs": [
               "Sets the rate schedule and emergency multiplier override (display",
               "sync is permissionless)"
@@ -3385,11 +3301,10 @@
             "type": "bool"
           },
           {
-            "name": "last_yield_distribution_slot",
+            "name": "last_override_slot",
             "docs": [
               "Slot of the last emergency override (`set_okum_multiplier`); user",
-              "operations are blocked in that slot. Not stamped by routine display",
-              "sync. Name kept for IDL stability."
+              "operations are blocked in that slot."
             ],
             "type": "u64"
           },
@@ -3621,29 +3536,6 @@
           {
             "name": "target_owner",
             "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "TokenMetadataUpdatedEvent",
-      "docs": [
-        "Emitted by `update_token_metadata`."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "mint",
-            "type": "pubkey"
-          },
-          {
-            "name": "name",
-            "type": "string"
-          },
-          {
-            "name": "symbol",
-            "type": "string"
           }
         ]
       }

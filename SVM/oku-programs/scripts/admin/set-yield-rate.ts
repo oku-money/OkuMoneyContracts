@@ -1,5 +1,5 @@
 /**
- * Publish the OkuM rate schedule (rebaser-only): the normal operator path for
+ * Publish the OkuM rate schedule (rateManager-only): the normal operator path for
  * yield. The operator publishes a per-second RATE and a bounded window; the
  * multiplier follows from elapsed time. (`set-multiplier.ts` is an emergency
  * override, not part of this flow.)
@@ -89,14 +89,14 @@ async function main() {
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
   const cfg: any = await program.account.psmConfig.fetch(psmConfig);
-  const rebaser = resolveRoleSigner(provider, cfg, 'rebaser');
+  const rateManager = resolveRoleSigner(provider, cfg, 'rateManager');
   const schedule = scheduleFromConfig(cfg);
   const nowSec = Math.floor(Date.now() / 1000);
   const currentMultiplier = computeMultiplier(schedule, BigInt(nowSec));
 
   const common = {
     'config PDA': psmConfig.toBase58(),
-    'signer (rebaser)': describeRoleSigner('rebaser', rebaser),
+    'signer (rateManager)': describeRoleSigner('rateManager', rateManager),
     'current multiplier (wad)': currentMultiplier.toString(),
     'current rate (wad)': schedule.ratePerSecond.toString(),
     'current rateEnd': schedule.rateEnd.toString(),
@@ -135,8 +135,8 @@ async function main() {
     summary = { ...common, mode, 'successor rate (wad)': rate.toString(), 'successor end': String(end) };
     method = program.methods
       .setNextOkumYieldRate(new BN(rate.toString()), new BN(end))
-      .accountsPartial({ rebaser: rebaser.authority, config: psmConfig })
-      .signers(rebaser.signers);
+      .accountsPartial({ rateManager: rateManager.authority, config: psmConfig })
+      .signers(rateManager.signers);
   } else if (mode === 'atomic') {
     const rate = resolveRate(parseArg('rate'), parseArg('apy'));
     const end = resolveEnd(parseArg('end'), parseArg('days'), nowSec);
@@ -160,8 +160,8 @@ async function main() {
         new BN(nextRate.toString()),
         new BN(nextEnd),
       )
-      .accountsPartial({ rebaser: rebaser.authority, config: psmConfig })
-      .signers(rebaser.signers);
+      .accountsPartial({ rateManager: rateManager.authority, config: psmConfig })
+      .signers(rateManager.signers);
   } else if (mode === 'active') {
     const rate = resolveRate(parseArg('rate'), parseArg('apy'));
     // Halting is the one case with no window.
@@ -181,8 +181,8 @@ async function main() {
     };
     method = program.methods
       .setOkumYieldRate(new BN(rate.toString()), new BN(end))
-      .accountsPartial({ rebaser: rebaser.authority, config: psmConfig })
-      .signers(rebaser.signers);
+      .accountsPartial({ rateManager: rateManager.authority, config: psmConfig })
+      .signers(rateManager.signers);
   } else {
     throw new Error(`Unknown --mode=${mode}. Expected one of: active, successor, atomic.`);
   }

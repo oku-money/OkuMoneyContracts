@@ -125,7 +125,7 @@ type RoleName = keyof typeof ROLES;
  */
 const ROLE_MAP: Record<string, readonly RoleName[]> = {
   OkuMoney: [
-    "OKUM_REBASER",
+    "OKUM_RATE_MANAGER",
     // Testnet-only parity with SVM's direct_minter/direct_burner.
     "OKUM_MINTER",
     "OKUM_BURNER",

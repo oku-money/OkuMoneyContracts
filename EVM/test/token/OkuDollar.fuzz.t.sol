@@ -357,7 +357,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         newNotePrice = _boundOkuMMultiplier(newNotePrice);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newNotePrice);
 
         uint256 balanceAfter = okuDollar.balanceOf(user1);
@@ -655,7 +655,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         newNotePrice = _boundOkuMMultiplier(newNotePrice);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newNotePrice);
 
         uint256 balanceAfter = okuMoney.balanceOf(user1);
@@ -681,7 +681,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         newNotePrice = _boundOkuMMultiplier(newNotePrice);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(newNotePrice);
 
         uint256 vaultBalanceAfter = okuMoney.balanceOf(address(okuDollar));

@@ -147,7 +147,7 @@ describe("lite-psm", () => {
       expect(config.bufferWithdrawer.toString()).to.equal(coldMultisig.publicKey.toString());
       expect(config.capManager.toString()).to.equal(coldMultisig.publicKey.toString());
       expect(config.allowanceManager.toString()).to.equal(coldMultisig.publicKey.toString());
-      expect(config.rebaser.toString()).to.equal(orchestrator.publicKey.toString());
+      expect(config.rateManager.toString()).to.equal(orchestrator.publicKey.toString());
       expect(config.maxSupply.toString()).to.equal(MAX_SUPPLY.toString());
       // Minter allowance may have been partially consumed by earlier tests
       // sharing this bankrun harness.
@@ -654,7 +654,7 @@ describe("lite-psm", () => {
         await program2.methods
           .setOkumMultiplier(new BN(m1.toString()))
           .accountsPartial({
-            rebaser: orchestrator.publicKey,
+            rateManager: orchestrator.publicKey,
             config: configPda2,
             okuMMint: okuMMint2,
             token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -784,7 +784,7 @@ describe("lite-psm", () => {
         }
       });
 
-      it("rebaser can force the multiplier via the emergency override", async () => {
+      it("rateManager can force the multiplier via the emergency override", async () => {
         // Multiplier is WAD-scaled (1e18).
         // Nudge it one unit above whatever has accrued so far.
         const current = await computeCanonicalMultiplier(h, program, configPda);
@@ -793,7 +793,7 @@ describe("lite-psm", () => {
         await program.methods
           .setOkumMultiplier(newMultiplier)
           .accountsPartial({
-            rebaser: orchestrator.publicKey,
+            rateManager: orchestrator.publicKey,
             config: configPda,
             okuMMint: okuMMint,
             token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -802,7 +802,7 @@ describe("lite-psm", () => {
           .rpc();
 
         // THE POINT OF THE TEST: the multiplier actually moved to the value
-        // submitted. (`lastYieldDistributionSlot > 0` alone would not prove
+        // submitted. (`lastOverrideSlot > 0` alone would not prove
         // that: on a shared harness an earlier test may already have stamped
         // it, so a silently no-op override would pass.)
         const after = await computeCanonicalMultiplier(h, program, configPda);
@@ -814,16 +814,16 @@ describe("lite-psm", () => {
         // EMERGENCY override rather than a rate change.
         const configAfter = await program.account.psmConfig.fetch(configPda);
         expect(Number(configAfter.okumRateEnd), "override halts the schedule").to.equal(0);
-        expect(Number(configAfter.lastYieldDistributionSlot)).to.be.greaterThan(0);
+        expect(Number(configAfter.lastOverrideSlot)).to.be.greaterThan(0);
       });
 
-      it("rebaser CANNOT force the multiplier above MAX_MULTIPLIER (MultiplierTooHigh)", async () => {
+      it("rateManager CANNOT force the multiplier above MAX_MULTIPLIER (MultiplierTooHigh)", async () => {
         await expectBankrunError(
           () =>
             program.methods
               .setOkumMultiplier(new BN((MAX_MULTIPLIER + 1n).toString()))
               .accountsPartial({
-                rebaser: orchestrator.publicKey,
+                rateManager: orchestrator.publicKey,
                 config: configPda,
                 okuMMint: okuMMint,
                 token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -834,12 +834,12 @@ describe("lite-psm", () => {
         );
       });
 
-      it("non-rebaser CANNOT force the multiplier", async () => {
+      it("non-rateManager CANNOT force the multiplier", async () => {
         try {
           await program.methods
             .setOkumMultiplier(new BN("1100000000000000000")) // value irrelevant, auth must fail
             .accountsPartial({
-              rebaser: warmMultisig.publicKey, // Wrong role
+              rateManager: warmMultisig.publicKey, // Wrong role
               config: configPda,
               okuMMint: okuMMint,
               token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -867,14 +867,14 @@ describe("lite-psm", () => {
     // lives in `tests/bankrun/streaming-accrual.ts`. What remains here is the
     // role check, which belongs with the rest of this file's authority matrix.
 
-    it("rebaser can publish a rate schedule", async () => {
+    it("rateManager can publish a rate schedule", async () => {
       const now = Number((await h.context.banksClient.getClock()).unixTimestamp);
       await program.methods
         .setOkumYieldRate(
           new BN(ratePerSecondForApy(0.05).toString()),
           new BN(now + 30 * 86_400)
         )
-        .accountsPartial({ rebaser: orchestrator.publicKey, config: configPda })
+        .accountsPartial({ rateManager: orchestrator.publicKey, config: configPda })
         .signers([orchestrator])
         .rpc();
 
@@ -884,7 +884,7 @@ describe("lite-psm", () => {
       );
     });
 
-    it("non-rebaser CANNOT publish a rate schedule", async () => {
+    it("non-rateManager CANNOT publish a rate schedule", async () => {
       const now = Number((await h.context.banksClient.getClock()).unixTimestamp);
       try {
         await program.methods
@@ -892,10 +892,10 @@ describe("lite-psm", () => {
             new BN(ratePerSecondForApy(0.05).toString()),
             new BN(now + 30 * 86_400)
           )
-          .accountsPartial({ rebaser: warmMultisig.publicKey, config: configPda })
+          .accountsPartial({ rateManager: warmMultisig.publicKey, config: configPda })
           .signers([warmMultisig])
           .rpc();
-        expect.fail("Should have rejected non-rebaser");
+        expect.fail("Should have rejected non-rateManager");
       } catch (err: any) {
         expect(err?.error?.errorCode?.code).to.equal("Unauthorized");
       }

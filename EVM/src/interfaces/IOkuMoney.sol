@@ -16,6 +16,8 @@ interface IOkuMoney is IERC20 {
     function burn(uint256 amount) external;
     /// @notice Whether `account` is blacklisted on OkuMoney.
     function isBlacklisted(address account) external view returns (bool);
+    /// @notice Whether OkuMoney is paused (transfers, and so OkuDollar wrap/unwrap, revert).
+    function paused() external view returns (bool);
     /// @notice Current OkuM multiplier (dollar value per token, 1e18 = $1.00).
     /// @dev Computed continuously from the rate schedule; not a stored value.
     function okuMMultiplier() external view returns (uint256);
@@ -45,5 +47,5 @@ interface IOkuMoney is IERC20 {
     /// @notice Emergency discrete override — re-anchors the accrual base.
     function setOkuMMultiplier(uint256 newMultiplier) external;
     /// @notice Block of the last discrete override (the override-block stamp).
-    function lastYieldDistributionBlock() external view returns (uint256);
+    function lastOverrideBlock() external view returns (uint256);
 }

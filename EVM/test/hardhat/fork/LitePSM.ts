@@ -33,7 +33,7 @@ describe("LitePSM Scenarios", () => {
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
     const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
-    const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
+    const OKUM_RATE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_RATE_MANAGER"))
     const PSM_BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("PSM_BUFFER_WITHDRAWER"))
     const DEPOSIT_AMOUNT = parseUnits("10000", 6) // USDC amount (6 decimals)
     const DECIMAL_MULTIPLIER = 10n ** 12n // Convert USDC (6 decimals) to OkuMoney (18 decimals)
@@ -127,7 +127,7 @@ describe("LitePSM Scenarios", () => {
 
         // Grant RBAC roles to Frank for testing
         await okuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)
-        await okuMoney.connect(Frank).grantRole(OKUM_REBASER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(OKUM_RATE_MANAGER, frankAddr)
         await psm.connect(Frank).grantRole(PSM_BUFFER_WITHDRAWER, frankAddr)
 
         await okuMoney.connect(Frank).configureMinterAllowance(

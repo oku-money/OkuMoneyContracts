@@ -7,7 +7,7 @@
  *                     ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER,
  *                     VAULT_RESCUER
  *   Warm Multisig   → all PAUSER, all BLACKLISTER
- *   Orchestrator    → OKUM_REBASER, BUFFER_DEPOSITOR
+ *   Orchestrator    → OKUM_RATE_MANAGER, BUFFER_DEPOSITOR
  *
  * OKUM_MINTER and OKUM_BURNER are intentionally NOT in this list — they must
  * remain on the LitePSM proxy address, granted at deploy time via
@@ -130,9 +130,9 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
   ]);
 
   const orchRoles = new Map<string, RoleName[]>([
-    // OKUM_REBASER is now the ONLY rate-setting role in the system: OkuDollar
-    // derives its multiplier from OkuMoney, so there is no vault-side rebaser.
-    ["OkuMoney", ["OKUM_REBASER"]],
+    // OKUM_RATE_MANAGER is now the ONLY rate-setting role in the system: OkuDollar
+    // derives its multiplier from OkuMoney, so there is no vault-side rateManager.
+    ["OkuMoney", ["OKUM_RATE_MANAGER"]],
     ["OkuDollar", []],
     ["LitePSM", ["PSM_BUFFER_DEPOSITOR"]],
   ]);

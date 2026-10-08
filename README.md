@@ -105,7 +105,7 @@ multipliers across the fleet.
 On both stacks the emergency override (`setOkuMMultiplier` /
 `set_okum_multiplier`) is the sole remaining discrete jump, and
 therefore the sole function that stamps the sandwich lock
-(`lastYieldDistributionBlock` / `last_yield_distribution_slot`).
+(`lastOverrideBlock` / `last_override_slot`).
 
 Mechanics: [`EVM/README.md` § Streaming Accrual & Cross-Chain
 Determinism](EVM/README.md#streaming-accrual--cross-chain-determinism)
@@ -277,7 +277,7 @@ retry. SVM↔SVM bridges bypass the buffer (direct burn/mint).
 
 #### Schedule broadcast across chains
 
-The multiplier is never "ticked". `OKUM_REBASER`
+The multiplier is never "ticked". `OKUM_RATE_MANAGER`
 publishes a per-second rate and a bounded window, and every chain
 computes the same multiplier from it. The operational rules follow
 from that:
@@ -351,9 +351,9 @@ All metrics on a 1-min cadence. PagerDuty for "token float" and
 
 - The orchestrator key has **no mint authority on EVM** (`OKUM_MINTER` is held
   by contracts); compromise cannot mint beyond the key's own USDC holdings.
-- **EVM roles:** `OKUM_REBASER` (governs both OkuM and UsdOku — the vault has no
+- **EVM roles:** `OKUM_RATE_MANAGER` (governs both OkuM and UsdOku — the vault has no
   rate of its own), `PSM_BUFFER_DEPOSITOR`.
-- **SVM roles:** `rebaser`, `buffer_depositor`. `direct_minter` / `direct_burner`
+- **SVM roles:** `rate_manager`, `buffer_depositor`. `direct_minter` / `direct_burner`
   are assigned independently on mainnet (`MAINNET_DIRECT_MINTER` /
   `MAINNET_DIRECT_BURNER`, unset = disabled; `SVM/oku-programs/scripts/config/authorities.ts`).
   Whichever key holds them performs SVM bridge mint/burn and bears the
@@ -361,8 +361,11 @@ All metrics on a 1-min cadence. PagerDuty for "token float" and
 - Compromise allows multiplier manipulation — material but bounded by
   `MAX_RATE` / `MAX_MULTIPLIER` (`AUTHORITY-MATRIX.md` §3-A). It cannot withdraw
   the buffer: `*_BUFFER_WITHDRAWER` and every `*_UNPAUSER` are cold.
-- On suspected compromise rotate the key immediately; pausing both PSMs (warm
-  multisig) is the emergency lever.
+- On suspected compromise rotate the key immediately. The emergency lever is
+  pausing **every** contract on every chain at once (warm multisig), coordinated
+  by the backend: on EVM that means OkuMoney as well as LitePSM and OkuDollar,
+  because the rate setters and `setOkuMMultiplier` honour OkuMoney's pause only.
+  Pausing just the PSMs does not stop a compromised rate key.
 - **No two concurrent orchestrator instances** may process the same bridge
   request; nonce / event-ID dedup is the orchestrator's responsibility.
 
@@ -379,7 +382,7 @@ and `SVM/oku-programs/programs/lite-psm/src/roles.rs`.
 |---|---|---|
 | Cold Multisig | DEFAULT_ADMIN_ROLE, all `*_UNPAUSER`, all `*_UNBLACKLISTER`, OKUM_CAP_MANAGER, OKUM_ALLOWANCE_MANAGER, all `*_UPGRADER`, PSM_BUFFER_WITHDRAWER, VAULT_RESCUER | role_admin, unpauser, unfreezer, cap_manager, allowance_manager, buffer_withdrawer |
 | Warm Multisig | all `*_PAUSER`, all `*_BLACKLISTER` | pauser, freezer |
-| Orchestrator | OKUM_REBASER, PSM_BUFFER_DEPOSITOR | rebaser, buffer_depositor |
+| Orchestrator | OKUM_RATE_MANAGER, PSM_BUFFER_DEPOSITOR | rate_manager, buffer_depositor |
 | Bridge backend | — | direct_minter, direct_burner (separate keys; may be unset) |
 | LitePSM | OKUM_MINTER, OKUM_BURNER | Mint authority on OkuM Token-2022 mint |
 
@@ -409,7 +412,7 @@ only because testnet OkuM is backed by MockUSDC and has no value:
   therefore **hard-refuses mainnet with no override**. Full grant list and
   rationale: [`EVM/README.md` § Role Grants Policy](EVM/README.md#role-grants-policy).
 - **SVM** — `scripts/admin/grant-roles.ts --delegate=<pubkey>` moves only
-  `direct_minter`, `direct_burner`, `rebaser`, `buffer_depositor`, and will
+  `direct_minter`, `direct_burner`, `rate_manager`, `buffer_depositor`, and will
   never touch the governance/safety set or `role_admin`. Rationale:
   [`SVM/README.md` § Delegated operation vs. retained ownership](SVM/README.md#delegated-operation-vs-retained-ownership-devnettestnet).
 
@@ -720,7 +723,7 @@ step on-chain before the next. Dry-run first (`DRY_RUN=1` on EVM,
    table, refuses to continue unless the cold multisig holds
    `DEFAULT_ADMIN_ROLE` on all three contracts, has the deployer
    `renounceRole` every granular role `initialize` gave it (all `*_UPGRADER`,
-   `OKUM_MINTER` / `OKUM_BURNER`, `OKUM_REBASER`, `PSM_BUFFER_WITHDRAWER`, ...),
+   `OKUM_MINTER` / `OKUM_BURNER`, `OKUM_RATE_MANAGER`, `PSM_BUFFER_WITHDRAWER`, ...),
    revokes the deployer's `DEFAULT_ADMIN_ROLE` last, and finally asserts with
    `hasRole` that the deployer holds nothing. Every grant, renounce and revoke
    is ledgered. Re-running is idempotent.

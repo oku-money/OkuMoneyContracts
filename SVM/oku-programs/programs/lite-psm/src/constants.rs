@@ -6,7 +6,7 @@ pub use oku_shared::{MAX_MULTIPLIER, PRECISION, TOKEN_DECIMALS, USDC_DECIMALS};
 
 /// OkuM mint `TokenMetadata` name/symbol: the identity wallets show. Must match
 /// EVM `OkuMoney`. The "usdOku" dollar view is the `ScaledUiAmount` display, not
-/// an on-chain symbol. Shared by `initialize` and `update_token_metadata`.
+/// an on-chain symbol.
 pub const OKU_M_METADATA_NAME: &str = "OkuMoney";
 /// See `OKU_M_METADATA_NAME`.
 pub const OKU_M_METADATA_SYMBOL: &str = "OkuM";

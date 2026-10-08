@@ -90,7 +90,7 @@ describe("Mainnet handover drill: grantRolesMainnet leaves the deployer with not
             expect(await c.hasRole(ROLES.DEFAULT_ADMIN_ROLE, coldAddr)).to.be.true;
         }
         expect(await result.okuMoney.hasRole(ROLES.OKUM_UPGRADER, coldAddr)).to.be.true;
-        expect(await result.okuMoney.hasRole(ROLES.OKUM_REBASER, await orch.getAddress())).to.be.true;
+        expect(await result.okuMoney.hasRole(ROLES.OKUM_RATE_MANAGER, await orch.getAddress())).to.be.true;
         expect(await result.okuMoney.hasRole(ROLES.OKUM_PAUSER, await warm.getAddress())).to.be.true;
 
         // The PSM's own mint/burn grants are untouched.

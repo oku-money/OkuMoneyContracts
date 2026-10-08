@@ -29,7 +29,7 @@ contract PSMInvariantsTest is BaseTest {
             IOkuMoney(address(okuMoney)),
             IOkuDollar(address(okuDollar)),
             usdc,
-            rebaser,
+            rateManager,
             minter,
             [blacklister, unblacklister, pauser, unpauser]
         );
@@ -39,7 +39,7 @@ contract PSMInvariantsTest is BaseTest {
         litePsm.grantRole(PSM_BUFFER_DEPOSITOR, address(handler));
         litePsm.grantRole(PSM_BUFFER_WITHDRAWER, address(handler));
         vm.stopPrank();
-        // The handler drives `okuMRatePerSecond` by pranking `rebaser` (OKUM_REBASER
+        // The handler drives `okuMRatePerSecond` by pranking `rateManager` (OKUM_RATE_MANAGER
         // from BaseTest); with `warpTime` this makes the multiplier compound, which
         // the PSM redeem rounding paths need in order to be exercised.
 

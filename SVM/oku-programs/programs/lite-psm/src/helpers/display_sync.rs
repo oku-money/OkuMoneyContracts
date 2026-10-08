@@ -52,7 +52,7 @@ pub fn multiplier_to_f64_floor(multiplier: u128) -> f64 {
 /// a caller cannot pair a multiplier with an effective time it was not computed
 /// at. Callers must still pass a multiplier evaluated at the current time.
 ///
-/// Does NOT stamp `last_yield_distribution_slot`: display syncs are cosmetic and
+/// Does NOT stamp `last_override_slot`: display syncs are cosmetic and
 /// must not engage the yield lock.
 pub fn write_display_multiplier<'info>(
     multiplier: u128,

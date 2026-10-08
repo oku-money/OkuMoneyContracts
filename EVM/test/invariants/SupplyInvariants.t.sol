@@ -15,7 +15,7 @@ contract SupplyInvariantsTest is BaseTest {
 
     function setUp() public override {
         super.setUp();
-        handler = new OkuMoneyHandler(okuMoney, minter, rebaser, allowanceManager);
+        handler = new OkuMoneyHandler(okuMoney, minter, rateManager, allowanceManager);
 
         targetContract(address(handler));
 

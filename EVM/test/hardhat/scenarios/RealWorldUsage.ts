@@ -38,7 +38,7 @@ const DAY = 86400
 // ---------------------------------------------------------------------------
 
 const {
-    OKUM_MINTER, OKUM_BURNER, OKUM_REBASER, OKUM_ALLOWANCE_MANAGER,
+    OKUM_MINTER, OKUM_BURNER, OKUM_RATE_MANAGER, OKUM_ALLOWANCE_MANAGER,
     OKUM_BLACKLISTER, OKUM_UNBLACKLISTER,
     PSM_BUFFER_DEPOSITOR, PSM_BUFFER_WITHDRAWER,
     PSM_PAUSER, PSM_UNPAUSER,
@@ -100,7 +100,7 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     // Roles
     await okuMoney.connect(admin).grantRole(OKUM_MINTER, await psm.getAddress())
     await okuMoney.connect(admin).grantRole(OKUM_BURNER, await psm.getAddress())
-    await okuMoney.connect(admin).grantRole(OKUM_REBASER, adminAddr)
+    await okuMoney.connect(admin).grantRole(OKUM_RATE_MANAGER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_ALLOWANCE_MANAGER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_BLACKLISTER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_UNBLACKLISTER, adminAddr)

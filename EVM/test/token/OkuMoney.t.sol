@@ -102,7 +102,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_Mint_BalanceUnaffectedByNotePrice() public {
         // Set okuMMultiplier to 2x before minting
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         uint256 amount = 100e18;
@@ -120,7 +120,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_Mint_TotalSupplyIsRawAmount() public {
         // Set okuMMultiplier to 2x before minting
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         uint256 amount = 100e18;
@@ -208,7 +208,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_Burn_RemovesExactAmount() public {
         // Set okuMMultiplier to 2x, then mint and burn
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         _mintOkuMoney(minter, 100e18);
@@ -304,7 +304,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_Transfer_MovesExactAmount() public {
         // Set okuMMultiplier to 2x, then mint and transfer
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         _mintOkuMoney(user1, 100e18);
@@ -449,18 +449,18 @@ contract OkuMoneyTest is BaseTest {
 
     // ============ setOkuMMultiplier Tests ============
 
-    function test_SetOkuMMultiplier_OnlyRebaser() public {
+    function test_SetOkuMMultiplier_OnlyRateManager() public {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_RATE_MANAGER
             )
         );
         okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
     function test_SetOkuMMultiplier_CannotDecrease() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
         okuMoney.setOkuMMultiplier(PRECISION - 1);
     }
@@ -470,7 +470,7 @@ contract OkuMoneyTest is BaseTest {
         uint256 balanceBefore = okuMoney.balanceOf(user1);
 
         // Double the note price
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         // balanceOf does NOT change with okuMMultiplier — standard ERC-20
@@ -482,7 +482,7 @@ contract OkuMoneyTest is BaseTest {
         _mintOkuMoney(user1, 100e18);
         uint256 supplyBefore = okuMoney.totalSupply();
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         // totalSupply does NOT change with okuMMultiplier — standard ERC-20
@@ -490,7 +490,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_SetOkuMMultiplier_UpdatesPrice() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         assertEq(okuMoney.okuMMultiplier(), PRECISION * 2);
@@ -501,17 +501,17 @@ contract OkuMoneyTest is BaseTest {
         vm.expectEmit(true, false, false, true);
         emit OkuMMultiplierUpdated(PRECISION, PRECISION * 2, okuMoney.totalSupply(), block.number);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
     function test_SetOkuMMultiplier_RevertsOnEqualValue() public {
         // Setting the multiplier to its current value is a no-op for the value but
-        // would otherwise stamp `lastYieldDistributionBlock` and burn a sandwich-lock
+        // would otherwise stamp `lastOverrideBlock` and burn a sandwich-lock
         // slot for nothing. {setOkuMMultiplier} requires strict increase.
         uint256 currentPrice = okuMoney.okuMMultiplier();
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
         okuMoney.setOkuMMultiplier(currentPrice);
     }
@@ -523,7 +523,7 @@ contract OkuMoneyTest is BaseTest {
         vm.prank(pauser);
         okuMoney.pause();
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
@@ -532,14 +532,14 @@ contract OkuMoneyTest is BaseTest {
     ///         re-anchor: leaving an elapsed `okuMRateEnd` in place would make
     ///         `MathLib.computeMultiplier` underflow (`rateEnd - anchor`) on every read.
     function test_SetOkuMMultiplier_CollapsesExpiredSchedule() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 1 days);
 
         // Warp well past okuMRateEnd with no pending rate armed.
         vm.warp(block.timestamp + 90 days);
         uint256 current = okuMoney.okuMMultiplier();
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(current + 1);
 
         // Must not revert, and the schedule must be fully halted.
@@ -555,28 +555,28 @@ contract OkuMoneyTest is BaseTest {
 
     // ============ setOkuMYieldRate / setNextOkuMYieldRate Tests ============
 
-    function test_SetOkuMYieldRate_OnlyRebaser() public {
+    function test_SetOkuMYieldRate_OnlyRateManager() public {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_RATE_MANAGER
             )
         );
         okuMoney.setOkuMYieldRate(PRECISION + 1e9, 0);
     }
 
-    function test_SetNextOkuMYieldRate_OnlyRebaser() public {
+    function test_SetNextOkuMYieldRate_OnlyRateManager() public {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_RATE_MANAGER
             )
         );
         okuMoney.setNextOkuMYieldRate(PRECISION + 1e9, block.timestamp + 60 days);
     }
 
     function test_SetOkuMYieldRate_RevertsOnRateBelowPrecision() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.InvalidRate.selector);
         okuMoney.setOkuMYieldRate(PRECISION - 1, 0);
     }
@@ -586,23 +586,23 @@ contract OkuMoneyTest is BaseTest {
     ///      `setOkuMYieldRateWithSuccessor`); a sub-unity successor would otherwise
     ///      activate unattended at `okuMRateEnd` and break monotonicity.
     function test_SetNextOkuMYieldRate_RevertsOnRateBelowPrecision() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e9, block.timestamp + 30 days);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.InvalidRate.selector);
         okuMoney.setNextOkuMYieldRate(PRECISION - 1, block.timestamp + 60 days);
     }
 
     function test_SetOkuMYieldRate_RevertsOnRateTooHigh() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.RateTooHigh.selector);
         okuMoney.setOkuMYieldRate(MAX_RATE + 1, 0);
     }
 
     function test_SetOkuMYieldRate_RevertsOnPastEndTimestamp() public {
         vm.warp(1000);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.EndTimestampInPast.selector);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp - 1);
     }
@@ -614,13 +614,13 @@ contract OkuMoneyTest is BaseTest {
     // every setter that re-anchors from it) revert.
 
     function test_SetOkuMYieldRate_AcceptsExactlyMaxRateWindow() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp + MAX_RATE_WINDOW);
         assertEq(okuMoney.okuMRateEnd(), block.timestamp + MAX_RATE_WINDOW);
     }
 
     function test_SetOkuMYieldRate_RevertsOneSecondBeyondMaxRateWindow() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.RateWindowTooLong.selector);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp + MAX_RATE_WINDOW + 1);
     }
@@ -628,7 +628,7 @@ contract OkuMoneyTest is BaseTest {
     /// @dev Halting is exempt: it requires `endTimestamp == 0`, so there is no
     ///      window to bound and the length check must not fire.
     function test_SetOkuMYieldRate_HaltingIsExemptFromWindowBound() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION, 0);
         assertEq(okuMoney.okuMRateEnd(), 0);
     }
@@ -639,17 +639,17 @@ contract OkuMoneyTest is BaseTest {
     ///      90-day windows are two bounded `rpow` calls, not one 180-day call.
     function test_SetNextOkuMYieldRate_BoundsTheSuccessorWindowIndependently() public {
         uint256 rateEnd = block.timestamp + MAX_RATE_WINDOW;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, rateEnd);
 
         // Successor window exactly at the bound: allowed, even though the total
         // span from now is 180 days.
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 634e6, rateEnd + MAX_RATE_WINDOW);
         assertEq(okuMoney.okuMPendingRateEnd(), rateEnd + MAX_RATE_WINDOW);
 
         // One second beyond it: rejected.
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.RateWindowTooLong.selector);
         okuMoney.setNextOkuMYieldRate(PRECISION + 634e6, rateEnd + MAX_RATE_WINDOW + 1);
     }
@@ -657,7 +657,7 @@ contract OkuMoneyTest is BaseTest {
     /// @dev Halting (`newRate == PRECISION`) requires `endTimestamp == 0`;
     ///      a non-zero timestamp — even a valid future one — must revert.
     function test_SetOkuMYieldRate_RevertsOnNonZeroEndTimestampWhenHalting() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.EndTimestampNotAllowed.selector);
         okuMoney.setOkuMYieldRate(PRECISION, block.timestamp + 30 days);
     }
@@ -668,20 +668,20 @@ contract OkuMoneyTest is BaseTest {
         vm.prank(pauser);
         okuMoney.pause();
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuMoney.setOkuMYieldRate(PRECISION + 1e10, block.timestamp + 30 days);
     }
 
     function test_SetOkuMYieldRate_PermitsDecreaseWhilePaused() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 2e10, block.timestamp + 30 days);
 
         vm.prank(pauser);
         okuMoney.pause();
 
         // A strict decrease (including zeroing) must succeed even while paused.
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION, 0);
 
         assertEq(okuMoney.okuMRatePerSecond(), PRECISION);
@@ -694,9 +694,9 @@ contract OkuMoneyTest is BaseTest {
         uint256 lowRate = PRECISION + 1e9;
         uint256 endTime = block.timestamp + 30 days;
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(highRate, endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(lowRate, endTime + 30 days);
 
         vm.warp(endTime + 1); // pending (lowRate) now effective; storage still says highRate
@@ -709,33 +709,33 @@ contract OkuMoneyTest is BaseTest {
         // midRate is BELOW stale storage (highRate) but ABOVE the true effective
         // rate (lowRate) — a naive stale-storage comparison would incorrectly permit it.
         uint256 midRate = PRECISION + 5e10;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuMoney.setOkuMYieldRate(midRate, block.timestamp + 30 days);
     }
 
     function test_SetNextOkuMYieldRate_RevertsOnIncreaseWhilePaused() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
 
         vm.prank(pauser);
         okuMoney.pause();
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
     }
 
     function test_SetNextOkuMYieldRate_PermitsDecreaseWhilePaused() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 2e10, endTime);
 
         vm.prank(pauser);
         okuMoney.pause();
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION, endTime + 30 days);
 
         assertEq(okuMoney.okuMPendingRatePerSecond(), PRECISION);
@@ -743,7 +743,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_SetOkuMYieldRate_StoresSchedule() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
 
         assertEq(okuMoney.okuMRatePerSecond(), PRECISION + 1393e6);
@@ -754,14 +754,14 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_SetOkuMYieldRate_SnapshotsMultiplier() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp + 30 days);
 
         vm.warp(block.timestamp + 1 days);
         uint256 multBefore = okuMoney.okuMMultiplier();
         assertGt(multBefore, PRECISION);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION, 0); // halt accrual
 
         assertEq(okuMoney.okuMBaseMultiplier(), multBefore, "base is snapshotted");
@@ -771,17 +771,17 @@ contract OkuMoneyTest is BaseTest {
     /// @notice Continuous accrual does NOT stamp the sandwich-guard block: there is no
     ///         discrete step to sandwich. Only `setOkuMMultiplier` stamps.
     function test_SetOkuMYieldRate_DoesNotStampYieldBlock() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp + 30 days);
 
-        assertEq(okuMoney.lastYieldDistributionBlock(), 0);
+        assertEq(okuMoney.lastOverrideBlock(), 0);
     }
 
     function test_SetOkuMYieldRate_DoesNotAffectBalances() public {
         uint256 supply = 10_000e18;
         _mintOkuMoney(user1, supply);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, block.timestamp + MAX_RATE_WINDOW);
         _accrueAtCurrentRate(365 days);
 
@@ -793,7 +793,7 @@ contract OkuMoneyTest is BaseTest {
     /// @notice The multiplier has no supply term, so a zero-supply rate change is fine.
     function test_SetOkuMYieldRate_WorksWithZeroSupply() public {
         assertEq(okuMoney.totalSupply(), 0);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(MAX_RATE, block.timestamp + 30 days);
         vm.warp(block.timestamp + 1 days);
         assertGt(okuMoney.okuMMultiplier(), PRECISION);
@@ -835,7 +835,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_UiMultiplier_MatchesOkuMMultiplier() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
         vm.warp(block.timestamp + 30 days);
 
@@ -848,7 +848,7 @@ contract OkuMoneyTest is BaseTest {
     ///         returns 0 ("nothing scheduled"), not okuMRateEnd, so indexers/UIs
     ///         are not told a change is scheduled.
     function test_EffectiveAt_ReturnsZero_WhenNoSuccessorArmed() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
 
         assertEq(okuMoney.effectiveAt(), 0, "no successor armed -> nothing scheduled");
@@ -858,9 +858,9 @@ contract OkuMoneyTest is BaseTest {
     ///         successor is actually staged via setNextOkuMYieldRate.
     function test_EffectiveAt_ReturnsRateEnd_WhenSuccessorArmed() public {
         uint256 endTime = block.timestamp + 60 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
 
         assertEq(
@@ -878,9 +878,9 @@ contract OkuMoneyTest is BaseTest {
     ///         ACTIVATED by then (it's the current rate now), not "scheduled".
     function test_EffectiveAt_ReturnsZero_AfterWindowElapsed() public {
         uint256 endTime = block.timestamp + 60 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
 
         vm.warp(endTime + 1);
@@ -891,7 +891,7 @@ contract OkuMoneyTest is BaseTest {
     ///         equal the current uiMultiplier() (not a fabricated projection)
     ///         whenever effectiveAt() reports nothing scheduled.
     function test_NewUIMultiplier_EqualsCurrent_WhenNoSuccessorArmed() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
         vm.warp(block.timestamp + 10 days);
 
@@ -902,9 +902,9 @@ contract OkuMoneyTest is BaseTest {
     ///         successor's activation instant when one IS armed.
     function test_NewUIMultiplier_ProjectsValueAtActivation_WhenSuccessorArmed() public {
         uint256 endTime = block.timestamp + 60 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
 
         uint256 projected = okuMoney.newUIMultiplier();
@@ -919,7 +919,7 @@ contract OkuMoneyTest is BaseTest {
     /// @notice toUIAmount / fromUIAmount are exact inverses at a non-trivial
     ///         multiplier, and both delegate to okuMMultiplier() correctly.
     function test_ToUIAmount_FromUIAmount_RoundTrip() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
         vm.warp(block.timestamp + 30 days);
 
@@ -944,7 +944,7 @@ contract OkuMoneyTest is BaseTest {
     ///         multiplier, exactly matching toUIAmount(balanceOf(account)).
     function test_BalanceOfUI_MatchesToUIAmountOfBalance() public {
         _mintOkuMoney(user1, 5000e18);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
         vm.warp(block.timestamp + 30 days);
 
@@ -960,7 +960,7 @@ contract OkuMoneyTest is BaseTest {
     ///         exactly matching toUIAmount(totalSupply()).
     function test_TotalSupplyUI_MatchesToUIAmountOfTotalSupply() public {
         _mintOkuMoney(user1, 5000e18);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e11, block.timestamp + 60 days);
         vm.warp(block.timestamp + 30 days);
 
@@ -977,31 +977,31 @@ contract OkuMoneyTest is BaseTest {
     ///         emit `UIMultiplierUpdateCancelled` for the superseded successor.
     function test_SetOkuMYieldRate_EmitsCancelledForSupersededPendingRate() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
 
         vm.expectEmit(false, false, false, false);
         emit IScaledUIAmount.UIMultiplierUpdateCancelled(0, 0);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 3e10, block.timestamp + 90 days);
     }
 
     /// @notice The discrete override also cancels an armed successor.
     function test_SetOkuMMultiplier_EmitsCancelledForArmedPendingRate() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
 
         vm.expectEmit(false, false, false, false);
         emit IScaledUIAmount.UIMultiplierUpdateCancelled(0, 0);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
@@ -1012,9 +1012,9 @@ contract OkuMoneyTest is BaseTest {
     ///         rollover would emit a false cancellation.
     function test_SetOkuMYieldRate_DoesNotEmitCancelledForAlreadyActivatedSuccessor() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
 
         // Warp PAST rateEnd: the staged successor is now the active, accruing
@@ -1022,7 +1022,7 @@ contract OkuMoneyTest is BaseTest {
         vm.warp(endTime + 1);
 
         vm.recordLogs();
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 3e10, block.timestamp + 90 days);
 
         Vm.Log[] memory entries = vm.getRecordedLogs();
@@ -1045,9 +1045,9 @@ contract OkuMoneyTest is BaseTest {
 
         // Reference: two separate calls, on a fork of state via snapshot.
         uint256 snapshotId = vm.snapshotState();
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6, nextEnd);
         uint256 refRate = okuMoney.okuMRatePerSecond();
         uint256 refRateEnd = okuMoney.okuMRateEnd();
@@ -1057,7 +1057,7 @@ contract OkuMoneyTest is BaseTest {
         vm.revertToState(snapshotId);
 
         // Combined call, from identical starting state.
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRateWithSuccessor(
             PRECISION + 1393e6, endTime, PRECISION + 2000e6, nextEnd
         );
@@ -1074,7 +1074,7 @@ contract OkuMoneyTest is BaseTest {
     function test_SetOkuMYieldRateWithSuccessor_SuccessorActivatesWithoutTransaction() public {
         uint256 endTime = block.timestamp + 30 days;
         uint256 nextEnd = endTime + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRateWithSuccessor(
             PRECISION + 1393e6, endTime, PRECISION + 2000e6, nextEnd
         );
@@ -1093,7 +1093,7 @@ contract OkuMoneyTest is BaseTest {
         uint256 endTime = block.timestamp + 30 days;
         uint256 nextEnd = endTime + 30 days;
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRateWithSuccessor(
             PRECISION + 1393e6, endTime, PRECISION + 2000e6, nextEnd
         );
@@ -1115,7 +1115,7 @@ contract OkuMoneyTest is BaseTest {
         uint256 rateBefore = okuMoney.okuMRatePerSecond();
         uint256 pendingBefore = okuMoney.okuMPendingRatePerSecond();
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.RateTooHigh.selector);
         okuMoney.setOkuMYieldRateWithSuccessor(MAX_RATE + 1, endTime, PRECISION + 2000e6, nextEnd);
 
@@ -1137,7 +1137,7 @@ contract OkuMoneyTest is BaseTest {
         // nextEndTimestamp <= endTimestamp violates PendingEndNotAfterRateEnd —
         // the FIRST half (setOkuMYieldRate's body) would otherwise have succeeded
         // in isolation.
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.PendingEndNotAfterRateEnd.selector);
         okuMoney.setOkuMYieldRateWithSuccessor(
             PRECISION + 1393e6, endTime, PRECISION + 2000e6, endTime
@@ -1154,15 +1154,15 @@ contract OkuMoneyTest is BaseTest {
     ///         invoked it.
     function test_SetOkuMYieldRateWithSuccessor_EmitsCancelledForSupersededPendingRate() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1e10, endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2e10, endTime + 30 days);
 
         vm.expectEmit(false, false, false, false);
         emit IScaledUIAmount.UIMultiplierUpdateCancelled(0, 0);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRateWithSuccessor(
             PRECISION + 3e10,
             block.timestamp + 90 days,
@@ -1171,14 +1171,14 @@ contract OkuMoneyTest is BaseTest {
         );
     }
 
-    /// @notice Only OKUM_REBASER may call the combined function.
-    function test_SetOkuMYieldRateWithSuccessor_RevertsIfNotRebaser() public {
+    /// @notice Only OKUM_RATE_MANAGER may call the combined function.
+    function test_SetOkuMYieldRateWithSuccessor_RevertsIfNotRateManager() public {
         uint256 endTime = block.timestamp + 30 days;
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector,
                 address(this),
-                OKUM_REBASER
+                OKUM_RATE_MANAGER
             )
         );
         okuMoney.setOkuMYieldRateWithSuccessor(
@@ -1191,31 +1191,31 @@ contract OkuMoneyTest is BaseTest {
     ///      the active rate is halted, and a halted schedule was never given a
     ///      window to stage a successor against.
     function test_SetNextOkuMYieldRate_RevertsWhenNoRateEnd() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.NoRateEndSet.selector);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6, block.timestamp + 60 days);
     }
 
     function test_SetNextOkuMYieldRate_RevertsWhenAlreadyExpired() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
 
         // `>=` boundary: exactly endTime already reverts.
         vm.warp(endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.RateAlreadyExpired.selector);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6, endTime + 60 days);
     }
 
     function test_SetNextOkuMYieldRate_SucceedsOneSecondBeforeEnd() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
 
         vm.warp(endTime - 1);
         uint256 nextRate = PRECISION + 2000e6;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(nextRate, endTime + 60 days);
 
         assertEq(okuMoney.okuMPendingRatePerSecond(), nextRate);
@@ -1223,10 +1223,10 @@ contract OkuMoneyTest is BaseTest {
 
     function test_SetNextOkuMYieldRate_RevertsOnRateTooHigh() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.RateTooHigh.selector);
         okuMoney.setNextOkuMYieldRate(MAX_RATE + 1, endTime + 60 days);
     }
@@ -1234,10 +1234,10 @@ contract OkuMoneyTest is BaseTest {
     /// @dev `pendingEndTimestamp` must be strictly after `okuMRateEnd`.
     function test_SetNextOkuMYieldRate_RevertsOnPendingEndNotAfterRateEnd() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.PendingEndNotAfterRateEnd.selector);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6, endTime);
     }
@@ -1246,9 +1246,9 @@ contract OkuMoneyTest is BaseTest {
     ///         transaction at the boundary — the cross-chain-safety primitive.
     function test_SetNextOkuMYieldRate_ActivatesWithoutTransaction() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6, endTime + 60 days);
 
         vm.warp(endTime);
@@ -1263,9 +1263,9 @@ contract OkuMoneyTest is BaseTest {
     function test_SetNextOkuMYieldRate_OverhangBoundedByPendingRateEnd() public {
         uint256 endTime = block.timestamp + 30 days;
         uint256 pendingEnd = endTime + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setNextOkuMYieldRate(PRECISION + 2000e6, pendingEnd);
 
         assertEq(okuMoney.okuMPendingRateEnd(), pendingEnd, "pendingRateEnd stored");
@@ -1296,7 +1296,7 @@ contract OkuMoneyTest is BaseTest {
     /// @notice With no successor armed, accrual halts at `okuMRateEnd`.
     function test_RateExpiry_HaltsAccrualWhenNoPending() public {
         uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMYieldRate(PRECISION + 1393e6, endTime);
 
         vm.warp(endTime);
@@ -1317,7 +1317,7 @@ contract OkuMoneyTest is BaseTest {
     function test_OkuMPrice_UnaffectedByTimeWhenScheduleHalted() public {
         assertEq(okuMoney.okuMMultiplier(), PRECISION);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 3);
 
         assertEq(okuMoney.okuMMultiplier(), PRECISION * 3);
@@ -1330,7 +1330,7 @@ contract OkuMoneyTest is BaseTest {
         // No calls — price stays the same
         assertEq(okuMoney.okuMMultiplier(), price0);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
         uint256 price1 = okuMoney.okuMMultiplier();
         assertEq(price1, PRECISION * 2);
@@ -1341,40 +1341,40 @@ contract OkuMoneyTest is BaseTest {
 
     // ============ Yield Distribution Block Tests (Sandwich Attack Prevention) ============
     //
-    // `setOkuMMultiplier` is the only function that stamps `lastYieldDistributionBlock`
+    // `setOkuMMultiplier` is the only function that stamps `lastOverrideBlock`
     // (see test_SetOkuMYieldRate_DoesNotStampYieldBlock).
 
-    function test_LastYieldDistributionBlock_InitiallyZero() public view {
-        assertEq(okuMoney.lastYieldDistributionBlock(), 0);
+    function test_LastOverrideBlock_InitiallyZero() public view {
+        assertEq(okuMoney.lastOverrideBlock(), 0);
     }
 
-    function test_SetOkuMMultiplier_SetsLastYieldDistributionBlock() public {
-        vm.prank(rebaser);
+    function test_SetOkuMMultiplier_SetsLastOverrideBlock() public {
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+        assertEq(okuMoney.lastOverrideBlock(), block.number);
     }
 
-    function test_SetOkuMMultiplier_UpdatesLastYieldDistributionBlock() public {
-        uint256 blockBefore = okuMoney.lastYieldDistributionBlock();
+    function test_SetOkuMMultiplier_UpdatesLastOverrideBlock() public {
+        uint256 blockBefore = okuMoney.lastOverrideBlock();
         assertEq(blockBefore, 0);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+        assertEq(okuMoney.lastOverrideBlock(), block.number);
     }
 
-    function test_LastYieldDistributionBlock_UpdatesOnEachOverride() public {
-        vm.prank(rebaser);
+    function test_LastOverrideBlock_UpdatesOnEachOverride() public {
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
-        uint256 block1 = okuMoney.lastYieldDistributionBlock();
+        uint256 block1 = okuMoney.lastOverrideBlock();
 
         vm.roll(block.number + 10);
 
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 3);
-        uint256 block2 = okuMoney.lastYieldDistributionBlock();
+        uint256 block2 = okuMoney.lastOverrideBlock();
 
         assertEq(block2, block1 + 10);
     }
@@ -1650,7 +1650,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_OkuMMultiplier_AfterUpdate() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         assertEq(okuMoney.okuMMultiplier(), PRECISION * 2);
@@ -1692,7 +1692,7 @@ contract OkuMoneyTest is BaseTest {
     function test_MultipleOkuMMultiplierUpdates_SameBlock() public {
         _mintOkuMoney(user1, 100e18);
 
-        vm.startPrank(rebaser);
+        vm.startPrank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
         okuMoney.setOkuMMultiplier(PRECISION * 3);
         vm.stopPrank();
@@ -2068,7 +2068,7 @@ contract OkuMoneyTest is BaseTest {
     ///      same ceiling (see `test_UsdMultiplier_SaturatesAtMaxMultiplier`). An
     ///      operator typo must fail loudly; time passing must not brick the token.
     function test_SetOkuMMultiplier_RevertMultiplierTooHigh() public {
-        vm.prank(rebaser);
+        vm.prank(rateManager);
         vm.expectRevert(OkuMoneyErrors.MultiplierTooHigh.selector);
         okuMoney.setOkuMMultiplier(Constants.MAX_MULTIPLIER + 1);
     }

@@ -238,8 +238,6 @@ contract OkuDollar is
     /// @dev `Transfer.value` is the post-rounding dollar amount and advisory only: balances
     ///      floor per account, so read `balanceOf`. Likewise `totalSupply() >= sum(balanceOf)`
     ///      (gap < holders wei); invariants must use `>=`.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: the only external calls are to the protocol OkuMoney (trusted, no callbacks); event values are fixed before them.
     function _transferDollars(address from, address to, uint256 amount) private {
         uint256 multiplier = usdMultiplier();
         uint256 shares = _toShares(amount, multiplier);
@@ -250,8 +248,6 @@ contract OkuDollar is
     }
 
     /// @dev `multiplier` is passed in to avoid a second cross-contract `okuMMultiplier()` read.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: the only external calls are to the protocol OkuMoney (trusted, no callbacks); event values are fixed before them.
     function _transferUsdShares(
         address from,
         address to,
@@ -355,8 +351,6 @@ contract OkuDollar is
     /// @param receiver Address to receive OkuDollar
     /// @param minAmountOut Minimum OkuDollar to receive (slippage protection)
     /// @return usdMinted Amount of OkuDollar minted
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: the only external calls are to the protocol OkuMoney (trusted, no callbacks); event values are fixed before them.
     function wrap(
         uint256 okuMAmount,
         address receiver,
@@ -375,7 +369,6 @@ contract OkuDollar is
         if (_blacklisted(msg.sender)) revert Errors.SenderBlacklisted();
         if (_blacklisted(receiver)) revert Errors.RecipientBlacklisted();
 
-        // Measure actual tokens received (handles fee-on-transfer edge cases)
         uint256 balBefore = IERC20(address($.okuMoney)).balanceOf(address(this));
         IERC20(address($.okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
         uint256 actualReceived = IERC20(address($.okuMoney)).balanceOf(address(this)) - balBefore;
@@ -397,8 +390,7 @@ contract OkuDollar is
         // protocol `Wrapped`, and ERC-4626 `Deposit`: each audience has its own event.
         emit Transfer(address(0), receiver, usdMinted);
         emit TransferValue(address(0), receiver, actualReceived, usdMinted);
-        // The two multiplier params are identical; kept for indexer/ABI stability.
-        emit Wrapped(msg.sender, receiver, actualReceived, usdMinted, multiplier, multiplier);
+        emit Wrapped(msg.sender, receiver, actualReceived, usdMinted, multiplier);
         emit Deposit(msg.sender, receiver, actualReceived, usdMinted);
     }
 
@@ -423,8 +415,6 @@ contract OkuDollar is
 
     /// @dev Shared core for {unwrap} and the ERC-4626 {withdraw}/{redeem}. `owner`'s shares
     ///      are burned; `_msgSender()` only populates the `Withdraw` event's `sender`.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: the only external calls are to the protocol OkuMoney (trusted, no callbacks); event values are fixed before them.
     function _unwrap(
         address owner,
         uint256 usdAmount,
@@ -461,7 +451,7 @@ contract OkuDollar is
         // Same four audiences as `wrap`. `Transfer.value` is the dollar amount requested.
         emit Transfer(owner, address(0), usdAmount);
         emit TransferValue(owner, address(0), sharesToBurn, usdAmount);
-        emit Unwrapped(owner, receiver, usdAmount, okuMReturned, multiplier, multiplier);
+        emit Unwrapped(owner, receiver, usdAmount, okuMReturned, multiplier);
         emit Withdraw(_msgSender(), receiver, owner, okuMReturned, usdAmount);
     }
 
@@ -492,9 +482,10 @@ contract OkuDollar is
         return MathLib.dollarsToOkuM(shares, usdMultiplier());
     }
 
-    /// @dev Zero while paused or when `receiver` is blacklisted (`wrap` would revert).
+    /// @dev Zero while this vault or OkuMoney is paused, or when `receiver` is blacklisted
+    ///      (`wrap` would revert).
     function maxDeposit(address receiver) public view returns (uint256) {
-        if (paused() || _blacklisted(receiver)) return 0;
+        if (_wrapHalted() || _blacklisted(receiver)) return 0;
         return type(uint256).max;
     }
 
@@ -503,18 +494,23 @@ contract OkuDollar is
         return maxDeposit(receiver);
     }
 
-    /// @dev OkuM equivalent of the balance (the spec wants assets); zero while paused or when
-    ///      `owner` is blacklisted. `whenNoOverrideThisBlock` is deliberately not modelled
+    /// @dev OkuM equivalent of the balance (the spec wants assets); zero in the same cases as
+    ///      {maxDeposit} for `owner`. `whenNoOverrideThisBlock` is deliberately not modelled
     ///      (one-block window on the emergency override); {maxDeposit} omits it too.
     function maxWithdraw(address owner) public view returns (uint256) {
-        if (paused() || _blacklisted(owner)) return 0;
+        if (_wrapHalted() || _blacklisted(owner)) return 0;
         return convertToAssets(balanceOf(owner));
     }
 
     /// @dev See {maxWithdraw}; share units.
     function maxRedeem(address owner) public view returns (uint256) {
-        if (paused() || _blacklisted(owner)) return 0;
+        if (_wrapHalted() || _blacklisted(owner)) return 0;
         return balanceOf(owner);
+    }
+
+    /// @dev Either pause stops wrap/unwrap: OkuMoney's blocks the OkuM transfer leg.
+    function _wrapHalted() private view returns (bool) {
+        return paused() || _getOkuDollarStorage().okuMoney.paused();
     }
 
     /// @notice Dollars of UsdOku `deposit(assets)` would mint now (= {convertToShares}).
@@ -639,8 +635,6 @@ contract OkuDollar is
     ///      (shares track raw OkuM 1:1), so only the surplus above it is rescuable. Each
     ///      unwrap can leave up to 1 wei above backing (ceil shares, floor OkuM), which counts
     ///      as rescuable donation: favors the protocol.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: the only external calls are to the protocol OkuMoney (trusted, no callbacks); event values are fixed before them.
     function rescueDonation(
         uint256 amount,
         address receiver
@@ -675,8 +669,6 @@ contract OkuDollar is
 
     /// @notice Add `account` to the OkuDollar blacklist.
     /// @dev Blacklisted accounts cannot send or receive UsdOku.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: no external call precedes the emit (role check and storage writes only); false positive.
     function blacklist(address account) external onlyRole(Roles.OKUM_BLACKLISTER) {
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         if ($.isBlacklisted[account]) revert Errors.AlreadyBlacklisted();
@@ -685,8 +677,6 @@ contract OkuDollar is
     }
 
     /// @notice Remove `account` from the OkuDollar blacklist.
-    // forge-lint: disable-next-item(reentrancy-events)
-    // Reason: no external call precedes the emit (role check and storage writes only); false positive.
     function unblacklist(address account) external onlyRole(Roles.OKUM_UNBLACKLISTER) {
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         if (!$.isBlacklisted[account]) revert Errors.NotBlacklisted();

@@ -1,5 +1,5 @@
-//! Permissioned direct mint (fiat on-ramp): no on-chain USDC leg, so only role,
-//! allowance and supply-cap guards apply. Collateral is held off-chain; the
+//! Permissioned direct mint (fiat on-ramp, SVM->SVM bridge destination leg): no
+//! on-chain USDC leg, so only role, allowance and supply-cap guards apply. The
 //! USDC-backed path is `psm::mint_oku_m`.
 
 use crate::contexts::direct_mint::MintOkuMDirect;
@@ -14,8 +14,8 @@ use anchor_spl::token_interface;
 
 /// Mint `raw_amount` OkuM straight to `recipient`, with no USDC paid in.
 ///
-/// Used for the fiat on-ramp and the EVM->SVM bridge leg, where the backing
-/// dollars are held off-chain. Only the `direct_minter` can call it, and every
+/// Used for the fiat on-ramp and the SVM->SVM bridge destination leg, where the
+/// backing is held off-chain or was burned on the source chain. Only the `direct_minter` can call it, and every
 /// call draws down its `direct_minter_allowance`, so the allowance manager
 /// bounds how much can ever be minted this way.
 pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, raw_amount: u64) -> Result<()> {

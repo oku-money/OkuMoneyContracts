@@ -49,9 +49,8 @@ pub struct RedeemEvent {
 /// Emitted on a buffer deposit. EVM: `BufferDeposited`.
 #[event]
 pub struct BufferDepositEvent {
-    /// The `buffer_depositor` that sent the USDC. Named `orchestrator` because
-    /// the orchestrator holds that role in v1; kept for IDL stability.
-    pub orchestrator: Pubkey,
+    /// The `buffer_depositor` that sent the USDC
+    pub depositor: Pubkey,
     /// USDC deposited (6 decimals)
     pub amount: u64,
     /// Vault USDC balance after the deposit (6 decimals)
@@ -213,8 +212,8 @@ pub struct ThawEvent {
     pub target_owner: Pubkey,
 }
 
-/// Emitted when a role is updated. A `RoleAdmin` rotation fires it twice:
-/// at proposal (`new_authority` = pending admin) and at acceptance.
+/// Emitted when a role is updated. A `RoleAdmin` rotation fires it only on
+/// acceptance; the proposal emits `RoleAdminTransferProposedEvent`.
 #[event]
 pub struct AuthorityUpdatedEvent {
     pub role: AuthorityRole,
@@ -242,12 +241,4 @@ pub struct RoleAdminTransferAcceptedEvent {
 pub struct RoleAdminTransferCancelledEvent {
     pub current_admin: Pubkey,
     pub cancelled_pending: Pubkey,
-}
-
-/// Emitted by `update_token_metadata`.
-#[event]
-pub struct TokenMetadataUpdatedEvent {
-    pub mint: Pubkey,
-    pub name: String,
-    pub symbol: String,
 }

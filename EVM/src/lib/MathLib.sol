@@ -10,15 +10,9 @@ import {Constants} from "./Constants.sol";
  * @notice Shared math utilities for OkuMoney contracts
  * @dev See Constants.sol for the terminology legend.
  *
- *      ROUNDING: conversions use `Math.mulDiv`, floor by default. `rpow` keeps MakerDAO's
- *      half-up assembly rounding.
- *
- *      Exactly THREE `Math.Rounding.Ceil` sites exist, all in `OkuDollar` and all rounding
- *      against the caller (ERC-4626 convention):
- *        - `_unwrap`'s `sharesToBurn` (favors the vault)
- *        - `previewMint`     (assets the caller must deposit)
- *        - `previewWithdraw` (shares the caller must burn)
- *      SVM has no equivalent ceil primitive; see `oku-shared/src/math.rs` before porting.
+ *      ROUNDING: conversions use `Math.mulDiv` and floor. `rpow` keeps MakerDAO's half-up
+ *      assembly rounding. The only ceilings are in `OkuDollar`, rounding against the caller
+ *      per ERC-4626.
  */
 library MathLib {
     /**

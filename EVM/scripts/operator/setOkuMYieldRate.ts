@@ -1,5 +1,5 @@
 /**
- * Set OkuMoney's streaming yield rate (OKUM_REBASER role).
+ * Set OkuMoney's streaming yield rate (OKUM_RATE_MANAGER role).
  *
  * Yield is expressed as a RATE, which is supply-independent by construction and
  * therefore produces the same multiplier delta on every chain.

@@ -24,7 +24,7 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
-import {OkuMoneyErrors} from "../lib/errors/OkuMoneyErrors.sol";
+import {SharedErrors} from "../lib/errors/SharedErrors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {OverrideBlockGuard} from "../lib/OverrideBlockGuard.sol";
 import {OkuDollarEvents} from "../lib/events/OkuDollarEvents.sol";
@@ -104,8 +104,8 @@ contract OkuDollar is
         public
         initializer
     {
-        if (_okuMoney == address(0)) revert OkuMoneyErrors.ZeroAddress();
-        if (_admin == address(0)) revert OkuMoneyErrors.ZeroAddress();
+        if (_okuMoney == address(0)) revert SharedErrors.ZeroAddress();
+        if (_admin == address(0)) revert SharedErrors.ZeroAddress();
 
         __ERC20_init(name_, symbol_);
         __ERC20Permit_init(name_);
@@ -229,7 +229,7 @@ contract OkuDollar is
         whenNotPaused
         returns (bool)
     {
-        if (_blacklisted(_msgSender())) revert OkuMoneyErrors.SenderBlacklisted();
+        if (_blacklisted(_msgSender())) revert SharedErrors.SenderBlacklisted();
         _spendAllowance(from, msg.sender, amount);
         _transferDollars(from, to, amount);
         return true;
@@ -242,7 +242,7 @@ contract OkuDollar is
         uint256 multiplier = usdMultiplier();
         uint256 shares = _toShares(amount, multiplier);
         // A nonzero `amount` flooring to zero shares would move nothing yet emit Transfer.
-        if (amount != 0 && shares == 0) revert OkuMoneyErrors.AmountTooSmall();
+        if (amount != 0 && shares == 0) revert SharedErrors.AmountTooSmall();
         _transferUsdShares(from, to, shares, multiplier);
         emit Transfer(from, to, _toDollars(shares, multiplier));
     }
@@ -256,14 +256,14 @@ contract OkuDollar is
     )
         internal
     {
-        if (from == address(0)) revert OkuMoneyErrors.ZeroAddress();
-        if (to == address(0)) revert OkuMoneyErrors.ZeroAddress();
+        if (from == address(0)) revert SharedErrors.ZeroAddress();
+        if (to == address(0)) revert SharedErrors.ZeroAddress();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
-        if (_blacklisted(from)) revert OkuMoneyErrors.SenderBlacklisted();
-        if (_blacklisted(to)) revert OkuMoneyErrors.RecipientBlacklisted();
+        if (_blacklisted(from)) revert SharedErrors.SenderBlacklisted();
+        if (_blacklisted(to)) revert SharedErrors.RecipientBlacklisted();
         uint256 fromBalance = $.usdShares[from];
-        if (fromBalance < shares) revert OkuMoneyErrors.InsufficientBalance();
+        if (fromBalance < shares) revert SharedErrors.InsufficientBalance();
 
         $.usdShares[from] = fromBalance - shares;
         $.usdShares[to] += shares;
@@ -305,8 +305,8 @@ contract OkuDollar is
         virtual
         override
     {
-        if (_blacklisted(owner)) revert OkuMoneyErrors.SenderBlacklisted();
-        if (_blacklisted(spender)) revert OkuMoneyErrors.RecipientBlacklisted();
+        if (_blacklisted(owner)) revert SharedErrors.SenderBlacklisted();
+        if (_blacklisted(spender)) revert SharedErrors.RecipientBlacklisted();
         super.permit(owner, spender, value, deadline, v, r, s);
     }
 
@@ -320,8 +320,8 @@ contract OkuDollar is
         override(ERC20Upgradeable, IERC20)
         returns (bool)
     {
-        if (_blacklisted(_msgSender())) revert OkuMoneyErrors.SenderBlacklisted();
-        if (_blacklisted(spender)) revert OkuMoneyErrors.RecipientBlacklisted();
+        if (_blacklisted(_msgSender())) revert SharedErrors.SenderBlacklisted();
+        if (_blacklisted(spender)) revert SharedErrors.RecipientBlacklisted();
         return super.approve(spender, value);
     }
 
@@ -362,12 +362,12 @@ contract OkuDollar is
         whenNoOverrideThisBlock
         returns (uint256 usdMinted)
     {
-        if (okuMAmount == 0) revert OkuMoneyErrors.ZeroAmount();
-        if (receiver == address(0)) revert OkuMoneyErrors.ZeroAddress();
+        if (okuMAmount == 0) revert SharedErrors.ZeroAmount();
+        if (receiver == address(0)) revert SharedErrors.ZeroAddress();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
-        if (_blacklisted(msg.sender)) revert OkuMoneyErrors.SenderBlacklisted();
-        if (_blacklisted(receiver)) revert OkuMoneyErrors.RecipientBlacklisted();
+        if (_blacklisted(msg.sender)) revert SharedErrors.SenderBlacklisted();
+        if (_blacklisted(receiver)) revert SharedErrors.RecipientBlacklisted();
 
         uint256 balBefore = IERC20(address($.okuMoney)).balanceOf(address(this));
         IERC20(address($.okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
@@ -375,7 +375,7 @@ contract OkuDollar is
 
         // Shares track raw OkuM 1:1 because `usdMultiplier()` delegates to `okuMMultiplier()`.
         uint256 multiplier = $.okuMoney.okuMMultiplier();
-        if (actualReceived == 0) revert OkuMoneyErrors.AmountTooSmall();
+        if (actualReceived == 0) revert SharedErrors.AmountTooSmall();
 
         // Dollars minted = OkuM received at the current multiplier; enforce the caller's
         // minimum.
@@ -423,20 +423,20 @@ contract OkuDollar is
         internal
         returns (uint256 okuMReturned)
     {
-        if (usdAmount == 0) revert OkuMoneyErrors.ZeroAmount();
-        if (receiver == address(0)) revert OkuMoneyErrors.ZeroAddress();
+        if (usdAmount == 0) revert SharedErrors.ZeroAmount();
+        if (receiver == address(0)) revert SharedErrors.ZeroAddress();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         // Receiver too: stops a user blacklisted only on OkuDollar from routing OkuM onward.
-        if (_blacklisted(owner)) revert OkuMoneyErrors.SenderBlacklisted();
-        if (_blacklisted(receiver)) revert OkuMoneyErrors.RecipientBlacklisted();
+        if (_blacklisted(owner)) revert SharedErrors.SenderBlacklisted();
+        if (_blacklisted(receiver)) revert SharedErrors.RecipientBlacklisted();
 
         // Floor on OkuM returned, ceil on shares burned: both favor the vault.
         uint256 multiplier = $.okuMoney.okuMMultiplier();
         okuMReturned = _toShares(usdAmount, multiplier);
         uint256 sharesToBurn =
             Math.mulDiv(usdAmount, Constants.PRECISION, multiplier, Math.Rounding.Ceil);
-        if ($.usdShares[owner] < sharesToBurn) revert OkuMoneyErrors.InsufficientBalance();
+        if ($.usdShares[owner] < sharesToBurn) revert SharedErrors.InsufficientBalance();
 
         // Defensive: reserves back every share, so this should never fire.
         uint256 reserves = IERC20(address($.okuMoney)).balanceOf(address(this));
@@ -608,7 +608,7 @@ contract OkuDollar is
         returns (uint256 assets)
     {
         if (owner != _msgSender()) {
-            if (_blacklisted(_msgSender())) revert OkuMoneyErrors.SenderBlacklisted();
+            if (_blacklisted(_msgSender())) revert SharedErrors.SenderBlacklisted();
             _spendAllowance(owner, _msgSender(), shares);
         }
         return _unwrap(owner, shares, receiver);
@@ -643,8 +643,8 @@ contract OkuDollar is
         nonReentrant
         onlyRole(Roles.VAULT_RESCUER)
     {
-        if (amount == 0) revert OkuMoneyErrors.ZeroAmount();
-        if (receiver == address(0)) revert OkuMoneyErrors.ZeroAddress();
+        if (amount == 0) revert SharedErrors.ZeroAmount();
+        if (receiver == address(0)) revert SharedErrors.ZeroAddress();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         // Only the surplus above what backs outstanding shares can leave.
@@ -671,7 +671,7 @@ contract OkuDollar is
     /// @dev Blacklisted accounts cannot send or receive UsdOku.
     function blacklist(address account) external onlyRole(Roles.OKUM_BLACKLISTER) {
         OkuDollarStorage storage $ = _getOkuDollarStorage();
-        if ($.isBlacklisted[account]) revert OkuMoneyErrors.AlreadyBlacklisted();
+        if ($.isBlacklisted[account]) revert SharedErrors.AlreadyBlacklisted();
         $.isBlacklisted[account] = true;
         emit Blacklisted(account);
     }
@@ -679,7 +679,7 @@ contract OkuDollar is
     /// @notice Remove `account` from the OkuDollar blacklist.
     function unblacklist(address account) external onlyRole(Roles.OKUM_UNBLACKLISTER) {
         OkuDollarStorage storage $ = _getOkuDollarStorage();
-        if (!$.isBlacklisted[account]) revert OkuMoneyErrors.NotBlacklisted();
+        if (!$.isBlacklisted[account]) revert SharedErrors.NotBlacklisted();
         $.isBlacklisted[account] = false;
         emit Unblacklisted(account);
     }

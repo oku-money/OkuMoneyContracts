@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 /**
  * @title LitePSMErrors
- * @notice Errors specific to LitePSM; shared ones live in {OkuMoneyErrors}, and
+ * @notice Errors specific to LitePSM; shared ones live in {SharedErrors}, and
  *         `OverrideInProgress` comes from {OverrideBlockGuard}.
  */
 abstract contract LitePSMErrors {

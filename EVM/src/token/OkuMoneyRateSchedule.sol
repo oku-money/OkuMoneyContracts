@@ -14,6 +14,7 @@ import {Constants} from "../lib/Constants.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {OkuMoneyEvents} from "../lib/events/OkuMoneyEvents.sol";
 import {OkuMoneyErrors} from "../lib/errors/OkuMoneyErrors.sol";
+import {SharedErrors} from "../lib/errors/SharedErrors.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {IScaledUIAmount, IScaledUIAmountNewUIMultiplier} from "../interfaces/IScaledUIAmount.sol";
 
@@ -231,7 +232,7 @@ abstract contract OkuMoneyRateSchedule is
     {
         RateScheduleStorage storage $ = _getRateScheduleStorage();
         uint256 currentMultiplier = okuMMultiplier();
-        if (newMultiplier <= currentMultiplier) revert OkuMoneyErrors.MultiplierCannotDecrease();
+        if (newMultiplier <= currentMultiplier) revert SharedErrors.MultiplierCannotDecrease();
         if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
 
         // Announce the cancelled successor (if any) while it is still in storage.

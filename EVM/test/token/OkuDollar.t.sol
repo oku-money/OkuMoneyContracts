@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {Constants} from "../../src/lib/Constants.sol";
-import {OkuMoneyErrors} from "../../src/lib/errors/OkuMoneyErrors.sol";
+import {SharedErrors} from "../../src/lib/errors/SharedErrors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -123,7 +123,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.wrap(okuMAmount, user1, 0);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
+        vm.expectRevert(SharedErrors.ZeroAddress.selector);
         okuDollar.transfer(address(0), 1e18);
     }
 
@@ -169,7 +169,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_Wrap_RevertsOnZeroAmount() public {
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.ZeroAmount.selector);
+        vm.expectRevert(SharedErrors.ZeroAmount.selector);
         okuDollar.wrap(0, user1, 0);
     }
 
@@ -179,7 +179,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(okuDollar), okuMAmount);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
+        vm.expectRevert(SharedErrors.ZeroAddress.selector);
         okuDollar.wrap(okuMAmount, address(0), 0);
     }
 
@@ -332,7 +332,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_Unwrap_RevertsOnZeroAmount() public {
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.ZeroAmount.selector);
+        vm.expectRevert(SharedErrors.ZeroAmount.selector);
         okuDollar.unwrap(0, user1);
     }
 
@@ -341,7 +341,7 @@ contract OkuDollarTest is BaseTest {
         _mintUsdOku(user1, okuMAmount);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
+        vm.expectRevert(SharedErrors.ZeroAddress.selector);
         okuDollar.unwrap(okuMAmount, address(0));
     }
 
@@ -357,7 +357,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user2);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
         okuDollar.unwrap(okuMAmount, user2);
     }
 
@@ -1091,7 +1091,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_RescueDonation_RevertsOnZeroAmount() public {
         vm.prank(vaultRescuer);
-        vm.expectRevert(OkuMoneyErrors.ZeroAmount.selector);
+        vm.expectRevert(SharedErrors.ZeroAmount.selector);
         okuDollar.rescueDonation(0, treasury);
     }
 
@@ -1101,7 +1101,7 @@ contract OkuDollarTest is BaseTest {
         okuMoney.transfer(address(okuDollar), 50e18);
 
         vm.prank(vaultRescuer);
-        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
+        vm.expectRevert(SharedErrors.ZeroAddress.selector);
         okuDollar.rescueDonation(1e18, address(0));
     }
 
@@ -1272,7 +1272,7 @@ contract OkuDollarTest is BaseTest {
         _mintUsdOku(user1, 100e18);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.InsufficientBalance.selector);
+        vm.expectRevert(SharedErrors.InsufficientBalance.selector);
         okuDollar.transfer(user2, 101e18);
     }
 
@@ -1316,7 +1316,7 @@ contract OkuDollarTest is BaseTest {
         _elevateUsdMultiplier(PRECISION * 2);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.AmountTooSmall.selector);
+        vm.expectRevert(SharedErrors.AmountTooSmall.selector);
         okuDollar.transfer(user2, 1);
     }
 
@@ -1330,7 +1330,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.approve(user2, 1);
 
         vm.prank(user2);
-        vm.expectRevert(OkuMoneyErrors.AmountTooSmall.selector);
+        vm.expectRevert(SharedErrors.AmountTooSmall.selector);
         okuDollar.transferFrom(user1, user2, 1);
     }
 
@@ -2018,7 +2018,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         okuDollar.blacklist(user1);
 
-        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
         vm.prank(user1);
         okuDollar.wrap(100e18, user1, 0);
     }
@@ -2029,7 +2029,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         okuDollar.blacklist(user1); // blacklist receiver, not sender
 
-        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
         vm.prank(user2);
         okuDollar.wrap(100e18, user1, 0); // receiver is blacklisted
     }
@@ -2039,7 +2039,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         okuDollar.blacklist(user1);
 
-        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
         vm.prank(user1);
         okuDollar.unwrap(50e18, user1);
     }
@@ -2049,7 +2049,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         okuDollar.blacklist(user1);
 
-        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
         vm.prank(user1);
         okuDollar.transfer(user2, 50e18);
     }
@@ -2059,7 +2059,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         okuDollar.blacklist(user2);
 
-        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
         vm.prank(user1);
         okuDollar.transfer(user2, 50e18);
     }
@@ -2070,7 +2070,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user1);
 
         // Permit with blacklisted owner should revert
-        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
         okuDollar.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
     }
 
@@ -2122,11 +2122,11 @@ contract OkuDollarTest is BaseTest {
         _blacklistOnOkuMoneyOnly(user1);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
         okuDollar.transfer(user3, 10e18);
 
         vm.prank(user2);
-        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
         okuDollar.transfer(user1, 10e18);
     }
 
@@ -2135,7 +2135,7 @@ contract OkuDollarTest is BaseTest {
         _blacklistOnOkuMoneyOnly(user1);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
         okuDollar.unwrap(50e18, user3);
     }
 
@@ -2145,11 +2145,11 @@ contract OkuDollarTest is BaseTest {
         _blacklistOnOkuMoneyOnly(user1);
 
         vm.prank(user2);
-        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
         okuDollar.wrap(100e18, user1, 0);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
         okuDollar.approve(user2, 1);
     }
 
@@ -2177,13 +2177,13 @@ contract OkuDollarTest is BaseTest {
     function test_Blacklist_RevertAlreadyBlacklisted() public {
         vm.prank(blacklister);
         okuDollar.blacklist(user1);
-        vm.expectRevert(OkuMoneyErrors.AlreadyBlacklisted.selector);
+        vm.expectRevert(SharedErrors.AlreadyBlacklisted.selector);
         vm.prank(blacklister);
         okuDollar.blacklist(user1);
     }
 
     function test_Blacklist_RevertNotBlacklisted() public {
-        vm.expectRevert(OkuMoneyErrors.NotBlacklisted.selector);
+        vm.expectRevert(SharedErrors.NotBlacklisted.selector);
         vm.prank(unblacklister);
         okuDollar.unblacklist(user1);
     }
@@ -2197,7 +2197,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user2);
 
         // Permit signature is bogus — call must revert before signature check.
-        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
         okuDollar.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
     }
 
@@ -2207,7 +2207,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user2);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
         okuDollar.approve(user2, 50e18);
     }
 
@@ -2218,7 +2218,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user1);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
         okuDollar.approve(user2, 50e18);
     }
 
@@ -2254,7 +2254,7 @@ contract OkuDollarTest is BaseTest {
         );
 
         vm.prank(user2);
-        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
         okuDollar.transferFrom(user1, user3, 50e18);
     }
 
@@ -2284,7 +2284,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.blacklist(user2);
 
         vm.prank(user2);
-        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
         okuDollar.redeem(50e18, user3, user1);
     }
 
@@ -2422,7 +2422,7 @@ contract OkuDollarTest is BaseTest {
         OkuDollar impl = new OkuDollar();
         bytes memory initData =
             abi.encodeCall(OkuDollar.initialize, (address(0), "OkuDollar", "usdOku", admin));
-        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
+        vm.expectRevert(SharedErrors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -2431,7 +2431,7 @@ contract OkuDollarTest is BaseTest {
         bytes memory initData = abi.encodeCall(
             OkuDollar.initialize, (address(okuMoney), "OkuDollar", "usdOku", address(0))
         );
-        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
+        vm.expectRevert(SharedErrors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -2445,7 +2445,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_Unwrap_RevertInsufficientBalance() public {
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.InsufficientBalance.selector);
+        vm.expectRevert(SharedErrors.InsufficientBalance.selector);
         okuDollar.unwrap(1e18, user1);
     }
 
@@ -2457,7 +2457,7 @@ contract OkuDollarTest is BaseTest {
         okuDollar.wrap(100e18, user1, 0);
 
         vm.prank(user1);
-        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
+        vm.expectRevert(SharedErrors.ZeroAddress.selector);
         okuDollar.unwrap(1e18, address(0));
     }
 
@@ -2533,7 +2533,7 @@ contract OkuDollarTest is BaseTest {
                 )
             )
         );
-        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
+        vm.expectRevert(SharedErrors.ZeroAddress.selector);
         h.exposedTransferUsdShares(address(0), user1, 1, PRECISION);
     }
 }

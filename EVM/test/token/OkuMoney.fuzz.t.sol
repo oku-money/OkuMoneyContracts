@@ -6,6 +6,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {OkuMoneyErrors} from "../../src/lib/errors/OkuMoneyErrors.sol";
+import {SharedErrors} from "../../src/lib/errors/SharedErrors.sol";
 
 /**
  * @title OkuMoneyFuzzTest
@@ -256,7 +257,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 lowerPrice = higherPrice - decrease;
 
         vm.prank(rateManager);
-        vm.expectRevert(OkuMoneyErrors.MultiplierCannotDecrease.selector);
+        vm.expectRevert(SharedErrors.MultiplierCannotDecrease.selector);
         okuMoney.setOkuMMultiplier(lowerPrice);
     }
 

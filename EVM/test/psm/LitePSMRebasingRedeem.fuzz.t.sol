@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
+import {SharedErrors} from "../../src/lib/errors/SharedErrors.sol";
 
 /**
  * @title LitePSMRebasingRedeemFuzzTest
@@ -87,7 +88,7 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
             assembly {
                 sel := mload(add(reason, 32))
             }
-            // OkuMoneyErrors.InsufficientBalance selector — must NEVER show up.
+            // SharedErrors.InsufficientBalance selector — must NEVER show up.
             require(sel != 0xf4d678b8, "Fuzz: must not revert InsufficientBalance");
             // AmountTooSmall = 0xc2e4ff97; allow + log.
         }

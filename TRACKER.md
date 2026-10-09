@@ -206,6 +206,11 @@ Reviewed, understood, deliberately not fixed:
   `initialize` populates for nobody — so a grant without an allowance still
   reverts `ExceedsAllowance`. The drill asserts against the same exported list;
   never hand-copy it. Only script-sent grants go in `roleGrants.json`.
+- **Never give a `src/` contract, library or interface a name OpenZeppelin also uses**
+  (e.g. `Errors`, `Math`, `Strings`). The compiler accepts it, but Slither then resolves
+  references against the OpenZeppelin symbol, cannot build IR for every function that uses
+  it, and silently skips its reentrancy and other IR-based detectors there. The shared
+  errors are `SharedErrors` for this reason.
 - **`EVM/scripts/config/addresses.json` is tracked and must never receive `fork:`
   keys.** `saveAddressBook()` re-derives the tracked / `addresses.local.json`
   partition on every write, including the reserved `upgrades` index, so no

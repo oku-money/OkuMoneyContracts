@@ -361,7 +361,7 @@ src/
     ReentrancyGuardUpgradeable.sol  # OZ 5.x dropped the upgradeable variant; this replaces it
     OverrideBlockGuard.sol  # whenNoOverrideThisBlock (OkuDollar + LitePSM); emergency override only
     events/                 # One event-declaration file per contract
-    errors/                 # One error-declaration file per contract; OkuMoneyErrors also holds the errors OkuDollar/LitePSM share
+    errors/                 # SharedErrors (raised by several contracts) + one error file per contract
 
 test/mocks/                 # Test-only mocks/harnesses, compiled by Hardhat but outside `src/`.
                             # MockUSDC.sol (6-decimal) is also the deploy script's testnet collateral.

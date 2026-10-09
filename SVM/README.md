@@ -505,7 +505,7 @@ SVM-specific deliberate departures from EVM; the symmetric view is in
 |---|---|
 | `Constants.sol` / `MathLib.sol` | `oku-shared/src/constants.rs` / `rate.rs` + `wad.rs` (+ `math.rs` for u64 PSM conversions) |
 | `OverrideBlockGuard.sol` | `oku-shared/src/yield_lock.rs` + `lite-psm/src/helpers/yield_lock.rs` |
-| `Roles.sol` / `Errors.sol` + `errors/*.sol` / `events/*.sol` | `programs/lite-psm/src/{roles,errors,events}.rs` |
+| `Roles.sol` / `errors/*.sol` / `events/*.sol` | `programs/lite-psm/src/{roles,errors,events}.rs` |
 | `ReentrancyGuardUpgradeable.sol` | not ported: Solana forbids a program re-entering itself |
 
 ### Token model and multiplier location

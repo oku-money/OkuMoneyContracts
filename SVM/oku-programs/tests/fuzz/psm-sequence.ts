@@ -458,6 +458,19 @@ class Fuzz {
       await run((c) => this.opSetNext(c, ratePerSecondForApy(0.02 + r.next()), c.sched.rateEnd + BigInt(100 + r.int(5000))));
     }
     await run((c) => this.opPause(c));
+    // Still inside the window: the rate accruing now (or one below) re-written past the end of
+    // its segment, and a successor one second past the armed one, would both extend accrual.
+    await run((c) => {
+      const [seg, segEnd] = effectiveSegment(c.sched, c.now);
+      const rr = r.chance(0.5) || seg - 1n <= PRECISION ? seg : seg - 1n;
+      return this.opSetRate(c, rr, (segEnd > c.now ? segEnd : c.now) + 1n + BigInt(r.int(DAY)));
+    });
+    await run((c) => {
+      const s = c.sched;
+      if (s.rateEnd <= c.now) return this.opSync(c);
+      const armed = s.pendingRatePerSecond > PRECISION;
+      return this.opSetNext(c, armed ? s.pendingRatePerSecond : s.ratePerSecond, (armed ? s.pendingRateEnd : s.rateEnd + 100n) + 1n);
+    });
     await warpBy(this.h, dur + 1 + r.int(5000));
     this.log(`scenario: warped past the window (+${dur}s+)`);
     for (let i = 0; i < 4; i++) {

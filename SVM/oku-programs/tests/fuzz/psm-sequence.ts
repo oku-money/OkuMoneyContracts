@@ -1094,10 +1094,17 @@ class Fuzz {
     };
   }
 
-  /** `accept_role_admin`, signed by the pending admin (sometimes by someone else). */
+  /**
+   * `accept_role_admin`, signed by the pending admin, or (often, while a proposal is
+   * open) by someone else, most often the current admin. The impostor is never the
+   * pending key, so a dropped signer check is caught.
+   */
   opAcceptRoleAdmin(_c: Ctx): Op {
     const pending = this.m.pendingAdmin;
-    const who = pending >= 0 && (this.exact || this.rng.chance(0.8)) ? pending : this.rng.pick(POOL);
+    const others = POOL.filter((i) => i !== pending);
+    const impostor = this.m.roles.roleAdmin >= 0 && this.m.roles.roleAdmin !== pending && this.rng.chance(0.5)
+      ? this.m.roles.roleAdmin : this.rng.pick(others);
+    const who = pending >= 0 && (this.exact || this.rng.chance(0.6)) ? pending : impostor;
     const v: string[] = [];
     if (pending < 0) v.push("NoPendingRoleAdmin");
     else if (who !== pending) v.push("NotPendingRoleAdmin");

@@ -275,6 +275,12 @@ jobs:
       - name: Run bankrun test suite
         run: npm run test:bankrun
 
+      # Random instruction sequences checked against a model after every step
+      # (SVM counterpart of the EVM invariant suites). Short here; run with
+      # FUZZ_SEEDS=200 FUZZ_STEPS=500 for a deep pass.
+      - name: Run lite_psm sequence fuzz
+        run: FUZZ_SEEDS=6 FUZZ_STEPS=200 npm run test:fuzz
+
       # NOTE: a "Trident harness compile smoke" step used to sit here, pointing
       # at SVM/oku-programs/trident-tests. That directory does not exist in the
       # repository, so the step could only ever fail. Removed rather than left

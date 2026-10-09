@@ -14,6 +14,7 @@
     "test": "npm run test:rust && npm run test:scripts && npm run test:bankrun",
     "test:rust": "cargo test --workspace --quiet",
     "test:bankrun": "anchor build --ignore-keys && RUST_LOG= npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'",
+    "test:fuzz": "anchor build --ignore-keys && RUST_LOG= npx mocha --require tsx --timeout 0 'tests/fuzz/**/*.ts'",
     "test:scripts": "npx mocha --require tsx --timeout 30000 'tests/scripts/**/*.ts'",
     "drill:upgrade": "tsx scripts/test/upgrade-drill.ts",
     "test:onchain": "NETWORK=devnet tsx scripts/test/test-devnet.ts",

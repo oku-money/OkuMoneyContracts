@@ -335,6 +335,7 @@ From `SVM/oku-programs`; `npm test` runs both suites.
 | Rust (`cargo test --workspace`) | `npm run test:rust` | 62 (lite-psm 10, oku-shared 51, differential 1) |
 | Bankrun (in-process BPF on litesvm via `anchor-bankrun`) | `npm run test:bankrun` | 130 |
 | Cross-language `compute_multiplier` (Solidity corpus replayed in Rust and TS; `EVM/test/differential/GenerateVectors.t.sol`) | `npm run test:differential` (repo root) | 3,867 vectors |
+| Stateful sequence fuzz of `lite_psm` (random instruction sequences vs. a model; `tests/fuzz/psm-sequence.ts`) | `npm run test:fuzz` (`FUZZ_SEEDS`, `FUZZ_STEPS`, `FUZZ_SEED` to replay) | 8 seeds x 250 steps |
 | Upgrade-tooling helpers (identity binding, IDL layout diff, state snapshots) | `npm run test:scripts` | 15 |
 | Upgrade drill (real validator: deploy-init, direct, propose → execute → verify, refusals) | `npm run drill:upgrade` | — |
 | Live devnet / fork smoke | `npm run test:onchain[:fork]` | — |

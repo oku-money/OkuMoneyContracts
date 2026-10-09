@@ -45,8 +45,8 @@ confidence-threshold = 0.93
 # warning for any entry in this list that doesn't appear in the current
 # dep graph. Those warnings are intentional headroom — a future
 # Anchor/Solana SDK bump may pull in a crate under one of these licenses
-# and we don't want to discover it through a CI fail. The audit pass
-# treats only `license-disallowed` / `license-not-allowed` as findings;
+# and we don't want to discover it through a CI fail. Only
+# `license-disallowed` / `license-not-allowed` are findings;
 # `license-not-encountered` is informational.
 allow = [
     "MIT",

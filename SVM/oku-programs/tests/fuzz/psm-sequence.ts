@@ -33,7 +33,7 @@
  *        FUZZ_SEED=42 npm run test:fuzz          (replay one seed; prints the trace)
  *        FUZZ_SEED_START=1100 FUZZ_SEEDS=25 ...  (seeds 1100..1124)
  * Each bankrun cluster stays resident until the process exits (~100 MB per seed), so a very
- * long run belongs in batches of ~25 seeds per process (the audit Makefile does this).
+ * long campaign belongs in batches of ~25 seeds per process, stepping FUZZ_SEED_START.
  * A failure prints the seed, the step, the operation trace and the diff.
  *
  * Validated by mutation: each of these bugs, planted in a scratch copy of the program, is

@@ -6,7 +6,10 @@
  * random sequence of instructions (user mint/redeem, buffer deposit/withdraw,
  * direct mint/burn, allowance and cap changes, pause/unpause, freeze/thaw, rate
  * schedule writes, the emergency multiplier override, display sync, time warps,
- * and calls signed by the wrong key). A small independent model of the PSM
+ * role rotation via `set_authority` and the two-step `role_admin` handover, and calls
+ * signed by the wrong key). Roles move between a pool of keys; every role-gated call is
+ * signed by the current holder, and now and then by someone else (often a former holder),
+ * which must be refused. A small independent model of the PSM
  * predicts every outcome. After EVERY step the chain is compared against the
  * model:
  *
@@ -26,7 +29,12 @@
  *   - the wallet display multiplier never exceeds the canonical one (exact
  *     integer comparison of the f64);
  *   - in the slot of an emergency override, user and buffer operations fail
- *     with OverrideInProgress.
+ *     with OverrideInProgress;
+ *   - every role and `pending_role_admin` equal the model, so a rotation takes effect
+ *     immediately, a former holder loses the role, and only the pending admin can accept.
+ *
+ * While paused, value-moving calls are often generated with otherwise-valid arguments, so
+ * `Paused` is the only reason they can fail.
  *
  * Run:   npm run test:fuzz                       (FUZZ_SEEDS=8 x FUZZ_STEPS=250)
  *        FUZZ_SEEDS=200 FUZZ_STEPS=500 npm run test:fuzz
@@ -40,8 +48,10 @@
  * caught within 10 seeds x 300 steps: allowance not consumed (direct burn), pause ignored in
  * withdraw_buffer and in direct burn, mint rounding up, redeem paying one unit extra, mint
  * ignoring the override-slot lock, rate writes not re-anchoring, set_max_supply allowing a cap
- * below supply, supply cap and allowance off by one, slippage check wrong at equality, and a
- * pause gate that compares against the stored instead of the effective rate. Boundary-targeted
+ * below supply, supply cap and allowance off by one, slippage check wrong at equality, a
+ * pause gate that compares against the stored instead of the effective rate, accept_role_admin
+ * skipping its signer check, set_authority not writing, cancel not clearing the proposal, and
+ * pause accepting any signer. Boundary-targeted
  * amounts and the paused-expiry scenario exist because uniform random inputs missed the last
  * three. When changing the generators, re-run such mutants: a green run proves little on its own.
  */
@@ -166,8 +176,21 @@ function f64LeWad(x: number, canonical: bigint): boolean {
 // Model
 // ---------------------------------------------------------------------------
 
-/** Holders of OkuM the model tracks: users 0..2 and the direct burner (3). */
-const BURNER = 3;
+/**
+ * Accounts the model tracks (index into `Fuzz.accts`): users 0..2, then the role pool
+ * (payer = initial role_admin, cold, warm, orchestrator, two spares, direct minter,
+ * direct burner). Every role is always held by one pool account; roles move between them.
+ * Each account has a USDC and an OkuM token account, both tracked.
+ */
+const USERS = [0, 1, 2];
+const POOL = [3, 4, 5, 6, 7, 8, 9, 10];
+const [PAYER, COLD, WARM, ORCH, , , DMINT, DBURN] = POOL;
+
+const ROLES = [
+  "roleAdmin", "pauser", "unpauser", "freezer", "unfreezer", "bufferDepositor", "bufferWithdrawer",
+  "capManager", "allowanceManager", "rateManager", "directMinter", "directBurner",
+] as const;
+type Role = (typeof ROLES)[number];
 
 interface Model {
   vault: bigint;
@@ -177,14 +200,13 @@ interface Model {
   allowDirectMint: bigint;
   allowDirectBurn: bigint;
   paused: boolean;
-  okuM: bigint[]; // per holder
-  frozen: boolean[]; // per holder
-  usdc: bigint[]; // users 0..2, then orchestrator (3), cold (4)
+  okuM: bigint[]; // per account
+  frozen: boolean[]; // per account (its OkuM token account)
+  usdc: bigint[]; // per account
+  roles: Record<Role, number>; // account index holding each role
+  pendingAdmin: number; // -1 = none
   lastMultiplier: bigint;
 }
-
-const ORCH = 3;
-const COLD = 4;
 
 interface Ctx {
   cfg: any;
@@ -240,13 +262,12 @@ class Fuzz {
   config!: PublicKey;
   vaultUsdc!: PublicKey;
 
-  users = [Keypair.generate(), Keypair.generate(), Keypair.generate()];
-  directMinter = Keypair.generate();
-  directBurner = Keypair.generate();
-  rogue = Keypair.generate();
-  holders!: Keypair[]; // users + burner
+  accts!: Keypair[]; // see USERS / POOL
+  rogue = Keypair.generate(); // never holds a role
   okuMAta!: PublicKey[];
-  usdcAta!: PublicKey[]; // users, orchestrator, cold
+  usdcAta!: PublicKey[];
+  /** Set while setup, probes and directed scenarios run: always sign with the right key. */
+  exact = false;
 
   m!: Model;
   step = 0;
@@ -266,30 +287,25 @@ class Fuzz {
     this.okuMMint = init.okuMMint;
     this.vaultUsdc = init.vaultUsdcAta;
 
-    this.holders = [...this.users, this.directBurner];
-    await fundKeypairs(h, [...this.holders, this.directMinter, this.rogue], 100 * anchor.web3.LAMPORTS_PER_SOL);
+    this.accts = [
+      Keypair.generate(), Keypair.generate(), Keypair.generate(),
+      h.payer, coldMultisig, warmMultisig, psmOrchestrator,
+      Keypair.generate(), Keypair.generate(), Keypair.generate(), Keypair.generate(),
+    ];
+    await fundKeypairs(h, [...this.accts.filter((k) => k !== h.payer), this.rogue], 100 * anchor.web3.LAMPORTS_PER_SOL);
 
-    // Direct minter / burner roles (role_admin = payer).
-    for (const [role, kp] of [["directMinter", this.directMinter], ["directBurner", this.directBurner]] as const) {
-      await program.methods
-        .setAuthority({ [role]: {} } as any, kp.publicKey)
-        .accountsPartial({ roleAdmin: h.payer.publicKey, config: this.config })
-        .rpc();
-    }
-
-    // Token accounts. OkuM ATAs are pre-created so freeze/thaw always has a target.
+    // Token accounts for every tracked account. OkuM ones are pre-created so freeze/thaw
+    // and burns always have a target.
     this.okuMAta = [];
-    for (const kp of this.holders) {
-      this.okuMAta.push(await ensureAtaViaBankrun(h, kp.publicKey, this.okuMMint, TOKEN_2022_PROGRAM_ID));
-    }
     this.usdcAta = [];
-    for (const owner of [...this.users, psmOrchestrator, coldMultisig]) {
-      this.usdcAta.push(await ensureAtaViaBankrun(h, owner.publicKey, this.usdcMint, TOKEN_PROGRAM_ID));
+    for (const kp of this.accts) {
+      this.okuMAta.push(await ensureAtaViaBankrun(h, kp.publicKey, this.okuMMint, TOKEN_2022_PROGRAM_ID));
+      this.usdcAta.push(await ensureAtaViaBankrun(h, kp.publicKey, this.usdcMint, TOKEN_PROGRAM_ID));
     }
     const FUND = 1_000_000_000_000_000n; // 1e9 USDC each
-    for (let i = 0; i < 4; i++) await mintToViaBankrun(h, this.usdcMint, this.usdcAta[i], h.payer, FUND, TOKEN_PROGRAM_ID);
+    for (const ata of this.usdcAta) await mintToViaBankrun(h, this.usdcMint, ata, h.payer, FUND, TOKEN_PROGRAM_ID);
 
-    const usdc = [FUND, FUND, FUND, FUND, 0n];
+    const n = this.accts.length;
     this.m = {
       vault: 0n,
       supply: 0n,
@@ -298,17 +314,29 @@ class Fuzz {
       allowDirectMint: 0n,
       allowDirectBurn: 0n,
       paused: false,
-      okuM: [0n, 0n, 0n, 0n],
-      frozen: [false, false, false, false],
-      usdc,
+      okuM: Array(n).fill(0n),
+      frozen: Array(n).fill(false),
+      usdc: Array(n).fill(FUND),
+      // As `initializePsm` assigns them (shared/setup.ts); the direct roles start disabled.
+      roles: {
+        roleAdmin: PAYER, pauser: WARM, unpauser: COLD, freezer: WARM, unfreezer: COLD,
+        bufferDepositor: ORCH, bufferWithdrawer: COLD, capManager: COLD, allowanceManager: COLD,
+        rateManager: ORCH, directMinter: -1, directBurner: -1,
+      },
+      pendingAdmin: -1,
       lastMultiplier: PRECISION,
     };
 
     // Seed the model through the same code paths as the fuzz steps.
     const ctx = () => this.readCtx();
+    this.exact = true;
+    await this.exec(this.opSetAuthority(await ctx(), "directMinter", DMINT), "setup");
+    await this.exec(this.opSetAuthority(await ctx(), "directBurner", DBURN), "setup");
     await this.exec(this.opSetDirectMinterAllowance(await ctx(), 100_000_000_000n), "setup");
     await this.exec(this.opSetDirectBurnerAllowance(await ctx(), 100_000_000_000n), "setup");
     await this.exec(this.opDeposit(await ctx(), 200_000_000_000n), "setup");
+    await this.exec(this.opDirectMint(await ctx(), DBURN, 5_000_000_000n), "setup"); // the burner starts with a balance
+    this.exact = false;
     await this.check(await ctx(), "setup");
   }
 
@@ -322,7 +350,7 @@ class Fuzz {
         // While paused, mostly try value-moving operations (they must ALL be rejected and move
         // nothing) and leave the paused state quickly so the other paths get exercised.
         const pr = this.rng.next();
-        const moving = ["mint", "redeem", "deposit", "withdraw", "directMint", "directBurn", "rate", "successor", "override"];
+        const moving = ["mint", "redeem", "deposit", "withdraw", "directMint", "directBurn", "directBurn", "rate", "successor", "override"];
         const tightCap = this.m.maxSupply - this.m.supply < 1_000_000_000n;
         const kind = tightCap && !this.m.paused && pr < 0.2 ? "maxSupply" // a pinned cap would starve every mint
           : this.m.paused && pr < 0.25 ? "unpause" : this.m.paused && pr < 0.7 ? this.rng.pick(moving) : this.rng.weighted<string>([
@@ -332,6 +360,7 @@ class Fuzz {
           ["freeze", 3], ["thaw", 3],
           ["rate", 7], ["successor", 4], ["withSuccessor", 4], ["override", 3],
           ["sync", 3], ["warp", 9], ["rogue", 5], ["scenario", 3],
+          ["setAuthority", 5], ["acceptAdmin", 2], ["cancelAdmin", 1],
         ]);
         if (kind === "scenario") {
           await this.scenarioPausedExpiry();
@@ -393,6 +422,15 @@ class Fuzz {
    * one. Random steps reach this combination too rarely to rely on.
    */
   async scenarioPausedExpiry() {
+    this.exact = true;
+    try {
+      await this.scenarioPausedExpiryBody();
+    } finally {
+      this.exact = false;
+    }
+  }
+
+  async scenarioPausedExpiryBody() {
     const r = this.rng;
     const run = async (mk: (c: Ctx) => Op) => {
       await warpSlots(this.h, 1n);
@@ -424,7 +462,9 @@ class Fuzz {
   async probeSameSlot() {
     const ctx = await this.readCtx();
     if (!ctx.lock) throw new Fail("override succeeded but the config does not show the lock for this slot");
+    this.exact = true;
     const probes = [this.opMint(ctx, 0, 1_000_000n), this.opRedeem(ctx, 0, 1_000n, 0n), this.opDeposit(ctx, 1_000_000n), this.opWithdraw(ctx, 1n), this.opDirectMint(ctx, 0, 1_000n), this.opDirectBurn(ctx, 1_000n)];
+    this.exact = false;
     for (const p of probes) {
       p.name = `lockProbe:${p.name}`;
       if (!p.violations.includes("OverrideInProgress")) throw new Fail(`probe ${p.name} lacks the lock violation (model bug)`);
@@ -436,7 +476,7 @@ class Fuzz {
     // An operation that is attempted often but never succeeds means the fuzzer
     // is not exercising it (the EVM suites' NoHandlerActionAlwaysReverts).
     for (const [name, c] of this.counts) {
-      if (name.startsWith("lockProbe:") || name === "rogue" || name === "setup") continue;
+      if (name.startsWith("lockProbe:") || name === "rogue" || name === "setup" || name === "acceptRoleAdmin" || name === "cancelRoleAdminTransfer") continue;
       if (c.tried >= 40 && c.ok === 0) throw new Fail(`${name}: ${c.tried} attempts, none succeeded`);
     }
   }
@@ -482,14 +522,12 @@ class Fuzz {
     const mint = await getMint(this.h.provider.connection as any, this.okuMMint, undefined, TOKEN_2022_PROGRAM_ID);
     eq("OkuM supply", mint.supply, m.supply);
     eq("sum of tracked OkuM balances vs supply", m.okuM.reduce((a, b) => a + b, 0n), m.supply);
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < this.accts.length; i++) {
       const a = await this.tokenAmount(this.okuMAta[i], TOKEN_2022_PROGRAM_ID);
-      eq(`OkuM balance of holder ${i}`, a.amount, m.okuM[i]);
-      if (a.isFrozen !== m.frozen[i]) fail(`holder ${i} frozen flag: chain ${a.isFrozen} != model ${m.frozen[i]}`);
-    }
-    for (let i = 0; i < 5; i++) {
-      const a = await this.tokenAmount(this.usdcAta[i], TOKEN_PROGRAM_ID);
-      eq(`USDC balance of account ${i}`, a.amount, m.usdc[i]);
+      eq(`OkuM balance of account ${i}`, a.amount, m.okuM[i]);
+      if (a.isFrozen !== m.frozen[i]) fail(`account ${i} frozen flag: chain ${a.isFrozen} != model ${m.frozen[i]}`);
+      const u = await this.tokenAmount(this.usdcAta[i], TOKEN_PROGRAM_ID);
+      eq(`USDC balance of account ${i}`, u.amount, m.usdc[i]);
     }
     const c = after.cfg;
     eq("max_supply", BigInt(c.maxSupply.toString()), m.maxSupply);
@@ -497,6 +535,12 @@ class Fuzz {
     eq("direct_minter_allowance", BigInt(c.directMinterAllowance.toString()), m.allowDirectMint);
     eq("direct_burner_allowance", BigInt(c.directBurnerAllowance.toString()), m.allowDirectBurn);
     if (c.isPaused !== m.paused) fail(`is_paused: chain ${c.isPaused} != model ${m.paused}`);
+    for (const role of ROLES) {
+      const want = m.roles[role] < 0 ? anchor.web3.PublicKey.default : this.accts[m.roles[role]].publicKey;
+      if (!c[role].equals(want)) fail(`role ${role}: chain ${c[role].toBase58()} != model account ${m.roles[role]}`);
+    }
+    const wantPending = m.pendingAdmin < 0 ? anchor.web3.PublicKey.default : this.accts[m.pendingAdmin].publicKey;
+    if (!c.pendingRoleAdmin.equals(wantPending)) fail(`pending_role_admin: chain ${c.pendingRoleAdmin.toBase58()} != model ${m.pendingAdmin}`);
     if (m.supply > m.maxSupply && m.maxSupply >= 0n) {
       // The cap can be lowered only to >= supply, so supply can never exceed it.
       fail(`supply ${m.supply} exceeds max_supply ${m.maxSupply}`);
@@ -524,11 +568,55 @@ class Fuzz {
     return u > 0n ? u : 1n;
   }
 
+  /**
+   * While paused, arguments that would be valid if the PSM were not paused, so `Paused` is
+   * the only reason the call can fail. Without this a pause bug hides behind an unrelated
+   * rejection (insufficient balance, allowance, ...). Undefined if no such call exists now.
+   */
+  validWhilePaused(kind: string, ctx: Ctx): Op | undefined {
+    const r = this.rng;
+    const md = this.m;
+    const pickRaw = (cap: bigint) => (cap >= 1n ? r.amount(1n, cap < 2_000_000_000n ? cap : 2_000_000_000n) : undefined);
+    const live = (i: number) => !md.frozen[i];
+    switch (kind) {
+      case "directBurn": {
+        const b = md.roles.directBurner;
+        if (b < 0 || !live(b)) return undefined;
+        const cap = [md.okuM[b], md.allowDirectBurn, md.supply].reduce((a, x) => (x < a ? x : a));
+        const raw = pickRaw(cap);
+        return raw === undefined ? undefined : this.opDirectBurn(ctx, raw);
+      }
+      case "directMint": {
+        const to = r.pick(USERS.filter(live));
+        const cap = md.allowDirectMint < md.maxSupply - md.supply ? md.allowDirectMint : md.maxSupply - md.supply;
+        const raw = to === undefined ? undefined : pickRaw(cap);
+        return raw === undefined ? undefined : this.opDirectMint(ctx, to, raw);
+      }
+      case "redeem": {
+        const u = r.pick(USERS.filter((i) => live(i) && md.okuM[i] > 0n));
+        if (u === undefined) return undefined;
+        const byVault = (md.vault * PRECISION) / ctx.m;
+        const raw = pickRaw(md.okuM[u] < byVault ? md.okuM[u] : byVault);
+        return raw === undefined ? undefined : this.opRedeem(ctx, u, raw, 0n);
+      }
+      case "withdraw": {
+        const amt = pickRaw(md.vault);
+        return amt === undefined ? undefined : this.opWithdraw(ctx, amt);
+      }
+      case "deposit": return this.opDeposit(ctx, r.amount(1n, 1_000_000_000n));
+    }
+    return undefined;
+  }
+
   build(kind: string, ctx: Ctx): Op {
     const r = this.rng;
     const user = r.int(3);
     const md = this.m;
     const remCap = md.maxSupply - md.supply;
+    if (md.paused && r.chance(0.6)) {
+      const op = this.validWhilePaused(kind, ctx);
+      if (op) return op;
+    }
     switch (kind) {
       case "mint": {
         // Boundaries: exactly at / one past the supply cap and the PSM mint allowance.
@@ -551,10 +639,12 @@ class Fuzz {
       }
       case "directMint": {
         const e = this.edge(0.35, [md.allowDirectMint, md.allowDirectMint + 1n, remCap, remCap + 1n]);
-        return this.opDirectMint(ctx, r.int(4), e ?? r.amount(1n, 40_000_000_000n));
+        // Often to the current burner, so direct burns have something to burn.
+        const to = md.roles.directBurner >= 0 && r.chance(0.3) ? md.roles.directBurner : r.int(this.accts.length);
+        return this.opDirectMint(ctx, to, e ?? r.amount(1n, 40_000_000_000n));
       }
       case "directBurn": {
-        const bal = this.m.okuM[BURNER];
+        const bal = md.roles.directBurner >= 0 ? md.okuM[md.roles.directBurner] : 0n;
         const e = this.edge(0.35, [md.allowDirectBurn, md.allowDirectBurn + 1n, bal, bal + 1n, md.supply + 1n]);
         return this.opDirectBurn(ctx, e ?? (bal > 0n && r.chance(0.8) ? r.amount(1n, bal) : r.amount(1n, 1_000_000_000n)));
       }
@@ -570,8 +660,15 @@ class Fuzz {
       }
       case "pause": return this.opPause(ctx);
       case "unpause": return this.opUnpause(ctx);
-      case "freeze": return this.opFreeze(ctx, r.int(4));
-      case "thaw": return this.opThaw(ctx, r.int(4));
+      case "freeze": return this.opFreeze(ctx, r.int(this.accts.length));
+      case "thaw": return this.opThaw(ctx, r.int(this.accts.length));
+      case "setAuthority": {
+        const role: Role = r.chance(0.3) ? "roleAdmin" : r.pick(ROLES);
+        const to = r.chance(0.05) ? -1 : r.chance(0.15) ? md.roles.roleAdmin : r.pick(POOL);
+        return this.opSetAuthority(ctx, role, to);
+      }
+      case "acceptAdmin": return this.opAcceptRoleAdmin(ctx);
+      case "cancelAdmin": return this.opCancelRoleAdmin(ctx);
       case "rate": {
         const [rate, end] = this.randRate(ctx);
         return this.opSetRate(ctx, rate, end);
@@ -632,6 +729,25 @@ class Fuzz {
     return [rate, end];
   }
 
+  /**
+   * Who signs a `role`-gated call: normally the current holder. Outside exact mode, now and
+   * then another pool account (often a former holder), which must be refused with
+   * `Unauthorized` and change nothing. A disabled role (zero key) refuses everyone.
+   */
+  signer(role: Role): { kp: Keypair; idx: number; wrong: boolean } {
+    const holder = this.m.roles[role];
+    if (holder < 0 || (!this.exact && this.rng.chance(0.06))) {
+      const i = this.rng.pick(POOL.filter((x) => x !== holder));
+      return { kp: this.accts[i], idx: i, wrong: true };
+    }
+    return { kp: this.accts[holder], idx: holder, wrong: false };
+  }
+
+  /** A wrong signer fails the account constraint before any handler check runs. */
+  gate(sig: { wrong: boolean }, v: string[]): string[] {
+    return sig.wrong ? ["Unauthorized"] : v;
+  }
+
   // ---- PSM ops
 
   common(ctx: Ctx, v: string[], lockGated = true): string[] {
@@ -648,7 +764,7 @@ class Fuzz {
     if (this.m.supply + raw > this.m.maxSupply) v.push("MaxSupplyExceeded");
     if (raw > this.m.allowMint) v.push("AllowanceExceeded");
     if (this.m.frozen[i]) v.push("FROZEN");
-    const u = this.users[i];
+    const u = this.accts[i];
     return {
       name: "mintOkuM",
       ixs: [anchorIx(this.program.methods.mintOkuM(bn(usdc)).accountsPartial({
@@ -674,7 +790,7 @@ class Fuzz {
     if (this.m.okuM[i] < raw) v.push("InsufficientUserBalance");
     if (this.m.vault < out) v.push("InsufficientBuffer");
     if (this.m.frozen[i]) v.push("FROZEN");
-    const u = this.users[i];
+    const u = this.accts[i];
     return {
       name: "redeemOkuM",
       ixs: [anchorIx(this.program.methods.redeemOkuM(bn(raw), bn(minOut)).accountsPartial({
@@ -692,38 +808,43 @@ class Fuzz {
   }
 
   opDeposit(ctx: Ctx, amount: bigint): Op {
+    const sig = this.signer("bufferDepositor");
+    const d = sig.idx;
     const v = this.common(ctx, []);
     if (amount === 0n) v.push("ZeroAmount");
-    if (this.m.usdc[ORCH] < amount) v.push("TOKEN");
+    if (this.m.usdc[d] < amount) v.push("TOKEN");
     return {
       name: "depositBuffer",
       ixs: [anchorIx(this.program.methods.depositBuffer(bn(amount)).accountsPartial({
-        bufferDepositor: psmOrchestrator.publicKey, config: this.config,
-        bufferDepositorUsdcAta: this.usdcAta[ORCH], vaultUsdc: this.vaultUsdc,
+        bufferDepositor: sig.kp.publicKey, config: this.config,
+        bufferDepositorUsdcAta: this.usdcAta[d], vaultUsdc: this.vaultUsdc,
         usdcMint: this.usdcMint, tokenProgram: TOKEN_PROGRAM_ID,
       }))],
-      signers: [psmOrchestrator], violations: v,
-      apply: () => { this.m.usdc[ORCH] -= amount; this.m.vault += amount; },
+      signers: [sig.kp], violations: this.gate(sig, v),
+      apply: () => { this.m.usdc[d] -= amount; this.m.vault += amount; },
     };
   }
 
   opWithdraw(ctx: Ctx, amount: bigint): Op {
+    const sig = this.signer("bufferWithdrawer");
+    const w = sig.idx;
     const v = this.common(ctx, []);
     if (amount === 0n) v.push("ZeroAmount");
     if (this.m.vault < amount) v.push("InsufficientBuffer");
     return {
       name: "withdrawBuffer",
       ixs: [anchorIx(this.program.methods.withdrawBuffer(bn(amount)).accountsPartial({
-        bufferWithdrawer: coldMultisig.publicKey, config: this.config,
-        withdrawerUsdcAta: this.usdcAta[COLD], vaultUsdc: this.vaultUsdc,
+        bufferWithdrawer: sig.kp.publicKey, config: this.config,
+        withdrawerUsdcAta: this.usdcAta[w], vaultUsdc: this.vaultUsdc,
         usdcMint: this.usdcMint, tokenProgram: TOKEN_PROGRAM_ID,
       }))],
-      signers: [coldMultisig], violations: v,
-      apply: () => { this.m.vault -= amount; this.m.usdc[COLD] += amount; },
+      signers: [sig.kp], violations: this.gate(sig, v),
+      apply: () => { this.m.vault -= amount; this.m.usdc[w] += amount; },
     };
   }
 
   opDirectMint(ctx: Ctx, holder: number, raw: bigint): Op {
+    const sig = this.signer("directMinter");
     const v = this.common(ctx, []);
     if (raw === 0n) v.push("ZeroAmount");
     if (this.m.supply + raw > this.m.maxSupply) v.push("MaxSupplyExceeded");
@@ -732,31 +853,33 @@ class Fuzz {
     return {
       name: "mintOkuMDirect",
       ixs: [anchorIx(this.program.methods.mintOkuMDirect(bn(raw)).accountsPartial({
-        directMinter: this.directMinter.publicKey, config: this.config, okuMMint: this.okuMMint,
-        recipient: this.holders[holder].publicKey, recipientOkuMAta: this.okuMAta[holder],
+        directMinter: sig.kp.publicKey, config: this.config, okuMMint: this.okuMMint,
+        recipient: this.accts[holder].publicKey, recipientOkuMAta: this.okuMAta[holder],
         token2022Program: TOKEN_2022_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       }))],
-      signers: [this.directMinter], violations: v,
+      signers: [sig.kp], violations: this.gate(sig, v),
       apply: () => { this.m.okuM[holder] += raw; this.m.supply += raw; this.m.allowDirectMint -= raw; },
     };
   }
 
   opDirectBurn(ctx: Ctx, raw: bigint): Op {
+    const sig = this.signer("directBurner");
+    const b = sig.idx; // burns from the signer's own OkuM account
     const v = this.common(ctx, []);
     if (raw === 0n) v.push("ZeroAmount");
     if (raw > this.m.allowDirectBurn) v.push("AllowanceExceeded");
     if (raw > this.m.supply) v.push("Overflow"); // supply - raw is computed before the burn CPI
-    if (this.m.okuM[BURNER] < raw) v.push("TOKEN");
-    if (this.m.frozen[BURNER]) v.push("FROZEN");
+    if (this.m.okuM[b] < raw) v.push("TOKEN");
+    if (this.m.frozen[b]) v.push("FROZEN");
     return {
       name: "burnOkuMDirect",
       ixs: [anchorIx(this.program.methods.burnOkuMDirect(bn(raw)).accountsPartial({
-        directBurner: this.directBurner.publicKey, config: this.config, okuMMint: this.okuMMint,
-        burnerOkuMAta: this.okuMAta[BURNER], token2022Program: TOKEN_2022_PROGRAM_ID,
+        directBurner: sig.kp.publicKey, config: this.config, okuMMint: this.okuMMint,
+        burnerOkuMAta: this.okuMAta[b], token2022Program: TOKEN_2022_PROGRAM_ID,
       }))],
-      signers: [this.directBurner], violations: v,
-      apply: () => { this.m.okuM[BURNER] -= raw; this.m.supply -= raw; this.m.allowDirectBurn -= raw; },
+      signers: [sig.kp], violations: this.gate(sig, v),
+      apply: () => { this.m.okuM[b] -= raw; this.m.supply -= raw; this.m.allowDirectBurn -= raw; },
     };
   }
 
@@ -768,60 +891,68 @@ class Fuzz {
     }));
   }
   opSetMinterAllowance(_c: Ctx, v: bigint): Op {
-    return { name: "setMinterAllowance", ixs: [this.allowanceIx("setMinterAllowance", v, coldMultisig)], signers: [coldMultisig], violations: [], apply: () => { this.m.allowMint = v; } };
+    const sig = this.signer("allowanceManager");
+    return { name: "setMinterAllowance", ixs: [this.allowanceIx("setMinterAllowance", v, sig.kp)], signers: [sig.kp], violations: this.gate(sig, []), apply: () => { this.m.allowMint = v; } };
   }
   opSetDirectMinterAllowance(_c: Ctx, v: bigint): Op {
-    return { name: "setDirectMinterAllowance", ixs: [this.allowanceIx("setDirectMinterAllowance", v, coldMultisig)], signers: [coldMultisig], violations: [], apply: () => { this.m.allowDirectMint = v; } };
+    const sig = this.signer("allowanceManager");
+    return { name: "setDirectMinterAllowance", ixs: [this.allowanceIx("setDirectMinterAllowance", v, sig.kp)], signers: [sig.kp], violations: this.gate(sig, []), apply: () => { this.m.allowDirectMint = v; } };
   }
   opSetDirectBurnerAllowance(_c: Ctx, v: bigint): Op {
-    return { name: "setDirectBurnerAllowance", ixs: [this.allowanceIx("setDirectBurnerAllowance", v, coldMultisig)], signers: [coldMultisig], violations: [], apply: () => { this.m.allowDirectBurn = v; } };
+    const sig = this.signer("allowanceManager");
+    return { name: "setDirectBurnerAllowance", ixs: [this.allowanceIx("setDirectBurnerAllowance", v, sig.kp)], signers: [sig.kp], violations: this.gate(sig, []), apply: () => { this.m.allowDirectBurn = v; } };
   }
 
   opSetMaxSupply(_c: Ctx, next: bigint): Op {
+    const sig = this.signer("capManager");
     const v: string[] = [];
     if (next < this.m.supply) v.push("BelowCurrentSupply");
     return {
       name: "setMaxSupply",
       ixs: [anchorIx(this.program.methods.setMaxSupply(bn(next)).accountsPartial({
-        capManager: coldMultisig.publicKey, config: this.config, okuMMint: this.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID,
+        capManager: sig.kp.publicKey, config: this.config, okuMMint: this.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID,
       }))],
-      signers: [coldMultisig], violations: v, apply: () => { this.m.maxSupply = next; },
+      signers: [sig.kp], violations: this.gate(sig, v), apply: () => { this.m.maxSupply = next; },
     };
   }
 
   opPause(_c: Ctx): Op {
+    const sig = this.signer("pauser");
     return {
       name: "pause",
-      ixs: [anchorIx(this.program.methods.pause().accountsPartial({ pauser: warmMultisig.publicKey, config: this.config }))],
-      signers: [warmMultisig], violations: this.m.paused ? ["AlreadyPaused"] : [], apply: () => { this.m.paused = true; },
+      ixs: [anchorIx(this.program.methods.pause().accountsPartial({ pauser: sig.kp.publicKey, config: this.config }))],
+      signers: [sig.kp], violations: this.gate(sig, this.m.paused ? ["AlreadyPaused"] : []), apply: () => { this.m.paused = true; },
     };
   }
   opUnpause(_c: Ctx): Op {
+    const sig = this.signer("unpauser");
     return {
       name: "unpause",
-      ixs: [anchorIx(this.program.methods.unpause().accountsPartial({ unpauser: coldMultisig.publicKey, config: this.config }))],
-      signers: [coldMultisig], violations: this.m.paused ? [] : ["NotPaused"], apply: () => { this.m.paused = false; },
+      ixs: [anchorIx(this.program.methods.unpause().accountsPartial({ unpauser: sig.kp.publicKey, config: this.config }))],
+      signers: [sig.kp], violations: this.gate(sig, this.m.paused ? [] : ["NotPaused"]), apply: () => { this.m.paused = false; },
     };
   }
 
   opFreeze(_c: Ctx, i: number): Op {
+    const sig = this.signer("freezer");
     return {
       name: "freezeAccount",
       ixs: [anchorIx(this.program.methods.freezeAccount().accountsPartial({
-        freezer: warmMultisig.publicKey, config: this.config, okuMMint: this.okuMMint,
+        freezer: sig.kp.publicKey, config: this.config, okuMMint: this.okuMMint,
         targetOkuMAta: this.okuMAta[i], token2022Program: TOKEN_2022_PROGRAM_ID,
       }))],
-      signers: [warmMultisig], violations: this.m.frozen[i] ? ["TOKEN"] : [], apply: () => { this.m.frozen[i] = true; },
+      signers: [sig.kp], violations: this.gate(sig, this.m.frozen[i] ? ["TOKEN"] : []), apply: () => { this.m.frozen[i] = true; },
     };
   }
   opThaw(_c: Ctx, i: number): Op {
+    const sig = this.signer("unfreezer");
     return {
       name: "thawAccount",
       ixs: [anchorIx(this.program.methods.thawAccount().accountsPartial({
-        unfreezer: coldMultisig.publicKey, config: this.config, okuMMint: this.okuMMint,
+        unfreezer: sig.kp.publicKey, config: this.config, okuMMint: this.okuMMint,
         targetOkuMAta: this.okuMAta[i], token2022Program: TOKEN_2022_PROGRAM_ID,
       }))],
-      signers: [coldMultisig], violations: this.m.frozen[i] ? [] : ["TOKEN"], apply: () => { this.m.frozen[i] = false; },
+      signers: [sig.kp], violations: this.gate(sig, this.m.frozen[i] ? [] : ["TOKEN"]), apply: () => { this.m.frozen[i] = false; },
     };
   }
 
@@ -878,7 +1009,7 @@ class Fuzz {
     };
   }
 
-  rateIx(_ctx: Ctx, kind: "set" | "next" | "with", a: bigint, b: bigint, c?: bigint, d?: bigint, signer: Keypair = psmOrchestrator) {
+  rateIx(_ctx: Ctx, kind: "set" | "next" | "with", a: bigint, b: bigint, c: bigint | undefined, d: bigint | undefined, signer: Keypair) {
     const accts = { rateManager: signer.publicKey, config: this.config };
     const m = this.program.methods as any;
     if (kind === "set") return anchorIx(m.setOkumYieldRate(bn(a), bn(b)).accountsPartial(accts));
@@ -887,14 +1018,16 @@ class Fuzz {
   }
 
   opSetRate(ctx: Ctx, rate: bigint, end: bigint): Op {
+    const sig = this.signer("rateManager");
     const v = this.activeViolations(rate, end, ctx.now, ctx.sched);
-    return { name: "setYieldRate", ixs: [this.rateIx(ctx, "set", rate, end)], signers: [psmOrchestrator], violations: v, apply: () => {}, post: this.readBack(ctx, rate, end) };
+    return { name: "setYieldRate", ixs: [this.rateIx(ctx, "set", rate, end, undefined, undefined, sig.kp)], signers: [sig.kp], violations: this.gate(sig, v), apply: () => {}, post: this.readBack(ctx, rate, end) };
   }
 
   opSetNext(ctx: Ctx, rate: bigint, pend: bigint): Op {
+    const sig = this.signer("rateManager");
     const v = this.successorViolations(rate, pend, ctx.now, ctx.sched);
     return {
-      name: "setNextYieldRate", ixs: [this.rateIx(ctx, "next", rate, pend)], signers: [psmOrchestrator], violations: v, apply: () => {},
+      name: "setNextYieldRate", ixs: [this.rateIx(ctx, "next", rate, pend, undefined, undefined, sig.kp)], signers: [sig.kp], violations: this.gate(sig, v), apply: () => {},
       post: (cfg) => {
         const s = scheduleFromConfig(cfg);
         if (s.pendingRatePerSecond !== rate || s.pendingRateEnd !== pend) throw new Fail(`successor stored (${s.pendingRatePerSecond}, ${s.pendingRateEnd}) != (${rate}, ${pend})`);
@@ -910,10 +1043,12 @@ class Fuzz {
       const after: Schedule = { ...ctx.sched, ratePerSecond: rate, rateEnd: end, baseMultiplier: ctx.m, lastAccrualTime: ctx.now, pendingRatePerSecond: PRECISION, pendingRateEnd: 0n };
       v = this.successorViolations(nrate, nend, ctx.now, after);
     }
-    return { name: "setYieldRateWithSuccessor", ixs: [this.rateIx(ctx, "with", rate, end, nrate, nend)], signers: [psmOrchestrator], violations: v, apply: () => {}, post: this.readBack(ctx, rate, end, { rate: nrate, end: nend }) };
+    const sig = this.signer("rateManager");
+    return { name: "setYieldRateWithSuccessor", ixs: [this.rateIx(ctx, "with", rate, end, nrate, nend, sig.kp)], signers: [sig.kp], violations: this.gate(sig, v), apply: () => {}, post: this.readBack(ctx, rate, end, { rate: nrate, end: nend }) };
   }
 
   opOverride(ctx: Ctx, target: bigint): Op {
+    const sig = this.signer("rateManager");
     const v: string[] = [];
     if (ctx.lock) v.push("OverrideInProgress");
     if (this.m.paused) v.push("Paused");
@@ -922,9 +1057,9 @@ class Fuzz {
     return {
       name: "setOkumMultiplier",
       ixs: [anchorIx(this.program.methods.setOkumMultiplier(bn(target)).accountsPartial({
-        rateManager: psmOrchestrator.publicKey, config: this.config, okuMMint: this.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID,
+        rateManager: sig.kp.publicKey, config: this.config, okuMMint: this.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID,
       }))],
-      signers: [psmOrchestrator], violations: v, apply: () => {}, override: true,
+      signers: [sig.kp], violations: this.gate(sig, v), apply: () => {}, override: !sig.wrong,
       post: (cfg) => {
         const s = scheduleFromConfig(cfg);
         if (s.baseMultiplier !== target || s.ratePerSecond !== PRECISION || s.rateEnd !== 0n || s.pendingRatePerSecond !== PRECISION || s.pendingRateEnd !== 0n || s.lastAccrualTime !== ctx.now) {
@@ -932,6 +1067,60 @@ class Fuzz {
         }
         if (BigInt(cfg.lastOverrideSlot.toString()) !== ctx.slot) throw new Fail("override did not stamp last_override_slot");
       },
+    };
+  }
+
+  // ---- role rotation
+
+  /**
+   * `set_authority(role, new)`. `to = -1` passes the zero key. For `roleAdmin` this only
+   * proposes; `accept_role_admin` commits.
+   */
+  opSetAuthority(_c: Ctx, role: Role, to: number): Op {
+    const sig = this.signer("roleAdmin");
+    const v: string[] = [];
+    if (to < 0 || to === this.m.roles.roleAdmin) v.push("InvalidAuthority");
+    const key = to < 0 ? anchor.web3.PublicKey.default : this.accts[to].publicKey;
+    return {
+      name: "setAuthority",
+      ixs: [anchorIx((this.program.methods as any).setAuthority({ [role]: {} }, key).accountsPartial({
+        roleAdmin: sig.kp.publicKey, config: this.config,
+      }))],
+      signers: [sig.kp], violations: this.gate(sig, v),
+      apply: () => {
+        if (role === "roleAdmin") this.m.pendingAdmin = to;
+        else this.m.roles[role] = to;
+      },
+    };
+  }
+
+  /** `accept_role_admin`, signed by the pending admin (sometimes by someone else). */
+  opAcceptRoleAdmin(_c: Ctx): Op {
+    const pending = this.m.pendingAdmin;
+    const who = pending >= 0 && (this.exact || this.rng.chance(0.8)) ? pending : this.rng.pick(POOL);
+    const v: string[] = [];
+    if (pending < 0) v.push("NoPendingRoleAdmin");
+    else if (who !== pending) v.push("NotPendingRoleAdmin");
+    return {
+      name: "acceptRoleAdmin",
+      ixs: [anchorIx((this.program.methods as any).acceptRoleAdmin().accountsPartial({
+        newRoleAdmin: this.accts[who].publicKey, config: this.config,
+      }))],
+      signers: [this.accts[who]], violations: v,
+      apply: () => { this.m.roles.roleAdmin = pending; this.m.pendingAdmin = -1; },
+    };
+  }
+
+  /** `cancel_role_admin_transfer`, signed by the current admin. */
+  opCancelRoleAdmin(_c: Ctx): Op {
+    const sig = this.signer("roleAdmin");
+    return {
+      name: "cancelRoleAdminTransfer",
+      ixs: [anchorIx((this.program.methods as any).cancelRoleAdminTransfer().accountsPartial({
+        roleAdmin: sig.kp.publicKey, config: this.config,
+      }))],
+      signers: [sig.kp], violations: this.gate(sig, this.m.pendingAdmin < 0 ? ["NoPendingRoleAdmin"] : []),
+      apply: () => { this.m.pendingAdmin = -1; },
     };
   }
 
@@ -949,7 +1138,7 @@ class Fuzz {
       case 4: ix = this.rateIx(ctx, "set", PRECISION, 0n, undefined, undefined, r); break;
       case 5: ix = anchorIx(m.freezeAccount().accountsPartial({ freezer: r.publicKey, config: this.config, okuMMint: this.okuMMint, targetOkuMAta: this.okuMAta[0], token2022Program: TOKEN_2022_PROGRAM_ID })); break;
       default: ix = anchorIx(m.mintOkuMDirect(bn(1_000_000n)).accountsPartial({
-        directMinter: r.publicKey, config: this.config, okuMMint: this.okuMMint, recipient: this.holders[0].publicKey, recipientOkuMAta: this.okuMAta[0],
+        directMinter: r.publicKey, config: this.config, okuMMint: this.okuMMint, recipient: this.accts[0].publicKey, recipientOkuMAta: this.okuMAta[0],
         token2022Program: TOKEN_2022_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
       }));
     }

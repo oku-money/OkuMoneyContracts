@@ -357,12 +357,11 @@ src/
   lib/
     Roles.sol               # Shared RBAC role constants
     Constants.sol           # Compile-time constants + terminology legend
-    Errors.sol              # Errors raised by more than one contract (incl. blacklist)
     MathLib.sol             # computeMultiplier / compoundFor / rpow + conversion helpers
     ReentrancyGuardUpgradeable.sol  # OZ 5.x dropped the upgradeable variant; this replaces it
     OverrideBlockGuard.sol  # whenNoOverrideThisBlock (OkuDollar + LitePSM); emergency override only
     events/                 # One event-declaration file per contract
-    errors/                 # One error-declaration file per contract (contract-specific errors)
+    errors/                 # One error-declaration file per contract; OkuMoneyErrors also holds the errors OkuDollar/LitePSM share
 
 test/mocks/                 # Test-only mocks/harnesses, compiled by Hardhat but outside `src/`.
                             # MockUSDC.sol (6-decimal) is also the deploy script's testnet collateral.

@@ -87,7 +87,7 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
             assembly {
                 sel := mload(add(reason, 32))
             }
-            // Errors.InsufficientBalance selector — must NEVER show up.
+            // OkuMoneyErrors.InsufficientBalance selector — must NEVER show up.
             require(sel != 0xf4d678b8, "Fuzz: must not revert InsufficientBalance");
             // AmountTooSmall = 0xc2e4ff97; allow + log.
         }

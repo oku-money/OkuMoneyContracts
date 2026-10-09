@@ -15,7 +15,7 @@ import {
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
-import {Errors} from "../lib/Errors.sol";
+import {OkuMoneyErrors} from "../lib/errors/OkuMoneyErrors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {OkuMoneyRateSchedule} from "./OkuMoneyRateSchedule.sol";
 import {
@@ -82,7 +82,7 @@ contract OkuMoney is
         public
         initializer
     {
-        if (_admin == address(0)) revert Errors.ZeroAddress();
+        if (_admin == address(0)) revert OkuMoneyErrors.ZeroAddress();
 
         __ERC20_init(name_, symbol_);
         __ERC20Permit_init(name_);
@@ -187,8 +187,8 @@ contract OkuMoney is
         override
     {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        if ($.isBlacklisted[owner]) revert Errors.SenderBlacklisted();
-        if ($.isBlacklisted[spender]) revert Errors.RecipientBlacklisted();
+        if ($.isBlacklisted[owner]) revert OkuMoneyErrors.SenderBlacklisted();
+        if ($.isBlacklisted[spender]) revert OkuMoneyErrors.RecipientBlacklisted();
         super.permit(owner, spender, value, deadline, v, r, s);
     }
 
@@ -204,8 +204,8 @@ contract OkuMoney is
         returns (bool)
     {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        if ($.isBlacklisted[_msgSender()]) revert Errors.SenderBlacklisted();
-        if ($.isBlacklisted[spender]) revert Errors.RecipientBlacklisted();
+        if ($.isBlacklisted[_msgSender()]) revert OkuMoneyErrors.SenderBlacklisted();
+        if ($.isBlacklisted[spender]) revert OkuMoneyErrors.RecipientBlacklisted();
         return super.approve(spender, value);
     }
 
@@ -222,7 +222,9 @@ contract OkuMoney is
         override(ERC20Upgradeable, IERC20)
         returns (bool)
     {
-        if (_getOkuMoneyStorage().isBlacklisted[_msgSender()]) revert Errors.SenderBlacklisted();
+        if (_getOkuMoneyStorage().isBlacklisted[_msgSender()]) {
+            revert OkuMoneyErrors.SenderBlacklisted();
+        }
         return super.transferFrom(from, to, value);
     }
 
@@ -233,8 +235,8 @@ contract OkuMoney is
     function _update(address from, address to, uint256 amount) internal override {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
 
-        if (from != address(0) && $.isBlacklisted[from]) revert Errors.SenderBlacklisted();
-        if (to != address(0) && $.isBlacklisted[to]) revert Errors.RecipientBlacklisted();
+        if (from != address(0) && $.isBlacklisted[from]) revert OkuMoneyErrors.SenderBlacklisted();
+        if (to != address(0) && $.isBlacklisted[to]) revert OkuMoneyErrors.RecipientBlacklisted();
 
         if (from != address(0) && to != address(0)) {
             _requireNotPaused();
@@ -255,8 +257,8 @@ contract OkuMoney is
     function mint(address to, uint256 amount) external onlyRole(Roles.OKUM_MINTER) whenNotPaused {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
 
-        if ($.isBlacklisted[msg.sender]) revert Errors.SenderBlacklisted();
-        if ($.isBlacklisted[to]) revert Errors.RecipientBlacklisted();
+        if ($.isBlacklisted[msg.sender]) revert OkuMoneyErrors.SenderBlacklisted();
+        if ($.isBlacklisted[to]) revert OkuMoneyErrors.RecipientBlacklisted();
         if (totalSupply() + amount > $.maxSupply) revert ExceedsSupplyCap();
         if ($.minterAllowance[msg.sender] < amount) revert ExceedsAllowance();
 
@@ -270,7 +272,7 @@ contract OkuMoney is
     /// @dev `OKUM_BURNER` is separate from `OKUM_MINTER` so burn can be revoked independently.
     function burn(uint256 amount) external onlyRole(Roles.OKUM_BURNER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        if ($.isBlacklisted[msg.sender]) revert Errors.SenderBlacklisted();
+        if ($.isBlacklisted[msg.sender]) revert OkuMoneyErrors.SenderBlacklisted();
         _burn(msg.sender, amount);
     }
 
@@ -286,7 +288,7 @@ contract OkuMoney is
         external
         onlyRole(Roles.OKUM_ALLOWANCE_MANAGER)
     {
-        if (minter_ == address(0)) revert Errors.ZeroAddress();
+        if (minter_ == address(0)) revert OkuMoneyErrors.ZeroAddress();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 oldAllowance = $.minterAllowance[minter_];
         $.minterAllowance[minter_] = newAllowance;
@@ -311,7 +313,7 @@ contract OkuMoney is
     /// @param account Address to blacklist.
     function blacklist(address account) external onlyRole(Roles.OKUM_BLACKLISTER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        if ($.isBlacklisted[account]) revert Errors.AlreadyBlacklisted();
+        if ($.isBlacklisted[account]) revert OkuMoneyErrors.AlreadyBlacklisted();
         $.isBlacklisted[account] = true;
         emit Blacklisted(account);
     }
@@ -320,7 +322,7 @@ contract OkuMoney is
     /// @param account Address to unblacklist.
     function unblacklist(address account) external onlyRole(Roles.OKUM_UNBLACKLISTER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        if (!$.isBlacklisted[account]) revert Errors.NotBlacklisted();
+        if (!$.isBlacklisted[account]) revert OkuMoneyErrors.NotBlacklisted();
         $.isBlacklisted[account] = false;
         emit Unblacklisted(account);
     }

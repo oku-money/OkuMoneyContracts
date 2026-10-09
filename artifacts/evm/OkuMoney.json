@@ -46,6 +46,11 @@
     },
     {
       "inputs": [],
+      "name": "AmountTooSmall",
+      "type": "error"
+    },
+    {
+      "inputs": [],
       "name": "BelowCurrentSupply",
       "type": "error"
     },
@@ -241,6 +246,11 @@
       "type": "error"
     },
     {
+      "inputs": [],
+      "name": "InsufficientBalance",
+      "type": "error"
+    },
+    {
       "inputs": [
         {
           "internalType": "address",
@@ -356,6 +366,11 @@
     {
       "inputs": [],
       "name": "ZeroAddress",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ZeroAmount",
       "type": "error"
     },
     {

@@ -17,7 +17,7 @@ import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
-import {Errors} from "../lib/Errors.sol";
+import {OkuMoneyErrors} from "../lib/errors/OkuMoneyErrors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {OverrideBlockGuard} from "../lib/OverrideBlockGuard.sol";
 import {LitePSMEvents} from "../lib/events/LitePSMEvents.sol";
@@ -95,10 +95,10 @@ contract LitePSM is
         public
         initializer
     {
-        if (_okuMoney == address(0)) revert Errors.ZeroAddress();
-        if (_okuDollar == address(0)) revert Errors.ZeroAddress();
-        if (_usdc == address(0)) revert Errors.ZeroAddress();
-        if (_admin == address(0)) revert Errors.ZeroAddress();
+        if (_okuMoney == address(0)) revert OkuMoneyErrors.ZeroAddress();
+        if (_okuDollar == address(0)) revert OkuMoneyErrors.ZeroAddress();
+        if (_usdc == address(0)) revert OkuMoneyErrors.ZeroAddress();
+        if (_admin == address(0)) revert OkuMoneyErrors.ZeroAddress();
         // OkuDollar must wrap this OkuMoney, or every UsdOku path would price against a
         // different multiplier than the one it mints with.
         if (IOkuDollar(_okuDollar).asset() != _okuMoney) revert AssetMismatch();
@@ -241,7 +241,7 @@ contract LitePSM is
         whenNoOverrideThisBlock
         returns (uint256 usdcOut)
     {
-        if (usdAmount == 0) revert Errors.ZeroAmount();
+        if (usdAmount == 0) revert OkuMoneyErrors.ZeroAmount();
         LitePSMStorage storage $ = _getLitePSMStorage();
         // `OkuDollar.transferFrom` would also reject the user; this fails first, clearly.
         if ($.okuMoney.isBlacklisted(msg.sender)) revert UserBlacklisted(msg.sender);
@@ -253,7 +253,7 @@ contract LitePSM is
         uint256 balBefore = okuDollarToken.balanceOf(address(this));
         okuDollarToken.safeTransferFrom(msg.sender, address(this), usdAmount);
         uint256 received = okuDollarToken.balanceOf(address(this)) - balBefore;
-        if (received == 0) revert Errors.AmountTooSmall();
+        if (received == 0) revert OkuMoneyErrors.AmountTooSmall();
 
         uint256 okuMAmount = $.okuDollar.unwrap(received, address(this));
         uint256 okuMMult;
@@ -278,12 +278,12 @@ contract LitePSM is
         view
         returns (uint256 okuMAmount, uint256 okuMMult)
     {
-        if (usdcAmount == 0) revert Errors.ZeroAmount();
+        if (usdcAmount == 0) revert OkuMoneyErrors.ZeroAmount();
         okuMMult = $.okuMoney.okuMMultiplier();
         okuMAmount = MathLib.dollarsToOkuM(
             MathLib.usdcToDollars(usdcAmount, $.usdcDecimalMultiplier), okuMMult
         );
-        if (okuMAmount == 0) revert Errors.AmountTooSmall();
+        if (okuMAmount == 0) revert OkuMoneyErrors.AmountTooSmall();
     }
 
     /// @dev Reverts if the output rounds to zero or exceeds the buffer.
@@ -295,12 +295,12 @@ contract LitePSM is
         view
         returns (uint256 usdcAmount, uint256 okuMMult)
     {
-        if (okuMAmount == 0) revert Errors.ZeroAmount();
+        if (okuMAmount == 0) revert OkuMoneyErrors.ZeroAmount();
         okuMMult = $.okuMoney.okuMMultiplier();
         usdcAmount = MathLib.dollarsToUsdc(
             MathLib.okuMToDollars(okuMAmount, okuMMult), $.usdcDecimalMultiplier
         );
-        if (usdcAmount == 0) revert Errors.AmountTooSmall();
+        if (usdcAmount == 0) revert OkuMoneyErrors.AmountTooSmall();
         uint256 buffer = $.usdc.balanceOf(address(this));
         if (buffer < usdcAmount) revert InsufficientBuffer(buffer, usdcAmount);
     }
@@ -333,7 +333,7 @@ contract LitePSM is
         whenNoOverrideThisBlock
         onlyRole(Roles.PSM_BUFFER_WITHDRAWER)
     {
-        if (to == address(0)) revert Errors.ZeroAddress();
+        if (to == address(0)) revert OkuMoneyErrors.ZeroAddress();
         LitePSMStorage storage $ = _getLitePSMStorage();
         uint256 balance = $.usdc.balanceOf(address(this));
         if (balance < amount) revert InsufficientBuffer(balance, amount);
@@ -350,7 +350,7 @@ contract LitePSM is
         whenNoOverrideThisBlock
         onlyRole(Roles.PSM_BUFFER_DEPOSITOR)
     {
-        if (amount == 0) revert Errors.ZeroAmount();
+        if (amount == 0) revert OkuMoneyErrors.ZeroAmount();
         LitePSMStorage storage $ = _getLitePSMStorage();
         $.usdc.safeTransferFrom(msg.sender, address(this), amount);
         emit BufferDeposited(msg.sender, amount, $.usdc.balanceOf(address(this)));

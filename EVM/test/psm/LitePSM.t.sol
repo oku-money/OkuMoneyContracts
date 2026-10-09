@@ -3,7 +3,6 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -139,7 +138,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Mint_RevertsZeroAmount() public {
         vm.prank(user1);
-        vm.expectRevert(Errors.ZeroAmount.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAmount.selector);
         litePsm.mintOkuM(0);
     }
 
@@ -483,7 +482,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Redeem_RevertsZeroAmount() public {
         vm.prank(user1);
-        vm.expectRevert(Errors.ZeroAmount.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAmount.selector);
         litePsm.redeemOkuM(0);
     }
 
@@ -851,7 +850,7 @@ contract LitePSMTest is BaseTest {
         _approveOkuMoney(user1, address(litePsm), tinyAmount);
 
         vm.prank(user1);
-        vm.expectRevert(Errors.AmountTooSmall.selector);
+        vm.expectRevert(OkuMoneyErrors.AmountTooSmall.selector);
         litePsm.redeemOkuM(tinyAmount);
     }
 
@@ -1014,7 +1013,7 @@ contract LitePSMTest is BaseTest {
 
     function test_WithdrawUSDC_RevertZeroAddress() public {
         vm.prank(bufferWithdrawer);
-        vm.expectRevert(Errors.ZeroAddress.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
         litePsm.withdrawUsdc(address(0), 1);
     }
 
@@ -1447,7 +1446,7 @@ contract LitePSMTest is BaseTest {
         usdc18.mint(user1, 1);
         vm.startPrank(user1);
         usdc18.approve(address(psm18), 1);
-        vm.expectRevert(Errors.AmountTooSmall.selector);
+        vm.expectRevert(OkuMoneyErrors.AmountTooSmall.selector);
         psm18.mintOkuM(1);
         vm.stopPrank();
     }
@@ -1462,7 +1461,7 @@ contract LitePSMTest is BaseTest {
         usdc18.mint(user1, 1);
         vm.startPrank(user1);
         usdc18.approve(address(psm18), 1);
-        vm.expectRevert(Errors.AmountTooSmall.selector);
+        vm.expectRevert(OkuMoneyErrors.AmountTooSmall.selector);
         psm18.mintUsdOku(1);
         vm.stopPrank();
     }
@@ -1701,7 +1700,7 @@ contract LitePSMTest is BaseTest {
         _setOkuMMultiplierAndRoll(3e18);
 
         vm.prank(user1);
-        vm.expectRevert(Errors.AmountTooSmall.selector);
+        vm.expectRevert(OkuMoneyErrors.AmountTooSmall.selector);
         litePsm.redeemUsdOku(1);
     }
 
@@ -1772,7 +1771,7 @@ contract LitePSMTest is BaseTest {
         bytes memory initData = abi.encodeCall(
             LitePSM.initialize, (address(0), address(okuDollar), address(usdc), admin)
         );
-        vm.expectRevert(Errors.ZeroAddress.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -1781,7 +1780,7 @@ contract LitePSMTest is BaseTest {
         bytes memory initData = abi.encodeCall(
             LitePSM.initialize, (address(okuMoney), address(0), address(usdc), admin)
         );
-        vm.expectRevert(Errors.ZeroAddress.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -1790,7 +1789,7 @@ contract LitePSMTest is BaseTest {
         bytes memory initData = abi.encodeCall(
             LitePSM.initialize, (address(okuMoney), address(okuDollar), address(0), admin)
         );
-        vm.expectRevert(Errors.ZeroAddress.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -1799,7 +1798,7 @@ contract LitePSMTest is BaseTest {
         bytes memory initData = abi.encodeCall(
             LitePSM.initialize, (address(okuMoney), address(okuDollar), address(usdc), address(0))
         );
-        vm.expectRevert(Errors.ZeroAddress.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -1837,19 +1836,19 @@ contract LitePSMTest is BaseTest {
 
     function test_MintUsdOku_RevertZeroAmount() public {
         vm.prank(user1);
-        vm.expectRevert(Errors.ZeroAmount.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAmount.selector);
         litePsm.mintUsdOku(0);
     }
 
     function test_RedeemUsdOku_RevertZeroAmount() public {
         vm.prank(user1);
-        vm.expectRevert(Errors.ZeroAmount.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAmount.selector);
         litePsm.redeemUsdOku(0);
     }
 
     function test_DepositBuffer_RevertZeroAmount() public {
         vm.prank(bufferDepositor);
-        vm.expectRevert(Errors.ZeroAmount.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAmount.selector);
         litePsm.depositBuffer(0);
     }
 }

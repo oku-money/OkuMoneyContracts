@@ -11,7 +11,6 @@ import {
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
-import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {OkuMoneyEvents} from "../lib/events/OkuMoneyEvents.sol";
 import {OkuMoneyErrors} from "../lib/errors/OkuMoneyErrors.sol";
@@ -232,7 +231,7 @@ abstract contract OkuMoneyRateSchedule is
     {
         RateScheduleStorage storage $ = _getRateScheduleStorage();
         uint256 currentMultiplier = okuMMultiplier();
-        if (newMultiplier <= currentMultiplier) revert Errors.MultiplierCannotDecrease();
+        if (newMultiplier <= currentMultiplier) revert OkuMoneyErrors.MultiplierCannotDecrease();
         if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
 
         // Announce the cancelled successor (if any) while it is still in storage.

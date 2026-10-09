@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 /**
  * @title OkuDollarErrors
- * @notice Errors specific to OkuDollar; shared ones live in {Errors}, and
+ * @notice Errors specific to OkuDollar; shared ones live in {OkuMoneyErrors}, and
  *         `OverrideInProgress` comes from {OverrideBlockGuard}.
  */
 abstract contract OkuDollarErrors {

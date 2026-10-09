@@ -5,7 +5,6 @@ import {BaseTest} from "../Base.t.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import {Constants} from "../../src/lib/Constants.sol";
-import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {
     PausableUpgradeable
@@ -166,7 +165,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(minter);
-        vm.expectRevert(Errors.RecipientBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
         okuMoney.mint(user1, 100e18);
     }
 
@@ -263,7 +262,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(minter);
 
         vm.prank(minter);
-        vm.expectRevert(Errors.SenderBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
         okuMoney.burn(50e18);
     }
 
@@ -347,7 +346,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(user1);
-        vm.expectRevert(Errors.SenderBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuMoney.transfer(user2, 30e18);
     }
@@ -359,7 +358,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user2);
 
         vm.prank(user1);
-        vm.expectRevert(Errors.RecipientBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuMoney.transfer(user2, 30e18);
     }
@@ -461,7 +460,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_SetOkuMMultiplier_CannotDecrease() public {
         vm.prank(rateManager);
-        vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
+        vm.expectRevert(OkuMoneyErrors.MultiplierCannotDecrease.selector);
         okuMoney.setOkuMMultiplier(PRECISION - 1);
     }
 
@@ -512,7 +511,7 @@ contract OkuMoneyTest is BaseTest {
         uint256 currentPrice = okuMoney.okuMMultiplier();
 
         vm.prank(rateManager);
-        vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
+        vm.expectRevert(OkuMoneyErrors.MultiplierCannotDecrease.selector);
         okuMoney.setOkuMMultiplier(currentPrice);
     }
 
@@ -1410,7 +1409,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(user1);
-        vm.expectRevert(Errors.SenderBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuMoney.transfer(user2, 50e18);
     }
@@ -1422,7 +1421,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user2);
 
         vm.prank(user1);
-        vm.expectRevert(Errors.RecipientBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuMoney.transfer(user2, 50e18);
     }
@@ -1432,7 +1431,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(minter);
-        vm.expectRevert(Errors.RecipientBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
         okuMoney.mint(user1, 100e18);
     }
 
@@ -1940,7 +1939,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         // Bogus signature is fine — call must revert before signature check.
-        vm.expectRevert(Errors.SenderBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
         okuMoney.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
     }
 
@@ -1949,7 +1948,7 @@ contract OkuMoneyTest is BaseTest {
         vm.prank(blacklister);
         okuMoney.blacklist(user2);
 
-        vm.expectRevert(Errors.RecipientBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
         okuMoney.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
     }
 
@@ -1959,7 +1958,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user2);
 
         vm.prank(user1);
-        vm.expectRevert(Errors.RecipientBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.RecipientBlacklisted.selector);
         okuMoney.approve(user2, 50e18);
     }
 
@@ -1982,7 +1981,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(user1);
-        vm.expectRevert(Errors.SenderBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
         okuMoney.approve(user2, 50e18);
     }
 
@@ -2007,7 +2006,7 @@ contract OkuMoneyTest is BaseTest {
         );
 
         vm.prank(user2);
-        vm.expectRevert(Errors.SenderBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
         okuMoney.transferFrom(user1, user3, 50e18);
     }
 
@@ -2032,7 +2031,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(minter);
 
         vm.prank(minter);
-        vm.expectRevert(Errors.SenderBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.SenderBlacklisted.selector);
         okuMoney.mint(user1, 100e18);
     }
 
@@ -2043,13 +2042,13 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(blacklister);
-        vm.expectRevert(Errors.AlreadyBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.AlreadyBlacklisted.selector);
         okuMoney.blacklist(user1);
     }
 
     function test_Unblacklist_RevertsOnNotBlacklisted() public {
         vm.prank(unblacklister);
-        vm.expectRevert(Errors.NotBlacklisted.selector);
+        vm.expectRevert(OkuMoneyErrors.NotBlacklisted.selector);
         okuMoney.unblacklist(user1);
     }
 
@@ -2059,7 +2058,7 @@ contract OkuMoneyTest is BaseTest {
         OkuMoney impl = new OkuMoney();
         bytes memory initData =
             abi.encodeCall(OkuMoney.initialize, ("OkuMoney", "OkuM", address(0), MAX_SUPPLY));
-        vm.expectRevert(Errors.ZeroAddress.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -2075,7 +2074,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_ConfigureMinterAllowance_RevertZeroAddress() public {
         vm.prank(allowanceManager);
-        vm.expectRevert(Errors.ZeroAddress.selector);
+        vm.expectRevert(OkuMoneyErrors.ZeroAddress.selector);
         okuMoney.configureMinterAllowance(address(0), 1000e18);
     }
 }

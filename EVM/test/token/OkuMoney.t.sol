@@ -741,6 +741,200 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.okuMPendingRatePerSecond(), PRECISION);
     }
 
+    // ---- No extension while paused: a write may only lower the projected curve ----
+
+    function _pause() private {
+        vm.prank(pauser);
+        okuMoney.pause();
+    }
+
+    /// @dev Re-writing the same rate with a later end would keep accruing past the window
+    ///      the pause froze; rejected. Up to the current end it is harmless and passes.
+    function test_SetOkuMYieldRate_SameRateCannotExtendWindowWhilePaused() public {
+        uint256 rate = PRECISION + 1e10;
+        uint256 endTime = block.timestamp + 10 days;
+        vm.prank(rateManager);
+        okuMoney.setOkuMYieldRate(rate, endTime);
+        _pause();
+
+        vm.prank(rateManager);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.setOkuMYieldRate(rate, endTime + 1);
+
+        vm.prank(rateManager);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.setOkuMYieldRate(rate - 1, block.timestamp + 90 days);
+
+        vm.prank(rateManager);
+        okuMoney.setOkuMYieldRate(rate - 1, endTime);
+        assertEq(okuMoney.okuMRateEnd(), endTime);
+    }
+
+    /// @dev Once the successor is the effective rate, its own end bounds the write.
+    function test_SetOkuMYieldRate_WhilePausedBoundedByLiveSuccessorEnd() public {
+        uint256 endTime = block.timestamp + 10 days;
+        uint256 pendingEnd = endTime + 10 days;
+        vm.prank(rateManager);
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            PRECISION + 2e10, endTime, PRECISION + 1e10, pendingEnd
+        );
+        vm.warp(endTime + 1);
+        _pause();
+
+        vm.prank(rateManager);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e10, pendingEnd + 1);
+
+        vm.prank(rateManager);
+        okuMoney.setOkuMYieldRate(PRECISION + 1e10, pendingEnd);
+
+        // After every segment has run out the effective rate is PRECISION: halts only.
+        vm.warp(pendingEnd + 1);
+        vm.prank(rateManager);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.setOkuMYieldRate(PRECISION + 1, block.timestamp + 1 days);
+        vm.prank(rateManager);
+        okuMoney.setOkuMYieldRate(PRECISION, 0);
+    }
+
+    /// @dev A successor at or below the ACTIVE rate used to pass while paused, adding yield
+    ///      after `okuMRateEnd` where none was scheduled. It is now compared with the
+    ///      successor it replaces.
+    function test_SetNextOkuMYieldRate_CannotAddOrExtendSuccessorWhilePaused() public {
+        uint256 rate = PRECISION + 2e10;
+        uint256 endTime = block.timestamp + 10 days;
+        vm.prank(rateManager);
+        okuMoney.setOkuMYieldRate(rate, endTime);
+        _pause();
+
+        // None armed: no yielding successor may be added.
+        vm.prank(rateManager);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.setNextOkuMYieldRate(rate, endTime + 10 days);
+
+        vm.prank(unpauser);
+        okuMoney.unpause();
+        vm.prank(rateManager);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 1e10, endTime + 10 days);
+        _pause();
+
+        // Armed: higher rate or later end rejected; lower-or-equal on both passes.
+        vm.prank(rateManager);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 1e10 + 1, endTime + 10 days);
+        vm.prank(rateManager);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 1e10, endTime + 10 days + 1);
+        vm.prank(rateManager);
+        okuMoney.setNextOkuMYieldRate(PRECISION + 5e9, endTime + 5 days);
+        assertEq(okuMoney.okuMPendingRateEnd(), endTime + 5 days);
+    }
+
+    /// @dev The atomic setter clears the successor before staging the new one, so while
+    ///      paused only a no-yield successor can follow the (lowered) active rate.
+    function test_SetOkuMYieldRateWithSuccessor_WhilePausedOnlyNoYieldSuccessor() public {
+        uint256 endTime = block.timestamp + 10 days;
+        vm.prank(rateManager);
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            PRECISION + 2e10, endTime, PRECISION + 2e10, endTime + 10 days
+        );
+        _pause();
+
+        vm.prank(rateManager);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            PRECISION + 1e10, endTime, PRECISION + 1e10, endTime + 1 days
+        );
+
+        vm.prank(rateManager);
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            PRECISION + 1e10, endTime, PRECISION, endTime + 1 days
+        );
+        assertEq(okuMoney.okuMPendingRatePerSecond(), PRECISION);
+    }
+
+    struct PausedWrite {
+        uint8 kind;
+        uint256 rate;
+        uint256 end;
+        uint256 nextRate;
+        uint256 nextEnd;
+    }
+
+    /// @dev The property the gate exists for: while paused, any write that is accepted leaves
+    ///      the multiplier at every later checkpoint no higher than the old schedule would.
+    function testFuzz_PausedRateWriteNeverRaisesFutureMultiplier(
+        uint256 r1,
+        uint256 d1,
+        uint256 r2,
+        uint256 d2,
+        uint256 elapsed,
+        PausedWrite memory w
+    )
+        public
+    {
+        d1 = bound(d1, 1, MAX_RATE_WINDOW);
+        d2 = bound(d2, 1, MAX_RATE_WINDOW);
+        uint256 t0 = block.timestamp;
+        vm.prank(rateManager);
+        okuMoney.setOkuMYieldRateWithSuccessor(
+            bound(r1, PRECISION + 1, MAX_RATE),
+            t0 + d1,
+            bound(r2, PRECISION, MAX_RATE),
+            t0 + d1 + d2
+        );
+        vm.warp(t0 + bound(elapsed, 0, d1 + d2 + 1 days));
+        _pause();
+
+        uint256[6] memory at = [
+            block.timestamp + 1,
+            t0 + d1,
+            t0 + d1 + 1,
+            t0 + d1 + d2,
+            t0 + d1 + d2 + 1,
+            block.timestamp + 200 days
+        ];
+        uint256[6] memory before = _curveAt(at);
+        if (!_tryPausedWrite(w)) return;
+        uint256[6] memory afterWrite = _curveAt(at);
+        for (uint256 i; i < at.length; i++) {
+            assertLe(afterWrite[i], before[i], "paused write raised the curve");
+        }
+    }
+
+    /// @dev Multiplier at each future checkpoint (0 for past ones), state left untouched.
+    function _curveAt(uint256[6] memory at) private returns (uint256[6] memory m) {
+        uint256 snap = vm.snapshotState();
+        uint256 now_ = block.timestamp;
+        for (uint256 i; i < at.length; i++) {
+            if (at[i] < now_) continue;
+            vm.warp(at[i]);
+            m[i] = okuMoney.okuMMultiplier();
+        }
+        vm.revertToState(snap);
+    }
+
+    /// @dev One bounded rate write of kind 0/1/2 (active / successor / both); true if accepted.
+    function _tryPausedWrite(PausedWrite memory w) private returns (bool ok) {
+        w.rate = bound(w.rate, PRECISION, MAX_RATE);
+        w.end = w.rate == PRECISION ? 0 : block.timestamp + bound(w.end, 1, MAX_RATE_WINDOW);
+        bytes memory data;
+        if (w.kind % 3 == 0) {
+            data = abi.encodeCall(okuMoney.setOkuMYieldRate, (w.rate, w.end));
+        } else if (w.kind % 3 == 1) {
+            w.end = okuMoney.okuMRateEnd() + bound(w.end, 1, MAX_RATE_WINDOW);
+            data = abi.encodeCall(okuMoney.setNextOkuMYieldRate, (w.rate, w.end));
+        } else {
+            w.nextRate = bound(w.nextRate, PRECISION, MAX_RATE);
+            w.nextEnd = w.end + bound(w.nextEnd, 1, MAX_RATE_WINDOW);
+            data = abi.encodeCall(
+                okuMoney.setOkuMYieldRateWithSuccessor, (w.rate, w.end, w.nextRate, w.nextEnd)
+            );
+        }
+        vm.prank(rateManager);
+        (ok,) = address(okuMoney).call(data);
+    }
+
     function test_SetOkuMYieldRate_StoresSchedule() public {
         uint256 endTime = block.timestamp + 30 days;
         vm.prank(rateManager);

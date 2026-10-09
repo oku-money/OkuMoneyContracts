@@ -47,6 +47,7 @@ import {
   mintToViaBankrun,
   ensureAtaViaBankrun,
   warpBy,
+  warpTo,
   getClock,
   expectBankrunError,
   computeCanonicalMultiplier,
@@ -154,6 +155,22 @@ describe("streaming accrual (continuous rate schedule)", () => {
       .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
       .signers([orchestrator])
       .rpc();
+
+  const setNext = async (rate: bigint, pendingEndTs: number) =>
+    psm.methods
+      .setNextOkumYieldRate(new BN(rate.toString()), new BN(pendingEndTs))
+      .accountsPartial({ rateManager: orchestrator.publicKey, config: psmConfigPda })
+      .signers([orchestrator])
+      .rpc();
+
+  const pausePsm = async () => {
+    const { warmMultisig } = await import("../shared/setup");
+    await psm.methods
+      .pause()
+      .accountsPartial({ pauser: warmMultisig.publicKey, config: psmConfigPda })
+      .signers([warmMultisig])
+      .rpc();
+  };
 
   const setRateWithSuccessor = async (
     rate: bigint,
@@ -571,42 +588,26 @@ describe("streaming accrual (continuous rate schedule)", () => {
     );
   });
 
-  it("while paused, rejects a successor that increases on the rate written in the same call", async () => {
-    // The subtle one. Paused with a 5% baseline, `withSuccessor(3%, .., 4%, ..)`
-    // must revert: the successor's pause gate has to compare against the 3%
-    // just written, NOT the prior 5%. Comparing against the prior
-    // value would let a rate INCREASE through while users cannot exit — exactly what
-    // the gate exists to prevent.
+  it("while paused, the atomic setter accepts only a no-yield successor", async () => {
+    // The subtle one. Paused with a 5% baseline, `withSuccessor(3%, .., s, ..)`:
+    // the active write clears the old successor, and the successor gate must see
+    // that cleared slot, NOT the prior schedule. So any yielding successor (even
+    // below the 3% just written) would add yield after the window the pause froze.
     const start = await nowTs();
-    await setRate(ratePerSecondForApy(0.05), start + 30 * DAY);
+    const end = start + 30 * DAY;
+    await setRate(ratePerSecondForApy(0.05), end);
+    await pausePsm();
 
-    const { warmMultisig } = await import("../shared/setup");
-    await psm.methods
-      .pause()
-      .accountsPartial({ pauser: warmMultisig.publicKey, config: psmConfigPda })
-      .signers([warmMultisig])
-      .rpc();
+    for (const s of [ratePerSecondForApy(0.04), ratePerSecondForApy(0.02)]) {
+      await expectBankrunError(
+        () => setRateWithSuccessor(ratePerSecondForApy(0.03), end, s, end + 30 * DAY),
+        "Paused",
+      );
+    }
 
-    const t = await nowTs();
-    await expectBankrunError(
-      () =>
-        setRateWithSuccessor(
-          ratePerSecondForApy(0.03), // decrease vs 5% -> active gate passes
-          t + 30 * DAY,
-          ratePerSecondForApy(0.04), // increase vs the 3% just written -> must fail
-          t + 60 * DAY,
-        ),
-      "Paused",
-    );
-
-    // Control: a successor at or below the newly-written rate is still allowed,
-    // so the gate is not simply rejecting everything while paused.
-    await setRateWithSuccessor(
-      ratePerSecondForApy(0.03),
-      t + 30 * DAY,
-      ratePerSecondForApy(0.02),
-      t + 60 * DAY,
-    );
+    // Control: a decrease with a no-yield successor passes, so the gate is not
+    // simply rejecting everything while paused.
+    await setRateWithSuccessor(ratePerSecondForApy(0.03), end, PRECISION, end + 30 * DAY);
   });
 
   it("emits PendingRateCancelled when an armed successor is discarded", async () => {
@@ -660,27 +661,52 @@ describe("streaming accrual (continuous rate schedule)", () => {
 
   it("while paused, rejects a rate INCREASE but permits a decrease and a halt", async () => {
     const start = await nowTs();
-    await setRate(ratePerSecondForApy(0.05), start + 30 * DAY);
-
-    await psm.methods
-      .pause()
-      .accountsPartial({ pauser: (await import("../shared/setup")).warmMultisig.publicKey, config: psmConfigPda })
-      .signers([(await import("../shared/setup")).warmMultisig])
-      .rpc();
-
-    const t = await nowTs();
+    const end = start + 30 * DAY;
+    await setRate(ratePerSecondForApy(0.05), end);
+    await pausePsm();
 
     // Increase -> blocked.
-    await expectBankrunError(
-      () => setRate(ratePerSecondForApy(0.5), t + 30 * DAY),
-      "Paused",
-    );
+    await expectBankrunError(() => setRate(ratePerSecondForApy(0.5), end), "Paused");
 
     // Decrease -> allowed. Inflating while users cannot exit is the thing
     // being prevented; slowing down is incident response and must stay open.
-    await setRate(ratePerSecondForApy(0.01), t + 30 * DAY);
+    await setRate(ratePerSecondForApy(0.01), end);
 
     // Halting -> always allowed.
     await setRate(PRECISION, 0);
+  });
+
+  it("while paused, no write may extend accrual past the segment accruing now", async () => {
+    const rate = ratePerSecondForApy(0.05);
+    const start = await nowTs();
+    const end = start + 10 * DAY;
+    await setRate(rate, end);
+    await pausePsm();
+
+    // Same or lower rate, later end: more yield after the frozen window.
+    await expectBankrunError(() => setRate(rate, end + 1), "Paused");
+    await expectBankrunError(() => setRate(rate - 1n, start + 90 * DAY), "Paused");
+    // A yielding successor where none was armed: also more yield.
+    await expectBankrunError(() => setNext(rate, end + 10 * DAY), "Paused");
+    // Up to the current end is harmless.
+    await setRate(rate - 1n, end);
+    expect((await fetchSchedule()).rateEnd).to.equal(BigInt(end));
+  });
+
+  it("while paused, a successor may only be replaced by a lower-or-equal, no-later one", async () => {
+    const start = await nowTs();
+    const end = start + 10 * DAY;
+    const next = ratePerSecondForApy(0.03);
+    await setRateWithSuccessor(ratePerSecondForApy(0.05), end, next, end + 10 * DAY);
+    await pausePsm();
+
+    await expectBankrunError(() => setNext(next + 1n, end + 10 * DAY), "Paused");
+    await expectBankrunError(() => setNext(next, end + 10 * DAY + 1), "Paused");
+    await setNext(next - 1n, end + 5 * DAY);
+
+    // Once that successor is live, its own end bounds an active write.
+    await warpTo(h, end + 1);
+    await expectBankrunError(() => setRate(next - 1n, end + 5 * DAY + 1), "Paused");
+    await setRate(next - 1n, end + 5 * DAY);
   });
 });

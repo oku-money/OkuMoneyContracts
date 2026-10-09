@@ -159,6 +159,19 @@ class Rng {
 
 const bn = (x: bigint) => new BN(x.toString());
 
+/**
+ * The rate accruing at `now` and when it stops (written here, not imported, so the model
+ * stays independent of the code under test): active window up to `rateEnd`, then the
+ * successor up to `pendingRateEnd`, then [PRECISION, 0].
+ */
+function effectiveSegment(s: Schedule, now: bigint): [bigint, bigint] {
+  if (s.rateEnd !== 0n && now > s.rateEnd) {
+    if (s.pendingRateEnd !== 0n && now > s.pendingRateEnd) return [PRECISION, 0n];
+    return [s.pendingRatePerSecond, s.pendingRateEnd];
+  }
+  return [s.ratePerSecond, s.rateEnd];
+}
+
 /** Exact test of `x <= canonical / 1e18` for a non-negative finite f64 `x`. */
 function f64LeWad(x: number, canonical: bigint): boolean {
   const dv = new DataView(new ArrayBuffer(8));
@@ -452,7 +465,10 @@ class Fuzz {
         const eff = effectiveRate(c.sched, c.now);
         const near = [c.sched.ratePerSecond, c.sched.ratePerSecond - 1n, eff, eff + 1n, PRECISION];
         const next = r.pick(near.filter((x) => x >= PRECISION && x <= MAX_RATE));
-        return this.opSetRate(c, next, next === PRECISION ? 0n : c.now + 1000n);
+        // End within the live segment when there is one, so the rate comparison is what decides.
+        const segEnd = effectiveSegment(c.sched, c.now)[1];
+        const end = segEnd > c.now && segEnd < c.now + 1000n ? segEnd : c.now + 1000n;
+        return this.opSetRate(c, next, next === PRECISION ? 0n : end);
       });
     }
     await run((c) => this.opUnpause(c));
@@ -676,6 +692,10 @@ class Fuzz {
       case "successor": {
         const rate = this.randRateValue(ctx);
         const base = ctx.cfg.okumRateEnd.toString() !== "0" ? BigInt(ctx.cfg.okumRateEnd.toString()) : ctx.now + BigInt(DAY);
+        // Sometimes exactly at / one past the armed successor's end (the paused gate's bound).
+        if (ctx.sched.pendingRateEnd > base && r.chance(this.m.paused ? 0.5 : 0.1)) {
+          return this.opSetNext(ctx, rate, ctx.sched.pendingRateEnd + BigInt(r.int(2)));
+        }
         return this.opSetNext(ctx, rate, base + BigInt(r.chance(0.1) ? -r.int(100) : 1 + r.int(100 * DAY)));
       }
       case "withSuccessor": {
@@ -721,6 +741,10 @@ class Fuzz {
     if (rate === PRECISION) end = r.chance(0.85) ? 0n : ctx.now + BigInt(DAY);
     else end = r.weighted<bigint>([
       [ctx.now + BigInt(1 + r.int(MAX_WINDOW)), 14],
+      // The paused gate's boundary: the end of the segment accruing now (+/-1).
+      ...((ctx.sched.rateEnd > ctx.now || ctx.sched.pendingRateEnd > ctx.now)
+        ? [[effectiveSegment(ctx.sched, ctx.now)[1] + BigInt(r.int(3)) - 1n, this.m.paused ? 6 : 1] as [bigint, number]]
+        : []),
       [ctx.now + BigInt(MAX_WINDOW), 1],
       [ctx.now + BigInt(MAX_WINDOW + 1), 1],
       [ctx.now - BigInt(r.int(10)), 1],
@@ -979,7 +1003,11 @@ class Fuzz {
       if (end <= now) v.push("EndTimestampInPast");
       else if (end - now > BigInt(MAX_WINDOW)) v.push("RateWindowTooLong");
     }
-    if (v.length === 0 && this.m.paused && rate > effectiveRate(sched, now)) v.push("Paused");
+    // While paused a yielding write must not beat the segment accruing now in rate or end.
+    if (v.length === 0 && this.m.paused && rate !== PRECISION) {
+      const [segRate, segEnd] = effectiveSegment(sched, now);
+      if (rate > segRate || end > segEnd) v.push("Paused");
+    }
     return v;
   }
 
@@ -991,7 +1019,9 @@ class Fuzz {
     if (now >= sched.rateEnd) return ["RateAlreadyExpired"];
     if (pend <= sched.rateEnd) return ["PendingEndNotAfterRateEnd"];
     if (pend - sched.rateEnd > BigInt(MAX_WINDOW)) return ["RateWindowTooLong"];
-    if (this.m.paused && rate > effectiveRate(sched, now)) v.push("Paused");
+    // While paused a yielding successor must not beat the one it replaces (none armed:
+    // rate PRECISION, so only a no-yield successor passes).
+    if (this.m.paused && rate !== PRECISION && (rate > sched.pendingRatePerSecond || pend > sched.pendingRateEnd)) v.push("Paused");
     return v;
   }
 

@@ -111,16 +111,8 @@ abstract contract OkuMoneyRateSchedule is
     ///      that (or with no rate end): the stored rate.
     ///      Basis for the rate setters' pause gate.
     function okuMEffectiveRatePerSecond() public view returns (uint256) {
-        RateScheduleStorage storage $ = _getRateScheduleStorage();
-        uint256 rateEnd = $.okuMRateEnd;
-        if (rateEnd != 0 && block.timestamp > rateEnd) {
-            uint256 pendingRateEnd = $.okuMPendingRateEnd;
-            if (pendingRateEnd != 0 && block.timestamp > pendingRateEnd) {
-                return Constants.PRECISION;
-            }
-            return $.okuMPendingRatePerSecond;
-        }
-        return $.okuMRatePerSecond;
+        (uint256 rate,) = _effectiveSegment(_getRateScheduleStorage());
+        return rate;
     }
 
     /// @notice Snapshot multiplier taken at {okuMLastAccrualTime}.
@@ -185,7 +177,7 @@ abstract contract OkuMoneyRateSchedule is
     /// @dev Activation keys off the absolute `okuMRateEnd` inside {okuMMultiplier} with no
     ///      transaction at the boundary, so staging on different chains days apart still
     ///      activates simultaneously. Requires a bounded, unexpired active window.
-    ///      Pause-gated for increases like {setOkuMYieldRate}.
+    ///      While paused it may not exceed the armed successor in rate or end.
     function setNextOkuMYieldRate(
         uint256 newRate,
         uint256 pendingEndTimestamp
@@ -291,7 +283,7 @@ abstract contract OkuMoneyRateSchedule is
 
         RateScheduleStorage storage $ = _getRateScheduleStorage();
         uint256 oldRate = $.okuMRatePerSecond;
-        _requireNoIncreaseWhilePaused(newRate);
+        _requireActiveNotRaisedWhilePaused($, newRate, endTimestamp);
         // Read the multiplier under the OLD schedule, before any write: it becomes the new
         // base, so the curve is continuous at this instant (no yield gained or lost).
         uint256 snapshot = okuMMultiplier();
@@ -327,7 +319,7 @@ abstract contract OkuMoneyRateSchedule is
         if (pendingEndTimestamp - rateEnd > Constants.MAX_RATE_WINDOW) {
             revert RateWindowTooLong();
         }
-        _requireNoIncreaseWhilePaused(newRate);
+        _requireSuccessorNotRaisedWhilePaused($, newRate, pendingEndTimestamp);
 
         // Replacing an armed successor counts as cancelling it.
         _emitPendingRateCancelledIfArmed($);
@@ -345,11 +337,56 @@ abstract contract OkuMoneyRateSchedule is
         if (newRate > Constants.MAX_RATE) revert RateTooHigh();
     }
 
-    /// @dev While paused only decreases (vs the EFFECTIVE rate) are allowed: incident
-    ///      response must be able to zero accrual, and an increase would hand the inflated
-    ///      multiplier to whoever redeems first after unpause.
-    function _requireNoIncreaseWhilePaused(uint256 newRate) private view {
-        if (newRate > okuMEffectiveRatePerSecond() && paused()) {
+    /// @dev The rate accruing now and when it stops: the active window up to `okuMRateEnd`,
+    ///      then the successor up to `okuMPendingRateEnd`, then `PRECISION` (end 0).
+    function _effectiveSegment(RateScheduleStorage storage $)
+        private
+        view
+        returns (uint256 rate, uint256 end)
+    {
+        uint256 rateEnd = $.okuMRateEnd;
+        if (rateEnd != 0 && block.timestamp > rateEnd) {
+            uint256 pendingRateEnd = $.okuMPendingRateEnd;
+            if (pendingRateEnd != 0 && block.timestamp > pendingRateEnd) {
+                return (Constants.PRECISION, 0);
+            }
+            return ($.okuMPendingRatePerSecond, pendingRateEnd);
+        }
+        return ($.okuMRatePerSecond, rateEnd);
+    }
+
+    /// @dev While paused a write may only lower the projected multiplier curve: incident
+    ///      response must be able to cut or halt accrual, but any gain would be handed to
+    ///      whoever redeems first after unpause. A halt always passes. A yielding rate must
+    ///      not exceed the EFFECTIVE rate nor outlast the segment accruing it, so the new
+    ///      curve grows no faster and stops no later (the cleared successor only lowers it).
+    function _requireActiveNotRaisedWhilePaused(
+        RateScheduleStorage storage $,
+        uint256 newRate,
+        uint256 endTimestamp
+    )
+        private
+        view
+    {
+        if (newRate == Constants.PRECISION || !paused()) return;
+        (uint256 rate, uint256 end) = _effectiveSegment($);
+        if (newRate > rate || endTimestamp > end) revert PausableUpgradeable.EnforcedPause();
+    }
+
+    /// @dev Successor counterpart (only reachable before `okuMRateEnd`, so the stored
+    ///      successor is not yet live): while paused a yielding successor must not exceed
+    ///      the one it replaces in rate or end. With none armed (rate `PRECISION`) only a
+    ///      no-yield successor passes, including after an atomic re-anchor, which clears it.
+    function _requireSuccessorNotRaisedWhilePaused(
+        RateScheduleStorage storage $,
+        uint256 newRate,
+        uint256 pendingEndTimestamp
+    )
+        private
+        view
+    {
+        if (newRate == Constants.PRECISION || !paused()) return;
+        if (newRate > $.okuMPendingRatePerSecond || pendingEndTimestamp > $.okuMPendingRateEnd) {
             revert PausableUpgradeable.EnforcedPause();
         }
     }

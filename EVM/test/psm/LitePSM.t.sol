@@ -1705,6 +1705,19 @@ contract LitePSMTest is BaseTest {
         litePsm.redeemUsdOku(1);
     }
 
+    /// @notice The transfer moves one share (worth 1 dollar-wei to the PSM at m = 1.9e18)
+    ///         but unwrapping 1 dollar-wei floors to 0 OkuM: `unwrap` rejects it with the
+    ///         documented `AmountTooSmall`, not `_quoteRedeem`'s `ZeroAmount`.
+    function test_RedeemUsdOku_RevertsWhenUnwrapRoundsToZero() public {
+        _mintUsdOku(user1, 100e18);
+        _approveOkuDollar(user1, address(litePsm), 100e18);
+        _setOkuMMultiplierAndRoll(19e17);
+
+        vm.prank(user1);
+        vm.expectRevert(SharedErrors.AmountTooSmall.selector);
+        litePsm.redeemUsdOku(2);
+    }
+
     /// @notice redeemUsdOku emits only UsdOkuRedeemed, not OkuMRedeemed.
     function test_RedeemUsdOku_OkuMAtPsmInstant_NoOkuMRedeemedEvent() public {
         // Setup: user1 holds UsdOku; PSM buffer covers the redemption.

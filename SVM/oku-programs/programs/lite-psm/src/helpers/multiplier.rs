@@ -37,10 +37,10 @@ pub fn current(config: &PsmConfig) -> Result<u128> {
 }
 
 /// The rate actually accruing now (the successor or nothing once the stored
-/// window has closed). The pause gate compares against this, not the stored
-/// rate, so a stale rate cannot disguise an increase as a decrease.
-/// EVM: `OkuMoneyRateSchedule.okuMEffectiveRatePerSecond`.
+/// window has closed) and when it stops. The pause gate bounds a paused write
+/// by this, not the stored rate, so a stale rate cannot disguise an increase.
+/// EVM: `OkuMoneyRateSchedule._effectiveSegment`.
 #[inline]
-pub fn effective_rate(config: &PsmConfig, unix_timestamp: i64) -> u128 {
-    schedule_of(config).effective_rate(unix_timestamp)
+pub fn effective_segment(config: &PsmConfig, unix_timestamp: i64) -> (u128, i64) {
+    schedule_of(config).effective_segment(unix_timestamp)
 }

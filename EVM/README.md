@@ -695,6 +695,9 @@ on both tokens in one run.
 
 - `unwrap` rounds `sharesToBurn` **up**, deliberately favouring the vault (an
   OkuDollar ceiling, as the [`MathLib.sol`](src/lib/MathLib.sol) rounding-policy header allows).
+- An `unwrap` (or 4626 `withdraw` / `redeem`) whose OkuM output floors to zero
+  reverts `AmountTooSmall` rather than burning a share for nothing; this is also
+  what a dust `LitePSM.redeemUsdOku` reverts with.
 - `InsufficientBalance` (user balance) and `InsufficientReserves` (vault reserves)
   are intentionally distinct; collapsing them would hide which side is short.
 - Both are `public` so the ERC-4626 entry points can call them, and carry
@@ -821,11 +824,23 @@ what `whenNotPaused` gates:
 - **LitePSM**: `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku`,
   `depositBuffer`, `withdrawUsdc`.
 
-`setOkuMYieldRate` and `setNextOkuMYieldRate` are **decrease-only while paused**:
-both compare the new rate against `okuMEffectiveRatePerSecond()` (not raw
-storage) and revert `EnforcedPause` on an increase, so operators can zero or lower
-the rate during an incident but cannot stage or activate a higher one while
-users cannot exit.
+The rate setters may only **lower the projected multiplier curve while paused**
+(else `EnforcedPause`), so operators can cut or halt accrual during an incident
+but cannot add yield for whoever redeems first after unpause:
+
+- A halt (`PRECISION`, end 0) always passes.
+- A yielding active rate must be `<=` the effective rate and end no later than the
+  segment accruing now: `okuMRateEnd`, or `okuMPendingRateEnd` once the successor
+  is live. Comparing with the effective rate, not raw storage, matters once a
+  window has closed. Re-writing the same rate with a later end is an extension and
+  is rejected.
+- A yielding successor must not exceed the armed one in rate or end; with none
+  armed (including straight after `setOkuMYieldRateWithSuccessor`'s re-anchor,
+  which clears it), only a no-yield successor passes.
+
+A successor staged **before** the pause still activates at `okuMRateEnd`: pause
+freezes no schedule already published. Cut it with a lower `setOkuMYieldRate` or
+a halt.
 
 ---
 

@@ -54,7 +54,7 @@ bounds stay on-chain; business policy moves to the backend.
 | E8 | `setMaxSupply` | `OkuMoney` | `OKUM_CAP_MANAGER` | Raise/lower the global cap | `≥ totalSupply` | Yes |
 | E9 | `blacklist` | `OkuMoney` | `OKUM_BLACKLISTER` | Freeze an address as sender, recipient, **or approved spender** (incl. `approve`/`permit`/`transferFrom`/`mint`-as-minter — matched to Circle FiatToken's scope, see `EVM/README.md` Accepted Risk #12) | works while paused; does NOT retroactively revoke allowances already granted | Yes (E10) |
 | E10 | `unblacklist` | `OkuMoney` | `OKUM_UNBLACKLISTER` | Unfreeze | — | — |
-| E11 | `pause` / `unpause` | `OkuMoney` | `OKUM_PAUSER` / `OKUM_UNPAUSER` | Halt mint + transfers, `setOkuMMultiplier`, and rate increases (a new rate above `okuMEffectiveRatePerSecond()` reverts) | — | Yes |
+| E11 | `pause` / `unpause` | `OkuMoney` | `OKUM_PAUSER` / `OKUM_UNPAUSER` | Halt mint + transfers, `setOkuMMultiplier`, and any rate write that would raise the projected multiplier (higher than the effective rate, or extending its window or the successor's) | — | Yes |
 | E12 | `_authorizeUpgrade` | `OkuMoney` | `OKUM_UPGRADER` | **Replace all token logic** | **none — no timelock, no two-step** | **No** |
 | E13 | `rescueDonation` | `OkuDollar` | `VAULT_RESCUER` | Withdraw OkuM held above `totalUsdShares` | `nonReentrant`, `held > totalUsdShares`; **≈1 wei/unwrap is permanently classifiable as donation** | **No** |
 | E14 | `blacklist` / `unblacklist` | `OkuDollar` | `OKUM_(UN)BLACKLISTER` | Freeze on the vault — **same role hash as E9/E10, but a separate grant per contract**; same sender/recipient/spender scope as E9 (incl. `transferFrom` and the ERC-4626 `redeem`/`withdraw` spender path). OkuDollar blocks an address if it is on **either** its own list **or** OkuMoney's (E9); the reverse does not hold | works while paused; does NOT retroactively revoke allowances | Yes |
@@ -81,7 +81,7 @@ Roles are **pubkeys stored on `PsmConfig`**, enforced by Anchor `has_one`, not a
 | # | Instruction | Role | Blast radius | Guards | Rev? |
 |---|---|---|---|---|---|
 | S1 | `set_okum_multiplier` | `rate_manager` | **Same 1,000,000× ceiling as E1** — plus a **mandatory Token-2022 CPI**: the emergency lever aborts if `ScaledUiAmount::update_multiplier` fails | pause, yield-lock, strictly-increasing, ≤ `MAX_MULTIPLIER` | **No** |
-| S2 | `set_okum_yield_rate` | `rate_manager` | As E2 | rate + window bounds; pause-gated only on increase vs effective rate | **No** |
+| S2 | `set_okum_yield_rate` | `rate_manager` | As E2 | rate + window bounds; while paused may only lower the projected curve (no increase vs effective rate, no extension) | **No** |
 | S3 | `set_next_okum_yield_rate` | `rate_manager` | As E3 | as above | **No** |
 | S4 | `set_okum_yield_rate_with_successor` | `rate_manager` | As E4 | as above | **No** |
 | S5 | `mint_oku_m_direct` | `direct_minter` | **Mint with NO collateral** — bounded only by `max_supply` and `direct_minter_allowance`. No EVM equivalent. | pause, yield-lock, cap, allowance | **No** |

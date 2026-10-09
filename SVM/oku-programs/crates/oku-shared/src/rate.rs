@@ -77,13 +77,22 @@ impl Schedule {
     /// Mirrors EVM `OkuMoneyRateSchedule.okuMEffectiveRatePerSecond`.
     #[inline]
     pub fn effective_rate(&self, now_ts: i64) -> u128 {
+        self.effective_segment(now_ts).0
+    }
+
+    /// The rate accruing now and when it stops: the active window up to
+    /// `rate_end`, then the successor up to `pending_rate_end`, then
+    /// `(PRECISION, 0)`. The pause gate bounds a paused write by both.
+    /// Mirrors EVM `OkuMoneyRateSchedule._effectiveSegment`.
+    #[inline]
+    pub fn effective_segment(&self, now_ts: i64) -> (u128, i64) {
         if self.rate_end != 0 && now_ts > self.rate_end {
             if self.pending_rate_end != 0 && now_ts > self.pending_rate_end {
-                return PRECISION;
+                return (PRECISION, 0);
             }
-            return self.pending_rate_per_second;
+            return (self.pending_rate_per_second, self.pending_rate_end);
         }
-        self.rate_per_second
+        (self.rate_per_second, self.rate_end)
     }
 }
 
@@ -513,6 +522,25 @@ mod tests {
         assert_eq!(s.effective_rate(DAY), r1, "inside active window");
         assert_eq!(s.effective_rate(45 * DAY), r2, "inside overhang");
         assert_eq!(s.effective_rate(90 * DAY), PRECISION, "past pending expiry");
+        // Segment ends; the boundaries belong to the earlier segment (strict `>`).
+        assert_eq!(s.effective_segment(30 * DAY), (r1, 30 * DAY), "at rate_end");
+        assert_eq!(
+            s.effective_segment(30 * DAY + 1),
+            (r2, 60 * DAY),
+            "successor live"
+        );
+        assert_eq!(
+            s.effective_segment(60 * DAY),
+            (r2, 60 * DAY),
+            "at pending end"
+        );
+        assert_eq!(
+            s.effective_segment(60 * DAY + 1),
+            (PRECISION, 0),
+            "all expired"
+        );
+        let halted = Schedule::halted_at(0);
+        assert_eq!(halted.effective_segment(DAY), (PRECISION, 0), "halted");
     }
 }
 

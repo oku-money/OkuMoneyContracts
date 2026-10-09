@@ -525,7 +525,7 @@ mirror nothing prices against.
 | PSM mint / redeem, buffer deposit / withdraw | `whenNotPaused` + `whenNoOverrideThisBlock` | `Paused` + `OverrideInProgress` — **matches**; neither buffer path has a solvency check |
 | OkuM peer-to-peer transfers while paused | blocked (`OkuMoney` pause) | not blocked (Token-2022 transfers bypass the program) |
 | Direct burn while paused | `burn()` works | `burn_oku_m_direct` is blocked |
-| Rate increases while paused | rejected; decreases allowed | same, against the single flag (compared to the *effective* rate) |
+| Rate writes while paused | may only lower the projected curve: a yielding rate `<=` the *effective* rate and ending no later than the segment accruing now; a successor no higher / no later than the armed one; halts always pass | same, against the single flag |
 
 ### Bridging, rounding, events
 

@@ -13,7 +13,7 @@ library Roles {
     /// @dev Can upgrade the OkuMoney implementation (UUPS `_authorizeUpgrade`).
     bytes32 public constant OKUM_UPGRADER = keccak256("OKUM_UPGRADER");
     /// @dev Can pause OkuMoney: blocks transfers between holders, `mint`, `setOkuMMultiplier`
-    ///      and rate increases (a new rate above `okuMEffectiveRatePerSecond()`).
+    ///      and any rate write that would raise the projected multiplier (README § Pause Behavior).
     bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
     /// @dev Can unpause OkuMoney.
     bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");

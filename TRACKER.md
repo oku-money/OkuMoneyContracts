@@ -146,7 +146,11 @@ regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pic
 
 - **EVM ABI:** `LitePSM.initialize(okuMoney, okuDollar, usdc, admin)`;
   `depositBuffer(amount)`; `redeemOkuM` / `redeemUsdOku` revert
-  `InsufficientBuffer(available, required)` and dust redeems revert `AmountTooSmall`.
+  `InsufficientBuffer(available, required)` and dust redeems revert `AmountTooSmall`
+  (`OkuDollar.unwrap` / `withdraw` / `redeem` too, when the OkuM output floors to zero).
+- **Rate setters while paused (both stacks):** may only lower the projected curve; a
+  same-rate re-write with a later end, or a yielding successor where none is armed, now
+  reverts `EnforcedPause` / `Paused`. The orchestrator must not treat that as transient.
   Removed: `QueueProcessed`, the `RedemptionQueue` events, `PSM_QUEUE_PROCESSOR`
   and `QUEUE_*` roles, `BelowMinimumRedemption`.
 - **SVM IDL:** `ZeroOutput` removed (redeem output can never be zero);

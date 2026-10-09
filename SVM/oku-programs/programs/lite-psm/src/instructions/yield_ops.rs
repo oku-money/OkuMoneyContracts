@@ -67,14 +67,46 @@ fn halt_schedule(config: &mut PsmConfig) {
     clear_successor(config);
 }
 
-/// Reject a rate increase while paused. Decreases (including halting) stay
-/// available: the incident lever must not be blocked by the incident.
-///
-/// Compares against the EFFECTIVE rate: once the active window has closed the
-/// stored rate is stale and higher than what accrues, so comparing against
-/// storage would let an increase pass as a decrease.
-fn check_pause_gate(config: &PsmConfig, new_rate: u64, now_ts: i64) -> Result<()> {
-    if config.is_paused && (new_rate as u128) > multiplier::effective_rate(config, now_ts) {
+/// While paused a write may only lower the projected multiplier curve: cutting
+/// or halting accrual is the incident lever and must stay available, but any
+/// gain would go to whoever redeems first after unpause. A halt always passes.
+/// A yielding rate must not exceed the EFFECTIVE rate (the stored one is stale
+/// once its window has closed) nor outlast the segment accruing it, so the new
+/// curve grows no faster and stops no later; the cleared successor only lowers it.
+/// EVM: `OkuMoneyRateSchedule._requireActiveNotRaisedWhilePaused`.
+fn check_active_pause_gate(
+    config: &PsmConfig,
+    new_rate: u64,
+    end_timestamp: i64,
+    now_ts: i64,
+) -> Result<()> {
+    if !config.is_paused || new_rate as u128 == PRECISION {
+        return Ok(());
+    }
+    let (rate, end) = multiplier::effective_segment(config, now_ts);
+    if new_rate as u128 > rate || end_timestamp > end {
+        return err!(LitePsmError::Paused);
+    }
+    Ok(())
+}
+
+/// Successor counterpart (reachable only before `okum_rate_end`, so the stored
+/// successor is not yet live): while paused a yielding successor must not
+/// exceed the one it replaces in rate or end. With none armed (rate
+/// `PRECISION`) only a no-yield successor passes, including after the atomic
+/// setter's re-anchor, which clears it.
+/// EVM: `OkuMoneyRateSchedule._requireSuccessorNotRaisedWhilePaused`.
+fn check_successor_pause_gate(
+    config: &PsmConfig,
+    new_rate: u64,
+    pending_end_timestamp: i64,
+) -> Result<()> {
+    if !config.is_paused || new_rate as u128 == PRECISION {
+        return Ok(());
+    }
+    if new_rate > config.okum_pending_rate_per_second
+        || pending_end_timestamp > config.okum_pending_rate_end
+    {
         return err!(LitePsmError::Paused);
     }
     Ok(())
@@ -84,7 +116,8 @@ fn check_pause_gate(config: &PsmConfig, new_rate: u64, now_ts: i64) -> Result<()
 // their own, and the atomic setter calls them in sequence. Do not merge them
 // into one validate-then-write pass: the successor's checks must see the active
 // rate's write, or a halted rate could take a successor and, while paused, the
-// gate would compare against the old effective rate and let an increase through.
+// successor gate would compare against the successor the write just cleared and
+// let a yielding one through.
 
 /// Write the active rate and its window, clearing any armed successor.
 fn apply_active_rate(
@@ -94,7 +127,7 @@ fn apply_active_rate(
     now_ts: i64,
 ) -> Result<()> {
     validate_rate_window(new_rate, end_timestamp, now_ts)?;
-    check_pause_gate(config, new_rate, now_ts)?;
+    check_active_pause_gate(config, new_rate, end_timestamp, now_ts)?;
 
     let old_rate = config.okum_rate_per_second;
     // Order matters: the cancel event must describe the successor as it was
@@ -144,7 +177,7 @@ fn apply_successor(
         LitePsmError::RateWindowTooLong
     );
 
-    check_pause_gate(config, new_rate, now_ts)?;
+    check_successor_pause_gate(config, new_rate, pending_end_timestamp)?;
 
     let old_rate = config.okum_pending_rate_per_second;
     emit_pending_cancelled_if_armed(config, now_ts);

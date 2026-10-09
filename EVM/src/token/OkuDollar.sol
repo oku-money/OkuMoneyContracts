@@ -398,7 +398,8 @@ contract OkuDollar is
 
     /// @notice Unwrap OkuDollar back to OkuMoney.
     /// @dev okuMReturned = floor(usdAmount * PRECISION / multiplier); shares burned use the
-    ///      same ratio rounded UP, favouring the vault.
+    ///      same ratio rounded UP, favouring the vault. Reverts `AmountTooSmall` when
+    ///      okuMReturned would be 0.
     /// @param usdAmount Amount of OkuDollar to unwrap (in dollar terms)
     /// @param receiver Address to receive OkuMoney
     /// @return okuMReturned Amount of OkuMoney tokens returned
@@ -436,6 +437,8 @@ contract OkuDollar is
         // Floor on OkuM returned, ceil on shares burned: both favor the vault.
         uint256 multiplier = $.okuMoney.okuMMultiplier();
         okuMReturned = _toShares(usdAmount, multiplier);
+        // Never burn shares for nothing (also gives LitePSM.redeemUsdOku dust this error).
+        if (okuMReturned == 0) revert SharedErrors.AmountTooSmall();
         uint256 sharesToBurn =
             Math.mulDiv(usdAmount, Constants.PRECISION, multiplier, Math.Rounding.Ceil);
         if ($.usdShares[owner] < sharesToBurn) revert SharedErrors.InsufficientBalance();

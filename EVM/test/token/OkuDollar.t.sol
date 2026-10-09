@@ -336,6 +336,39 @@ contract OkuDollarTest is BaseTest {
         okuDollar.unwrap(0, user1);
     }
 
+    /// @notice At m = 1.9e18, `unwrap(1)` floors to 0 OkuM while the share burn ceils to 1:
+    ///         it must revert, not burn a share for nothing.
+    function test_Unwrap_RevertsWhenOutputRoundsToZero() public {
+        _mintUsdOku(user1, 100e18);
+        _setOkuMMultiplierAndRoll(19e17);
+        uint256 sharesBefore = okuDollar.usdSharesOf(user1);
+
+        vm.prank(user1);
+        vm.expectRevert(SharedErrors.AmountTooSmall.selector);
+        okuDollar.unwrap(1, user1);
+        assertEq(okuDollar.usdSharesOf(user1), sharesBefore);
+
+        // The smallest amount worth one OkuM wei goes through.
+        uint256 one = Math.mulDiv(1, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Ceil);
+        vm.prank(user1);
+        assertEq(okuDollar.unwrap(one, user1), 1);
+    }
+
+    /// @notice Same guard on the ERC-4626 path: a spender's dust `redeem` cannot burn the
+    ///         owner's shares (beyond its allowance) for zero OkuM.
+    function test_Redeem_RevertsWhenOutputRoundsToZero() public {
+        _mintUsdOku(user1, 100e18);
+        _setOkuMMultiplierAndRoll(19e17);
+        _approveOkuDollar(user1, user2, 10);
+        uint256 sharesBefore = okuDollar.usdSharesOf(user1);
+
+        vm.prank(user2);
+        vm.expectRevert(SharedErrors.AmountTooSmall.selector);
+        okuDollar.redeem(1, user2, user1);
+        assertEq(okuDollar.usdSharesOf(user1), sharesBefore);
+        assertEq(okuDollar.allowance(user1, user2), 10);
+    }
+
     function test_Unwrap_RevertsOnZeroReceiver() public {
         uint256 okuMAmount = 100e18;
         _mintUsdOku(user1, okuMAmount);

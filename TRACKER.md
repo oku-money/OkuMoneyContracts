@@ -27,7 +27,7 @@ reasonable. Each is listed because the *reason* is not visible from the code alo
    the multiplier, so delay and front-running can only pay the caller more.
    **This depends on the PSM charging no fee.** If that policy is ever reversed,
    min-out parameters must land in the same change as the fee. Full reasoning:
-   NatSpec on `LitePSM.redeemOkuM`.
+   the `LitePSM` contract NatSpec header ("NO SLIPPAGE PARAMETERS").
 
 2. **Rate windows are bounded at 90 days on both stacks, and the two constants
    must agree.** At `MAX_RATE`, `rpow` overflows internally after roughly 15 years

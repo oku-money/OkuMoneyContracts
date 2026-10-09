@@ -19,7 +19,7 @@ forge install && forge build && forge test    # unit, fuzz, invariant, different
 npx hardhat compile && npx hardhat test       # fork, integration, simulation, deploy/operator drill tests
 ```
 
-CI (`.github/workflows/test.yml`) enforces >=95% line coverage on every `src/`
+CI ([`../.github/workflows/test.yml`](../.github/workflows/test.yml)) enforces >=95% line coverage on every `src/`
 file and on the total, and >=94% total branch coverage, from `forge coverage`.
 
 Targeted invocations and what each suite covers: § Testing.
@@ -144,7 +144,8 @@ strict formatter sees it.
 The script also **verifies itself before reporting success**. Each contract's
 `initialize` already grants the deployer (admin) its full role set, so
 `configureRoles` sends only grants to other holders: `OKUM_MINTER` and
-`OKUM_BURNER` to `LitePSM` (the only contract that ever holds them), then
+`OKUM_BURNER` to `LitePSM` (in production their only holder once
+`grantRolesMainnet` has the deployer renounce its `initialize` grants), then
 `LitePSM`'s minter allowance. `verifyDeployment` then re-reads the chain and
 asserts the complete matrix: all 26 entries of `expectedRoleGrants()` (each
 tagged `initialize` or `script`) via `hasRole`, the LitePSM minter allowance, and
@@ -361,7 +362,7 @@ src/
     ReentrancyGuardUpgradeable.sol  # OZ 5.x dropped the upgradeable variant; this replaces it
     OverrideBlockGuard.sol  # whenNoOverrideThisBlock (OkuDollar + LitePSM); emergency override only
     events/                 # One event-declaration file per contract
-    errors/                 # SharedErrors (raised by several contracts) + one error file per contract
+    errors/                 # SharedErrors (generic, mostly cross-contract) + one error file per contract
 
 test/mocks/                 # Test-only mocks/harnesses, compiled by Hardhat but outside `src/`.
                             # MockUSDC.sol (6-decimal) is also the deploy script's testnet collateral.
@@ -648,8 +649,9 @@ are already dollar-denominated, so a `uiMultiplier()` there would duplicate
 OkuMoney's or return a constant `1e18`.
 
 **Integrator contract.** The multiplier moves every second but
-`UIMultiplierUpdated` fires only on rate-schedule changes (the deviations are
-listed in the `IScaledUIAmount` NatSpec). A standards-only consumer must
+`UIMultiplierUpdated` fires only on `setOkuMYieldRate` /
+`setOkuMYieldRateWithSuccessor` re-anchors and the `setOkuMMultiplier` override,
+not on `setNextOkuMYieldRate` (the deviations are listed in the `IScaledUIAmount` NatSpec). A standards-only consumer must
 therefore **poll** `uiMultiplier()` / `balanceOfUI()` / `totalSupplyUI()` rather
 than cache until the next event, and treat the event as "the trajectory
 changed", not a value diff (it can fire with `old == new`). The trajectory (rate,
@@ -672,7 +674,7 @@ window end) is on the non-standard `OkuMYieldRateUpdated`.
 
 ## OkuDollar.sol
 
-**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `ReentrancyGuardUpgradeable`, `OverrideBlockGuard`, `UUPSUpgradeable`.
+**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `ReentrancyGuardUpgradeable`, `OverrideBlockGuard`, `UUPSUpgradeable`, `OkuDollarEvents`, `OkuDollarErrors`, `IOkuDollar`, `IERC4626`.
 
 **Concept**: Rebasing $1-pegged stablecoin wrapping OkuMoney. `usdMultiplier()`
 returns exactly `okuMoney.okuMMultiplier()`, so
@@ -691,8 +693,8 @@ on both tokens in one run.
 
 ### Wrap / Unwrap
 
-- `unwrap` rounds `sharesToBurn` **up**, deliberately favouring the vault (one of
-  the enumerated `Ceil` sites in the [`MathLib.sol`](src/lib/MathLib.sol) rounding-policy header).
+- `unwrap` rounds `sharesToBurn` **up**, deliberately favouring the vault (an
+  OkuDollar ceiling, as the [`MathLib.sol`](src/lib/MathLib.sol) rounding-policy header allows).
 - `InsufficientBalance` (user balance) and `InsufficientReserves` (vault reserves)
   are intentionally distinct; collapsing them would hide which side is short.
 - Both are `public` so the ERC-4626 entry points can call them, and carry
@@ -739,9 +741,11 @@ the vault.
   `InsufficientBuffer(available, required)`, as SVM `lite-psm` does; operators
   keep it funded via `depositBuffer`. `redeemUsdOku` can also revert
   `InsufficientReserves` when vault reserves are below the OkuM the unwrap returns.
-- **Blacklist.** `mintUsdOku` and the redeem paths revert `UserBlacklisted`
-  (the UsdOku paths move OkuM through the PSM, so OkuMoney's own check never sees
-  the user); `mintOkuM` is caught by `OkuMoney.mint`.
+- **Blacklist.** For OkuMoney's list, `mintUsdOku` and the redeem paths revert
+  `UserBlacklisted` (the UsdOku paths move OkuM through the PSM, so OkuMoney's own
+  check never sees the user); `mintOkuM` is caught by `OkuMoney.mint`. For
+  OkuDollar's own list, `mintUsdOku` reverts `RecipientBlacklisted` (from `wrap`)
+  and `redeemUsdOku` `SenderBlacklisted` (from `transferFrom`).
 - **Guards.** `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku` and
   `depositBuffer` carry `nonReentrant` + `whenNotPaused` +
   `whenNoOverrideThisBlock`; `withdrawUsdc` carries `whenNotPaused` +
@@ -780,7 +784,8 @@ pre-flight/recovery runbook) is documented once in
 [`../README.md` § Cross-chain transfers](../README.md#cross-chain-transfers-v1-off-chain-orchestrated).
 EVM-side facts:
 
-- `LitePSM` is the only `OKUM_MINTER` holder on every chain and the sole
+- In production `LitePSM` is the only `OKUM_MINTER` holder on every chain (after
+  `grantRolesMainnet` renounces the deployer's `initialize` grant) and the sole
   user-facing mint/burn surface. A transfer is `redeemOkuM` on chain A, then the
   orchestrator's `mintOkuM` on chain B against its own USDC custody.
 - `mintOkuM` is **permissionless**; the orchestrator's only privilege on this
@@ -851,7 +856,8 @@ Two EVM-specific points; the per-role blast radius is canonical in
 [`AUTHORITY-MATRIX.md`](../AUTHORITY-MATRIX.md):
 
 - **`OKUM_MINTER` / `OKUM_BURNER` are never held by an EOA in the production
-  model**: only `LitePSM` holds them. `grantRoles.ts` breaks this deliberately,
+  model**: only `LitePSM` holds them, once `grantRolesMainnet` has the deployer
+  renounce the pair `initialize` granted it. `grantRoles.ts` breaks this deliberately,
   on testnet only, to give an operator SVM-equivalent direct mint/burn; that is
   why it refuses to broadcast on any mainnet network instead of offering an
   override.
@@ -955,12 +961,14 @@ off-chain orchestrator watches the peg and pauses the PSM on a detected depeg.
 
 ### 4. 1-wei share dust in `OkuDollar.transfer`/`transferFrom` under inflated `usdMultiplier`
 
-Both floor the amount-to-share conversion, so when `usdMultiplier > 1e18`
-repeated calls against one permit allowance may under-consume ~1 share per call.
-The drift favours the holder; integrators batching against one allowance should
-budget for it. A nonzero amount that floors to zero shares reverts
-`AmountTooSmall`. `Transfer.value` is advisory, not an accounting record: read
-`balanceOf()` (worked counterexample in the `OkuDollar.transfer` NatSpec).
+Both floor the dollar-to-share conversion, so when `usdMultiplier > 1e18` the
+shares moved can fall short of `amount` by up to one share's value plus 1 wei,
+while `transferFrom` still debits the full `amount` from the allowance. The dust
+stays with the sender (`from`); the recipient and spender bear it. Integrators
+batching against one allowance should budget for it. A nonzero amount that
+floors to zero shares reverts `AmountTooSmall`. `Transfer.value` is advisory,
+not an accounting record: read `balanceOf()` (see the `OkuDollar._transferDollars`
+NatSpec).
 
 ### 5. `OkuDollar._update` ERC-20 tripwires
 
@@ -997,7 +1005,7 @@ hardcoding today's IDs would break. Adopted deliberately ahead of Final (SVM's
 Token-2022 `ScaledUiAmount` fills this role there). A Foundry test pins the hex
 values against the compiler-computed IDs, so a local signature change fails
 loudly, but nothing can predict the Final IDs. The two deviations from the
-EIP (`UIMultiplierUpdated` only on rate-schedule changes; a *projected*
+EIP (`UIMultiplierUpdated` only on re-anchors and overrides; a *projected*
 `newUIMultiplier()`) are our reading of a spec written for discrete steps, so
 standards-only consumers should poll.
 
@@ -1031,13 +1039,14 @@ they catch up.
 
 ### 10. Known issues
 
-**10a. ERC-4626 `mint()` / `withdraw()` do not guarantee exact output.** The spec
-requires exactly `shares` / exactly `assets`, but both are thin wrappers over
-`wrap`/`unwrap`'s floor-rounded conversions, so the actual amount can differ by up
-to 1 wei in the vault's favour. Exact conformance on a continuously repricing
-share token would need iterative correction; accepted as a rounding-direction
-tradeoff consistent with the floor-favours-vault convention. `deposit()` /
-`redeem()` are exact.
+**10a. ERC-4626 `mint()` does not guarantee exact output.** The spec requires
+exactly `shares`, but `mint` pulls the rounded-up `previewMint(shares)` OkuM and
+`wrap` floors it back to dollars, so it can mint more than `shares` (by up to
+1 wei while `usdMultiplier < 2e18`). The excess is the caller's own rounded-up
+input, so no value leaves other holders. Exact conformance on a continuously
+repricing share token would need iterative correction; accepted. `withdraw()`
+(ceil `previewWithdraw`, then floor in `unwrap`) returns exactly `assets` since
+`usdMultiplier >= 1e18`; `deposit()` / `redeem()` are exact.
 
 **10b. `rescueDonation` is 1-wei-per-unwrap optimistic.** It treats everything
 above `totalUsdShares` as donation, but `unwrap`'s ceil-burn / floor-return
@@ -1155,9 +1164,9 @@ invariant tests belong in Foundry.
 | `test/hardhat/scenarios` | Deterministic dual-chain edge cases (`RealWorldUsage.ts`). |
 | `test/hardhat/simulation` | Rear-facing epoch-accounting accuracy simulation; see [`docs/epoch-accounting.md`](docs/epoch-accounting.md). |
 
-`test/mocks` holds shared mocks and the two test-only harnesses
-(`MathLibHarness.sol`, `ReentrancyGuardHarness.sol`) that expose `internal`
-library surface for direct testing. Neither is in any production import path.
+`test/mocks` holds shared mocks and the three test-only harnesses
+(`MathLibHarness.sol`, `ReentrancyGuardHarness.sol`, `OkuDollarHarness.sol`) that
+expose `internal` surface for direct testing. None is in any production import path.
 
 ### Running
 
@@ -1189,7 +1198,7 @@ from `forge coverage` on each run; none are recorded here.
 
 ### Uncovered lines and branches (intentional)
 
-Each is a `revert` arm that no call path can drive. Line numbers are omitted
+Five `revert` arms, in three locations, that no call path can drive. Line numbers are omitted
 deliberately; every symbol is unique within its function. Guards that only an
 internal caller could trip are tested through a harness (`test/mocks/OkuDollarHarness.sol`)
 instead of being listed here.
@@ -1198,7 +1207,7 @@ instead of being listed here.
 |---|---|---|
 | `OkuDollar._update` | `UseWrapInstead` / `UseUnwrapInstead` / `OkuDollarDoesNotUseInternalUpdate` | Nothing invokes the inherited `_mint` / `_burn`; the override is `pure` and unconditionally reverts (Accepted Risk #5). A tripwire against a future refactor. |
 | `LitePSM.redeemUsdOku` | `received == 0` (balance delta after pulling `usdAmount` of `OkuDollar`) | `OkuDollar.transferFrom` reverts `AmountTooSmall` itself whenever the share conversion floors to zero (Accepted Risk #4), and `multiplier >= PRECISION` means a nonzero share delta implies a nonzero dollar delta. Defence-in-depth against either guard changing independently. |
-| `OkuDollar.wrap` | `sharesToMint == 0` | `wrap` rejects `okuMAmount == 0` at entry and `sharesToMint == actualReceived`, so zero needs a 100 % transfer-fee asset; the typed `IOkuMoney` wired at init is not fee-on-transfer. Kept because the balance-delta pattern exists to tolerate one. |
+| `OkuDollar.wrap` | `actualReceived == 0` → `AmountTooSmall` (balance delta after pulling `okuMAmount` of OkuM) | `wrap` rejects `okuMAmount == 0` at entry, so zero needs a 100 % transfer-fee asset; the typed `IOkuMoney` wired at init is not fee-on-transfer. Kept because the balance-delta pattern exists to tolerate one. |
 
 These are guards against an assumption about a collaborator that a future change
 could break. Guards against arithmetic that cannot happen by construction do not

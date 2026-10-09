@@ -22,7 +22,7 @@
  * keeps OKUM_MINTER + OKUM_ALLOWANCE_MANAGER can mint without bound.
  *
  * REQUIRES the following environment variables:
- *   MAINNET_COLD_MULTISIG   — Cold multisig address (timelock / hardware wallet)
+ *   MAINNET_COLD_MULTISIG   — Cold multisig address (hardware-wallet quorum; no timelock)
  *   MAINNET_WARM_MULTISIG   — Warm multisig address (day-to-day ops)
  *   MAINNET_ORCHESTRATOR    — Orchestrator KMS signer address
  *

@@ -15,6 +15,7 @@ abstract contract LitePSMErrors {
     error UsdcDecimalsTooLarge(uint8 reported);
     /// @dev `_okuDollar` must wrap `_okuMoney`; all pricing assumes one shared multiplier.
     error AssetMismatch();
-    /// @notice The caller is on OkuMoney's blacklist (checked by the PSM before paying out).
+    /// @notice The caller is on OkuMoney's blacklist (checked by the PSM up front on
+    ///         `redeemOkuM`, `mintUsdOku` and `redeemUsdOku`).
     error UserBlacklisted(address user);
 }

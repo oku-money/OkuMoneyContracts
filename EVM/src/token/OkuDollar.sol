@@ -141,7 +141,8 @@ contract OkuDollar is
     }
 
     /// @notice Total internal share tokens across all holders.
-    /// @dev NOT the ERC-4626 `totalSupply()`; equals the raw OkuM held as reserves.
+    /// @dev NOT the ERC-4626 `totalSupply()`; the raw OkuM backing all shares. Reserves are
+    ///      `>=` this (donations, unwrap rounding dust).
     function totalUsdShares() external view returns (uint256) {
         return _getOkuDollarStorage().totalUsdShares;
     }
@@ -199,7 +200,8 @@ contract OkuDollar is
     }
 
     /// @notice Send `amount` dollars of UsdOku. Moves the equivalent shares, rounded down,
-    ///         so the recipient may receive up to 1 wei less than `amount`.
+    ///         so the value moved may fall short of `amount` by up to one share's value
+    ///         plus 1 wei; the sender keeps the dust.
     /// @dev Pause-gated; both sides are blacklist-checked in `_transferUsdShares`. Reverts
     ///      `AmountTooSmall` if a non-zero `amount` is worth zero shares.
     function transfer(
@@ -215,9 +217,9 @@ contract OkuDollar is
         return true;
     }
 
-    /// @dev Allowance is debited by `amount` while at most `amount` dollars move (shares
-    ///      floor), so the <=1 wei gap is consumed from the allowance, in the protocol's
-    ///      favor. Also checks the spender (as Circle FiatToken), which `_transferUsdShares`
+    /// @dev Allowance is debited by the full `amount`, but the shares moved floor as in
+    ///      {transfer}: the gap stays with `from`, at the spender's (and recipient's)
+    ///      expense. Also checks the spender (as Circle FiatToken), which `_transferUsdShares`
     ///      cannot see; an existing allowance survives blacklisting.
     function transferFrom(
         address from,
@@ -289,9 +291,9 @@ contract OkuDollar is
 
     /// @notice EIP-2612 permit with blacklist enforcement.
     /// @dev `value` is in dollars but balances are shares, and `transferFrom` floors the
-    ///      share conversion: when `usdMultiplier > 1e18`, repeated `transferFrom` against one
-    ///      allowance may under-consume ~1 share per call; integrators should budget for that
-    ///      dust. Not pause-gated.
+    ///      share conversion: when `usdMultiplier > 1e18`, each `transferFrom` debits its full
+    ///      `amount` from the allowance but may move up to ~1 share's value less; integrators
+    ///      should budget for that dust. Not pause-gated.
     function permit(
         address owner,
         address spender,

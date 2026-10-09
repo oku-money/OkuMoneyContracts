@@ -106,8 +106,9 @@ abstract contract OkuMoneyRateSchedule is
     }
 
     /// @notice The per-second rate actually accruing right now.
-    /// @dev The pending rate once `okuMRateEnd` has elapsed with a successor armed;
-    ///      `PRECISION` once `okuMPendingRateEnd` has also elapsed; else the stored rate.
+    /// @dev Once `okuMRateEnd` has elapsed: the pending slot (`PRECISION` if no successor
+    ///      was armed), or `PRECISION` once `okuMPendingRateEnd` has also elapsed. Before
+    ///      that (or with no rate end): the stored rate.
     ///      Basis for the rate setters' pause gate.
     function okuMEffectiveRatePerSecond() public view returns (uint256) {
         RateScheduleStorage storage $ = _getRateScheduleStorage();

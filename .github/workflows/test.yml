@@ -83,11 +83,11 @@ jobs:
 
           # Gate 2: overall BRANCH coverage. Per-file would be the stronger
           # shape, but a few branches in src/ are provably unreachable (see
-          # README "Uncovered branches (intentional)"), which caps OkuDollar's
+          # EVM/README "Uncovered lines and branches (intentional)"), which caps OkuDollar's
           # per-file figure through no fault of the suite. A total gate catches
           # the regression that matters -- someone adding an untested
           # conditional -- without encoding that cap as a per-file exception.
-          # 94%, not 95%: the 4 deliberately-unreachable guards are a large share
+          # 94%, not 95%: the 5 deliberately-unreachable revert arms are a large share
           # of only ~120 branches, so a 95% gate left room for one new gap.
           awk -F'|' '
             /^\| Total/ {

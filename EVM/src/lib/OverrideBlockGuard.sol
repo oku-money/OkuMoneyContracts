@@ -26,6 +26,6 @@ abstract contract OverrideBlockGuard {
     }
 
     /// @notice Hook overridden by inheriting contracts to provide the OkuMoney instance
-    ///         whose distribution block is being tracked.
+    ///         whose `lastOverrideBlock` stamp is checked.
     function _overrideBlockOkuMoney() internal view virtual returns (IOkuMoney);
 }

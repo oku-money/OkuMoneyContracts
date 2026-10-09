@@ -16,7 +16,9 @@ library Roles {
     bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
     /// @dev Can unpause OkuMoney.
     bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");
-    /// @dev Can mint OkuM. Held only by LitePSM, and bounded by its `minterAllowance`.
+    /// @dev Can mint OkuM, bounded by the holder's `minterAllowance`. In production held only
+    ///      by LitePSM; `initialize` also grants it (with OKUM_ALLOWANCE_MANAGER) to the admin,
+    ///      which renounces both in `grantRolesMainnet`.
     bytes32 public constant OKUM_MINTER = keccak256("OKUM_MINTER");
     /// @dev Separate from `OKUM_MINTER` so burn can be locked down independently.
     bytes32 public constant OKUM_BURNER = keccak256("OKUM_BURNER");

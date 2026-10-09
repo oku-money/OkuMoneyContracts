@@ -419,8 +419,8 @@ code does not state is **which are negotiable**:
   sanity bounds against a compromised rate manager key and against `rpow` overflow,
   not economic parameters.
 - **`MAX_RATE_WINDOW` (90 days) is load-bearing and tightly argued.** See the
-  standing invariant in [`TRACKER.md`](../TRACKER.md): `rpow` overflows at ~15
-  years and the failure is unrecoverable without an upgrade.
+  standing invariant in [`TRACKER.md`](../TRACKER.md): `rpow` overflows after ~30
+  years on EVM (~15 on SVM) and the failure is unrecoverable without an upgrade.
 - **`MAX_USDC_DECIMALS` (18) is a deliberate forward-compat choice**, not a
   description of reality. Most USDC deployments use 6 — but BSC's canonical
   Binance-Peg USDC uses 18, which is why the PSM is decimals-agnostic rather

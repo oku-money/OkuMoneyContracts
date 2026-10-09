@@ -30,8 +30,8 @@ reasonable. Each is listed because the *reason* is not visible from the code alo
    NatSpec on `LitePSM.redeemOkuM`.
 
 2. **Rate windows are bounded at 90 days on both stacks, and the two constants
-   must agree.** At `MAX_RATE`, `rpow` overflows internally at roughly 15 years,
-   and once `okuMMultiplier()` reverts, *every* recovery path reverts with it —
+   must agree.** At `MAX_RATE`, `rpow` overflows internally after roughly 15 years
+   on SVM (472,763,099 s, `u128`) and roughly 30 years on EVM (945,526,197 s), and once `okuMMultiplier()` reverts, *every* recovery path reverts with it —
    including the emergency override, which re-anchors through the same read. The
    only exit is an upgrade. A divergence between stacks means one chain accepts
    a schedule the other rejects. Long-horizon fixtures must chain 90-day

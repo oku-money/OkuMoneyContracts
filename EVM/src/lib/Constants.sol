@@ -32,7 +32,7 @@ library Constants {
     uint256 public constant MAX_RATE = PRECISION + 1e11;
 
     /// @notice Maximum length of a single rate window: 90 days.
-    /// @dev `rpow` overflows at ~15y at MAX_RATE, and a reverting multiplier bricks every
+    /// @dev `rpow` overflows after ~30y (945,526,197 s) at MAX_RATE (~15y on SVM), and a reverting multiplier bricks every
     ///      recovery path (all of them re-anchor off it). Mirrors SVM `MAX_RATE_WINDOW_SECONDS`.
     uint256 public constant MAX_RATE_WINDOW = 90 days;
 

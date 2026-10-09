@@ -561,8 +561,10 @@ async function configureRoles(
   // three contracts, so only grants to OTHER holders are sent here. Production
   // role distribution is operator/grantRolesMainnet.ts.
 
-  // LitePSM is the only OKUM_MINTER; every PSM mint/redeem (including
-  // cross-chain flows, which route through it) goes through it.
+  // LitePSM is the only production OKUM_MINTER; every PSM mint/redeem (including
+  // cross-chain flows, which route through it) goes through it. Until
+  // grantRolesMainnet runs, the deployer also holds OKUM_MINTER and
+  // OKUM_ALLOWANCE_MANAGER from `initialize` and can mint unbacked OkuM.
   await sendAndWait("Grant OKUM_MINTER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_MINTER, litePSMAddress));
 
   // Redeems burn OkuM; without OKUM_BURNER they revert with AccessControlUnauthorizedAccount.

@@ -32,6 +32,15 @@
  *        FUZZ_SEEDS=200 FUZZ_STEPS=500 npm run test:fuzz
  *        FUZZ_SEED=42 npm run test:fuzz          (replay one seed; prints the trace)
  * A failure prints the seed, the step, the operation trace and the diff.
+ *
+ * Validated by mutation: each of these bugs, planted in a scratch copy of the program, is
+ * caught within 10 seeds x 300 steps: allowance not consumed (direct burn), pause ignored in
+ * withdraw_buffer and in direct burn, mint rounding up, redeem paying one unit extra, mint
+ * ignoring the override-slot lock, rate writes not re-anchoring, set_max_supply allowing a cap
+ * below supply, supply cap and allowance off by one, slippage check wrong at equality, and a
+ * pause gate that compares against the stored instead of the effective rate. Boundary-targeted
+ * amounts and the paused-expiry scenario exist because uniform random inputs missed the last
+ * three. When changing the generators, re-run such mutants: a green run proves little on its own.
  */
 
 import * as anchor from "@anchor-lang/core";
@@ -306,15 +315,24 @@ class Fuzz {
       for (this.step = 1; this.step <= steps; this.step++) {
         await warpSlots(this.h, 1n); // releases any override lock from the previous step
         const ctx = await this.readCtx();
-        // A paused PSM rejects most operations; leave it quickly so the other paths get exercised.
-        const kind = this.m.paused && this.rng.chance(0.4) ? "unpause" : this.rng.weighted<string>([
+        // While paused, mostly try value-moving operations (they must ALL be rejected and move
+        // nothing) and leave the paused state quickly so the other paths get exercised.
+        const pr = this.rng.next();
+        const moving = ["mint", "redeem", "deposit", "withdraw", "directMint", "directBurn", "rate", "successor", "override"];
+        const tightCap = this.m.maxSupply - this.m.supply < 1_000_000_000n;
+        const kind = tightCap && !this.m.paused && pr < 0.2 ? "maxSupply" // a pinned cap would starve every mint
+          : this.m.paused && pr < 0.25 ? "unpause" : this.m.paused && pr < 0.7 ? this.rng.pick(moving) : this.rng.weighted<string>([
           ["mint", 22], ["redeem", 20], ["deposit", 6], ["withdraw", 5],
           ["directMint", 8], ["directBurn", 6],
           ["allowance", 9], ["maxSupply", 3], ["pause", 2], ["unpause", 2],
           ["freeze", 3], ["thaw", 3],
           ["rate", 7], ["successor", 4], ["withSuccessor", 4], ["override", 3],
-          ["sync", 3], ["warp", 9], ["rogue", 5],
+          ["sync", 3], ["warp", 9], ["rogue", 5], ["scenario", 3],
         ]);
+        if (kind === "scenario") {
+          await this.scenarioPausedExpiry();
+          continue;
+        }
         if (kind === "warp") {
           const secs = this.rng.weighted<number>([[this.rng.int(60) + 1, 4], [this.rng.int(6 * 3600) + 60, 4], [this.rng.int(10 * DAY) + DAY, 2], [this.rng.int(120 * DAY) + 30 * DAY, 1]]);
           await warpBy(this.h, secs);
@@ -364,6 +382,40 @@ class Fuzz {
     await this.check(after, op.name);
   }
 
+  /**
+   * Directed scenario: pause while a rate window runs out. Once the window has closed the
+   * stored rate is stale (the effective rate is the successor or 1.0), and a paused PSM must
+   * still refuse any rate above the EFFECTIVE one, including a rate equal to the stale stored
+   * one. Random steps reach this combination too rarely to rely on.
+   */
+  async scenarioPausedExpiry() {
+    const r = this.rng;
+    const run = async (mk: (c: Ctx) => Op) => {
+      await warpSlots(this.h, 1n);
+      const c = await this.readCtx();
+      await this.exec(mk(c), "scenario", c);
+    };
+    if (this.m.paused) await run((c) => this.opUnpause(c));
+    const rate = ratePerSecondForApy(0.2 + r.next() * 2.5);
+    const dur = 60 + r.int(3 * 3600);
+    await run((c) => this.opSetRate(c, rate, c.now + BigInt(dur)));
+    if (r.chance(0.5)) {
+      await run((c) => this.opSetNext(c, ratePerSecondForApy(0.02 + r.next()), c.sched.rateEnd + BigInt(100 + r.int(5000))));
+    }
+    await run((c) => this.opPause(c));
+    await warpBy(this.h, dur + 1 + r.int(5000));
+    this.log(`scenario: warped past the window (+${dur}s+)`);
+    for (let i = 0; i < 4; i++) {
+      await run((c) => {
+        const eff = effectiveRate(c.sched, c.now);
+        const near = [c.sched.ratePerSecond, c.sched.ratePerSecond - 1n, eff, eff + 1n, PRECISION];
+        const next = r.pick(near.filter((x) => x >= PRECISION && x <= MAX_RATE));
+        return this.opSetRate(c, next, next === PRECISION ? 0n : c.now + 1000n);
+      });
+    }
+    await run((c) => this.opUnpause(c));
+  }
+
   /** After an override: the same slot must refuse every user / buffer operation. */
   async probeSameSlot() {
     const ctx = await this.readCtx();
@@ -381,7 +433,7 @@ class Fuzz {
     // is not exercising it (the EVM suites' NoHandlerActionAlwaysReverts).
     for (const [name, c] of this.counts) {
       if (name.startsWith("lockProbe:") || name === "rogue" || name === "setup") continue;
-      if (c.tried >= 25 && c.ok === 0) throw new Fail(`${name}: ${c.tried} attempts, none succeeded`);
+      if (c.tried >= 40 && c.ok === 0) throw new Fail(`${name}: ${c.tried} attempts, none succeeded`);
     }
   }
 
@@ -456,24 +508,51 @@ class Fuzz {
 
   // ------------------------------------------------------------------ ops
 
+  /** With probability `p`, one of the boundary values (positive ones only), else undefined. */
+  edge(p: number, xs: bigint[]): bigint | undefined {
+    const ys = xs.filter((x) => x > 0n && x < 10n ** 13n);
+    return ys.length > 0 && this.rng.chance(p) ? this.rng.pick(ys) : undefined;
+  }
+
+  /** USDC that mints about `raw` OkuM at multiplier `m`: ceil(raw*m/P), nudged by -1/0/+1. */
+  usdcFor(raw: bigint, m: bigint): bigint {
+    const u = (raw * m + PRECISION - 1n) / PRECISION + BigInt(this.rng.int(3) - 1);
+    return u > 0n ? u : 1n;
+  }
+
   build(kind: string, ctx: Ctx): Op {
     const r = this.rng;
     const user = r.int(3);
+    const md = this.m;
+    const remCap = md.maxSupply - md.supply;
     switch (kind) {
-      case "mint": return this.opMint(ctx, user, r.amount(1n, 5_000_000_000n));
+      case "mint": {
+        // Boundaries: exactly at / one past the supply cap and the PSM mint allowance.
+        const e = this.edge(0.35, [remCap, remCap + 1n, md.allowMint, md.allowMint + 1n]);
+        return this.opMint(ctx, user, e !== undefined ? this.usdcFor(e, ctx.m) : r.amount(1n, 5_000_000_000n));
+      }
       case "redeem": {
         const bal = this.m.okuM[user];
-        const raw = bal > 0n && r.chance(0.8) ? (r.chance(0.3) ? bal : r.amount(1n, bal)) : r.amount(1n, 5_000_000_000n);
+        // Boundaries: the whole balance (+1), and the amount whose payout is exactly the buffer (+/-1).
+        const e = this.edge(0.35, [bal, bal + 1n, ((md.vault + 1n) * PRECISION) / ctx.m, (md.vault * PRECISION) / ctx.m]);
+        const raw = e ?? (bal > 0n && r.chance(0.8) ? (r.chance(0.3) ? bal : r.amount(1n, bal)) : r.amount(1n, 5_000_000_000n));
         const exact = (raw * ctx.m) / PRECISION;
-        const minOut = r.chance(0.15) ? exact + BigInt(r.int(3)) : 0n; // sometimes demands too much
+        const minOut = r.chance(0.2) ? exact + BigInt(r.int(3)) : 0n; // sometimes demands too much, sometimes exactly enough
         return this.opRedeem(ctx, user, raw, minOut);
       }
       case "deposit": return this.opDeposit(ctx, r.amount(1n, 100_000_000_000n));
-      case "withdraw": return this.opWithdraw(ctx, r.chance(0.8) ? r.amount(1n, this.m.vault > 1n ? this.m.vault : 1n) : r.amount(1n, 10n * this.m.vault + 10n));
-      case "directMint": return this.opDirectMint(ctx, r.int(4), r.amount(1n, 40_000_000_000n));
+      case "withdraw": {
+        const e = this.edge(0.3, [md.vault, md.vault + 1n, md.vault - 1n]);
+        return this.opWithdraw(ctx, e ?? (r.chance(0.8) ? r.amount(1n, md.vault > 1n ? md.vault : 1n) : r.amount(1n, 10n * md.vault + 10n)));
+      }
+      case "directMint": {
+        const e = this.edge(0.35, [md.allowDirectMint, md.allowDirectMint + 1n, remCap, remCap + 1n]);
+        return this.opDirectMint(ctx, r.int(4), e ?? r.amount(1n, 40_000_000_000n));
+      }
       case "directBurn": {
         const bal = this.m.okuM[BURNER];
-        return this.opDirectBurn(ctx, bal > 0n && r.chance(0.8) ? r.amount(1n, bal) : r.amount(1n, 1_000_000_000n));
+        const e = this.edge(0.35, [md.allowDirectBurn, md.allowDirectBurn + 1n, bal, bal + 1n, md.supply + 1n]);
+        return this.opDirectBurn(ctx, e ?? (bal > 0n && r.chance(0.8) ? r.amount(1n, bal) : r.amount(1n, 1_000_000_000n)));
       }
       case "allowance": {
         const v = r.chance(0.1) ? 0n : r.amount(10_000_000_000n, 900_000_000_000n);
@@ -481,7 +560,9 @@ class Fuzz {
       }
       case "maxSupply": {
         const s = this.m.supply;
-        return this.opSetMaxSupply(ctx, r.chance(0.3) ? (s > 0n ? s - BigInt(1 + r.int(5)) : 0n) : s + r.amount(1n, 2_000_000_000_000n));
+        const tight = md.maxSupply - s < 1_000_000_000n;
+        const e = tight ? undefined : this.edge(0.4, [s, s - 1n, s + 1n]); // never re-pin an already tight cap
+        return this.opSetMaxSupply(ctx, e ?? (!tight && r.chance(0.3) ? (s > 0n ? s - BigInt(1 + r.int(5)) : 0n) : s + r.amount(10_000_000_000n, 2_000_000_000_000n)));
       }
       case "pause": return this.opPause(ctx);
       case "unpause": return this.opUnpause(ctx);
@@ -492,13 +573,13 @@ class Fuzz {
         return this.opSetRate(ctx, rate, end);
       }
       case "successor": {
-        const rate = this.randRateValue();
+        const rate = this.randRateValue(ctx);
         const base = ctx.cfg.okumRateEnd.toString() !== "0" ? BigInt(ctx.cfg.okumRateEnd.toString()) : ctx.now + BigInt(DAY);
         return this.opSetNext(ctx, rate, base + BigInt(r.chance(0.1) ? -r.int(100) : 1 + r.int(100 * DAY)));
       }
       case "withSuccessor": {
         const [rate, end] = this.randRate(ctx);
-        const nrate = this.randRateValue();
+        const nrate = this.randRateValue(ctx);
         const nend = end + BigInt(r.chance(0.1) ? -r.int(100) : 1 + r.int(100 * DAY));
         return this.opWithSuccessor(ctx, rate, end, nrate, nend);
       }
@@ -514,8 +595,15 @@ class Fuzz {
     throw new Error(`unknown op ${kind}`);
   }
 
-  randRateValue(): bigint {
+  randRateValue(ctx?: Ctx): bigint {
     const r = this.rng;
+    if (ctx && r.chance(0.35)) {
+      // Near the stored and the effective (currently accruing) rate: this is where a pause gate
+      // that compares against the wrong one is visible.
+      const eff = effectiveRate(ctx.sched, ctx.now);
+      const near = [ctx.sched.ratePerSecond, eff, ctx.sched.pendingRatePerSecond].flatMap((x) => [x - 1n, x, x + 1n]);
+      return r.pick(near.filter((x) => x >= PRECISION - 1n && x <= MAX_RATE + 1n));
+    }
     return r.weighted<bigint>([
       [ratePerSecondForApy(r.next() * 3), 12],
       [PRECISION, 2],
@@ -527,7 +615,7 @@ class Fuzz {
 
   randRate(ctx: Ctx): [bigint, bigint] {
     const r = this.rng;
-    const rate = this.randRateValue();
+    const rate = this.randRateValue(ctx);
     let end: bigint;
     if (rate === PRECISION) end = r.chance(0.85) ? 0n : ctx.now + BigInt(DAY);
     else end = r.weighted<bigint>([

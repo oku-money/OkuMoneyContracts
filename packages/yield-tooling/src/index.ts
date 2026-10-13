@@ -19,5 +19,6 @@
 export * from "./networks";
 export * from "./multiplier";
 export * from "./yieldRate";
+export * from "./catchUp";
 export * from "./epochDistribution";
 export * from "./epochSchedule";

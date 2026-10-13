@@ -19,6 +19,13 @@
  *       --rate=<wad> --end=<unix> --next-rate=<wad> --next-end=<unix>
  *   --dry-run | --yes-i-mean-it-on-mainnet
  *
+ * CATCH-UP (this chain lags the others; `active` / `atomic` only): replace
+ * --rate/--apy with `--target-multiplier=<wad>` and the minimal rate that reaches it
+ * at `--end` is derived. Must be sent while the PSM is UNPAUSED (cold key); a paused
+ * yielding write reverts `Paused`.
+ *   NETWORK=devnet tsx scripts/admin/set-yield-rate.ts --mode=active \
+ *       --target-multiplier=<wad> --end=<unix>
+ *
  * Rates are WAD (1e18); `1e18` means "no yield". Rates below PRECISION are
  * rejected on-chain (no representation of a loss).
  */
@@ -39,6 +46,7 @@ import {
   computeMultiplier,
   scheduleFromConfig,
   ratePerSecondForApy,
+  catchUpRate,
 } from "@okumoney/yield-tooling";
 
 function parseArg(name: string): string | undefined {
@@ -65,6 +73,31 @@ function resolveRate(rateArg?: string, apyArg?: string, label = 'rate'): bigint 
   }
   if (apyArg) return ratePerSecondForApy(Number(apyArg));
   throw new Error(`Required: --${label}=<wad> or --apy=<decimal, e.g. 0.05>`);
+}
+
+/**
+ * Catch-up: derive the active rate from `--target-multiplier=<wad>` so this chain
+ * reaches that multiplier at `end` (see `catchUpRate`). For a chain that lags the
+ * others, e.g. after a pause outlasted the armed window. Mutually exclusive with
+ * `--rate` / `--apy`. The write must land while UNPAUSED; a late landing leaves the
+ * chain marginally below target, never above.
+ */
+function resolveCatchUpRate(
+  targetArg: string,
+  currentMultiplier: bigint,
+  end: number,
+  nowSec: number,
+): bigint {
+  if (parseArg('rate') || parseArg('apy')) {
+    throw new Error('--target-multiplier is mutually exclusive with --rate / --apy.');
+  }
+  const rate = catchUpRate({
+    currentMultiplier,
+    targetMultiplier: BigInt(targetArg),
+    windowSeconds: BigInt(end - nowSec),
+  });
+  logger.info(`catch-up rate (wad): ${rate} (target ${targetArg} at ${end}, from ${currentMultiplier})`);
+  return rate;
 }
 
 /** Resolve an absolute unix expiry from `--end` or a relative `--days`. */
@@ -138,8 +171,11 @@ async function main() {
       .accountsPartial({ rateManager: rateManager.authority, config: psmConfig })
       .signers(rateManager.signers);
   } else if (mode === 'atomic') {
-    const rate = resolveRate(parseArg('rate'), parseArg('apy'));
     const end = resolveEnd(parseArg('end'), parseArg('days'), nowSec);
+    const target = parseArg('target-multiplier');
+    const rate = target
+      ? resolveCatchUpRate(target, currentMultiplier, end, nowSec)
+      : resolveRate(parseArg('rate'), parseArg('apy'));
     const nextRate = resolveRate(parseArg('next-rate'), parseArg('next-apy'), 'next-rate');
     const nextEnd = Number(
       parseArg('next-end') ?? (() => { throw new Error('Required: --next-end=<unix seconds>'); })(),
@@ -163,10 +199,18 @@ async function main() {
       .accountsPartial({ rateManager: rateManager.authority, config: psmConfig })
       .signers(rateManager.signers);
   } else if (mode === 'active') {
-    const rate = resolveRate(parseArg('rate'), parseArg('apy'));
+    const target = parseArg('target-multiplier');
+    let rate: bigint;
+    let end: number;
+    if (target) {
+      end = resolveEnd(parseArg('end'), parseArg('days'), nowSec);
+      rate = resolveCatchUpRate(target, currentMultiplier, end, nowSec);
+    } else {
+      rate = resolveRate(parseArg('rate'), parseArg('apy'));
+      end = rate === PRECISION ? 0 : resolveEnd(parseArg('end'), parseArg('days'), nowSec);
+    }
     // Halting is the one case with no window.
     const halting = rate === PRECISION;
-    const end = halting ? 0 : resolveEnd(parseArg('end'), parseArg('days'), nowSec);
     if (!halting && end <= nowSec) {
       throw new Error(
         `--end=${end} is not in the future. Every yielding rate must carry a ` +

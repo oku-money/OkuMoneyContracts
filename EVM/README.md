@@ -972,7 +972,16 @@ reach share backing (modulo the 1-wei caveat in 10b).
 
 EVM and SVM both monitor the USDC peg entirely off-chain. There is no on-chain
 oracle, aggregator or circuit-breaker and no storage reserved for one. The
-off-chain orchestrator watches the peg and pauses the PSM on a detected depeg.
+off-chain orchestrator watches the peg and pauses on a detected depeg.
+
+**The depeg pause must cover all three contracts on every chain** (PSM, OkuMoney,
+vault; see #1). Pausing only `LitePSM` leaves EVM rate writes open, while SVM's single
+`is_paused` flag also gates its rate writes (`SVM/README.md` § Accepted Risks #4): once the
+armed window lapses SVM halts and cannot restart yield until the cold unpauser acts,
+while EVM keeps accruing. Pausing all three on every chain makes every chain hit the
+same gate and halt at the same absolute `rateEnd`, so there is no divergence. If a
+pause did diverge the chains, recover with `TARGET_MULTIPLIER` (see
+[`../README.md` § Depeg longer than the armed window](../README.md#depeg-longer-than-the-armed-window)).
 
 ### 4. 1-wei share dust in `OkuDollar.transfer`/`transferFrom` under inflated `usdMultiplier`
 
@@ -1050,7 +1059,8 @@ same schedule at `PRECISION = 1e18` over a line-for-line port of `MathLib.sol`.
 
 **Divergence is one-way.** The multiplier is monotonic, so a chain that ran hot
 cannot be corrected downward; the only remedy is to run the laggards hot until
-they catch up.
+they catch up. `setOkuMYieldRate.ts` with `TARGET_MULTIPLIER=` derives the minimal
+catch-up rate for one chain (`catchUpRate`, `packages/yield-tooling`).
 
 ### 10. Known issues
 

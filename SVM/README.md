@@ -325,6 +325,19 @@ Trust assumptions the SVM side makes deliberately; reviewers should not re-flag 
    domain (`reachability` tests, `oku-shared/src/rate.rs`); `Clock::unix_timestamp` can lag wall clock
    (self-correcting, but drift monitoring must compare at equal *chain* timestamps); and wallet display
    steps because `ScaledUiAmount` cannot stream.
+4. **A PSM pause gates SVM rate writes (single `is_paused` flag).** EVM's rate setters honour
+   only OkuMoney's pause; here the one flag also gates them, with the same rule: while paused a
+   write may only lower the projected curve (`yield_ops.rs` `check_active_pause_gate` /
+   `check_successor_pause_gate`). Once the armed window lapses, the effective rate is
+   `PRECISION` and every yielding write reverts `Paused` until the cold `unpauser` acts, so a
+   pause longer than the armed window (one to two days at 24-hour epochs) halts SVM accrual.
+   The atomic setter clears the armed successor before the successor gate runs, so while paused
+   it accepts only a no-yield successor (bankrun: "while paused, the atomic setter accepts only
+   a no-yield successor"). Intended posture: a depeg pause covers PSM, OkuMoney and vault on
+   **every** chain, so all chains halt together at the same `rateEnd` (`EVM/README.md` Accepted
+   Risks #1, #3). Recovery after unpause, and catch-up if chains diverged anyway
+   (`set-yield-rate.ts --target-multiplier`): [`../README.md` § Depeg longer than the armed
+   window](../README.md#depeg-longer-than-the-armed-window).
 
 ## Testing
 

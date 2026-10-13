@@ -151,6 +151,10 @@ regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pic
 - **Rate setters while paused (both stacks):** may only lower the projected curve; a
   same-rate re-write with a later end, or a yielding successor where none is armed, now
   reverts `EnforcedPause` / `Paused`. The orchestrator must not treat that as transient.
+  Once the armed window has lapsed, EVERY yielding write reverts while paused, so a depeg
+  pause longer than the window halts accrual; pause all three contracts on every chain so
+  they halt together (README § Depeg longer than the armed window). Per-chain catch-up:
+  `set-yield-rate.ts --target-multiplier` (SVM), `TARGET_MULTIPLIER=` (EVM).
   Removed: `QueueProcessed`, the `RedemptionQueue` events, `PSM_QUEUE_PROCESSOR`
   and `QUEUE_*` roles, `BelowMinimumRedemption`.
 - **SVM IDL:** `ZeroOutput` removed (redeem output can never be zero);

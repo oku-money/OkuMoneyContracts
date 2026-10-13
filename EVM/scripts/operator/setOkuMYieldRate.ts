@@ -43,6 +43,10 @@
  * Environment:
  *   APY=<fraction>                e.g. 0.03 for 3% (preferred)
  *   RATE=<1e18-scaled>            raw override; mutually exclusive with APY
+ *   TARGET_MULTIPLIER=<1e18>      CATCH-UP for a lagging chain: derive the minimal rate that
+ *                                  lifts this chain's live multiplier to this value at
+ *                                  END_TIMESTAMP. Exclusive with APY/RATE; not with STAGE.
+ *                                  Send while OkuMoney is UNPAUSED (cold key).
  *   END_TIMESTAMP=<unix>          required (> now) unless rate == PRECISION
  *   STAGE=true                    use setNextOkuMYieldRate instead
  *   WITH_SUCCESSOR=true           use setOkuMYieldRateWithSuccessor (needs
@@ -66,13 +70,19 @@ import { getDeployedContract, waitMined } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { apyToRatePerSecond, describeRate, PRECISION, MAX_RATE } from "../utils/yieldRate";
+import { catchUpRate } from "@okumoney/yield-tooling";
 import { parseArg, isYesMainnet, isDryRun, runMain } from "../utils/cli";
 
 export type SetYieldRateMode = "direct" | "stage" | "withSuccessor";
 
 export interface SetOkuMYieldRateOpts {
   mode: SetYieldRateMode;
+  /** Ignored when `targetMultiplier` is set (the rate is derived from it). */
   rate: bigint;
+  /** Catch-up: derive the minimal rate that lifts THIS chain's live multiplier to this
+   *  value (1e18-scaled) at `endTimestamp`. "direct" / "withSuccessor" only. Must be sent
+   *  while OkuMoney is unpaused: a paused yielding write reverts `EnforcedPause`. */
+  targetMultiplier?: bigint;
   endTimestamp?: bigint; // required for "direct" / "withSuccessor"
   pendingEndTimestamp?: bigint; // required for "stage" / "withSuccessor"
   nextRate?: bigint; // required for "withSuccessor"
@@ -91,9 +101,12 @@ export async function runSetOkuMYieldRate(
   signer: Signer,
   opts: SetOkuMYieldRateOpts
 ): Promise<SetOkuMYieldRateResult> {
-  const { mode, rate, endTimestamp, pendingEndTimestamp, nextRate, dryRun = false } = opts;
-  if (rate < PRECISION) throw new Error(`rate ${rate} < PRECISION; contract reverts InvalidRate`);
-  if (rate > MAX_RATE) throw new Error(`rate ${rate} > MAX_RATE; contract reverts RateTooHigh`);
+  const { mode, endTimestamp, pendingEndTimestamp, nextRate, targetMultiplier, dryRun = false } = opts;
+  let rate = opts.rate;
+  if (targetMultiplier === undefined) {
+    if (rate < PRECISION) throw new Error(`rate ${rate} < PRECISION; contract reverts InvalidRate`);
+    if (rate > MAX_RATE) throw new Error(`rate ${rate} > MAX_RATE; contract reverts RateTooHigh`);
+  }
 
   const okuMAddr = loadAddress(ctx.bookKey, "OkuMoney");
   if (!okuMAddr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
@@ -112,6 +125,17 @@ export async function runSetOkuMYieldRate(
   logger.info(`Current rate:       ${describeRate(curRate)}`);
   logger.info(`Current rateEnd:    ${curEnd === 0n ? "halted (no yield accruing)" : new Date(Number(curEnd) * 1000).toISOString()}`);
   logger.info(`Current pending:    ${describeRate(curPending)}`);
+  if (targetMultiplier !== undefined) {
+    if (mode === "stage") throw new Error("targetMultiplier applies to the active rate (mode direct / withSuccessor)");
+    if (endTimestamp === undefined || endTimestamp === 0n) throw new Error("targetMultiplier requires endTimestamp");
+    const nowSec = BigInt((await ethers.provider.getBlock("latest"))!.timestamp);
+    rate = catchUpRate({
+      currentMultiplier: curMult,
+      targetMultiplier,
+      windowSeconds: endTimestamp - nowSec,
+    });
+    logger.info(`Catch-up target:    ${ethers.formatEther(targetMultiplier)} at ${endTimestamp}`);
+  }
   logger.info(`New rate:           ${describeRate(rate)}`);
 
   if (mode === "stage" && curEnd === 0n) {
@@ -158,9 +182,16 @@ if (require.main === module) {
 
     const apyStr = parseArg("apy");
     const rateStr = parseArg("rate");
+    const targetStr = parseArg("targetMultiplier");
     if (apyStr && rateStr) throw new Error("Pass --apy or --rate, not both");
-    if (!apyStr && !rateStr) throw new Error("Required: --apy=<fraction> (preferred) or --rate=<1e18>");
-    const rate = apyStr ? apyToRatePerSecond(Number(apyStr)) : BigInt(rateStr!);
+    if (targetStr && (apyStr || rateStr)) throw new Error("--targetMultiplier is mutually exclusive with --apy / --rate");
+    if (targetStr && mode === "stage") throw new Error("--targetMultiplier cannot be combined with --stage");
+    if (!apyStr && !rateStr && !targetStr) {
+      throw new Error("Required: --apy=<fraction> (preferred), --rate=<1e18>, or --targetMultiplier=<1e18> (catch-up)");
+    }
+    const targetMultiplier = targetStr ? BigInt(targetStr) : undefined;
+    // With a target the rate is derived in `runSetOkuMYieldRate`; any yielding placeholder passes the end-timestamp checks below.
+    const rate = targetStr ? MAX_RATE : apyStr ? apyToRatePerSecond(Number(apyStr)) : BigInt(rateStr!);
     if (rateStr) logger.warning("Raw --rate supplied; prefer --apy so all chains derive identically");
 
     const endStr = parseArg("endTimestamp");
@@ -198,6 +229,7 @@ if (require.main === module) {
     await runSetOkuMYieldRate(ctx, signer, {
       mode,
       rate,
+      targetMultiplier,
       endTimestamp: endTimestamp ?? 0n,
       pendingEndTimestamp,
       nextRate,

@@ -300,10 +300,42 @@ from that:
    halted).
 4. Divergence is **one-way**: the multiplier is monotonic, so a chain
    that ran hot cannot be corrected downward. The only remedy is to run
-   the laggards hot until they catch up.
+   the laggards hot until they catch up (see
+   [Depeg longer than the armed window](#depeg-longer-than-the-armed-window)).
 5. There is no price tick, so no "wait a slot/block before bridging" rule
    in normal operation. It applies only around the emergency override,
    which stamps the sandwich lock.
+
+#### Depeg longer than the armed window
+
+A rate write is a yielding write, and while paused the rate setters may only lower the
+projected curve (`EnforcedPause` on EVM, `Paused` on SVM). Past the armed window
+(`rateEnd`, then the successor's end; one to two days at 24-hour epochs) a paused chain
+therefore **cannot restart yield**, and a depeg can outlast that (March 2023: about three
+days). EVM honours OkuMoney's pause, SVM's single `is_paused` flag is the PSM's, so a
+PSM-only pause halts SVM alone.
+
+1. **Pause all three contracts (PSM, OkuMoney, vault) on every chain**, not just the PSM.
+   Every chain then hits the same gate and halts at the same absolute `rateEnd`: no
+   divergence. Pause is warm; unpause is cold.
+2. **After the cold unpause, publish a fresh schedule** with the normal derive and
+   `broadcastSchedule` flow. All chains are at the same multiplier, so the pre-state
+   check passes. Chains stay paused for no longer than the cold key takes to sign.
+3. **If the chains diverged anyway** (a PSM-only pause, a missed broadcast), the laggard
+   cannot go through `broadcastSchedule`, which refuses a chain not at the artifact's
+   pre-state. Fix it per chain, after unpausing it. Read the leader's multiplier and
+   `rateEnd` (`checkMultiplierDrift`, `admin:read-schedule`), then on the laggard:
+   - SVM: `set-yield-rate.ts --mode=active --target-multiplier=<wad> --end=<leader rateEnd>`
+   - EVM: `TARGET_MULTIPLIER=<wad> END_TIMESTAMP=<leader rateEnd> npx hardhat run
+     scripts/operator/setOkuMYieldRate.ts --network <chain>`
+
+   Both derive the minimal rate (`catchUpRate` in `packages/yield-tooling`) that lands the
+   laggard on the leader's multiplier at `rateEnd`, where the same successor then takes
+   over everywhere. `planCatchUp` computes target and rate from two schedules. A
+   transaction landing late leaves the chain marginally under target, never over.
+   Expect `checkMultiplierDrift` to report a rate mismatch on the laggard until
+   `rateEnd`; that is the catch-up working, not a fault. A gap that needs more than
+   `MAX_RATE` (about 2242% APY) over the window must be closed over several windows.
 
 #### Minter allowance rotation policy
 

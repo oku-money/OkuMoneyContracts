@@ -29,3 +29,7 @@ closed"), and a closed program ID can never be redeployed:
 | `BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g` | `devnet.v1-pre-streaming.json` | old `lite_psm` |
 | `3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N` | `devnet-fork.v1-pre-streaming.json` (and `upgrades[]` of the devnet archive) | old `lite_psm` |
 | `3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy` | `devnet-fork.v1-pre-streaming.json` | `oku_dollar` (crate removed) |
+| `4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN` | `devnet.v2-4k5gm.json` | `lite_psm` v2 (closed 2026-10-22, 3.108 SOL reclaimed; config `EBL4…`, vault, OkuM mint `BZw8…` and `5B3k…` stranded) |
+
+The current devnet deploy (`devnet.json`) is `lite_psm` `FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW`
+(deployed 2026-10-22).

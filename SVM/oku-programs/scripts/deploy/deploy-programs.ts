@@ -11,8 +11,9 @@
  *   # Deploy to devnet
  *   npm run deploy:programs
  * 
- *   # Deploy to devnet fork (Surfpool)
- *   NETWORK=devnet-fork npm run deploy:programs
+ *   # Deploy to devnet fork (Surfpool). NOTE: `deploy:programs` hard-sets
+ *   # NETWORK=devnet, so a NETWORK= prefix on it is ignored. Use the variant:
+ *   npm run deploy:programs:devnet-fork
  */
 
 import { Connection, LAMPORTS_PER_SOL } from '@solana/web3.js';

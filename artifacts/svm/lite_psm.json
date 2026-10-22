@@ -1,5 +1,5 @@
 {
-  "address": "4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN",
+  "address": "FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW",
   "metadata": {
     "name": "lite_psm",
     "version": "0.1.0",
@@ -439,7 +439,7 @@
             "Checked at runtime rather than a hardcoded key, so one binary serves every",
             "cluster; passing it grants nothing the upgrade authority lacks."
           ],
-          "address": "ChPL9fhREtCc8WQSBkBmqd6ESjfv5JHyENwXkj2JWV8D"
+          "address": "8j17QeciP6od5u3N8ruKairpmHYBUoYKeTAUdRPmZDJA"
         },
         {
           "name": "config",

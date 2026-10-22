@@ -137,12 +137,14 @@ An alert that watches distributed-so-far against the epoch target and halts earl
 (re-anchor to `PRECISION`) is part of the backend, not this repo, and does not
 exist here. Why it matters: `EVM/docs/epoch-accounting.md` § Finding.
 
-### Before the next deploy `[both]`
+### v0.4 testnet deploy `[both]`
 
-The next EVM deploy is clean-slate, not an in-place upgrade: `DEPLOYMENT_VERSION =
-v0.4`, the EVM address book and `testnet-addresses.json` EVM contracts are empty
-(`MockUSDC` included), and `roleGrants.json` is `[]`. Outstanding: run the deploy,
-regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pick up:
+Done 2026-10-22: EVM v0.4 clean-slate deploy + `grantRoles.ts` on sepolia, baseSepolia,
+arbSepolia, bscTestnet, opSepolia (CREATE2: identical addresses on each, see `testnet-addresses.json`);
+SVM devnet `lite_psm` v2 `4k5gm…` closed (3.108 SOL reclaimed) and redeployed as
+`FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW`, operational roles to the Fordefi vault
+`5Miw…`. `artifacts/` regenerated.
+The backend must pick up the new addresses and:
 
 - **EVM ABI:** `LitePSM.initialize(okuMoney, okuDollar, usdc, admin)`;
   `depositBuffer(amount)`; `redeemOkuM` / `redeemUsdOku` revert
@@ -167,10 +169,10 @@ regenerate `artifacts/` (`export-abis`, `export-idls`), and have the backend pic
 - **Operator-facing behaviour:** buffer deposit and withdraw are now pause-gated and
   blocked during the override lock on both stacks (`depositBuffer` / `withdrawUsdc`,
   `deposit_buffer` / `withdraw_buffer`). Automation must unpause before topping up.
-- **Clear on deploy:** the tracked `EVM/.openzeppelin/*.json` manifests and
-  `EVM/scripts/config/addresses.pre-streaming.json` describe the retired queue-era
-  deployments, and `artifacts/evm/MockUSDC.json` is not written by `export-abis`.
-  Kept until the next deploy; delete them (and regenerate `artifacts/`) as part of it.
+- **Cleared on deploy:** the testnet `EVM/.openzeppelin/*.json` manifests and
+  `artifacts/evm/MockUSDC.json` were removed. Still present on purpose:
+  `.openzeppelin/{base,bsc}.json` and `addresses.pre-streaming.json`, which are the only
+  record of the v0.2 contracts still live on base/bsc mainnet.
 - The deploy writes `EVM/scripts/config/upgradeBaselines.json` (layout baseline per proxy)
   and fresh `.openzeppelin/<chain>.json` manifests. **Commit both**: the upgrade script
   refuses to run without them (it never `forceImport`s).

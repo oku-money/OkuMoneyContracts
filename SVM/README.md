@@ -16,7 +16,7 @@ Solana implementation of OkuMoney (yield infrastructure backed by US Treasury Bi
 
 ## Programs
 
-**lite-psm** (`4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN`) is the single program: buffer-only Peg
+**lite-psm** (`FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW`) is the single program: buffer-only Peg
 Stability Module, yield schedule, compliance (freeze / thaw) and direct mint/burn for bridging. The
 `PsmConfig` PDA holds mint, freeze and `ScaledUiAmountConfig` authority over `OkuM`, so no EOA
 controls minting. `initialize` creates the mint with its three extensions via Token-2022 CPIs.

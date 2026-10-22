@@ -18,7 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync, spawnSync } from 'child_process';
 import { Connection, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
-import { detectNetwork, createProvider } from '../utils/network';
+import { detectNetwork, createProviderWithClusterCheck, walletPath } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { NetworkName, NETWORK_CONFIGS } from '../config/networks';
@@ -43,10 +43,9 @@ function parseList(name: string): string[] | undefined {
  * `cluster` URL for everything else.
  */
 function solanaUrlFor(network: NetworkName): string {
-  if (network === 'devnet') return 'devnet';
-  if (network === 'mainnet-beta') return 'mainnet-beta';
-  if (network === 'localnet') return 'localhost';
-  // Fork networks read their RPC from the network config.
+  // Use the configured RPC (SOLANA_RPC_URL / HELIUS_RPC resolution in
+  // networks.ts) so CLI calls hit the same endpoint as the provider, not the
+  // rate-limited public moniker.
   return NETWORK_CONFIGS[network].cluster;
 }
 
@@ -168,7 +167,7 @@ async function main() {
     );
   }
 
-  const provider = createProvider(network);
+  const provider = await createProviderWithClusterCheck(network);
   const wallet = provider.wallet.publicKey;
   const url = solanaUrlFor(network);
 
@@ -239,7 +238,7 @@ async function main() {
   // 4. Summary block.
   const summaryRows: Record<string, string> = {
     'network': network,
-    'cluster (--url)': url,
+    'cluster (--url)': url.replace(/(api-key=)[^&]*/i, '$1***'),
     'deployer wallet': wallet.toBase58(),
     'targets (input)': String(ids.length),
     'already closed (skip)': String(skipClosed.length),
@@ -300,7 +299,8 @@ async function main() {
     try {
       const stdout = execSync(
         `solana program close ${id} --bypass-warning ` +
-          `--recipient ${wallet.toBase58()} --url ${url}`,
+          `--recipient ${wallet.toBase58()} --url "${url}" ` +
+          `--keypair "${walletPath()}" --authority "${walletPath()}"`,
         { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf-8' }
       );
       // `solana program close` prints "Closed Program Id <id>, ..."

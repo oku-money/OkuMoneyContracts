@@ -23,6 +23,7 @@ import { ethers, network, upgrades, run } from "hardhat";
 import { Contract, Signer } from "ethers";
 import { saveAddress, loadAddressBook, saveAddressBook, hasAddress, loadAddress, isForkKey } from "../utils/addressBook";
 import { syncEvmRegistry } from "../utils/testnetRegistry";
+import { publicRpcUrl, RpcChain } from "../config/rpc";
 import {
   getChainMetadata,
   DEV_WALLET_ADDRESS,
@@ -939,7 +940,9 @@ export async function runDeploy(
       const metadata = getChainMetadata(networkName);
       syncEvmRegistry(networkName, {
         chainId: metadata.chainId,
-        rpcUrl: metadata.rpcUrl,
+        // Keyless public URL: metadata.rpcUrl may embed an Ankr/Alchemy key and
+        // testnet-addresses.json is committed.
+        rpcUrl: publicRpcUrl(networkName as RpcChain),
         explorer: metadata.explorer,
         contracts: {
           okuMoney: addresses.OkuMoney,

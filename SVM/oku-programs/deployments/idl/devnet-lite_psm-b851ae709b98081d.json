@@ -1,0 +1,3603 @@
+{
+  "address": "FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW",
+  "metadata": {
+    "name": "lite_psm",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "LitePSM - USDC to OkuMoney peg stability module"
+  },
+  "instructions": [
+    {
+      "name": "accept_role_admin",
+      "docs": [
+        "Complete a `RoleAdmin` rotation; signed by the proposed admin."
+      ],
+      "discriminator": [
+        203,
+        100,
+        15,
+        101,
+        168,
+        236,
+        213,
+        218
+      ],
+      "accounts": [
+        {
+          "name": "new_role_admin",
+          "docs": [
+            "Must match `config.pending_role_admin`."
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: `role_admin`, `pending_role_admin`)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "burn_oku_m_direct",
+      "docs": [
+        "Burn the caller's OkuM without a USDC payout (`direct_burner` only; the",
+        "source leg of a bridge out of this chain). Consumes the direct-burner allowance."
+      ],
+      "discriminator": [
+        202,
+        251,
+        16,
+        220,
+        210,
+        118,
+        204,
+        245
+      ],
+      "accounts": [
+        {
+          "name": "direct_burner",
+          "docs": [
+            "The configured `direct_burner`; owns and signs for the burned account."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA. Writable because the direct-burn allowance is",
+            "drawn down; `has_one` enforces the role."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_m_mint",
+          "docs": [
+            "OkuM mint (Token-2022). `mint::authority = config` is defense in depth."
+          ],
+          "writable": true
+        },
+        {
+          "name": "burner_oku_m_ata",
+          "docs": [
+            "The burner's own account; source of the burn."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "raw_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "cancel_role_admin_transfer",
+      "docs": [
+        "Withdraw a pending `RoleAdmin` proposal (`role_admin` only)."
+      ],
+      "discriminator": [
+        155,
+        31,
+        41,
+        13,
+        107,
+        117,
+        20,
+        22
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "docs": [
+            "The current `role_admin`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: role keys / `pending_role_admin`)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "deposit_buffer",
+      "docs": [
+        "Add USDC to the redemption buffer (`buffer_depositor` only). Blocked while",
+        "paused and in the slot of a multiplier override."
+      ],
+      "discriminator": [
+        192,
+        124,
+        202,
+        236,
+        253,
+        171,
+        69,
+        217
+      ],
+      "accounts": [
+        {
+          "name": "buffer_depositor",
+          "docs": [
+            "The configured `buffer_depositor` (enforced by `has_one` on `config`)."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA; read-only here."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer_depositor_usdc_ata",
+          "docs": [
+            "Buffer depositor's USDC account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "buffer_depositor"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault"
+          ],
+          "writable": true
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "USDC mint, for `transfer_checked`."
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "freeze_account",
+      "docs": [
+        "Freeze an OkuM token account (`freezer` only). Works while paused."
+      ],
+      "discriminator": [
+        253,
+        75,
+        82,
+        133,
+        167,
+        238,
+        43,
+        130
+      ],
+      "accounts": [
+        {
+          "name": "freezer",
+          "docs": [
+            "Works while paused."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA; read-only here. Signs the freeze as freeze authority."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_m_mint",
+          "docs": [
+            "OkuM mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "target_oku_m_ata",
+          "docs": [
+            "Token account to freeze"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize",
+      "docs": [
+        "One-time setup, callable only by the program's upgrade authority. Creates",
+        "the config PDA, the USDC vault and the OkuM Token-2022 mint."
+      ],
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "docs": [
+            "Becomes `config.role_admin`. Must be the program's upgrade authority",
+            "(see `program_data`). Otherwise `initialize` is a land-grab: `config` is a",
+            "singleton PDA, deploy and initialize are separate transactions, and",
+            "whoever lands first becomes `role_admin` permanently and picks `usdc_mint`",
+            "(only its decimals are validated). There is no re-init, so the program ID",
+            "would be unrecoverable."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "program_data",
+          "docs": [
+            "This program's ProgramData, proving `role_admin` is the upgrade authority.",
+            "Checked at runtime rather than a hardcoded key, so one binary serves every",
+            "cluster; passing it grants nothing the upgrade authority lacks."
+          ],
+          "address": "8j17QeciP6od5u3N8ruKairpmHYBUoYKeTAUdRPmZDJA"
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA, created here (seed `psm_config`)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "USDC mint (standard SPL); must have `USDC_DECIMALS` decimals."
+          ]
+        },
+        {
+          "name": "oku_m_mint",
+          "docs": [
+            "Fresh keypair for the OkuM mint, created in the handler (`CreateAccount`",
+            "needs the new account to sign)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault (ATA of `config`)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "config"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "InitializeParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "mint_oku_m",
+      "docs": [
+        "Mint OkuM for USDC at the canonical multiplier:",
+        "`raw_oku_m = usdc_amount * PRECISION / multiplier`, rounded down."
+      ],
+      "discriminator": [
+        200,
+        181,
+        20,
+        123,
+        23,
+        72,
+        39,
+        105
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "docs": [
+            "Pays the USDC, receives the OkuM, and pays rent if their OkuM account is",
+            "created here. Permissionless."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA. Writable because the PSM mint allowance is drawn",
+            "down on every mint."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "USDC mint. Unchecked to skip deserialization: it is only forwarded to",
+            "`transfer_checked`, which validates mint and decimals itself.",
+            "",
+            "forwarded as an `AccountInfo` to `transfer_checked`, which validates it."
+          ]
+        },
+        {
+          "name": "oku_m_mint",
+          "docs": [
+            "OkuM mint (Token-2022). `mint::authority = config` is defense in depth."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_usdc_ata",
+          "docs": [
+            "User's USDC account; any account the user owns (it is never created here)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_oku_m_ata",
+          "docs": [
+            "User's OkuM account. `associated_token::` because `init_if_needed` needs",
+            "the canonical address."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_m_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault. Unchecked for the same reason as `usdc_mint`.",
+            "",
+            "forwarded as an `AccountInfo` to `transfer_checked`, which validates it."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "usdc_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "mint_oku_m_direct",
+      "docs": [
+        "Mint OkuM without USDC (`direct_minter` only; fiat on-ramp and the SVM->SVM",
+        "bridge destination leg). Consumes the direct-minter allowance and respects",
+        "the supply cap."
+      ],
+      "discriminator": [
+        76,
+        111,
+        110,
+        216,
+        39,
+        168,
+        159,
+        223
+      ],
+      "accounts": [
+        {
+          "name": "direct_minter",
+          "docs": [
+            "Also pays for recipient ATA creation."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA. Writable because the direct-mint allowance is",
+            "drawn down; `has_one` makes the signer the configured `direct_minter`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_m_mint",
+          "docs": [
+            "OkuM mint (Token-2022). `mint::authority = config` is defense in depth."
+          ],
+          "writable": true
+        },
+        {
+          "name": "recipient",
+          "docs": [
+            "Recipient of the minted OkuM; does not sign."
+          ]
+        },
+        {
+          "name": "recipient_oku_m_ata",
+          "docs": [
+            "Recipient's OkuM token account, created if missing."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "recipient"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_m_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "raw_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "docs": [
+        "Pause mint, redeem, direct mint/burn and buffer moves (`pauser` only).",
+        "Freeze/thaw and rate decreases stay available."
+      ],
+      "discriminator": [
+        211,
+        22,
+        221,
+        251,
+        74,
+        121,
+        193,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "pauser",
+          "docs": [
+            "The configured `pauser`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: the pause flag)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "redeem_oku_m",
+      "docs": [
+        "Redeem OkuM for USDC from the buffer:",
+        "`usdc_amount = raw_oku_m_amount * multiplier / PRECISION`, rounded down.",
+        "Reverts with `SlippageExceeded` below `min_usdc_out` (`0` disables)."
+      ],
+      "discriminator": [
+        85,
+        74,
+        214,
+        82,
+        206,
+        164,
+        90,
+        70
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "docs": [
+            "Burns the OkuM, receives the USDC, and pays rent if their USDC account is",
+            "created here. Permissionless."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA. Read-only: a redeem changes no config state (it",
+            "only signs the vault transfer)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "USDC mint (pinned to the configured one)"
+          ]
+        },
+        {
+          "name": "oku_m_mint",
+          "docs": [
+            "OkuM mint (Token-2022). `mint::authority = config` is defense in depth."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_usdc_ata",
+          "docs": [
+            "User's USDC account, receives the payout. Created if missing so a user",
+            "who has never held USDC can still redeem."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_oku_m_ata",
+          "docs": [
+            "User's OkuM account; source of the burn"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_m_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault; source of the payout. Typed (deserialized) because the",
+            "handler reads its balance for the `InsufficientBuffer` check."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "raw_oku_m_amount",
+          "type": "u64"
+        },
+        {
+          "name": "min_usdc_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_authority",
+      "docs": [
+        "Replace the authority for `role` (`role_admin` only). For `RoleAdmin` this",
+        "only proposes the new admin; it takes effect on `accept_role_admin`."
+      ],
+      "discriminator": [
+        133,
+        250,
+        37,
+        21,
+        110,
+        163,
+        26,
+        121
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "docs": [
+            "The current `role_admin`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: role keys / `pending_role_admin`)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "role",
+          "type": {
+            "defined": {
+              "name": "AuthorityRole"
+            }
+          }
+        },
+        {
+          "name": "new_authority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_direct_burner_allowance",
+      "docs": [
+        "Reset the `burn_oku_m_direct` allowance in raw OkuM units",
+        "(`allowance_manager` only)."
+      ],
+      "discriminator": [
+        62,
+        173,
+        62,
+        89,
+        202,
+        158,
+        15,
+        27
+      ],
+      "accounts": [
+        {
+          "name": "allowance_manager",
+          "docs": [
+            "The configured `allowance_manager`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: the allowances)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_direct_minter_allowance",
+      "docs": [
+        "Reset the `mint_oku_m_direct` allowance in raw OkuM units",
+        "(`allowance_manager` only)."
+      ],
+      "discriminator": [
+        145,
+        198,
+        248,
+        218,
+        60,
+        85,
+        134,
+        225
+      ],
+      "accounts": [
+        {
+          "name": "allowance_manager",
+          "docs": [
+            "The configured `allowance_manager`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: the allowances)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_max_supply",
+      "docs": [
+        "Set the supply cap in raw OkuM units (`cap_manager` only). Cannot be set",
+        "below current supply."
+      ],
+      "discriminator": [
+        16,
+        207,
+        140,
+        77,
+        107,
+        20,
+        202,
+        158
+      ],
+      "accounts": [
+        {
+          "name": "cap_manager",
+          "docs": [
+            "The configured `cap_manager`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: `max_supply`)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_m_mint",
+          "docs": [
+            "OkuM mint, read so `set_max_supply` can refuse a cap below current supply."
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_max_supply",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_minter_allowance",
+      "docs": [
+        "Reset the `mint_oku_m` allowance in raw OkuM units (`allowance_manager` only)."
+      ],
+      "discriminator": [
+        50,
+        245,
+        41,
+        45,
+        12,
+        190,
+        111,
+        75
+      ],
+      "accounts": [
+        {
+          "name": "allowance_manager",
+          "docs": [
+            "The configured `allowance_manager`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: the allowances)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_next_okum_yield_rate",
+      "docs": [
+        "Stage the successor rate that takes over at the current `okum_rate_end`",
+        "with no transaction at the boundary (`rate_manager` only)."
+      ],
+      "discriminator": [
+        92,
+        215,
+        167,
+        110,
+        100,
+        155,
+        226,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "rate_manager",
+          "docs": [
+            "The configured `rate_manager`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: the rate schedule)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_rate",
+          "type": "u64"
+        },
+        {
+          "name": "pending_end_timestamp",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "set_okum_multiplier",
+      "docs": [
+        "EMERGENCY (`rate_manager` only): force the multiplier (WAD-scaled) to a strictly",
+        "higher value and halt accrual. The only instruction that engages the",
+        "same-slot yield lock."
+      ],
+      "discriminator": [
+        89,
+        177,
+        97,
+        177,
+        9,
+        168,
+        244,
+        240
+      ],
+      "accounts": [
+        {
+          "name": "rate_manager",
+          "docs": [
+            "The configured `rate_manager`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: the schedule is collapsed)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_m_mint",
+          "docs": [
+            "OkuM mint; its `ScaledUiAmount` display multiplier is rewritten."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_multiplier",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "set_okum_yield_rate",
+      "docs": [
+        "Set the active per-second rate and its window (`rate_manager` only). Re-anchors",
+        "the base multiplier and clears any staged successor. `end_timestamp` must",
+        "be `0` for a halt (`PRECISION`) and in the future otherwise."
+      ],
+      "discriminator": [
+        72,
+        196,
+        127,
+        236,
+        51,
+        111,
+        254,
+        17
+      ],
+      "accounts": [
+        {
+          "name": "rate_manager",
+          "docs": [
+            "The configured `rate_manager`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: the rate schedule)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_rate",
+          "type": "u64"
+        },
+        {
+          "name": "end_timestamp",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "set_okum_yield_rate_with_successor",
+      "docs": [
+        "Set the active rate and stage its successor atomically (`rate_manager` only);",
+        "the epoch orchestrator's instruction."
+      ],
+      "discriminator": [
+        147,
+        106,
+        72,
+        68,
+        80,
+        116,
+        9,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "rate_manager",
+          "docs": [
+            "The configured `rate_manager`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: the rate schedule)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_rate",
+          "type": "u64"
+        },
+        {
+          "name": "end_timestamp",
+          "type": "i64"
+        },
+        {
+          "name": "next_rate",
+          "type": "u64"
+        },
+        {
+          "name": "next_end_timestamp",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "sync_display_multiplier",
+      "docs": [
+        "Refresh the wallet-facing `ScaledUiAmount` mirror to the current canonical",
+        "multiplier. Permissionless: the value is fully determined on-chain."
+      ],
+      "discriminator": [
+        130,
+        206,
+        76,
+        127,
+        160,
+        220,
+        61,
+        177
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Anyone."
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: `last_display_sync_ts`). Signs the",
+            "mirror update as `ScaledUiAmount` authority."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_m_mint",
+          "docs": [
+            "OkuM mint; its `ScaledUiAmount` display multiplier is rewritten."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "thaw_account",
+      "docs": [
+        "Thaw an OkuM token account (`unfreezer` only). Works while paused."
+      ],
+      "discriminator": [
+        115,
+        152,
+        79,
+        213,
+        213,
+        169,
+        184,
+        35
+      ],
+      "accounts": [
+        {
+          "name": "unfreezer",
+          "docs": [
+            "Works while paused."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA; read-only here. Signs the thaw as freeze authority."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_m_mint",
+          "docs": [
+            "OkuM mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "target_oku_m_ata",
+          "docs": [
+            "Target account to thaw"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unpause",
+      "docs": [
+        "Resume operation (`unpauser` only)."
+      ],
+      "discriminator": [
+        169,
+        144,
+        4,
+        38,
+        10,
+        141,
+        188,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "unpauser",
+          "docs": [
+            "The configured `unpauser`."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA (writable: the pause flag)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdraw_buffer",
+      "docs": [
+        "Remove USDC from the buffer (`buffer_withdrawer` only). Blocked while",
+        "paused and in the slot of a multiplier override."
+      ],
+      "discriminator": [
+        90,
+        131,
+        164,
+        164,
+        84,
+        162,
+        127,
+        172
+      ],
+      "accounts": [
+        {
+          "name": "buffer_withdrawer",
+          "docs": [
+            "The configured `buffer_withdrawer` (enforced by `has_one` on `config`)."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "docs": [
+            "The singleton config PDA; read-only here. It owns the vault and signs the transfer out."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "withdrawer_usdc_ata",
+          "docs": [
+            "Buffer withdrawer's USDC account (destination)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault (source)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "USDC mint, for `transfer_checked`."
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "PsmConfig",
+      "discriminator": [
+        145,
+        221,
+        200,
+        51,
+        233,
+        201,
+        86,
+        180
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AuthorityUpdatedEvent",
+      "discriminator": [
+        44,
+        40,
+        20,
+        115,
+        145,
+        198,
+        95,
+        200
+      ]
+    },
+    {
+      "name": "BufferDepositEvent",
+      "discriminator": [
+        156,
+        31,
+        246,
+        123,
+        26,
+        115,
+        108,
+        116
+      ]
+    },
+    {
+      "name": "BufferWithdrawEvent",
+      "discriminator": [
+        145,
+        134,
+        103,
+        70,
+        150,
+        133,
+        86,
+        24
+      ]
+    },
+    {
+      "name": "DirectBurnEvent",
+      "discriminator": [
+        183,
+        248,
+        178,
+        16,
+        155,
+        250,
+        206,
+        9
+      ]
+    },
+    {
+      "name": "DirectBurnerAllowanceUpdatedEvent",
+      "discriminator": [
+        54,
+        179,
+        105,
+        133,
+        31,
+        84,
+        82,
+        161
+      ]
+    },
+    {
+      "name": "DirectMintEvent",
+      "discriminator": [
+        190,
+        183,
+        184,
+        65,
+        45,
+        246,
+        151,
+        121
+      ]
+    },
+    {
+      "name": "DirectMinterAllowanceUpdatedEvent",
+      "discriminator": [
+        116,
+        97,
+        64,
+        133,
+        148,
+        39,
+        157,
+        230
+      ]
+    },
+    {
+      "name": "DisplayMultiplierSynced",
+      "discriminator": [
+        225,
+        77,
+        85,
+        226,
+        151,
+        208,
+        222,
+        195
+      ]
+    },
+    {
+      "name": "FreezeEvent",
+      "discriminator": [
+        71,
+        23,
+        242,
+        12,
+        63,
+        34,
+        225,
+        159
+      ]
+    },
+    {
+      "name": "InitializeEvent",
+      "discriminator": [
+        206,
+        175,
+        169,
+        208,
+        241,
+        210,
+        35,
+        221
+      ]
+    },
+    {
+      "name": "MaxSupplyUpdatedEvent",
+      "discriminator": [
+        89,
+        10,
+        254,
+        214,
+        76,
+        12,
+        93,
+        206
+      ]
+    },
+    {
+      "name": "MintEvent",
+      "discriminator": [
+        197,
+        144,
+        146,
+        149,
+        66,
+        164,
+        95,
+        16
+      ]
+    },
+    {
+      "name": "MinterAllowanceUpdatedEvent",
+      "discriminator": [
+        29,
+        62,
+        74,
+        207,
+        203,
+        148,
+        100,
+        29
+      ]
+    },
+    {
+      "name": "MultiplierUpdated",
+      "discriminator": [
+        97,
+        156,
+        95,
+        2,
+        94,
+        11,
+        231,
+        105
+      ]
+    },
+    {
+      "name": "PauseEvent",
+      "discriminator": [
+        32,
+        51,
+        61,
+        169,
+        156,
+        104,
+        130,
+        43
+      ]
+    },
+    {
+      "name": "PendingRateCancelled",
+      "discriminator": [
+        197,
+        48,
+        193,
+        249,
+        36,
+        80,
+        163,
+        78
+      ]
+    },
+    {
+      "name": "PendingYieldRateUpdated",
+      "discriminator": [
+        100,
+        109,
+        59,
+        83,
+        141,
+        177,
+        65,
+        99
+      ]
+    },
+    {
+      "name": "RedeemEvent",
+      "discriminator": [
+        90,
+        114,
+        83,
+        146,
+        212,
+        26,
+        217,
+        59
+      ]
+    },
+    {
+      "name": "RoleAdminTransferAcceptedEvent",
+      "discriminator": [
+        36,
+        91,
+        149,
+        11,
+        232,
+        178,
+        29,
+        75
+      ]
+    },
+    {
+      "name": "RoleAdminTransferCancelledEvent",
+      "discriminator": [
+        96,
+        159,
+        231,
+        140,
+        179,
+        244,
+        89,
+        43
+      ]
+    },
+    {
+      "name": "RoleAdminTransferProposedEvent",
+      "discriminator": [
+        168,
+        216,
+        252,
+        233,
+        109,
+        135,
+        120,
+        145
+      ]
+    },
+    {
+      "name": "ThawEvent",
+      "discriminator": [
+        250,
+        225,
+        121,
+        219,
+        125,
+        92,
+        56,
+        166
+      ]
+    },
+    {
+      "name": "UnpauseEvent",
+      "discriminator": [
+        134,
+        156,
+        8,
+        215,
+        185,
+        128,
+        192,
+        217
+      ]
+    },
+    {
+      "name": "YieldRateUpdated",
+      "discriminator": [
+        119,
+        6,
+        248,
+        75,
+        216,
+        195,
+        215,
+        43
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Caller not authorized"
+    },
+    {
+      "code": 6001,
+      "name": "Paused",
+      "msg": "Program is paused"
+    },
+    {
+      "code": 6002,
+      "name": "AlreadyPaused",
+      "msg": "Program is already paused"
+    },
+    {
+      "code": 6003,
+      "name": "NotPaused",
+      "msg": "Program is not paused"
+    },
+    {
+      "code": 6004,
+      "name": "MaxSupplyExceeded",
+      "msg": "Mint would exceed max supply"
+    },
+    {
+      "code": 6005,
+      "name": "BelowCurrentSupply",
+      "msg": "New max_supply must be >= current circulating supply"
+    },
+    {
+      "code": 6006,
+      "name": "AllowanceExceeded",
+      "msg": "Mint would exceed minter allowance"
+    },
+    {
+      "code": 6007,
+      "name": "InsufficientBuffer",
+      "msg": "Insufficient buffer for redemption"
+    },
+    {
+      "code": 6008,
+      "name": "InsufficientUserBalance",
+      "msg": "User does not hold enough OkuM for redemption"
+    },
+    {
+      "code": 6009,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6010,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6011,
+      "name": "OverrideInProgress",
+      "msg": "Cannot perform operation in the same slot as a multiplier override"
+    },
+    {
+      "code": 6012,
+      "name": "MultiplierCannotDecrease",
+      "msg": "New multiplier must strictly increase"
+    },
+    {
+      "code": 6013,
+      "name": "InvalidRate",
+      "msg": "Rate must be >= PRECISION (the multiplier cannot decrease)"
+    },
+    {
+      "code": 6014,
+      "name": "RateTooHigh",
+      "msg": "Rate exceeds MAX_RATE"
+    },
+    {
+      "code": 6015,
+      "name": "EndTimestampNotAllowed",
+      "msg": "A halted rate must not carry an end timestamp"
+    },
+    {
+      "code": 6016,
+      "name": "EndTimestampInPast",
+      "msg": "A yielding rate requires an end timestamp in the future"
+    },
+    {
+      "code": 6017,
+      "name": "RateWindowTooLong",
+      "msg": "Rate window exceeds the maximum permitted length (90 days)"
+    },
+    {
+      "code": 6018,
+      "name": "NoRateEndSet",
+      "msg": "Cannot stage a successor: no active rate window is set"
+    },
+    {
+      "code": 6019,
+      "name": "RateAlreadyExpired",
+      "msg": "Cannot stage a successor: the active rate window has already expired"
+    },
+    {
+      "code": 6020,
+      "name": "PendingEndNotAfterRateEnd",
+      "msg": "Successor expiry must be strictly after the active rate end"
+    },
+    {
+      "code": 6021,
+      "name": "MultiplierTooHigh",
+      "msg": "Proposed multiplier exceeds MAX_MULTIPLIER ceiling"
+    },
+    {
+      "code": 6022,
+      "name": "MultiplierOutOfRange",
+      "msg": "Multiplier could not be computed from the current rate schedule"
+    },
+    {
+      "code": 6023,
+      "name": "MultiplierUpdateFailed",
+      "msg": "Failed to update ScaledUiAmount multiplier"
+    },
+    {
+      "code": 6024,
+      "name": "InvalidAuthority",
+      "msg": "Authority pubkey is invalid (e.g. zero pubkey)"
+    },
+    {
+      "code": 6025,
+      "name": "NoPendingRoleAdmin",
+      "msg": "No pending role-admin transfer to accept"
+    },
+    {
+      "code": 6026,
+      "name": "NotPendingRoleAdmin",
+      "msg": "Caller is not the pending role admin"
+    },
+    {
+      "code": 6027,
+      "name": "InvalidUsdcDecimals",
+      "msg": "USDC mint must have exactly 6 decimals"
+    },
+    {
+      "code": 6028,
+      "name": "AmountTooSmall",
+      "msg": "Output amount too small (rounds to zero)"
+    },
+    {
+      "code": 6029,
+      "name": "SlippageExceeded",
+      "msg": "Redeem output is below min_usdc_out"
+    }
+  ],
+  "types": [
+    {
+      "name": "AuthorityRole",
+      "docs": [
+        "Roles settable via `set_authority`."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "RoleAdmin"
+          },
+          {
+            "name": "Pauser"
+          },
+          {
+            "name": "Unpauser"
+          },
+          {
+            "name": "Freezer"
+          },
+          {
+            "name": "Unfreezer"
+          },
+          {
+            "name": "BufferDepositor"
+          },
+          {
+            "name": "BufferWithdrawer"
+          },
+          {
+            "name": "CapManager"
+          },
+          {
+            "name": "AllowanceManager"
+          },
+          {
+            "name": "RateManager"
+          },
+          {
+            "name": "DirectMinter"
+          },
+          {
+            "name": "DirectBurner"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AuthorityUpdatedEvent",
+      "docs": [
+        "Emitted when a role is updated. A `RoleAdmin` rotation fires it only on",
+        "acceptance; the proposal emits `RoleAdminTransferProposedEvent`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role",
+            "type": {
+              "defined": {
+                "name": "AuthorityRole"
+              }
+            }
+          },
+          {
+            "name": "old_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_authority",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BufferDepositEvent",
+      "docs": [
+        "Emitted on a buffer deposit. EVM: `BufferDeposited`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "depositor",
+            "docs": [
+              "The `buffer_depositor` that sent the USDC"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "USDC deposited (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "new_buffer_balance",
+            "docs": [
+              "Vault USDC balance after the deposit (6 decimals)"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BufferWithdrawEvent",
+      "docs": [
+        "Emitted on a buffer withdrawal. EVM: `BufferWithdrawn`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "docs": [
+              "The `buffer_withdrawer` that received the USDC"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "USDC withdrawn (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "new_buffer_balance",
+            "docs": [
+              "Vault USDC balance after the withdrawal (6 decimals)"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DirectBurnEvent",
+      "docs": [
+        "Emitted by `burn_oku_m_direct` (no USDC payout). EVM: ERC-20 `Transfer` to the zero address."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "direct_burner",
+            "type": "pubkey"
+          },
+          {
+            "name": "raw_oku_m_amount",
+            "docs": [
+              "OkuM burned (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "multiplier",
+            "type": "u128"
+          },
+          {
+            "name": "dollar_value",
+            "type": "u64"
+          },
+          {
+            "name": "new_total_supply",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DirectBurnerAllowanceUpdatedEvent",
+      "docs": [
+        "Emitted by `set_direct_burner_allowance`. No EVM counterpart."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_allowance",
+            "type": "u64"
+          },
+          {
+            "name": "new_allowance",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DirectMintEvent",
+      "docs": [
+        "Emitted by `mint_oku_m_direct` (no USDC). EVM: ERC-20 `Transfer` from the zero address."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "direct_minter",
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "raw_oku_m_amount",
+            "docs": [
+              "OkuM minted (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "multiplier",
+            "type": "u128"
+          },
+          {
+            "name": "dollar_value",
+            "type": "u64"
+          },
+          {
+            "name": "new_total_supply",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DirectMinterAllowanceUpdatedEvent",
+      "docs": [
+        "Emitted by `set_direct_minter_allowance`. EVM: `MinterAllowanceUpdated`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_allowance",
+            "type": "u64"
+          },
+          {
+            "name": "new_allowance",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DisplayMultiplierSynced",
+      "docs": [
+        "Emitted when the wallet display mirror is refreshed (informational only)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "multiplier",
+            "docs": [
+              "Canonical multiplier written, effective immediately"
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FreezeEvent",
+      "docs": [
+        "Emitted by `freeze_account`. EVM: `Blacklisted`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "account",
+            "type": "pubkey"
+          },
+          {
+            "name": "target_owner",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitializeEvent",
+      "docs": [
+        "Emitted by `initialize`. EVM: OZ `Initialized(uint64)`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_supply",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitializeParams",
+      "docs": [
+        "Parameter bundle for [`initialize`]. Named fields keep the call site hard to",
+        "scramble. Pubkey fields are the granular authorities (`roles::AuthorityRole`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "max_supply",
+            "docs": [
+              "Supply cap in raw OkuM units (6 decimals)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "minter_allowance",
+            "docs": [
+              "Initial `mint_oku_m` allowance in raw OkuM units (6 decimals)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pauser",
+            "docs": [
+              "Can pause the PSM."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unpauser",
+            "docs": [
+              "Can unpause the PSM."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "freezer",
+            "docs": [
+              "Can freeze OkuM token accounts."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unfreezer",
+            "docs": [
+              "Can thaw OkuM token accounts."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_depositor",
+            "docs": [
+              "Can add USDC to the redemption vault."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_withdrawer",
+            "docs": [
+              "Can take USDC out of the redemption vault."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "cap_manager",
+            "docs": [
+              "Can change the supply cap."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "allowance_manager",
+            "docs": [
+              "Can reset the mint / direct-mint / direct-burn allowances."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "rate_manager",
+            "docs": [
+              "Sets the yield-rate schedule and the emergency multiplier override."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_uri",
+            "docs": [
+              "Token-2022 metadata URI for the OkuM mint."
+            ],
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MaxSupplyUpdatedEvent",
+      "docs": [
+        "Emitted by `set_max_supply`. EVM: `MaxSupplyUpdated`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_max_supply",
+            "type": "u64"
+          },
+          {
+            "name": "new_max_supply",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintEvent",
+      "docs": [
+        "Emitted on a USDC-backed mint. EVM: `OkuMMinted`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_amount",
+            "docs": [
+              "USDC deposited (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "raw_oku_m_amount",
+            "docs": [
+              "OkuM minted (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "`raw_oku_m_amount * multiplier / PRECISION`"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "multiplier",
+            "docs": [
+              "Canonical multiplier from the rate schedule (not the display mirror)"
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "new_total_supply",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MinterAllowanceUpdatedEvent",
+      "docs": [
+        "Emitted by `set_minter_allowance`. EVM: `MinterAllowanceUpdated`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_allowance",
+            "type": "u64"
+          },
+          {
+            "name": "new_allowance",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MultiplierUpdated",
+      "docs": [
+        "Emitted by the emergency multiplier override only (a forced jump that",
+        "halts the schedule). EVM: `OkuMMultiplierUpdated`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_multiplier",
+            "docs": [
+              "Canonical multiplier just before the override, WAD-scaled"
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "new_multiplier",
+            "docs": [
+              "Multiplier forced by the override, WAD-scaled"
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "total_supply",
+            "docs": [
+              "OkuM supply at the override (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "docs": [
+              "Unix time of the override"
+            ],
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PauseEvent",
+      "docs": [
+        "Emitted by `pause`. EVM: OZ `Paused`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pauser",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PendingRateCancelled",
+      "docs": [
+        "Emitted when an armed successor is discarded or replaced before activating.",
+        "No EVM event of this name (EVM emits `UIMultiplierUpdateCancelled`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cancelled_rate",
+            "docs": [
+              "The successor rate that will no longer take over, WAD-scaled"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "cancelled_pending_rate_end",
+            "docs": [
+              "That successor's own expiry"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "docs": [
+              "Unix time of the cancelling write"
+            ],
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PendingYieldRateUpdated",
+      "docs": [
+        "Emitted when the pre-staged successor rate changes. The handover itself",
+        "emits nothing, so this is the record of it being armed.",
+        "EVM: `NextOkuMYieldRateSet`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_rate",
+            "type": "u64"
+          },
+          {
+            "name": "new_rate",
+            "type": "u64"
+          },
+          {
+            "name": "rate_end",
+            "docs": [
+              "Active window expiry, i.e. when the successor takes over"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "pending_rate_end",
+            "docs": [
+              "The successor's own expiry"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PsmConfig",
+      "docs": [
+        "PSM configuration PDA, seeds `[\"psm_config\"]`: authorities, token",
+        "references, limits and the rate schedule."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump, stored so signer seeds need no re-derivation"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "role_admin",
+            "docs": [
+              "Grants/revokes all roles"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pauser",
+            "docs": [
+              "Pause only"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unpauser",
+            "docs": [
+              "Unpause only"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "freezer",
+            "docs": [
+              "Freeze accounts"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unfreezer",
+            "docs": [
+              "Thaw accounts"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_depositor",
+            "docs": [
+              "Deposit USDC buffer"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_withdrawer",
+            "docs": [
+              "Withdraw USDC buffer"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "cap_manager",
+            "docs": [
+              "Set max supply"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "allowance_manager",
+            "docs": [
+              "Reset minter / direct-minter / direct-burner allowances"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "rate_manager",
+            "docs": [
+              "Sets the rate schedule and emergency multiplier override (display",
+              "sync is permissionless)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_mint",
+            "docs": [
+              "USDC mint (standard SPL Token, `USDC_DECIMALS` decimals)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_mint",
+            "docs": [
+              "Token-2022 mint with `ScaledUiAmount`; that extension is a write-only",
+              "display mirror, never read for pricing"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault_usdc",
+            "docs": [
+              "PSM's USDC buffer vault (ATA)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "max_supply",
+            "docs": [
+              "Supply cap in raw OkuM units (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "minter_allowance",
+            "docs": [
+              "Remaining mint allowance (6 decimals), reset by `allowance_manager`"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "is_paused",
+            "docs": [
+              "Set by `pause`, cleared by `unpause`; blocks every value-moving path"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "last_override_slot",
+            "docs": [
+              "Slot of the last emergency override (`set_okum_multiplier`); user",
+              "operations are blocked in that slot."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "okum_base_multiplier",
+            "docs": [
+              "Multiplier snapshot at `okum_last_accrual_time`, WAD-scaled. Starts at",
+              "`PRECISION`; re-snapshotted on every schedule write."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "okum_rate_per_second",
+            "docs": [
+              "Active per-second rate, WAD-scaled. `PRECISION` means no yield."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "okum_last_accrual_time",
+            "docs": [
+              "Timestamp `okum_base_multiplier` was snapshotted at."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "okum_rate_end",
+            "docs": [
+              "Expiry of `okum_rate_per_second`. `0` only when halted; every yielding",
+              "rate has a bounded window so an unattended schedule halts."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "okum_pending_rate_per_second",
+            "docs": [
+              "Pre-staged successor rate, active from `okum_rate_end` with no",
+              "transaction. `PRECISION` means none armed."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "okum_pending_rate_end",
+            "docs": [
+              "Successor's own expiry. `0` = none armed."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "last_display_sync_ts",
+            "docs": [
+              "Unix time of the last `sync_display_multiplier`. Observability only."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "pending_role_admin",
+            "docs": [
+              "Pending `role_admin` target of the two-step rotation (set by",
+              "`set_authority(RoleAdmin, ..)`, committed by `accept_role_admin`).",
+              "`Pubkey::default()` = no pending rotation."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "direct_minter",
+            "docs": [
+              "`Pubkey::default()` = disabled"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "direct_minter_allowance",
+            "docs": [
+              "Direct-mint allowance (6 decimals), separate from `minter_allowance`"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "direct_burner",
+            "docs": [
+              "`Pubkey::default()` = disabled"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "direct_burner_allowance",
+            "docs": [
+              "Direct-burn allowance (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved tail for future fields; consume from the front and shrink the",
+              "array so `LEN` stays constant (there is no `realloc` instruction)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                128
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedeemEvent",
+      "docs": [
+        "Emitted on redemption. EVM: `OkuMRedeemed`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "raw_oku_m_amount",
+            "docs": [
+              "OkuM burned (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "usdc_amount",
+            "docs": [
+              "USDC paid out (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of the OkuM burned; always equal to `usdc_amount`"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "multiplier",
+            "docs": [
+              "Canonical multiplier from the rate schedule (not the display mirror)"
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "new_total_supply",
+            "docs": [
+              "OkuM supply after the burn (6 decimals)"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoleAdminTransferAcceptedEvent",
+      "docs": [
+        "Emitted by `accept_role_admin`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "previous_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoleAdminTransferCancelledEvent",
+      "docs": [
+        "Emitted by `cancel_role_admin_transfer`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "current_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "cancelled_pending",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoleAdminTransferProposedEvent",
+      "docs": [
+        "Emitted when `set_authority(RoleAdmin, ..)` proposes a transfer; it takes",
+        "effect only when the new admin calls `accept_role_admin`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "current_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ThawEvent",
+      "docs": [
+        "Emitted by `thaw_account`. EVM: `Unblacklisted`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "account",
+            "type": "pubkey"
+          },
+          {
+            "name": "target_owner",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UnpauseEvent",
+      "docs": [
+        "Emitted by `unpause`. EVM: OZ `Unpaused`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "unpauser",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldRateUpdated",
+      "docs": [
+        "Emitted when the active rate or its window changes. EVM: `OkuMYieldRateUpdated`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_rate",
+            "docs": [
+              "Previous per-second rate, WAD-scaled"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "new_rate",
+            "docs": [
+              "New per-second rate, WAD-scaled; `PRECISION` means halted"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "rate_end",
+            "docs": [
+              "Absolute expiry of the new rate; `0` when halting"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "base_multiplier",
+            "docs": [
+              "Multiplier snapshot taken at this write, so indexers can reconstruct",
+              "`m(t)` without replaying history"
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    }
+  ]
+}

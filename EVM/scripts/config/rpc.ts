@@ -70,6 +70,11 @@ export function rpcUrl(chain: RpcChain, purpose: RpcPurpose = "live"): string {
   }
 }
 
+/** Keyless public URL. Use this for anything written to a committed file. */
+export function publicRpcUrl(chain: RpcChain): string {
+  return RPC[chain].publicUrl;
+}
+
 /**
  * Public nodes prune old state, so a fork can only be pinned to a past block when the
  * fork endpoint is a known archive provider (Ankr freemium, Alchemy) or FORK_URL, which

@@ -35,9 +35,9 @@ Exported by `export-abis` (3 production contracts):
 | `OkuDollar.json` | Rebasing $1-pegged stablecoin (usdOku) |
 | `LitePSM.json` | USDC ↔ OkuM peg stability module (sole user-facing mint/burn surface in v1) |
 
-`MockUSDC.json` (6-decimal testnet ERC-20) is also present but is **not** produced
-by `export-abis`, so it is not refreshed by it: its bytecode predates the v0.4
-build. Use its ABI only, or compile `EVM/src/mocks/MockUSDC.sol`.
+There is no `MockUSDC.json`: the testnet mock USDC (6-decimal, open `mint`) is not
+exported. It is a standard ERC-20, so any ERC-20 ABI works; the source is
+`EVM/test/mocks/MockUSDC.sol`.
 
 There are no bridge artifacts: v1 has no on-chain bridge on either stack
 ([`../README.md` § Cross-chain transfers](../README.md#cross-chain-transfers-v1-off-chain-orchestrated)).
@@ -75,7 +75,7 @@ npm run export-idls   # copy into ../../artifacts/svm/
 
 ## Current canonical deployments
 
-See `/testnet-addresses.json` at the repo root for the addresses these ABIs / IDLs are deployed at on each network. The EVM entries are empty until the v0.4 deploy runs.
+See `/testnet-addresses.json` at the repo root for the addresses these ABIs / IDLs are deployed at on each network (EVM v0.4 on sepolia, baseSepolia, arbSepolia, bscTestnet, opSepolia; SVM devnet `lite_psm` `FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW`).
 
 ## Usage examples
 

@@ -7,10 +7,10 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-lite_psm = "4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN"
+lite_psm = "FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW"
 
 [programs.localnet]
-lite_psm = "4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN"
+lite_psm = "FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW"
 
 [provider]
 cluster = "localnet"

@@ -1,0 +1,21 @@
+{
+  "network": "devnet",
+  "timestamp": "2026-09-19T18:02:57.158Z",
+  "tokens": {
+    "usdc": "85WWzchaYq6cnjtXoMfgpP29StNn28MFvH4pmNseX2JD",
+    "okuM": "BZw8nFZU58XEB9jDqZkM6B7Fj21juy7N8KvQT5ZeG3LV"
+  },
+  "programs": {
+    "litePsm": "4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN"
+  },
+  "pdas": {
+    "psmConfig": "EBL4GuBnLkkhKScjRDmbST9wpPgZhhSwKAdWAGPRRXaD",
+    "psmVaultUsdc": "7PwqQwMCsjQN61pKMHMty52NLnYdyVdwD4WkKky597Ha",
+    "psmOkuMEscrow": "5B3kduZ7UrwVbACmkuxoc3qezUuYTbbYgHSLo92efL1M"
+  },
+  "authorities": {
+    "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+    "warmMultisig": "2oYAfHzN1Ubi6kzHCcnoE2jzLNvHPPuUmWtg3o5jwiCz",
+    "orchestrator": "2oYAfHzN1Ubi6kzHCcnoE2jzLNvHPPuUmWtg3o5jwiCz"
+  }
+}

@@ -180,3 +180,15 @@ Testnet vs mainnet shape, per §3-D:
   last, and asserts it holds nothing (`README.md` § Mainnet ceremony). On SVM the
   granular roles are set to their final holders at `initialize`, while `role_admin` starts
   on the deployer and moves by the two-step handover (S16–S18).
+
+Current testnet holders (redeploy of 2026-10-22):
+
+- **EVM** (sepolia, baseSepolia, arbSepolia, bscTestnet, opSepolia; same CREATE2 addresses on each):
+  admin/upgraders on deployer `0x3CB68a6762041aA05E762814A8791CA9d98E79A0`; the 18
+  `grantRoles.ts` operational roles on `0x971A3e2b0031dE23715Fa1ce53843B5B045dae00`.
+- **SVM devnet** (`lite_psm` `FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW`, config
+  `4PnLTKxZndU7LR7At7RW615mJ6JFKGqHr9ckmrRpuNe8`): `role_admin` and upgrade authority
+  `5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej`; `rate_manager`, `direct_minter`,
+  `direct_burner`, `buffer_depositor` on the Fordefi Solana vault
+  `5Miw5ZQ4vT8MBSFcp8vtwearNpZiXZVa43WrRZDpXbzT` (`rate_manager` set by a one-off
+  `set_authority`); the other granular roles on operator `2oYAfHzN1Ubi6kzHCcnoE2jzLNvHPPuUmWtg3o5jwiCz`.

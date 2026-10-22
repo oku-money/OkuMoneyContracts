@@ -9,6 +9,7 @@ import { PublicKey, Keypair } from '@solana/web3.js';
 import { AnchorProvider } from '@anchor-lang/core';
 import { logger } from '../../utils/logger';
 import { DEPLOYMENT_CONFIG } from '../../config/networks';
+import { walletPath } from '../../utils/network';
 
 /**
  * Discriminator for the BPFLoaderUpgradeable `Program` variant. The
@@ -177,6 +178,8 @@ export async function deployPrograms(
         execSync(
           `solana program deploy ${programSoPath} \
             --program-id ${keypairPath} \
+            --keypair "${walletPath()}" \
+            --upgrade-authority "${walletPath()}" \
             --url "${cluster}" \
             --with-compute-unit-price ${priorityFee} \
             --max-sign-attempts 100 \

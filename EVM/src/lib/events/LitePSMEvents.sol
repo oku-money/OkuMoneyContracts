@@ -3,12 +3,13 @@ pragma solidity 0.8.28;
 
 /**
  * @title LitePSMEvents
- * @notice Event declarations for the LitePSM contract.
+ * @notice Event declarations for the LitePSM contract. "USDC" below means the
+ *         configured reserve (USDC or USDT).
  */
 abstract contract LitePSMEvents {
     /// @notice Emitted when a user mints OkuMoney by depositing USDC.
     /// @param user       Depositor and recipient
-    /// @param usdcAmount USDC paid in (USDC's own decimals)
+    /// @param usdcAmount Reserve received (reserve's own decimals)
     /// @param okuMAmount OkuM minted (18 decimals)
     /// @param okuMMultiplier OkuM multiplier used for pricing (1e18 = $1.00)
     event OkuMMinted(
@@ -26,7 +27,7 @@ abstract contract LitePSMEvents {
 
     /// @notice Emitted when a user mints OkuDollar (usdOku) by depositing USDC.
     /// @param user       Depositor and recipient
-    /// @param usdcAmount USDC paid in (USDC's own decimals)
+    /// @param usdcAmount Reserve received (reserve's own decimals)
     /// @param usdAmount  OkuDollar minted, in dollars (18 decimals)
     /// @param okuMMultiplier OkuM multiplier used for pricing (1e18 = $1.00)
     event UsdOkuMinted(
@@ -45,6 +46,7 @@ abstract contract LitePSMEvents {
     );
 
     /// @notice Emitted when the buffer depositor adds USDC to the buffer.
+    /// @param amount           Reserve received
     /// @param newBufferBalance PSM USDC balance after the deposit
     event BufferDeposited(address indexed depositor, uint256 amount, uint256 newBufferBalance);
 

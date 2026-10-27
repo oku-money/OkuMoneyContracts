@@ -83,7 +83,7 @@ mint. (Program and mint addresses:
 |---|---|---|
 | **OkuMoney** | EVM | Non-rebasing base token. Static balances; `okuMMultiplier()` is **computed**, not stored. The solvency anchor and sole source of yield. |
 | **OkuDollar** | EVM | Rebasing $1-pegged stablecoin wrapping OkuMoney 1:1 at the same multiplier. No rate state of its own. |
-| **LitePSM** | EVM | Peg Stability Module — multiplier-aware USDC ↔ OkuM, plus `mintUsdOku` / `redeemUsdOku` flows that route through the vault. Sole user-facing mint/burn surface. |
+| **LitePSM** | EVM | Peg Stability Module — multiplier-aware reserve (USDC or USDT) ↔ OkuM, plus `mintUsdOku` / `redeemUsdOku` flows that route through the vault. Sole user-facing mint/burn surface. |
 | **lite-psm** | SVM | One program (ID: `declare_id!` in `programs/lite-psm/src/lib.rs`, `Anchor.toml`, `deployments/devnet.json` → `programs.litePsm`): PSM, the rate schedule, compliance (freeze/thaw), and direct mint/burn for bridging. Holds mint, freeze and ScaledUiAmount authority via PDA. PDA seed `psm_config`. |
 | **OkuM mint** | SVM | Token-2022 mint (address: `deployments/<network>.json` → `tokens.okuM`), 6 decimals. Its `ScaledUiAmount` extension is a **write-only display mirror**, not the pricing source. |
 
@@ -165,7 +165,14 @@ backed up and replicated as such, not treated as operational logs.
 
 ## PSM (Peg Stability Module)
 
-Both stacks price USDC ↔ OkuM off the same multiplier and round the
+**Reserve.** Each PSM holds exactly one reserve token, fixed at init: USDC or USDT
+on EVM (USDC expected in most deployments), USDC only on SVM. There is no
+multi-reserve PSM. Code identifiers keep the `usdc` name (`usdc()`,
+`withdrawUsdc`, `usdcDecimalMultiplier`, `vault_usdc`); read them as "the
+configured reserve". EVM mints and buffer deposits credit the reserve balance
+the PSM actually received, so a fee-on-transfer reserve cannot under-back them.
+
+Both stacks price reserve ↔ OkuM off the same multiplier and round the
 same direction (floor, favouring the protocol):
 
 ```
@@ -173,7 +180,7 @@ mint:    okuMAmount = usdcValue × PRECISION / m
 redeem:  usdcAmount = okuMAmount × m / PRECISION
 ```
 
-Redemptions are paid from the PSM's USDC buffer on both stacks. A redeem the
+Redemptions are paid from the PSM's reserve buffer on both stacks. A redeem the
 buffer cannot cover reverts `InsufficientBuffer` (nothing is burned). A mint whose
 output rounds to zero reverts `AmountTooSmall`; so does a zero-output redeem on EVM,
 which SVM cannot produce (multiplier ≥ 1 and OkuM / USDC share 6 decimals).
@@ -207,17 +214,23 @@ destination, with **different mechanics per stack**:
 | EVM → SVM | `redeemOkuM` → USDC | `mint_oku_m` (USDC-funded) | USDC |
 | SVM → EVM | `burn_oku_m_direct` | `mintOkuM` (orchestrator supplies USDC); `mintUsdOku` instead if the user wants usdOku | USDC |
 
-**`mintOkuM` / `mint_oku_m` are permissionless.** Any address with USDC
+"USDC" in the table is the source and destination PSM's reserve. When the two
+reserves differ (a USDT-reserve EVM chain and a USDC chain), the orchestrator
+converts between them off-chain between the legs; that conversion, and any
+spread on it, is outside the contracts.
+
+**`mintOkuM` / `mint_oku_m` are permissionless.** Any address with the reserve
 can call them; the orchestrator holds no privileged PSM mint authority
 on either stack. Orchestrator key compromise grants no mint privilege
-beyond its own USDC custody — and, on SVM, beyond
+beyond its own reserve custody — and, on SVM, beyond
 `direct_minter_allowance`.
 
-**Cross-chain conservation invariant (USDC-mediated routes).** Stated in
-DOLLAR VALUE, not USDC. A USDC-denominated drift is structurally zero and
-therefore unfalsifiable: `LitePSM.mintOkuM(x)` transfers exactly `x`, so the
-amount redeemed on the source and the amount supplied on the destination are
-the same number by construction. Value is what can actually move, through two
+**Cross-chain conservation invariant (reserve-mediated routes, same reserve
+on both legs).** Stated in DOLLAR VALUE, not reserve units. A reserve-denominated
+drift is structurally zero and therefore unfalsifiable: with a fee-free reserve
+`LitePSM.mintOkuM(x)` credits exactly `x`, so the amount redeemed on the source
+and the amount supplied on the destination are the same number by construction.
+A transfer fee (or a cross-reserve conversion) is a loss outside the bound below. Value is what can actually move, through two
 independent floors:
 
 ```
@@ -440,7 +453,7 @@ only because testnet OkuM is backed by MockUSDC and has no value:
   what lets it revoke the lot unilaterally. Consequences stated plainly:
   holding `OKUM_MINTER` + `OKUM_ALLOWANCE_MANAGER` + `OKUM_CAP_MANAGER`
   together means **no on-chain ceiling on what that key can mint**, and
-  `PSM_BUFFER_WITHDRAWER` lets it drain the USDC buffer. `grantRoles.ts`
+  `PSM_BUFFER_WITHDRAWER` lets it drain the reserve buffer. `grantRoles.ts`
   therefore **hard-refuses mainnet with no override**. Full grant list and
   rationale: [`EVM/README.md` § Role Grants Policy](EVM/README.md#role-grants-policy).
 - **SVM** — `scripts/admin/grant-roles.ts --delegate=<pubkey>` moves only
@@ -707,7 +720,7 @@ NETWORK=devnet npm run test:onchain -- --step=redeem   # single step; an unknown
 ```
 1. EVM source: LitePSM.redeemOkuM(amount) → orchestrator observes the OkuMRedeemed event + USDC outflow.
 2. Destination: orchestrator calls `LitePSM.mintOkuM` (EVM) or `mint_oku_m` (SVM) funded with that USDC, crediting OkuM to the recipient.
-3. Treasury periodically tops up PSM USDC buffers per chain.
+3. Treasury periodically tops up PSM reserve buffers per chain.
 ```
 
 EVM cross-chain accounting covered by
@@ -810,7 +823,7 @@ pre-mainnet checklist: [`SVM/README.md`](SVM/README.md). Final state per role:
 2. **Never commit `.env` files** or private keys to git.
 3. **RPC reliability** — Alchemy preferred for live runs; public RPCs can lag on nonce / mempool state.
 4. **No on-chain bridge in v1.** Cross-chain replay/refund protection is the orchestrator's responsibility — the protocol surface is just PSM mint/burn.
-5. **EVM collateral token (USDC) should not carry a transfer callback.** `LitePSM` is reviewed against a plain ERC-20 (its user paths are `nonReentrant` as defence in depth); `initialize` validates only `decimals() <= 18` and cannot verify this on-chain. Circle USDC and its canonical bridged variants have no such callback; confirm this holds for whatever token is configured on any new chain before deploying, particularly a non-Circle or custom-bridged USDC variant.
+5. **EVM reserve token (USDC or USDT) should not carry a transfer callback.** `LitePSM` is reviewed against a plain ERC-20 (its user paths are `nonReentrant` as defence in depth); `initialize` validates only `decimals() <= 18` and cannot verify this on-chain. Circle USDC, Tether USDT and their canonical bridged variants have no such callback; confirm this holds for whatever token is configured on any new chain before deploying, particularly a non-canonical or custom-bridged variant. A transfer fee (Tether's legacy Ethereum contract can enable one) is tolerated: mints and buffer deposits credit the received balance, and a payout fee is borne by the recipient. See [`EVM/README.md` § Accepted Risks #14](EVM/README.md#14-reserve-token-usdc-or-usdt).
 
 ### Chain IDs
 

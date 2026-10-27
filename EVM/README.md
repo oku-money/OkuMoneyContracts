@@ -296,9 +296,9 @@ by the operator drill.
 
 | Script | Purpose |
 |---|---|
-| [`scripts/operator/psmOps.ts`](scripts/operator/psmOps.ts) | PSM mint/redeem, consolidated. `ACTION=<mintOkuM\|redeemOkuM\|mintUsdOku\|redeemUsdOku\|burn>` + `AMOUNT=<units>` (USDC 6-dec, OkuM/UsdOku 18-dec). `burn` burns the caller's own OkuM directly (needs `OKUM_BURNER`). A redeem reverts `InsufficientBuffer` when the PSM buffer is short. |
+| [`scripts/operator/psmOps.ts`](scripts/operator/psmOps.ts) | PSM mint/redeem, consolidated. `ACTION=<mintOkuM\|redeemOkuM\|mintUsdOku\|redeemUsdOku\|burn>` + `AMOUNT=<units>` (reserve native decimals, OkuM/UsdOku 18-dec). `burn` burns the caller's own OkuM directly (needs `OKUM_BURNER`). A redeem reverts `InsufficientBuffer` when the PSM buffer is short. |
 | [`scripts/operator/vaultOps.ts`](scripts/operator/vaultOps.ts) | OkuDollar vault operations. `ACTION=<wrap\|unwrap\|deposit\|mint\|withdraw\|redeem\|rescueDonation>` + `AMOUNT`, optional `RECEIVER` / `OWNER` / `MIN_AMOUNT_OUT`. Covers both the price-aware `wrap`/`unwrap` pair and the ERC-4626 surface. |
-| [`scripts/operator/depositBuffer.ts`](scripts/operator/depositBuffer.ts) / [`withdrawBuffer.ts`](scripts/operator/withdrawBuffer.ts) | PSM USDC buffer management. `AMOUNT=<6-dec USDC>`, plus `TO=0x...` for withdraw. Buffer depth caps how much can be redeemed. Both revert while the PSM is paused or in an override block. |
+| [`scripts/operator/depositBuffer.ts`](scripts/operator/depositBuffer.ts) / [`withdrawBuffer.ts`](scripts/operator/withdrawBuffer.ts) | PSM reserve buffer management. `AMOUNT=<reserve native decimals>`, plus `TO=0x...` for withdraw. Buffer depth caps how much can be redeemed. Both revert while the PSM is paused or in an override block. |
 | [`scripts/operator/configureMinterAllowance.ts`](scripts/operator/configureMinterAllowance.ts) | Rotate a minter's allowance. `MINTER` (defaults to deployed LitePSM) + `ALLOWANCE`. Note `OkuMoney.mint` gates on **both** the `OKUM_MINTER` role *and* this allowance. |
 | [`scripts/operator/setMaxSupply.ts`](scripts/operator/setMaxSupply.ts) | Raise/lower the supply cap. `MAX_SUPPLY=<18-dec>`. Requires `OKUM_CAP_MANAGER`. |
 | [`scripts/operator/setOkuMMultiplier.ts`](scripts/operator/setOkuMMultiplier.ts) | **Emergency** multiplier override. `NEW_MULTIPLIER=<1e18-scaled>`. Collapses the rate schedule to halted and engages `OverrideBlockGuard` for the rest of the block — prefer `setOkuMYieldRate.ts` for normal operation. **Front-run risk beyond that block**: pause `psm` + `usdOku` (via `pause.ts`) before calling this, unpause after — see Accepted Risk #11. |
@@ -731,15 +731,20 @@ ERC-4626 `Deposit` / `Withdraw` come from `IERC4626`.
 
 ## LitePSM.sol
 
-**Concept**: Multiplier-aware USDC ↔ OkuMoney swaps (`mintOkuM`, `redeemOkuM`),
+**Concept**: Multiplier-aware reserve ↔ OkuMoney swaps (`mintOkuM`, `redeemOkuM`),
 plus usdOku convenience paths (`mintUsdOku`, `redeemUsdOku`) that route through
-the vault.
+the vault. The reserve is one ERC-20, USDC or USDT, fixed at init (`usdc` in code;
+Accepted Risk #14).
 
 - Conversions use `okuMMultiplier()` and floor in the protocol's favour. They are
   decimals-agnostic: the PSM stores `usdcDecimalMultiplier` from the
-  collateral's `decimals()` at init (at most 18). At `m = 1.05`, 100 USDC mints
+  reserve's `decimals()` at init (at most 18). At `m = 1.05`, 100 USDC mints
   ~95.24 OkuM. An output that rounds to zero reverts `AmountTooSmall`; there is no
   other size floor.
+- **Reserve intake measures the balance delta.** `mintOkuM`, `mintUsdOku` and
+  `depositBuffer` pull first, then price (or emit) the amount actually received,
+  so a fee-on-transfer reserve cannot under-back a mint. Events report the
+  received amount.
 - **Redemptions settle from the buffer or revert**
   `InsufficientBuffer(available, required)`, as SVM `lite-psm` does; operators
   keep it funded via `depositBuffer`. `redeemUsdOku` can also revert
@@ -752,7 +757,7 @@ the vault.
 - **Guards.** `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku` and
   `depositBuffer` carry `nonReentrant` + `whenNotPaused` +
   `whenNoOverrideThisBlock`; `withdrawUsdc` carries `whenNotPaused` +
-  `whenNoOverrideThisBlock` (no `nonReentrant`: no callback surface beyond a USDC
+  `whenNoOverrideThisBlock` (no `nonReentrant`: no callback surface beyond a reserve
   transfer).
 - **`redeemUsdOku`** passes the post-transfer balance delta to `unwrap`, not the
   caller's `usdAmount`, because `OkuDollar.transferFrom` floors the share
@@ -968,9 +973,10 @@ is no rate-then-withdraw extraction (collateralization is 1.0 by construction;
 `VAULT_RESCUER.rescueDonation`, is bounded below by `totalUsdShares` and cannot
 reach share backing (modulo the 1-wei caveat in 10b).
 
-### 3. USDC peg monitoring — off-chain (no on-chain oracle)
+### 3. Reserve peg monitoring — off-chain (no on-chain oracle)
 
-EVM and SVM both monitor the USDC peg entirely off-chain. There is no on-chain
+EVM and SVM both monitor the reserve peg (USDC, or USDT where configured) entirely
+off-chain. There is no on-chain
 oracle, aggregator or circuit-breaker and no storage reserved for one. The
 off-chain orchestrator watches the peg and pauses on a detected depeg.
 
@@ -1164,6 +1170,31 @@ precondition: § LitePSM.sol). The only residual is mint-side truncation: on
 the protocol. `OkuDollar.wrap`'s `minAmountOut` / `OutputBelowMinimum` is a
 separate, reachable check and is unaffected.
 
+### 14. Reserve token: USDC or USDT
+
+Each `LitePSM` holds one reserve, USDC or USDT, set at `initialize` with no setter;
+there is no multi-reserve PSM. USDC is the expected reserve for most deployments.
+`SafeERC20` covers USDT's missing return values, and the PSM never approves the
+reserve, so USDT's approve-race rule does not apply.
+
+- **Transfer fee.** Tether's legacy Ethereum contract can enable a fee
+  (`basisPointsRate`, capped by `maximumFee`; currently zero). Mints and
+  `depositBuffer` credit the received balance, so the buffer stays fully backed.
+  Payouts (`redeemOkuM`, `redeemUsdOku`, `withdrawUsdc`) debit the quoted amount
+  from the buffer and the recipient bears the fee. A reserve fee is the issuer's,
+  not a PSM fee, so #13's no-fee precondition is unaffected; it is not covered by
+  any min-out.
+- **Issuer controls.** Tether can pause USDT, blacklist an address, and destroy a
+  blacklisted address's balance (`destroyBlackFunds`). Blacklisting the PSM proxy
+  would freeze, and could erase, the buffer. Circle can blacklist and pause USDC
+  but has no destroy function. Neither is mitigable on-chain; the off-chain
+  monitoring in #3 covers both.
+- **Cross-reserve bridging.** A route between a USDT-reserve chain and a USDC chain
+  needs an off-chain conversion by the orchestrator (`../README.md` § Cross-chain
+  transfers).
+
+Tested in `test/psm/LitePSMReserveUSDT.t.sol` against `test/mocks/MockUSDT.sol`.
+
 ---
 
 ## Testing
@@ -1247,6 +1278,7 @@ belong here; they should be removed from `src/`.
 | `LitePSM` redeem paths (buffer-covered vs. `InsufficientBuffer`, zero-output `AmountTooSmall`, `OkuMRedeemed` suppression, multi-decimal collateral) | `test/psm/LitePSM.t.sol`, `test/psm/LitePSMRebasingRedeem.t.sol`, `test/psm/LitePSM.fuzz.t.sol` |
 | `LitePSM` buffer functions are pause-gated and yield-locked | `test/psm/LitePSM.t.sol`: `test_DepositBuffer_RevertsWhenPaused`, `test_DepositBuffer_RevertsInOverrideBlock`, `test_WithdrawUSDC_RevertsWhenPaused`, `test_WithdrawUSDC_RevertsInOverrideBlock` |
 | Override front-run residual and its pause ceremony (Accepted Risk #11) | `test/psm/LitePSM.t.sol`: `test_SetOkuMMultiplier_PauseCeremony_ClosesFrontRunWindow` |
+| USDT-style reserve: no-return transfers, fee-on-transfer intake credits the received amount, full-fee `AmountTooSmall`, payout fee borne by recipient (Accepted Risk #14) | `test/psm/LitePSMReserveUSDT.t.sol` |
 | No PSM slippage parameter (Accepted Risk #13) | `test/psm/LitePSM.t.sol`: `test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier` |
 | Reentrancy through the PSM | `test/psm/Reentrancy.t.sol`, `test/lib/ReentrancyGuard.t.sol` |
 | `OkuMoney` rate schedule: `setOkuMYieldRate` continuity and non-stamping, `setNextOkuMYieldRate` boundaries, expiry with no successor | `test/token/OkuMoney.t.sol`, `test/token/OkuMoney.fuzz.t.sol` |

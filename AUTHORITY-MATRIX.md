@@ -61,8 +61,8 @@ bounds stay on-chain; business policy moves to the backend.
 | E15 | `pause` / `unpause` | `OkuDollar` | `VAULT_PAUSER` / `VAULT_UNPAUSER` | Halt wrap/unwrap/4626 + transfers | — | Yes |
 | E16 | `_authorizeUpgrade` | `OkuDollar` | `VAULT_UPGRADER` | **Replace all vault logic** | **none** | **No** |
 | E17 | `pause` / `unpause` | `LitePSM` | `PSM_PAUSER` / `PSM_UNPAUSER` | Halt all PSM user paths | — | Yes |
-| E18 | `withdrawUsdc` | `LitePSM` | `PSM_BUFFER_WITHDRAWER` | **Drain the entire buffer — no solvency check against circulating OkuM/UsdOku** | `whenNotPaused`, `whenNoOverrideThisBlock`, `amount <= balance`; no solvency check | **No** |
-| E19 | `depositBuffer(amount)` | `LitePSM` | `PSM_BUFFER_DEPOSITOR` | Add USDC (pull from caller) | `nonReentrant`, `whenNotPaused`, `whenNoOverrideThisBlock` | No |
+| E18 | `withdrawUsdc` | `LitePSM` | `PSM_BUFFER_WITHDRAWER` | **Drain the entire reserve buffer — no solvency check against circulating OkuM/UsdOku** | `whenNotPaused`, `whenNoOverrideThisBlock`, `amount <= balance`; no solvency check | **No** |
+| E19 | `depositBuffer(amount)` | `LitePSM` | `PSM_BUFFER_DEPOSITOR` | Add reserve (USDC or USDT; pull from caller, credits the received amount) | `nonReentrant`, `whenNotPaused`, `whenNoOverrideThisBlock` | No |
 | E20 | `_authorizeUpgrade` | `LitePSM` | `PSM_UPGRADER` | **Replace all PSM logic** | **none** | **No** |
 | E21 | `grantRole` / `revokeRole` | OZ `AccessControl`, each contract | `DEFAULT_ADMIN_ROLE` | **Grant or revoke every role above, on that contract** | none — immediate, no two-step | Yes |
 | E22 | `initialize` | each contract | deployer | Grants **every** role to one `_admin`; protocol is single-key until roles are redistributed **and the deployer's own are revoked** (`README.md` § Mainnet ceremony) | `initializer` | — |

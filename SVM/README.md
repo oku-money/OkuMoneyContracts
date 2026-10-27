@@ -78,8 +78,11 @@ RPC (`amount`), `spl-token accounts`, transfer arguments and `supply`.
   used here: a mint landing in an earlier slot ahead of an honest override is an accepted residual.
   The pause flag still stops a compromised `rate_manager` from forcing the multiplier.
 - **Decimals.** `OkuM` has 6 decimals and USDC is hard-coded to 6 (`InvalidUsdcDecimals` at init);
-  EVM `OkuMoney` has 18 and the PSM reads collateral decimals at init (≤ 18). The orchestrator
+  EVM `OkuMoney` has 18 and the PSM reads reserve decimals at init (≤ 18). The orchestrator
   rescales across chains.
+- **Reserve.** USDC only. EVM may use USDC or USDT (`EVM/README.md` Accepted Risk #14); SVM does
+  not. The USDC mint is a classic SPL Token mint (`Program<Token>`), which has no transfer-fee
+  extension, so SVM needs no balance-delta intake.
 
 ## Program structure
 
@@ -318,7 +321,7 @@ Trust assumptions the SVM side makes deliberately; reviewers should not re-flag 
    consequence: `MAX_MULTIPLIER` and the per-role allowance caps are **math-sanity bounds**
    (overflow-safe region, operator typos), not defence against a compromised rate manager key.
 2. **No on-chain Proof-of-Reserves or oracle.** Same posture as EVM (`EVM/README.md` Accepted Risk
-   "USDC peg monitoring — off-chain"): no PoR feed, no USDC-peg circuit breaker, no oracle relay.
+   "Reserve peg monitoring — off-chain"): no PoR feed, no USDC-peg circuit breaker, no oracle relay.
 3. **SVM ↔ EVM parity residue.** Constants and `rpow` rounding are byte-identical; what remains:
    `rpow`'s far-tail overflow differs (EVM reverts on an intermediate *product* above `uint256`; SVM
    returns `None` on a *quotient* above `u128`), both ~17 orders of magnitude outside the reachable

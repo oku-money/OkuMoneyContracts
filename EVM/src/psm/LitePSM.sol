@@ -25,7 +25,8 @@ import {LitePSMErrors} from "../lib/errors/LitePSMErrors.sol";
 
 /**
  * @title LitePSM
- * @notice Multiplier-aware Peg Stability Module for USDC <-> OkuMoney/OkuDollar swaps.
+ * @notice Multiplier-aware Peg Stability Module for reserve <-> OkuMoney/OkuDollar swaps.
+ *         The reserve is one ERC-20 (USDC or USDT) fixed at init; `usdc` names it in code.
  * @dev Zero-fee swap and decimal conversion factor follow MakerDAO's DssLitePsm. OkuM is
  *      minted on demand (bounded by the minter allowance) and redemptions are paid from
  *      the USDC buffer held here; a redemption the buffer cannot cover reverts with
@@ -33,7 +34,7 @@ import {LitePSMErrors} from "../lib/errors/LitePSMErrors.sol";
  *
  *      Conversions are at dollar value via `okuMMultiplier()`: depositing 100 USDC at a
  *      multiplier of 1.05 mints ~95.24 OkuM, and redeeming those returns ~100 USDC.
- *      USDC peg monitoring is off-chain; operators `pause()` on a detected depeg.
+ *      Reserve peg monitoring is off-chain; operators `pause()` on a detected depeg.
  *
  *      NO SLIPPAGE PARAMETERS, BY DESIGN. `okuMMultiplier` is monotonically
  *      non-decreasing and the PSM charges no fee, so a delayed or reordered mint/redeem
@@ -61,7 +62,7 @@ contract LitePSM is
         IOkuMoney okuMoney;
         IOkuDollar okuDollar;
         IERC20 usdc;
-        // 10 ** (18 - usdc.decimals()), resolved at init. 1e12 for Circle USDC.
+        // 10 ** (18 - usdc.decimals()), resolved at init. 1e12 for a 6-decimal reserve.
         uint256 usdcDecimalMultiplier;
     }
 
@@ -84,7 +85,7 @@ contract LitePSM is
     ///         admin every PSM role.
     /// @param _okuMoney  The OkuMoney proxy the PSM mints and burns.
     /// @param _okuDollar The OkuDollar proxy; must wrap `_okuMoney` (checked).
-    /// @param _usdc      The collateral token; at most 18 decimals (checked).
+    /// @param _usdc      The reserve token (USDC or USDT); at most 18 decimals (checked).
     /// @param _admin Receives the full PSM role set; see {OkuMoney.initialize}.
     function initialize(
         address _okuMoney,
@@ -163,14 +164,14 @@ contract LitePSM is
         whenNoOverrideThisBlock
     {
         LitePSMStorage storage $ = _getLitePSMStorage();
-        (uint256 okuMAmount, uint256 okuMMult) = _quoteMint($, usdcAmount);
 
-        // Take the USDC, then mint to the caller. No explicit blacklist check here:
-        // `OkuMoney.mint` rejects a blacklisted recipient itself.
-        $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
+        // Take the reserve, then mint to the caller against what arrived. No explicit
+        // blacklist check here: `OkuMoney.mint` rejects a blacklisted recipient itself.
+        uint256 received = _pullReserve($, usdcAmount);
+        (uint256 okuMAmount, uint256 okuMMult) = _quoteMint($, received);
         $.okuMoney.mint(msg.sender, okuMAmount);
 
-        emit OkuMMinted(msg.sender, usdcAmount, okuMAmount, okuMMult);
+        emit OkuMMinted(msg.sender, received, okuMAmount, okuMMult);
     }
 
     /// @notice Redeem OkuMoney for USDC from the buffer.
@@ -209,13 +210,13 @@ contract LitePSM is
         whenNoOverrideThisBlock
     {
         LitePSMStorage storage $ = _getLitePSMStorage();
-        (uint256 okuMAmount, uint256 okuMMult) = _quoteMint($, usdcAmount);
         // `OkuDollar.wrap` would also reject the user; this fails first, clearly.
         if ($.okuMoney.isBlacklisted(msg.sender)) revert UserBlacklisted(msg.sender);
 
+        uint256 received = _pullReserve($, usdcAmount);
+        (uint256 okuMAmount, uint256 okuMMult) = _quoteMint($, received);
         uint256 expectedUsdMinted = MathLib.okuMToDollars(okuMAmount, okuMMult);
 
-        $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         $.okuMoney.mint(address(this), okuMAmount);
 
         // Wrap the freshly minted OkuM for the user: approve exactly this amount, wrap
@@ -227,7 +228,7 @@ contract LitePSM is
         uint256 usdMinted = $.okuDollar.wrap(okuMAmount, msg.sender, expectedUsdMinted);
         okuMoneyToken.forceApprove(address($.okuDollar), 0);
 
-        emit UsdOkuMinted(msg.sender, usdcAmount, usdMinted, okuMMult);
+        emit UsdOkuMinted(msg.sender, received, usdMinted, okuMMult);
     }
 
     /// @notice Redeem OkuDollar for USDC (unwrap -> burn OkuM -> pay USDC).
@@ -265,11 +266,30 @@ contract LitePSM is
         emit UsdOkuRedeemed(msg.sender, received, usdcOut, okuMMult);
     }
 
+    // ============ Reserve Intake ============
+
+    /// @dev Pulls `amount` of the reserve from the caller and returns the balance delta,
+    ///      so a fee-on-transfer reserve (e.g. USDT with its fee enabled) cannot
+    ///      under-back a mint or overstate a deposit.
+    function _pullReserve(
+        LitePSMStorage storage $,
+        uint256 amount
+    )
+        private
+        returns (uint256 received)
+    {
+        if (amount == 0) revert SharedErrors.ZeroAmount();
+        uint256 balBefore = $.usdc.balanceOf(address(this));
+        $.usdc.safeTransferFrom(msg.sender, address(this), amount);
+        received = $.usdc.balanceOf(address(this)) - balBefore;
+        if (received == 0) revert SharedErrors.AmountTooSmall();
+    }
+
     // ============ Quotes ============
 
-    /// @dev OkuM owed for `usdcAmount` at the current multiplier, rounded down:
-    ///      USDC -> 18-decimal dollars -> OkuM. Reverts on a zero input or a zero result
-    ///      (so USDC is never taken for nothing).
+    /// @dev OkuM owed for `usdcAmount` of reserve at the current multiplier, rounded
+    ///      down: reserve -> 18-decimal dollars -> OkuM. Reverts on a zero input or a
+    ///      zero result (so reserve is never taken for nothing).
     function _quoteMint(
         LitePSMStorage storage $,
         uint256 usdcAmount
@@ -350,10 +370,9 @@ contract LitePSM is
         whenNoOverrideThisBlock
         onlyRole(Roles.PSM_BUFFER_DEPOSITOR)
     {
-        if (amount == 0) revert SharedErrors.ZeroAmount();
         LitePSMStorage storage $ = _getLitePSMStorage();
-        $.usdc.safeTransferFrom(msg.sender, address(this), amount);
-        emit BufferDeposited(msg.sender, amount, $.usdc.balanceOf(address(this)));
+        uint256 received = _pullReserve($, amount);
+        emit BufferDeposited(msg.sender, received, $.usdc.balanceOf(address(this)));
     }
 
     // ============ Upgradeability ============

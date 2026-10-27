@@ -13,6 +13,7 @@ import {
 } from "../../../scripts/utils/globalValue";
 import { timeWeightedAverage } from "../../../scripts/utils/yieldRate";
 import { RateSegment } from "../../../scripts/utils/epochDistribution";
+import { CHAIN_METADATA } from "../../../scripts/config/chains";
 
 // Pure TS logic — no network needed. Uses a temp file per test so it never
 // touches the real (gitignored) scripts/config/globalValueSamples.json store.
@@ -209,10 +210,18 @@ describe("scripts/utils/globalValue", () => {
         }
 
         it("throws (no partial sum) when an expected EVM chain has no address", async () => {
-            // The committed address book has no OkuMoney for any chain (clean-slate).
-            const err = await rejection(sampleGlobalValueUsd(["sepolia"]));
-            expect(err.message).to.match(/INCOMPLETE/);
-            expect(err.message).to.match(/sepolia/);
+            // A known, non-mainnet chain with an RPC but no address-book entry; never
+            // dialled, since the missing address throws first. Independent of what the
+            // committed address book holds.
+            const ghost = "unitTestNoAddressChain";
+            CHAIN_METADATA[ghost] = { ...CHAIN_METADATA.sepolia, name: ghost };
+            try {
+                const err = await rejection(sampleGlobalValueUsd([ghost]));
+                expect(err.message).to.match(/INCOMPLETE/);
+                expect(err.message).to.match(new RegExp(`${ghost}: No address found`));
+            } finally {
+                delete CHAIN_METADATA[ghost];
+            }
         });
 
         it("throws when SVM is expected but not configured, naming it", async () => {

@@ -6,7 +6,9 @@ SVM in parallel, off-chain orchestrator coordinating both.
 
 > **For reviewers:** start with the per-side READMEs ([`EVM/README.md`](EVM/README.md),
 > [`SVM/README.md`](SVM/README.md)), each with an "Accepted Risks" section
-> covering known design decisions. Open items live in [`TRACKER.md`](TRACKER.md).
+> covering known design decisions, and [`AUTHORITY-MATRIX.md`](AUTHORITY-MATRIX.md) for
+> admin powers. Non-obvious invariants: [§ Cross-stack invariants](#cross-stack-invariants).
+> Open work is tracked internally (Linear), not in this repo.
 
 ---
 
@@ -145,8 +147,9 @@ follows from it; nobody outside Oku Money can confirm the rate was the
 
 **Decision: no on-chain anchor.** Epoch derivations are recorded in a signed,
 versioned, append-only off-chain ledger (this repo ships only a reference
-implementation — local JSON files, see `TRACKER.md` § Out of scope; the signed
-store is the backend's). Anchoring a hash per epoch on-chain would prove the
+implementation — local JSON files, see
+[`EVM/docs/epoch-accounting.md` § Reference implementation status](EVM/docs/epoch-accounting.md#reference-implementation-status);
+the signed store is the backend's). Anchoring a hash per epoch on-chain would prove the
 file was not edited afterwards, not that its inputs were honest, and users
 already trust Oku Money with the far larger custody of the RWA backing itself.
 
@@ -198,6 +201,30 @@ lost in the interim.
 Per-stack detail: [`EVM/README.md` § LitePSM.sol](EVM/README.md#litepsmsol)
 (incl. the `mintUsdOku` / `redeemUsdOku` vault-routing convenience
 flows) and [`SVM/README.md` § PSM](SVM/README.md#psm).
+
+---
+
+## Cross-stack invariants
+
+Load-bearing and easy to break with a change that looks locally reasonable. Each is
+listed because the reason is not visible from the code alone.
+
+1. **The multiplier is monotonically non-decreasing, and that is the only reason the
+   PSM needs no slippage parameter.** Redeem output increases with the multiplier, so
+   delay and front-running can only pay the caller more. This depends on the PSM
+   charging no fee: if that ever changes, min-out parameters must land in the same
+   change. A reserve issuer's transfer fee is not a PSM fee (EVM Accepted Risk #14).
+   Detail: the `LitePSM` NatSpec header and EVM Accepted Risk #13.
+2. **Rate windows are bounded at 90 days on both stacks, and the two constants must
+   agree** (`Constants.MAX_RATE_WINDOW` / `MAX_RATE_WINDOW_SECONDS`). At `MAX_RATE`,
+   `rpow` overflows after about 15 years on SVM (`u128`) and about 30 on EVM, and once
+   `okuMMultiplier()` reverts every recovery path reverts with it, including the
+   emergency override, which re-anchors through the same read; the only exit is an
+   upgrade. A divergence between stacks means one chain accepts a schedule the other
+   rejects. Long-horizon fixtures must chain 90-day re-anchors, not open one long
+   window.
+3. **SVM's display multiplier never exceeds the canonical one, by exact cancellation
+   rather than margin.** See [`SVM/README.md` § Development notes](SVM/README.md#development-notes).
 
 ---
 
@@ -359,7 +386,7 @@ before an explicit refresh.
 - **Production policy:** ~ **1 % of weekly bridging volume**, rotated on a **weekly cadence** by `OKUM_ALLOWANCE_MANAGER` (cold multisig). Bounds a single-week worst-case mint by a compromised PSM contract or orchestrator USDC custody.
 - **Testnet** defaults are effectively uncapped; they are set in the deploy scripts (see § Initial deploy parameters).
 
-EVM rotation (env vars, not flags — see `TRACKER.md` § Standing traps):
+EVM rotation (env vars, not flags — see [`EVM/README.md` § Development notes](EVM/README.md#development-notes)):
 
 ```bash
 NETWORK=base MINTER=<psm-address> ALLOWANCE=10000000000000000000000000 YES_MAINNET=1 \
@@ -543,7 +570,6 @@ The three differences that are pure toolchain rather than design (versions:
 ```
 contracts/
 ├── README.md                  # this file — cross-stack model, trust, runbook
-├── TRACKER.md                 # open issues + standing invariants
 ├── AUTHORITY-MATRIX.md        # canonical role/authority reference
 ├── artifacts/                 # curated ABIs + IDLs for downstream consumers
 ├── EVM/                       # Solidity (Foundry + Hardhat)
@@ -837,5 +863,6 @@ source of truth.
 
 - **EVM-specific docs:** [`EVM/README.md`](EVM/README.md) (incl. Accepted Risks)
 - **SVM-specific docs:** [`SVM/README.md`](SVM/README.md) (incl. Accepted Risks)
-- **Open issues:** [`TRACKER.md`](TRACKER.md)
+- **Authority reference:** [`AUTHORITY-MATRIX.md`](AUTHORITY-MATRIX.md)
+- **Open issues:** tracked internally (Linear)
 - **Downstream SDK / backend consumption:** [`artifacts/README.md`](artifacts/README.md)

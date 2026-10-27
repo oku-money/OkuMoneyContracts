@@ -398,7 +398,8 @@ async function main() {
 
   // --- Cumulative distributed-vs-realized reporting (diagnostic only, does not fail the check) ---
   // Reads the LOCAL reference-implementation carry ledger (see carryLedger.ts —
-  // this is not yet a durable/shared store; see TRACKER.md). Reports the
+  // this is not yet a durable/shared store; see EVM/docs/epoch-accounting.md
+  // § Reference implementation status). Reports the
   // cumulative-conservation identity: cumulativeAchieved = cumulativeRealised -
   // outstandingCarry. This is internal bookkeeping against each entry's
   // measurement basis, not a guarantee about literal on-chain dollars paid —

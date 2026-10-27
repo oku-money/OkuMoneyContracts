@@ -12,7 +12,7 @@
  * representation or verification today (`okuMRatePerSecond()` is verifiable
  * on-chain; the carry balance behind it is not). Before relying on this for
  * real rate decisions across multiple operators, move it to a durable,
- * shared, signed/versioned store. See TRACKER.md.
+ * shared, signed/versioned store. See EVM/docs/epoch-accounting.md § Reference implementation status.
  */
 
 import fs from "fs";

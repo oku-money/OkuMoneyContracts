@@ -371,6 +371,29 @@ Bankrun suites are in `tests/bankrun/` (+ `scenarios/`), harness in `tests/share
   `OverrideInProgress` after a yield op, and replayed identical-byte transactions); pass
   `{ autoBumpSlot: false }` + `warpSlots(h, n)` for strict slot semantics.
 
+## Development notes
+
+Traps that are not visible from the code alone. Cross-stack invariants live in
+[`../README.md` § Cross-stack invariants](../README.md#cross-stack-invariants).
+
+- **`multiplier_to_f64_floor`'s `display <= canonical` holds by exact cancellation, not
+  by margin.** Two `next_down` steps cancel two f64 roundings with almost nothing left
+  over, so adding any third rounding operation breaks it. The margin is per-binade and
+  found by search, so sampled checks over-estimate it. The invariant is checked in exact
+  integer arithmetic; do not simplify it to a float threshold. Derivation and the wrong
+  approaches to avoid: doc comments in `helpers/display_sync.rs`.
+- **`PsmConfig` carries a `reserved` byte array and its `LEN` is pinned by a
+  compile-time `assert!`.** New fields are consumed from the front of `reserved` with
+  `LEN` held constant: no offset moves, no resize, no redeploy.
+- **`initialize` is gated on the program's own BPF upgrade authority via
+  `ProgramData`**, pinned with Anchor's `address =` so a foreign program's account
+  cannot be substituted. Bankrun loads programs under BPFLoader2 and creates no
+  ProgramData account, so the harness seeds a real one (`seedProgramData`) rather than
+  feature-flagging the check off under `cfg(test)`. Any new init-path test must do the
+  same.
+- **Run `npm run drill:upgrade` before shipping an SVM upgrade.** It needs a real
+  validator and is not in CI.
+
 ## Deployment
 
 > The runbook — prerequisites, Surfpool fork pre-flight, the two-phase `deploy:programs` →
@@ -557,5 +580,6 @@ shapes with minor naming differences (`BufferDeposited` ↔ `BufferDepositEvent`
 ## Pointers
 
 [`../README.md`](../README.md) (orchestrator runbook, RBAC tiers, mainnet ceremony, deployment) ·
-[`../AUTHORITY-MATRIX.md`](../AUTHORITY-MATRIX.md) · [`../TRACKER.md`](../TRACKER.md) (invariants, open
-items) · [`../EVM/README.md`](../EVM/README.md)
+[`../AUTHORITY-MATRIX.md`](../AUTHORITY-MATRIX.md) ·
+[`../README.md` § Cross-stack invariants](../README.md#cross-stack-invariants) ·
+[`../EVM/README.md`](../EVM/README.md). Open work is tracked internally (Linear).

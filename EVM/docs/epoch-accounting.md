@@ -435,7 +435,7 @@ target well before the scheduled staging time, the operator should re-anchor
 to `PRECISION` (halt) immediately via `setOkuMYieldRateWithSuccessor`, rather
 than waiting. This bounds the early-shock failure mode to **detection
 latency**, not epoch length. No automated alert exists: it belongs to the
-backend and is out of scope for this repo (`TRACKER.md` § Early-shock detection).
+backend and is out of scope for this repo.
 
 ## Steady state (conservativeFactor < 1, if ever used)
 
@@ -508,7 +508,7 @@ boundary.
   `scripts/utils/carryLedger.ts` and `scripts/utils/globalValue.ts` /
   `scripts/operator/sampleGlobalValue.ts` are REFERENCE implementations (local
   JSON stores). A durable, shared, ideally signed store is the backend's job and
-  out of scope for this repo (`TRACKER.md` § Out of scope: epoch management).
+  out of scope for this repo (§ Reference implementation status).
 - `conservativeFactor` (if used) is an off-chain operator decision, not a
   contract parameter — there is no on-chain enforcement that a published rate
   is in fact conservative relative to any particular realized figure.
@@ -524,9 +524,67 @@ boundary.
   failure mode identified in the simulation results above — an operator alert
   that watches `distributedSoFarUsd` continuously and triggers an emergency
   re-anchor to `PRECISION` before the scheduled staging time. Out of scope for
-  this repo (`TRACKER.md` § Early-shock detection).
+  this repo (backend).
 - Before adopting a non-default `baseWindowFraction` / `conservativeFactor` /
   epoch length, re-run
   `test/hardhat/simulation/epochAccounting.simulation.ts` with those values —
   it's the fastest way to see the actual accuracy/tx-count trade-off rather
   than reasoning about it in the abstract.
+
+## Reference implementation status
+
+Epoch management (deriving, staging and rolling schedules, sampling V̄, the carry
+ledger and its reconciliation) is the off-chain backend's job and **out of scope for
+this repo and its audit**. This repo's job is to make every lever the backend needs
+present and reachable on-chain. The scripts under `scripts/operator/` and
+`scripts/config/`, and the local stores `carryLedger.json` and
+`globalValueSamples.json`, are an internal-testing proof of concept, not a
+production-representative implementation. They are hardened against the internal
+review's findings P-01..P-07:
+
+- **P-01** `sampleGlobalValueUsd` throws unless every chain in
+  `expectedValueChains()` is read; samples record their chain set and
+  `samplesInWindow` rejects samples taken against a different set.
+- **P-02** artifacts commit a sorted `targetChains`; `broadcastSchedule.ts` uses it,
+  refuses a differing `CHAINS`, and finalizes the carry ledger only when every
+  committed target has an identity-bound receipt.
+- **P-03** artifacts bind per-target chainId + OkuMoney address (SVM: cluster +
+  program id), the reference chain's pre-state, and an expiry (`ARTIFACT_TTL_SECONDS`,
+  default 24h); `applyScheduleSingleChain.ts` and the broadcaster's SVM leg refuse on
+  mismatch. SVM pre-state is checked only when the SVM read env is set.
+- **P-04** roll derivations record the reference `okuMMultiplier()` as the epoch's
+  `epochStartMultiplier`; reconciliation uses `current / start - 1` and refuses
+  entries without it. V̄ there is still a single spot sample.
+- **P-05** `windowSamples` (yield-tooling) requires the window start covered
+  (interpolated) and caps sample gaps (`DEFAULT_MAX_SAMPLE_GAP_SEC` = 6h);
+  `distributedUsdOverWindow` and `samplesInWindow` both apply it.
+- **P-06** a chain already at the artifact's target gets a `recovered` receipt (tx
+  found via `NextOkuMYieldRateSet` logs, else `<already-applied>`) instead of a
+  resend; artifact, sample and ledger writes are tmp+rename.
+- **P-07** `checkMultiplierDrift.ts` resolves the expected fleet first and exits 2
+  ("INCOMPLETE COVERAGE") if any expected chain is unreadable.
+
+Things a contributor could not learn from the scripts alone:
+
+- **V̄ is the denominator of the rate derivation**, so a chain silently dropping out of
+  the sample set makes every derived rate come out *too high*. Completeness is
+  enforced for every expected chain (EVM and SVM). SVM is expected when configured or
+  `SVM_EXPECTED=true`; with neither it is excluded from V̄ (with a warning) while
+  still a broadcast target. Set `SVM_EXPECTED=true` once SVM carries supply, and do
+  not remove it.
+- **V̄'s denominator set and the broadcast's recipient set must be the same set**
+  (modulo the SVM exclusion above). `scripts/config/epochChains.ts`
+  (`participatingChains()`) is the single source of truth; all call sites route
+  through it, including explicit `CHAINS=` lists.
+- **Env-var names at the `broadcastSchedule.ts` → subprocess boundary are generated**
+  by `cli.ts`'s camelCase→SCREAMING_SNAKE transform and appear literally nowhere at
+  either end, so a mismatch is only discoverable by execution. `broadcastSchedule`
+  takes an injectable `SubprocessRunner` so that boundary is assertable;
+  `broadcastSchedule.test.ts` pins the env every chain receives. Keep it if the
+  orchestration scripts are touched.
+- **SVM `set-yield-rate.ts` can crash after the write has landed.** Its
+  post-submission summary evaluates the multiplier at the local clock, which on devnet
+  can sit behind the on-chain anchor and throw. `broadcastSchedule.ts` then reports
+  `[solana] FAILED` although the schedule is live. With the SVM read env set, a re-run
+  detects the target schedule and records a `recovered` receipt instead of re-sending;
+  without it, check on-chain state with `admin:read-schedule` before re-sending.

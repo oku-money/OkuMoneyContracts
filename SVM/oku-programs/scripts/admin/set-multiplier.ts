@@ -63,7 +63,8 @@ async function main() {
       `--to=${target} is not strictly ABOVE the current multiplier ${current}. ` +
         `set_okum_multiplier is monotonic-increase-only on-chain and will revert ` +
         `MultiplierCannotDecrease. If this chain is AHEAD of the target, there is ` +
-        `no correction available — see the "one-way divergence" note in TRACKER.md.`,
+        `no correction available — divergence is one-way (README.md § Schedule ` +
+        `broadcast across chains; EVM README Accepted Risk #9).`,
     );
   }
   if (target > MAX_MULTIPLIER) {

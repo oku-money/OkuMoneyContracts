@@ -11,7 +11,7 @@
 
 /**
  * Epoch length, in seconds. **24 hours.** Shorter epochs bound the early-shock
- * overshoot (`TRACKER.md` § Early-shock detection); every epoch boundary is
+ * overshoot (`EVM/docs/epoch-accounting.md` § Finding); every epoch boundary is
  * UTC midnight (see `EPOCH_ANCHOR_UNIX` below).
  *
  * Cost: the settlement-staging window scales with the epoch. At

@@ -155,7 +155,7 @@ together, since the rule is not stated in one place.
 | Role rotation | OZ `AccessControl`, immediate | every role immediate except `role_admin`, which is two-step |
 | Upgrade | UUPS ×3, per-contract role | BPF loader, single authority |
 | Minter allowance | per-address mapping | single global value |
-| Redeem slippage | none — monotonic multiplier + zero PSM fee make it structurally unreachable. `LitePSM` contract NatSpec header; invariant in `TRACKER.md` | user-supplied `min_usdc_out`, defence-in-depth; see `SVM/README.md § PSM` |
+| Redeem slippage | none — monotonic multiplier + zero PSM fee make it structurally unreachable. `LitePSM` contract NatSpec header; invariant in `README.md` § Cross-stack invariants | user-supplied `min_usdc_out`, defence-in-depth; see `SVM/README.md § PSM` |
 
 ---
 

@@ -22,7 +22,8 @@
  *
  * OPERATIONAL NOTE: the on-disk sample store here is a REFERENCE
  * implementation (a local JSON file), not a production design. Like the carry
- * ledger (see TRACKER.md), this is cross-chain-critical off-chain state that
+ * ledger (see EVM/docs/epoch-accounting.md § Reference implementation status),
+ * this is cross-chain-critical off-chain state that
  * every consumer of `realisedYieldToRatePerSecond` needs to agree on; it
  * should be moved to a durable, shared, and ideally signed store before
  * relying on it for real rate decisions across multiple operators.

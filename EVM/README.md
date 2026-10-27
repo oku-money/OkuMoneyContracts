@@ -419,9 +419,10 @@ code does not state is **which are negotiable**:
   any number far above realistic yield trajectories would serve. They are
   sanity bounds against a compromised rate manager key and against `rpow` overflow,
   not economic parameters.
-- **`MAX_RATE_WINDOW` (90 days) is load-bearing and tightly argued.** See the
-  standing invariant in [`TRACKER.md`](../TRACKER.md): `rpow` overflows after ~30
-  years on EVM (~15 on SVM) and the failure is unrecoverable without an upgrade.
+- **`MAX_RATE_WINDOW` (90 days) is load-bearing and tightly argued.** See
+  [`../README.md` § Cross-stack invariants](../README.md#cross-stack-invariants): `rpow`
+  overflows after ~30 years on EVM (~15 on SVM) and the failure is unrecoverable
+  without an upgrade.
 - **`MAX_USDC_DECIMALS` (18) is a deliberate forward-compat choice**, not a
   description of reality. Most USDC deployments use 6 — but BSC's canonical
   Binance-Peg USDC uses 18, which is why the PSM is decimals-agnostic rather
@@ -1289,6 +1290,54 @@ belong here; they should be removed from `src/`.
 
 ---
 
+## Development notes
+
+Traps that are not visible from the code alone. Cross-stack invariants live in
+[`../README.md` § Cross-stack invariants](../README.md#cross-stack-invariants).
+
+- **`verifyDeployment()` must throw, never warn.** It asserts the complete role-grant
+  matrix (`expectedRoleGrants()`: 26 entries, 24 granted to the admin by `initialize`
+  and 2 sent by the script), the LitePSM minter allowance, and address-book
+  completeness. Roles and allowances are checked separately on purpose: `OkuMoney.mint`
+  gates on both `onlyRole(OKUM_MINTER)` and `minterAllowance`, which `initialize`
+  populates for nobody, so a grant without an allowance still reverts
+  `ExceedsAllowance`. The drill asserts against the same exported list; never
+  hand-copy it. Only script-sent grants go in `roleGrants.json`.
+- **Never give a `src/` contract, library or interface a name OpenZeppelin also uses**
+  (`Errors`, `Math`, `Strings`, …). The compiler accepts it, but Slither then resolves
+  references against the OpenZeppelin symbol, cannot build IR for every function that
+  uses it, and silently skips its reentrancy and other IR-based detectors there. The
+  shared errors are `SharedErrors` for this reason.
+- **`scripts/config/addresses.json` is tracked and must never receive `fork:` keys.**
+  `saveAddressBook()` re-derives the tracked / `addresses.local.json` partition
+  (including the reserved `upgrades` index) on every write. Never add a writer that
+  bypasses it.
+- **Operator scripts are env-var driven, never flag-driven.** `npx hardhat run` parses
+  argv itself and rejects unrecognised `--flag` (HH305/HH310) before the script runs.
+  `parseArg()` maps camelCase→SCREAMING_SNAKE (`minAmountOut`→`MIN_AMOUNT_OUT`);
+  `isYesMainnet()` accepts `YES_MAINNET=1|true`. Do not reintroduce `--flag=value` into
+  any EVM script header, README, or error message. (SVM `tsx` scripts are the
+  opposite: they take `--flags`.)
+- **Deploys write `scripts/config/upgradeBaselines.json` and `.openzeppelin/<chain>.json`.
+  Commit both**: the upgrade script refuses to run without them (it never
+  `forceImport`s). `.openzeppelin/{base,bsc}.json` and `addresses.pre-streaming.json`
+  are the only record of the v0.2 contracts still live on base/bsc mainnet; keep them.
+- **The drill clears and backs up `carryLedger.json` and `globalValueSamples.json` in
+  `before()`.** Both are gitignored, so stale local state silently corrupts a rerun's
+  carry/target math, and they can hold real operator state.
+- **Never hardcode `NETWORK` in a drill.** The fork's chainId comes from `FORK_NETWORK`
+  at hardhat startup; let `resolveNetworkContext()` auto-detect.
+- **Lint with the pinned Foundry (`foundryup -i v1.8.5`, as CI does).** Its `forge lint`
+  flags `reentrancy-events`, `block-timestamp`, `unsafe-typecast` and
+  `require-revert-in-loop` in `src/`; each site carries a
+  `forge-lint: disable-next-item(...)` with a reason. Foundry < 1.8 rejects those ids
+  as unknown.
+- **Mainnet-fork suites read `ANKR_FREEMIUM_API_KEY`** from `.env` for a pinned,
+  cached fork; without it they run at latest and warn. The key is rejected for
+  Optimism (403), which stays on Alchemy/public.
+
+---
+
 ## Dependencies — pinned for audit
 
 Exact versions live in the files, not here:
@@ -1325,7 +1374,7 @@ tooling only: they do not enter production bytecode.
 ## Pointers
 
 - **Workspace overview:** [`../README.md`](../README.md)
-- **Open issues:** [`../TRACKER.md`](../TRACKER.md)
+- **Open issues:** tracked internally (Linear)
 - **Authority matrix:** [`../AUTHORITY-MATRIX.md`](../AUTHORITY-MATRIX.md)
 - **Epoch accounting:** [`docs/epoch-accounting.md`](docs/epoch-accounting.md)
 - **SVM-side docs:** [`../SVM/README.md`](../SVM/README.md)

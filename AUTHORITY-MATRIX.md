@@ -29,7 +29,7 @@ omission — none of them is there for decentralisation.
 | Rate rails (`rate >= PRECISION`, `<= MAX_RATE`) | (b) | Monotonicity is the invariant the entire multiplier model rests on. A backend bug writing a sub-unity rate would corrupt accounting, not merely misbehave. Cost ≈ 0 |
 | Bounded-window requirement on yielding rates | (b) | An open-ended rate ends at a transaction-dependent, per-chain moment — reintroducing the cross-chain divergence the design eliminates |
 | Pause gate on rate *increases*, against the **effective** rate | (b) | Prevents inflating the multiplier while users cannot exit. Subtle and load-bearing: comparing against the raw stored rate instead of the effective one lets a stale higher rate through |
-| `max_supply` / `minter_allowance` caps | (a) | Bound the blast radius of a compromised minter key |
+| `max_supply` / `minter_allowance` caps | (a) | Bound the blast radius of a compromised minter key. `minter_allowance` bounds net outstanding issuance (redeems restore it), so permissionless mint/redeem cycling cannot exhaust it |
 | Role separation on `PsmConfig` / EVM `AccessControl` | (a) | Cold / warm / orchestrator separation is key-compromise defence |
 | `set_okum_multiplier` emergency override | (c) | The backend needs an atomic re-anchor lever |
 | Sandwich lock on the override | (c) | The override is the one remaining discrete jump |
@@ -49,8 +49,8 @@ bounds stay on-chain; business policy moves to the backend.
 | E3 | `setNextOkuMYieldRate` | `OkuMoney` | `OKUM_RATE_MANAGER` | Arm successor, same bounds | as above, successor window bounded independently | **No** |
 | E4 | `setOkuMYieldRateWithSuccessor` | `OkuMoney` | `OKUM_RATE_MANAGER` | E2 + E3 atomically | as above | **No** |
 | E5 | `mint` | `OkuMoney` | `OKUM_MINTER` | Mint to `min(maxSupply − supply, minterAllowance)` | `whenNotPaused`, supply cap, per-minter allowance, sender + recipient blacklist | **No** |
-| E6 | `burn` | `OkuMoney` | `OKUM_BURNER` | Burn caller's own balance only | sender blacklist; **no pause gate — works while paused, deliberately** | No |
-| E7 | `configureMinterAllowance` | `OkuMoney` | `OKUM_ALLOWANCE_MANAGER` | Set **any** minter's allowance, incl. its own, to `type(uint256).max` | none beyond the role | Yes |
+| E6 | `burn` | `OkuMoney` | `OKUM_BURNER` | Burn caller's own balance only; restores the caller's `minterAllowance` by the amount, up to its `minterAllowanceLimit` | sender blacklist; **no pause gate — works while paused, deliberately** | No |
+| E7 | `configureMinterAllowance` | `OkuMoney` | `OKUM_ALLOWANCE_MANAGER` | Set **any** minter's allowance (and the limit burns restore it to), incl. its own, to `type(uint256).max` | none beyond the role | Yes |
 | E8 | `setMaxSupply` | `OkuMoney` | `OKUM_CAP_MANAGER` | Raise/lower the global cap | `≥ totalSupply` | Yes |
 | E9 | `blacklist` | `OkuMoney` | `OKUM_BLACKLISTER` | Freeze an address as sender, recipient, **or approved spender** (incl. `approve`/`permit`/`transferFrom`/`mint`-as-minter — matched to Circle FiatToken's scope, see `EVM/README.md` Accepted Risk #12) | works while paused; does NOT retroactively revoke allowances already granted | Yes (E10) |
 | E10 | `unblacklist` | `OkuMoney` | `OKUM_UNBLACKLISTER` | Unfreeze | — | — |
@@ -89,7 +89,7 @@ Roles are **pubkeys stored on `PsmConfig`**, enforced by Anchor `has_one`, not a
 | S7 | `withdraw_buffer` | `buffer_withdrawer` | **Drain the vault. Only check is `vault_balance >= amount`** — no solvency test. Same blast radius as E18. | pause **and** yield-lock; destination must be the withdrawer's own USDC account | **No** |
 | S8 | `deposit_buffer` | `buffer_depositor` | Add USDC | pause **and** yield-lock (same as E19) | No |
 | S9 | `set_max_supply` | `cap_manager` | Raise/lower cap | new cap `>=` current supply (`BelowCurrentSupply`; as E8) | Yes |
-| S10 | `set_minter_allowance` | `allowance_manager` | **Single global** PSM mint allowance (EVM's is per-address) | — | Yes |
+| S10 | `set_minter_allowance` | `allowance_manager` | **Single global** PSM mint allowance and `minter_allowance_limit` that `redeem_oku_m` restores it to (EVM's is per-address) | — | Yes |
 | S11 | `set_direct_minter_allowance` | `allowance_manager` | Bound/starve S5 — **the only off-switch for S5** | — | Yes |
 | S12 | `set_direct_burner_allowance` | `allowance_manager` | Bound S6 | — | Yes |
 | S13 | `freeze_account` | `freezer` | Freeze **one** OkuM token account (any, not only the ATA) via Token-2022: blocks send **and** receive on that account. The owner's other OkuM accounts are unaffected | not pause-gated, by design | Yes (S14) |
@@ -154,7 +154,7 @@ together, since the rule is not stated in one place.
 | Uncollateralised mint | none (equivalent = granting `OKUM_MINTER` to an EOA) | `direct_mint` / `direct_burn` |
 | Role rotation | OZ `AccessControl`, immediate | every role immediate except `role_admin`, which is two-step |
 | Upgrade | UUPS ×3, per-contract role | BPF loader, single authority |
-| Minter allowance | per-address mapping | single global value |
+| Minter allowance | per-address mapping; any `burn` by the minter restores it up to the configured limit | single global value; `redeem_oku_m` restores it up to the configured limit (direct allowances are not restored) |
 | Redeem slippage | none — monotonic multiplier + zero PSM fee make it structurally unreachable. `LitePSM` contract NatSpec header; invariant in `README.md` § Cross-stack invariants | user-supplied `min_usdc_out`, defence-in-depth; see `SVM/README.md § PSM` |
 
 ---

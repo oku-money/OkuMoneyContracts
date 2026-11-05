@@ -66,11 +66,13 @@ pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<(
 /// Set how much more OkuM the PSM may mint through `mint_oku_m`
 /// (`allowance_manager` only). It REPLACES the allowance (it does not add to it), and is
 /// allowed while paused so an incident can cut the allowance to zero. The
-/// value is not bounded: the supply cap still applies at mint time.
+/// value is not bounded: the supply cap still applies at mint time. Also sets
+/// `minter_allowance_limit`, the ceiling `redeem_oku_m` restores up to.
 pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
     let old_allowance = config.minter_allowance;
     config.minter_allowance = amount;
+    config.minter_allowance_limit = amount;
 
     emit!(MinterAllowanceUpdatedEvent {
         actor: ctx.accounts.allowance_manager.key(),

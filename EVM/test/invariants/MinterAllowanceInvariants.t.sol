@@ -6,7 +6,8 @@ import {OkuMoneyHandler} from "../handlers/OkuMoneyHandler.sol";
 
 /**
  * @title MinterAllowanceInvariantsTest
- * @notice Invariant tests for minter allowance monotonic decrease
+ * @notice Invariant tests for the minter allowance, which meters net outstanding issuance:
+ *         mints draw it down, burns restore it up to the last configured limit.
  */
 contract MinterAllowanceInvariantsTest is BaseTest {
     OkuMoneyHandler public handler;
@@ -28,7 +29,7 @@ contract MinterAllowanceInvariantsTest is BaseTest {
     }
 
     /**
-     * @notice Minter allowance only decreases unless admin resets
+     * @notice Minter allowance never rises above the configured value without an admin reset
      */
     function invariant_AllowanceMonotonicDecrease() public view {
         uint256 currentAllowance = okuMoney.minterAllowance(minter);
@@ -39,19 +40,28 @@ contract MinterAllowanceInvariantsTest is BaseTest {
     }
 
     /**
-     * @notice Burns do NOT restore minter allowance
+     * @notice Burns never restore the allowance above the last configured limit
      */
-    function invariant_BurnDoesNotRestoreAllowance() public view {
-        uint256 currentAllowance = okuMoney.minterAllowance(minter);
-        uint256 mintedTotal = handler.ghostMintedTotal();
+    function invariant_AllowanceNeverExceedsLimit() public view {
+        assertLe(
+            okuMoney.minterAllowance(minter),
+            okuMoney.minterAllowanceLimit(minter),
+            "Allowance exceeds configured limit"
+        );
+    }
 
+    /**
+     * @notice Consumed allowance equals net outstanding issuance (minted - burned).
+     * @dev Handler actors only receive OkuM from the handler's mint, so every burn is of
+     *      OkuM minted since the last configure and restoration is never clamped.
+     */
+    function invariant_AllowanceTracksNetIssuance() public view {
         if (!handler.wasAllowanceReset()) {
-            uint256 allowanceConsumed = initialAllowance - currentAllowance;
-
-            assertLe(
+            uint256 allowanceConsumed = initialAllowance - okuMoney.minterAllowance(minter);
+            assertEq(
                 allowanceConsumed,
-                mintedTotal + 1,
-                "Allowance consumed exceeds minted amount unexpectedly"
+                handler.ghostMintedTotal() - handler.ghostBurnedTotal(),
+                "Allowance consumed != net issuance"
             );
         }
     }

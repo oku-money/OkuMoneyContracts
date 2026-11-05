@@ -924,8 +924,9 @@ touches reserves directly).
 
 **Minter allowance**
 ```
-minterAllowance only decreases unless admin resets
-allowanceConsumed <= mintedTotal + 1                            // Burns don't restore allowance
+minterAllowance never exceeds its initial value unless admin resets
+minterAllowance <= minterAllowanceLimit                         // Burns restore up to the limit, never past it
+allowanceConsumed == mintedTotal - burnedTotal                  // Allowance tracks net outstanding issuance
 ```
 
 **PSM**

@@ -229,19 +229,95 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.totalSupply(), 60e18);
     }
 
-    function test_Burn_DoesNotRestoreAllowance() public {
+    function test_Burn_RestoresAllowance() public {
         uint256 amount = 100e18;
         uint256 allowanceBefore = okuMoney.minterAllowance(minter);
+        assertEq(okuMoney.minterAllowanceLimit(minter), allowanceBefore);
 
         _mintOkuMoney(minter, amount);
-        uint256 allowanceAfterMint = okuMoney.minterAllowance(minter);
+        assertEq(okuMoney.minterAllowance(minter), allowanceBefore - amount);
 
         vm.prank(minter);
         okuMoney.burn(amount);
 
-        // Allowance should NOT be restored after burn
-        assertEq(okuMoney.minterAllowance(minter), allowanceAfterMint);
-        assertEq(okuMoney.minterAllowance(minter), allowanceBefore - amount);
+        // The burn returns the allowance the mint consumed
+        assertEq(okuMoney.minterAllowance(minter), allowanceBefore);
+    }
+
+    function test_Burn_RestoreCappedAtLimit() public {
+        vm.prank(allowanceManager);
+        okuMoney.configureMinterAllowance(minter, 100e18);
+
+        _mintOkuMoney(minter, 40e18);
+        assertEq(okuMoney.minterAllowance(minter), 60e18);
+
+        // Lower the allowance mid-flight: the limit follows, and a burn of OkuM minted
+        // under the old allowance cannot restore past the new one.
+        vm.prank(allowanceManager);
+        okuMoney.configureMinterAllowance(minter, 50e18);
+
+        vm.prank(minter);
+        okuMoney.burn(10e18);
+        assertEq(okuMoney.minterAllowance(minter), 50e18, "stays at limit");
+
+        vm.prank(minter);
+        okuMoney.burn(30e18);
+        assertEq(okuMoney.minterAllowance(minter), 50e18, "never above limit");
+    }
+
+    function test_Burn_PartialRestoreUpToLimit() public {
+        vm.prank(allowanceManager);
+        okuMoney.configureMinterAllowance(minter, 100e18);
+
+        _mintOkuMoney(minter, 70e18);
+        vm.prank(minter);
+        okuMoney.burn(25e18);
+        assertEq(okuMoney.minterAllowance(minter), 55e18);
+    }
+
+    function test_Burn_ZeroAllowanceStaysZero() public {
+        _mintOkuMoney(minter, 100e18);
+
+        // Allowance manager cuts the minter off (incident response)
+        vm.prank(allowanceManager);
+        okuMoney.configureMinterAllowance(minter, 0);
+
+        vm.prank(minter);
+        okuMoney.burn(100e18);
+        assertEq(okuMoney.minterAllowance(minter), 0, "configured zero is not restored");
+
+        vm.prank(minter);
+        vm.expectRevert(OkuMoneyErrors.ExceedsAllowance.selector);
+        okuMoney.mint(user1, 1);
+    }
+
+    /// @notice A limit still 0 (e.g. freshly upgraded storage) never lowers a live allowance.
+    function test_Burn_UnsetLimitLeavesAllowanceUntouched() public {
+        _mintOkuMoney(minter, 100e18);
+        uint256 allowanceBefore = okuMoney.minterAllowance(minter);
+
+        // Simulate post-upgrade storage: allowance live, limit slot never written.
+        // minterAllowanceLimit is the 4th field of the ERC-7201 struct (slot base + 3).
+        bytes32 base = 0xa46c29efb747c5ba816fcb25c64c7053e640ad72653ff106cdc2a03e8238d100;
+        bytes32 limitSlot = keccak256(abi.encode(minter, uint256(base) + 3));
+        vm.store(address(okuMoney), limitSlot, bytes32(0));
+        assertEq(okuMoney.minterAllowanceLimit(minter), 0);
+
+        vm.prank(minter);
+        okuMoney.burn(100e18);
+        assertEq(okuMoney.minterAllowance(minter), allowanceBefore, "not lowered, not raised");
+    }
+
+    function test_Burn_NonMinterBurnerGetsNoAllowance() public {
+        address burnerOnly = makeAddr("burnerOnly");
+        vm.startPrank(admin);
+        okuMoney.grantRole(OKUM_BURNER, burnerOnly);
+        vm.stopPrank();
+
+        _mintOkuMoney(burnerOnly, 10e18);
+        vm.prank(burnerOnly);
+        okuMoney.burn(10e18);
+        assertEq(okuMoney.minterAllowance(burnerOnly), 0);
     }
 
     function test_Burn_RevertsInsufficientBalance() public {

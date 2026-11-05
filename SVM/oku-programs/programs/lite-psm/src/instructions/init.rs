@@ -219,6 +219,7 @@ fn write_initial_config(
 
     config.max_supply = params.max_supply;
     config.minter_allowance = params.minter_allowance;
+    config.minter_allowance_limit = params.minter_allowance;
 
     // Flat and halted: a freshly deployed chain has earned nothing.
     let schedule = Schedule::halted_at(now_ts);

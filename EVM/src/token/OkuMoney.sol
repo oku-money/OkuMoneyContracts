@@ -51,6 +51,11 @@ contract OkuMoney is
         // Addresses barred from sending, receiving or being minted to. OkuDollar also
         // consults this list.
         mapping(address => bool) isBlacklisted;
+        // Allowance last set by `configureMinterAllowance`, per minter. A burn restores
+        // `minterAllowance` up to it, so the allowance bounds net outstanding issuance
+        // rather than gross mint volume (a permissionless mint/redeem loop cannot drain it).
+        // Appended to the namespaced struct: upgrade-safe, reads 0 until first configured.
+        mapping(address => uint256) minterAllowanceLimit;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuMoney")) - 1)) & ~bytes32(uint256(0xff))
@@ -117,6 +122,12 @@ contract OkuMoney is
     /// @notice Remaining minter allowance for `minter_`, in raw token units.
     function minterAllowance(address minter_) external view returns (uint256) {
         return _getOkuMoneyStorage().minterAllowance[minter_];
+    }
+
+    /// @notice Allowance last configured for `minter_`; burns restore {minterAllowance} up
+    ///         to this value, in raw token units.
+    function minterAllowanceLimit(address minter_) external view returns (uint256) {
+        return _getOkuMoneyStorage().minterAllowanceLimit[minter_];
     }
 
     /// @notice Global supply cap in raw token units.
@@ -270,15 +281,28 @@ contract OkuMoney is
     /// @notice Burn raw tokens from the caller's balance. Allowed while paused.
     /// @param amount Number of raw tokens to burn.
     /// @dev `OKUM_BURNER` is separate from `OKUM_MINTER` so burn can be revoked independently.
+    ///      The burn restores the caller's `minterAllowance` by `amount`, never above its
+    ///      {minterAllowanceLimit}, so the allowance meters net outstanding issuance. An
+    ///      allowance already at or above the limit (e.g. a limit still 0 after upgrade)
+    ///      is left untouched, never lowered.
     function burn(uint256 amount) external onlyRole(Roles.OKUM_BURNER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if ($.isBlacklisted[msg.sender]) revert SharedErrors.SenderBlacklisted();
         _burn(msg.sender, amount);
+
+        uint256 current = $.minterAllowance[msg.sender];
+        uint256 limit = $.minterAllowanceLimit[msg.sender];
+        if (current < limit) {
+            uint256 room = limit - current;
+            $.minterAllowance[msg.sender] = current + (amount < room ? amount : room);
+        }
     }
 
     // ============ Minter Allowance Management ============
 
     /// @notice Set or update the minter allowance for `minter_`.
+    /// @dev Sets both the remaining allowance and the {minterAllowanceLimit} burns restore
+    ///      up to. Setting 0 stops minting and disables restoration.
     /// @param minter_ Address whose allowance is being configured.
     /// @param newAllowance New allowance in raw token units.
     function configureMinterAllowance(
@@ -292,6 +316,7 @@ contract OkuMoney is
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 oldAllowance = $.minterAllowance[minter_];
         $.minterAllowance[minter_] = newAllowance;
+        $.minterAllowanceLimit[minter_] = newAllowance;
         emit MinterAllowanceUpdated(minter_, oldAllowance, newAllowance);
     }
 

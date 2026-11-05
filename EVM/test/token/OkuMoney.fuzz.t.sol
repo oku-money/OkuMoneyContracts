@@ -388,15 +388,17 @@ contract OkuMoneyFuzzTest is BaseTest {
 
     // ============ Minter Allowance Tests ============
 
-    /// @notice Minter allowance only decreases (never increases from mint/burn)
-    function testFuzz_MinterAllowanceOnlyDecreases(
+    /// @notice A mint draws the allowance down; burning it restores it, never above the limit
+    function testFuzz_MinterAllowanceRestoredByBurn(
         uint256 initialAllowance,
-        uint256 mintAmount
+        uint256 mintAmount,
+        uint256 burnAmount
     )
         public
     {
         initialAllowance = bound(initialAllowance, 1e18, MAX_SUPPLY);
         mintAmount = bound(mintAmount, 1, _min(initialAllowance, MAX_SUPPLY));
+        burnAmount = bound(burnAmount, 1, mintAmount);
 
         vm.prank(allowanceManager);
         okuMoney.configureMinterAllowance(minter, initialAllowance);
@@ -415,13 +417,44 @@ contract OkuMoneyFuzzTest is BaseTest {
         vm.prank(user1);
         okuMoney.transfer(minter, mintAmount);
 
-        // Burn should NOT restore allowance
         vm.prank(minter);
-        okuMoney.burn(mintAmount);
+        okuMoney.burn(burnAmount);
 
         assertEq(
-            okuMoney.minterAllowance(minter), allowanceAfterMint, "Burn does not restore allowance"
+            okuMoney.minterAllowance(minter),
+            allowanceAfterMint + burnAmount,
+            "Burn restores allowance"
         );
+        assertLe(
+            okuMoney.minterAllowance(minter),
+            okuMoney.minterAllowanceLimit(minter),
+            "Allowance within limit"
+        );
+    }
+
+    /// @notice Mint/redeem-style cycling cannot drain the allowance (audit finding #1)
+    function testFuzz_MintBurnCyclingDoesNotDrainAllowance(
+        uint256 allowance,
+        uint256 amount,
+        uint8 cycles
+    )
+        public
+    {
+        allowance = bound(allowance, 1, MAX_SUPPLY);
+        amount = bound(amount, 1, allowance);
+        cycles = uint8(bound(cycles, 1, 50));
+
+        vm.prank(allowanceManager);
+        okuMoney.configureMinterAllowance(minter, allowance);
+
+        for (uint256 i = 0; i < cycles; i++) {
+            vm.startPrank(minter);
+            okuMoney.mint(minter, amount);
+            okuMoney.burn(amount);
+            vm.stopPrank();
+        }
+
+        assertEq(okuMoney.minterAllowance(minter), allowance, "Allowance fully restored");
     }
 
     /// @notice Only admin can increase allowance

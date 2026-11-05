@@ -88,9 +88,10 @@ pub struct RedeemOkuM<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    /// The singleton config PDA. Read-only: a redeem changes no config state (it
-    /// only signs the vault transfer).
+    /// The singleton config PDA. Writable: a redeem restores `minter_allowance`
+    /// (up to `minter_allowance_limit`) and signs the vault transfer.
     #[account(
+        mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]

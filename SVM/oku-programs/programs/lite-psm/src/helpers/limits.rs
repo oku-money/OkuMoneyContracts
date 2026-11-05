@@ -20,6 +20,15 @@ pub fn consume_allowance(allowance: &mut u64, amount: u64) -> Result<()> {
     Ok(())
 }
 
+/// Restore up to `amount` to `allowance` after a burn, never above `limit`.
+/// An allowance already at or above `limit` is left untouched (never lowered),
+/// e.g. while `limit` still reads 0 after an upgrade.
+pub fn restore_allowance(allowance: &mut u64, limit: u64, amount: u64) {
+    if *allowance < limit {
+        *allowance = allowance.saturating_add(amount).min(limit);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -38,5 +47,39 @@ mod tests {
         assert_eq!(allowance, 6);
         assert!(consume_allowance(&mut allowance, 7).is_err());
         assert_eq!(allowance, 6);
+    }
+
+    #[test]
+    fn restore_is_capped_at_limit() {
+        let mut allowance = 4;
+        restore_allowance(&mut allowance, 10, 3);
+        assert_eq!(allowance, 7);
+        restore_allowance(&mut allowance, 10, 100);
+        assert_eq!(allowance, 10);
+        let mut a = u64::MAX - 1;
+        restore_allowance(&mut a, u64::MAX, u64::MAX);
+        assert_eq!(a, u64::MAX);
+    }
+
+    #[test]
+    fn restore_never_lowers_an_allowance_above_limit() {
+        // Post-upgrade: limit reads 0 from `reserved`, allowance is live.
+        let mut allowance = 1_000;
+        restore_allowance(&mut allowance, 0, 500);
+        assert_eq!(allowance, 1_000);
+        let mut at = 10;
+        restore_allowance(&mut at, 10, 5);
+        assert_eq!(at, 10);
+    }
+
+    #[test]
+    fn mint_redeem_cycle_returns_consumed_allowance() {
+        let limit = 100;
+        let mut allowance = limit;
+        for _ in 0..1_000 {
+            consume_allowance(&mut allowance, 60).unwrap();
+            restore_allowance(&mut allowance, limit, 60);
+        }
+        assert_eq!(allowance, limit);
     }
 }

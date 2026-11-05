@@ -19,7 +19,8 @@
  *   - vault USDC, OkuM supply, every tracked OkuM / USDC balance, the three
  *     allowances, the supply cap and the pause flag equal the model exactly, so
  *     a failed call changes nothing, a paused PSM moves nothing, a frozen
- *     account never changes, and burns do not restore allowances;
+ *     account never changes, and a PSM redeem restores the PSM minter allowance
+ *     up to its configured limit (the direct allowances are never restored);
  *   - mint and redeem amounts equal floor(usdc * P / m) and floor(raw * m / P)
  *     at the canonical multiplier, so the PSM can never pay out more than the
  *     schedule says (this also cross-checks the program against the TypeScript
@@ -210,6 +211,7 @@ interface Model {
   supply: bigint;
   maxSupply: bigint;
   allowMint: bigint;
+  allowMintLimit: bigint; // last set_minter_allowance; redeem restores allowMint up to it
   allowDirectMint: bigint;
   allowDirectBurn: bigint;
   paused: boolean;
@@ -324,6 +326,7 @@ class Fuzz {
       supply: 0n,
       maxSupply: BigInt(MAX_SUPPLY.toString()),
       allowMint: BigInt(MINTER_ALLOWANCE.toString()),
+      allowMintLimit: BigInt(MINTER_ALLOWANCE.toString()),
       allowDirectMint: 0n,
       allowDirectBurn: 0n,
       paused: false,
@@ -561,6 +564,7 @@ class Fuzz {
     const c = after.cfg;
     eq("max_supply", BigInt(c.maxSupply.toString()), m.maxSupply);
     eq("minter_allowance", BigInt(c.minterAllowance.toString()), m.allowMint);
+    eq("minter_allowance_limit", BigInt(c.minterAllowanceLimit.toString()), m.allowMintLimit);
     eq("direct_minter_allowance", BigInt(c.directMinterAllowance.toString()), m.allowDirectMint);
     eq("direct_burner_allowance", BigInt(c.directBurnerAllowance.toString()), m.allowDirectBurn);
     if (c.isPaused !== m.paused) fail(`is_paused: chain ${c.isPaused} != model ${m.paused}`);
@@ -840,6 +844,10 @@ class Fuzz {
       apply: () => {
         const m = this.m;
         m.okuM[i] -= raw; m.supply -= raw; m.vault -= out; m.usdc[i] += out;
+        if (m.allowMint < m.allowMintLimit) {
+          const restored = m.allowMint + raw;
+          m.allowMint = restored < m.allowMintLimit ? restored : m.allowMintLimit;
+        }
       },
     };
   }
@@ -929,7 +937,7 @@ class Fuzz {
   }
   opSetMinterAllowance(_c: Ctx, v: bigint): Op {
     const sig = this.signer("allowanceManager");
-    return { name: "setMinterAllowance", ixs: [this.allowanceIx("setMinterAllowance", v, sig.kp)], signers: [sig.kp], violations: this.gate(sig, []), apply: () => { this.m.allowMint = v; } };
+    return { name: "setMinterAllowance", ixs: [this.allowanceIx("setMinterAllowance", v, sig.kp)], signers: [sig.kp], violations: this.gate(sig, []), apply: () => { this.m.allowMint = v; this.m.allowMintLimit = v; } };
   }
   opSetDirectMinterAllowance(_c: Ctx, v: bigint): Op {
     const sig = this.signer("allowanceManager");

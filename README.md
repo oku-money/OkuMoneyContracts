@@ -380,10 +380,29 @@ PSM-only pause halts SVM alone.
 #### Minter allowance rotation policy
 
 `minterAllowance` on `OkuMoney` (EVM) and `PsmConfig.minterAllowance`
-(SVM) bounds how many raw OkuM tokens the PSM can mint on each chain
-before an explicit refresh.
+(SVM) bounds the PSM's **net outstanding issuance** on each chain: every PSM
+mint draws it down, and every PSM redeem (EVM `OkuMoney.burn`, SVM
+`redeem_oku_m`) restores it by the amount burned, never above the value last
+configured (`minterAllowanceLimit(psm)` on EVM, `PsmConfig.minter_allowance_limit`
+on SVM). `configureMinterAllowance` / `set_minter_allowance` set both values.
+A mint-and-redeem loop therefore returns the allowance it consumed and cannot
+exhaust it (Cyfrin audit finding #1). The SVM direct-mint / direct-burn
+allowances are separate and are **not** restored.
 
-- **Production policy:** ~ **1 % of weekly bridging volume**, rotated on a **weekly cadence** by `OKUM_ALLOWANCE_MANAGER` (cold multisig). Bounds a single-week worst-case mint by a compromised PSM contract or orchestrator USDC custody.
+- **Production policy:** ~ **1 % of weekly bridging volume** of headroom for
+  net outstanding PSM issuance, reviewed on a **weekly cadence** by
+  `OKUM_ALLOWANCE_MANAGER` (cold multisig). It bounds how much OkuM a
+  compromised PSM contract or orchestrator USDC custody can have outstanding
+  at once. Because redemptions refill it, it is **not** a cap on gross mint
+  volume per week: the gross-volume and buffer alerts below replace that
+  circuit breaker, with a warm-key `pause()` as the response.
+- **Setting 0 is still the off-switch:** a configured zero allowance has a
+  zero limit, so redemptions never revive it.
+- **After the upgrade that introduces the limit,** the limit reads 0 on every
+  existing deployment. The live allowance is left untouched (never lowered),
+  but redemptions restore nothing until the allowance manager re-runs the
+  rotation command below once per chain. Make that call part of the upgrade
+  runbook.
 - **Testnet** defaults are effectively uncapped; they are set in the deploy scripts (see § Initial deploy parameters).
 
 EVM rotation (env vars, not flags — see [`EVM/README.md` § Development notes](EVM/README.md#development-notes)):
@@ -400,8 +419,10 @@ NETWORK=mainnet-beta tsx scripts/admin/set-minter-allowance.ts \
   --amount=10000000 --yes-i-mean-it-on-mainnet
 ```
 
-Monitoring alerts: `minterAllowance < 10 %` of weekly throughput; or
-not rotated in > 7 days.
+Monitoring alerts: `minterAllowance < 10 %` of its limit (sustained net
+issuance, not a single loop); gross PSM mint volume (sum of `OkuMMinted` /
+`UsdOkuMinted` on EVM, `MintEvent` on SVM) above 2 × the expected rolling
+24 h volume; or a limit of 0 on a live PSM (post-upgrade re-configure missed).
 
 #### Monitoring SLAs
 
@@ -409,7 +430,8 @@ not rotated in > 7 days.
 |---|---|---|
 | Orchestrator token float (EVM) | Non-zero OkuM for > 1 h between batch cycles | EVM bridges use PSM-mediated USDC flow |
 | PSM buffer | < 2 × expected daily redemption volume | A depleted buffer reverts redeems with `InsufficientBuffer` on both stacks |
-| Minter allowance | < 10 % of weekly throughput estimate | |
+| Minter allowance | < 10 % of its configured limit | Tracks net outstanding PSM issuance; redemptions refill it |
+| Gross PSM mint volume | Rolling 24 h mint volume > 2 × expected | Replaces the gross-volume circuit breaker the allowance no longer provides; respond with warm-key `pause()` |
 | Pause state | PSM paused for > 15 min unexpectedly | Buffer top-ups are blocked while paused; unpause (cold) first |
 
 SVM bridges use direct `burn_oku_m_direct` / `mint_oku_m_direct` with no USDC

@@ -7,7 +7,7 @@ use crate::errors::LitePsmError;
 use crate::events::*;
 use crate::helpers::{
     check_supply_cap, check_yield_lock, check_yield_lock_with_clock, consume_allowance,
-    dollars_to_raw, multiplier, raw_to_dollars,
+    dollars_to_raw, multiplier, raw_to_dollars, restore_allowance,
 };
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -43,8 +43,9 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         raw_oku_m_amount,
         ctx.accounts.config.max_supply,
     )?;
-    // The PSM's own mint allowance is drawn down per mint (reset by the
-    // allowance manager), bounding total PSM issuance.
+    // The PSM's own mint allowance is drawn down per mint and restored by
+    // `redeem_oku_m` up to `minter_allowance_limit` (both set by the allowance
+    // manager), bounding net outstanding PSM issuance.
     consume_allowance(&mut ctx.accounts.config.minter_allowance, raw_oku_m_amount)?;
 
     // 1. User pays USDC into the vault. `transfer_checked` validates mint and decimals, so a wrong-mint or
@@ -147,6 +148,15 @@ pub fn redeem_oku_m(
         ),
         raw_oku_m_amount,
     )?;
+
+    // The burn returns the PSM's mint allowance, up to the configured limit, so
+    // a permissionless mint/redeem loop cannot drain it.
+    let limit = ctx.accounts.config.minter_allowance_limit;
+    restore_allowance(
+        &mut ctx.accounts.config.minter_allowance,
+        limit,
+        raw_oku_m_amount,
+    );
 
     // 2. Pay USDC from the vault; the config PDA owns the vault and signs.
     let bump_seed = [ctx.accounts.config.bump];

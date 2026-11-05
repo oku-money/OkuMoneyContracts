@@ -48,7 +48,8 @@ pub struct PsmConfig {
     // ===== Limits =====
     /// Supply cap in raw OkuM units (6 decimals)
     pub max_supply: u64,
-    /// Remaining mint allowance (6 decimals), reset by `allowance_manager`
+    /// Remaining mint allowance (6 decimals), reset by `allowance_manager`;
+    /// `redeem_oku_m` restores it up to `minter_allowance_limit`
     pub minter_allowance: u64,
     /// Set by `pause`, cleared by `unpause`; blocks every value-moving path
     pub is_paused: bool,
@@ -99,9 +100,16 @@ pub struct PsmConfig {
     /// Direct-burn allowance (6 decimals)
     pub direct_burner_allowance: u64,
 
+    /// Allowance last set by `allowance_manager` (6 decimals). A `redeem_oku_m`
+    /// burn restores `minter_allowance` up to it, so the allowance bounds net
+    /// outstanding PSM issuance rather than gross mint volume. Taken from the
+    /// front of `reserved`, so it reads 0 after an upgrade until the next
+    /// `set_minter_allowance` (and 0 never restores).
+    pub minter_allowance_limit: u64,
+
     /// Reserved tail for future fields; consume from the front and shrink the
     /// array so `LEN` stays constant (there is no `realloc` instruction).
-    pub reserved: [u8; 128],
+    pub reserved: [u8; 120],
 }
 
 impl PsmConfig {

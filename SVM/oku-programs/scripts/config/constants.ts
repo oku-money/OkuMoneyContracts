@@ -4,8 +4,10 @@
 
 // Supply limits
 export const MAX_SUPPLY = 1_000_000_000 * 1_000_000; // 1B OkuM (6 decimals)
-// Matches EVM's MINTER_ALLOWANCE (1B), set equal to max_supply. The
-// orchestrator can reset it via set-minter-allowance after deploy.
+// Testnet / devnet initialize allowance; matches EVM's TESTNET_MINTER_ALLOWANCE
+// (1B), set equal to max_supply. Mainnet initializes with 0 (PSM minting closed,
+// see deploy/lib/config.ts); the allowance_manager opens it via
+// set-minter-allowance once the multiplier matches the fleet.
 export const MINTER_ALLOWANCE = 1_000_000_000 * 1_000_000; // 1B (matches EVM)
 
 // Token decimals

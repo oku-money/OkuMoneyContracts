@@ -98,7 +98,8 @@ export async function initializePsm(
   h: BankrunHarness,
   program: Program<LitePsm>,
   payer: Keypair,
-  usdcMint: PublicKey
+  usdcMint: PublicKey,
+  minterAllowance: BN = MINTER_ALLOWANCE
 ): Promise<PsmSetupResult> {
   // Generate a fresh keypair for the OkuM mint — the program's
   // `initialize` instruction creates it with Token-2022 extensions.
@@ -135,7 +136,7 @@ export async function initializePsm(
   await program.methods
     .initialize({
       maxSupply: MAX_SUPPLY,
-      minterAllowance: MINTER_ALLOWANCE,
+      minterAllowance,
       pauser: warmMultisig.publicKey,
       unpauser: coldMultisig.publicKey,
       freezer: warmMultisig.publicKey,

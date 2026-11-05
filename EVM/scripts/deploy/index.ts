@@ -72,13 +72,33 @@ const DEV_WALLET = DEV_WALLET_ADDRESS;
 
 interface DeploymentConfig {
   maxSupply: bigint;
+  /**
+   * LitePSM minter allowance set at deploy. 0 = PSM minting closed (no
+   * `configureMinterAllowance` call is sent).
+   */
   minterAllowance: bigint;
 }
 
-function getDeploymentConfig(): DeploymentConfig {
+/** Testnet / local default: effectively uncapped (README § Minter allowance rotation policy). */
+export const TESTNET_MINTER_ALLOWANCE = ethers.parseUnits("1000000000", 18); // 1 billion
+
+/**
+ * Every proxy starts halted at a 1.00 multiplier. On a mainnet chain added after
+ * the fleet has accrued yield, an open PSM would sell OkuM below its global value
+ * (Cyfrin audit finding #2), so mainnet deploys (and forks rehearsing them) leave
+ * PSM minting CLOSED: allowance 0, which reverts every `mintOkuM` / `mintUsdOku`
+ * with `ExceedsAllowance` while redeems, rate writes and `setOkuMMultiplier` keep
+ * working. The cold allowance manager opens it only once `okuMMultiplier()` has
+ * reached the fleet's (README § Opening PSM minting on a chain).
+ *
+ * `PSM_MINTING_CLOSED=true` rehearses the closed deploy on a testnet. There is no
+ * way to open minting at deploy on mainnet.
+ */
+export function getDeploymentConfig(networkName: string): DeploymentConfig {
+  const closed = isMainnetNetwork(networkName) || process.env.PSM_MINTING_CLOSED === "true";
   return {
     maxSupply: ethers.parseUnits("1000000000", 18), // 1 billion
-    minterAllowance: ethers.parseUnits("1000000000", 18), // 1 billion
+    minterAllowance: closed ? 0n : TESTNET_MINTER_ALLOWANCE,
   };
 }
 
@@ -571,7 +591,13 @@ async function configureRoles(
   // Redeems burn OkuM; without OKUM_BURNER they revert with AccessControlUnauthorizedAccount.
   await sendAndWait("Grant OKUM_BURNER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_BURNER, litePSMAddress));
 
-  await sendAndWait("Set LitePSM minter allowance", () => okuMoney.configureMinterAllowance(litePSMAddress, config.minterAllowance));
+  // Zero = PSM minting closed (see getDeploymentConfig). Nothing to send: a fresh
+  // OkuMoney already reads 0 for every minter.
+  if (config.minterAllowance > 0n) {
+    await sendAndWait("Set LitePSM minter allowance", () => okuMoney.configureMinterAllowance(litePSMAddress, config.minterAllowance));
+  } else {
+    logger.info("  LitePSM minter allowance left at 0: PSM minting CLOSED until the multiplier is seeded (README § Opening PSM minting on a chain)");
+  }
 }
 
 export type RoleHolderKind = "litePSM" | "deployer";
@@ -650,7 +676,8 @@ async function verifyDeployment(
   deployerAddress: string,
   okuMoney: Contract,
   okuDollar: Contract,
-  litePSM: Contract
+  litePSM: Contract,
+  config: DeploymentConfig
 ): Promise<void> {
   logger.step(5, "Verifying Deployment");
 
@@ -717,9 +744,16 @@ async function verifyDeployment(
   // Minter allowances are separate from the role itself: `OkuMoney.mint`
   // checks BOTH `onlyRole(OKUM_MINTER)` and `minterAllowance[msg.sender]`, so
   // a role grant without an allowance still reverts with ExceedsAllowance.
+  // A closed deploy (mainnet) must leave it at exactly 0; an open one must match.
   const psmAllowance = await okuMoney.minterAllowance(litePSMAddress);
-  if (psmAllowance === 0n) missingRoles.push("LitePSM minter allowance is zero");
-  logger.info(`  LitePSM minter allowance: ${psmAllowance}`);
+  if (psmAllowance !== config.minterAllowance) {
+    missingRoles.push(`LitePSM minter allowance is ${psmAllowance}, expected ${config.minterAllowance}`);
+  }
+  if (psmAllowance === 0n) {
+    logger.info(`  LitePSM minter allowance: 0 (PSM minting CLOSED; okuMMultiplier = ${await okuMoney.okuMMultiplier()})`);
+  } else {
+    logger.info(`  LitePSM minter allowance: ${psmAllowance}`);
+  }
 
   // Verify all addresses saved. Exactly one USDC entry: MockUSDC (testnets) or
   // USDC (real token, SKIP_MOCK_USDC / mainnet) — and it must be what LitePSM uses.
@@ -797,7 +831,7 @@ export async function runDeploy(
   // Returns: { networkName, bookKey, isFork, chainConfig }.
   const ctx = await resolveNetworkContext();
   const { networkName, bookKey, isFork, chainConfig } = ctx;
-  const config = getDeploymentConfig();
+  const config = getDeploymentConfig(networkName);
 
   // Deploying a fresh proxy set to a production chain is at least as
   // consequential as any single operator transaction, all of which are gated.
@@ -914,7 +948,8 @@ export async function runDeploy(
     deployerAddress,
     okuMoney,
     okuDollar,
-    litePSM
+    litePSM,
+    config
   );
 
   // Step 6: Etherscan verification (live networks only — never on a fork)

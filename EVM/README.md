@@ -146,9 +146,16 @@ The script also **verifies itself before reporting success**. Each contract's
 `configureRoles` sends only grants to other holders: `OKUM_MINTER` and
 `OKUM_BURNER` to `LitePSM` (in production their only holder once
 `grantRolesMainnet` has the deployer renounce its `initialize` grants), then
-`LitePSM`'s minter allowance. `verifyDeployment` then re-reads the chain and
+`LitePSM`'s minter allowance on testnets. **Mainnet deploys (and forks of them)
+leave the allowance at 0, so PSM minting is closed**: every proxy starts halted
+at a 1.00 multiplier, and a chain added after the fleet accrued yield must not
+sell OkuM at 1.00 (Cyfrin audit finding #2). The cold allowance manager opens
+it once the multiplier matches the fleet ([`../README.md` § Opening PSM minting
+on a chain](../README.md#opening-psm-minting-on-a-chain)); `PSM_MINTING_CLOSED=true`
+rehearses this on a testnet. `verifyDeployment` then re-reads the chain and
 asserts the complete matrix: all 26 entries of `expectedRoleGrants()` (each
-tagged `initialize` or `script`) via `hasRole`, the LitePSM minter allowance, and
+tagged `initialize` or `script`) via `hasRole`, the LitePSM minter allowance
+(exactly the configured value: 0 on mainnet), and
 every contract's presence in the address book (with exactly one of `MockUSDC` /
 `USDC`, matching `LitePSM.usdc()`), failing the run with an explicit
 list of anything missing. The allowance is checked separately because
@@ -1302,7 +1309,8 @@ Traps that are not visible from the code alone. Cross-stack invariants live in
   completeness. Roles and allowances are checked separately on purpose: `OkuMoney.mint`
   gates on both `onlyRole(OKUM_MINTER)` and `minterAllowance`, which `initialize`
   populates for nobody, so a grant without an allowance still reverts
-  `ExceedsAllowance`. The drill asserts against the same exported list; never
+  `ExceedsAllowance`. That is exactly how a mainnet deploy keeps PSM minting closed
+  (allowance 0, asserted), so do not "fix" a zero allowance there. The drill asserts against the same exported list; never
   hand-copy it. Only script-sent grants go in `roleGrants.json`.
 - **Never give a `src/` contract, library or interface a name OpenZeppelin also uses**
   (`Errors`, `Math`, `Strings`, …). The compiler accepts it, but Slither then resolves

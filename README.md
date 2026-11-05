@@ -361,21 +361,64 @@ PSM-only pause halts SVM alone.
 2. **After the cold unpause, publish a fresh schedule** with the normal derive and
    `broadcastSchedule` flow. All chains are at the same multiplier, so the pre-state
    check passes. Chains stay paused for no longer than the cold key takes to sign.
-3. **If the chains diverged anyway** (a PSM-only pause, a missed broadcast), the laggard
-   cannot go through `broadcastSchedule`, which refuses a chain not at the artifact's
-   pre-state. Fix it per chain, after unpausing it. Read the leader's multiplier and
-   `rateEnd` (`checkMultiplierDrift`, `admin:read-schedule`), then on the laggard:
+3. **If the chains diverged anyway** (a PSM-only pause, a missed broadcast), follow
+   [§ Chain lagging the fleet](#chain-lagging-the-fleet). The laggard cannot go through
+   `broadcastSchedule`, which refuses a chain not at the artifact's pre-state.
+
+#### Chain lagging the fleet
+
+A chain whose multiplier is below the fleet's sells OkuM through its PSM below its
+global value, and the buyer redeems the difference from the buffer (Cyfrin audit
+finding #2). So **PSM minting on a lagging chain stays closed until it has caught
+up.** No contract change is needed: a minter allowance of 0 fails every PSM mint
+(`ExceedsAllowance` on EVM, `AllowanceExceeded` on SVM) while redeems, rate writes and
+the multiplier override keep working, and on both stacks `configureMinterAllowance` /
+`set_minter_allowance` works whether or not the PSM is paused. A configured 0 has a
+limit of 0, so redemptions never revive it (§ Minter allowance rotation policy).
+
+**Act before the lag, not after it.** A chain falls behind when its accrual stops
+before the fleet's: a successor that was never armed, or a pause that outlasted its
+window. Both are visible ahead of time. `checkMultiplierDrift` fails with
+`LAG IMMINENT` when a chain stops accruing within `LAG_ALARM_HOURS` (default 6) while
+the rest of the fleet keeps going, and with `LAGGING THE FLEET` once it has. Run it
+on the monitoring cadence (§ Monitoring SLAs).
+
+1. **On `LAG IMMINENT`, stage the missing successor** with the normal broadcast. If it
+   cannot land before the chain's accrual stops, **pause that chain's PSM (warm key)
+   before then**: EVM `LitePSM.pause()` (`PSM_PAUSER`; leave OkuMoney unpaused so its
+   rate writes still work), SVM `pause` (`pauser`). No mint is then ever priced below
+   the fleet. On `LAGGING THE FLEET` (the moment has passed), pause it immediately.
+   An SVM chain paused through a depeg that outlasted its window is already paused.
+2. **Zero its PSM minter allowance (cold allowance manager)**, recording the current
+   value: EVM Safe `OkuMoney.configureMinterAllowance(<LitePSM>, 0)`; SVM Squads vault
+   `set_minter_allowance(0)` (`admin:set-minter-allowance -- --amount=0`).
+3. **Unpause the PSM (cold).** Redemptions resume; minting stays closed.
+4. **Catch it up.** Read the leader's multiplier and `rateEnd` (`checkMultiplierDrift`,
+   `admin:read-schedule`), then on the laggard:
    - SVM: `set-yield-rate.ts --mode=active --target-multiplier=<wad> --end=<leader rateEnd>`
    - EVM: `TARGET_MULTIPLIER=<wad> END_TIMESTAMP=<leader rateEnd> npx hardhat run
      scripts/operator/setOkuMYieldRate.ts --network <chain>`
 
    Both derive the minimal rate (`catchUpRate` in `packages/yield-tooling`) that lands the
-   laggard on the leader's multiplier at `rateEnd`, where the same successor then takes
-   over everywhere. `planCatchUp` computes target and rate from two schedules. A
-   transaction landing late leaves the chain marginally under target, never over.
-   Expect `checkMultiplierDrift` to report a rate mismatch on the laggard until
-   `rateEnd`; that is the catch-up working, not a fault. A gap that needs more than
-   `MAX_RATE` (about 2242% APY) over the window must be closed over several windows.
+   laggard on the leader's multiplier at `rateEnd`. The write clears any successor, so
+   then stage the leader's successor on the laggard (EVM `STAGE=true` with
+   `setOkuMYieldRate.ts`, SVM `set-yield-rate.ts --mode=successor`)
+   so the same successor takes over everywhere at `rateEnd`. `planCatchUp` computes target
+   and rate from two schedules. A transaction landing late leaves the chain marginally
+   under target, never over. Expect `checkMultiplierDrift` to report a rate mismatch and
+   multiplier spread on the laggard until `rateEnd`; that is the catch-up working, not a
+   fault. A gap that needs more than `MAX_RATE` (about 2242% APY) over the window must be
+   closed over several windows.
+5. **Reopen minting (cold allowance manager)** with the recorded allowance, or the
+   policy value, only once the laggard has reached the leader: past the leader's
+   `rateEnd`, `checkMultiplierDrift` passes, with identical rate, `rateEnd`, successor
+   and successor end on both, and the multipliers equal at the same timestamp up to
+   rounding dust. If a late transaction left it short, run another catch-up window
+   first. Skip the weekly rotation on that chain until then.
+
+While a chain's PSM minting is closed, bridges whose destination leg is that PSM's
+mint stall (the pre-flight checklist's allowance check catches it); redemptions and
+the source legs keep working.
 
 #### Minter allowance rotation policy
 
@@ -433,13 +476,15 @@ issuance, not a single loop); gross PSM mint volume (sum of `OkuMMinted` /
 | Minter allowance | < 10 % of its configured limit | Tracks net outstanding PSM issuance; redemptions refill it |
 | Gross PSM mint volume | Rolling 24 h mint volume > 2 × expected | Replaces the gross-volume circuit breaker the allowance no longer provides; respond with warm-key `pause()` |
 | Pause state | PSM paused for > 15 min unexpectedly | Buffer top-ups are blocked while paused; unpause (cold) first |
+| Lag alarm | `checkMultiplierDrift` reports `LAG IMMINENT` or `LAGGING THE FLEET` | `LAG_ALARM_HOURS` (default 6) before a chain stops accruing ahead of the fleet. Stage its successor, or pause its PSM (warm) before then: § Chain lagging the fleet |
+| Minting left closed | PSM minter allowance 0 on a chain whose schedule and multiplier match the fleet | A finished catch-up or new chain whose minting was never reopened; destination bridge legs to it stall |
 
 SVM bridges use direct `burn_oku_m_direct` / `mint_oku_m_direct` with no USDC
 intermediary, so there is no float to monitor; watch the direct minter/burner
 transaction success rate instead.
 
-All metrics on a 1-min cadence. PagerDuty for "token float" and
-"PSM buffer"; Slack warning for the rest.
+All metrics on a 1-min cadence. PagerDuty for "token float", "PSM buffer"
+and "Lag alarm"; Slack warning for the rest.
 
 #### Orchestrator security
 
@@ -798,8 +843,17 @@ non-generic ones:
 
 Testnet supply cap and minter allowance are set in `EVM/scripts/deploy/index.ts`
 and `SVM/oku-programs/scripts/config/constants.ts`; they are effectively
-uncapped for dev and must be replaced by the production policy (§ Minter
-allowance rotation policy) before real value is at stake.
+uncapped for dev.
+
+**Mainnet deploys leave PSM minting closed** (minter allowance 0) on both stacks,
+because every chain starts halted at a 1.00 multiplier (Cyfrin audit finding #2):
+`EVM/scripts/deploy/index.ts` `getDeploymentConfig` sends no
+`configureMinterAllowance` and `verifyDeployment` requires the allowance to be 0;
+`SVM/oku-programs/scripts/deploy/lib/config.ts` initializes `minter_allowance = 0`
+and `deploy-init.ts` fails if an existing config has a non-zero one. There is no
+flag to open minting at deploy on mainnet. `PSM_MINTING_CLOSED=true` rehearses the
+closed deploy on a testnet. The production allowance (§ Minter allowance rotation
+policy) is set last, in § Opening PSM minting on a chain.
 
 ### Mainnet ceremony
 
@@ -864,6 +918,33 @@ authorities, not on-chain state.
 The deployer then holds nothing on SVM. Mechanics and the SVM README
 pre-mainnet checklist: [`SVM/README.md`](SVM/README.md). Final state per role:
 `AUTHORITY-MATRIX.md` §5.
+
+#### Opening PSM minting on a chain
+
+**Both stacks, last.** The deploy leaves PSM minting closed (§ Initial deploy
+parameters), and every chain starts halted at 1.00. Open it only after the
+handover, and only once the chain's multiplier matches the fleet's:
+
+1. **Fleet still at 1.00** (chains launched together, before any yield): publish the
+   first schedule to every chain with `broadcastSchedule`, confirm
+   `checkMultiplierDrift` passes, then go to step 4.
+2. **Chain added after yield accrued elsewhere:** with minting still closed, override
+   it to the leader's current multiplier (EVM `setOkuMMultiplier.ts`; SVM
+   `set-multiplier.ts --to-match-evm=<wad>`), then catch it up to the leader's `rateEnd`
+   and stage the leader's successor, as § Chain lagging the fleet step 4 does. Until it
+   has caught up, `checkMultiplierDrift` reports it as lagging; that is expected while
+   its minting is closed.
+3. **Confirm it has caught up:** past the leader's `rateEnd`, `checkMultiplierDrift`
+   passes with identical schedules, and its multiplier equals the leader's at the same
+   timestamp up to rounding dust.
+4. **Open minting:** the cold allowance manager (EVM `OKUM_ALLOWANCE_MANAGER`, SVM
+   `allowance_manager`) sets the production allowance (§ Minter allowance rotation
+   policy) as a multisig transaction: EVM Safe `OkuMoney.configureMinterAllowance(<LitePSM>, <amount>)`,
+   SVM Squads vault `set_minter_allowance(<amount>)`.
+
+Until step 4, PSM mints on that chain fail and bridges whose destination leg is its
+PSM mint stall; redemptions are open throughout. SVM direct mints are not affected
+(they take a raw OkuM amount, so they are not priced by the multiplier).
 
 ### Security notes
 

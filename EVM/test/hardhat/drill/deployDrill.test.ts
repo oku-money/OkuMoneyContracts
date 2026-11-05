@@ -22,7 +22,14 @@ import { expect } from "chai";
 import { ethers, network } from "hardhat";
 import fs from "fs";
 import path from "path";
-import { runDeploy, expectedRoleGrants, DeployResult } from "../../../scripts/deploy/index";
+import {
+    runDeploy,
+    expectedRoleGrants,
+    DeployResult,
+    getDeploymentConfig,
+    TESTNET_MINTER_ALLOWANCE,
+} from "../../../scripts/deploy/index";
+import { MAINNET_NETWORKS } from "../../../scripts/utils/mainnetGuard";
 import { loadAddressBook, resolveUsdcAddress } from "../../../scripts/utils/addressBook";
 import { ROLES } from "../../../scripts/config/roles";
 
@@ -204,7 +211,7 @@ describe("Deploy drill: the real deploy script produces a correctly-wired chain"
         expect([...declared].filter((k) => !granted.has(k)), "declared but never granted").to.be.empty;
     });
 
-    it("sets a non-zero minter allowance for LitePSM, the only minting contract", async () => {
+    it("sets a non-zero minter allowance for LitePSM on a testnet / local deploy", async () => {
         // `OkuMoney.mint` checks BOTH the OKUM_MINTER role and a separate
         // per-minter allowance, so a role grant alone is not sufficient —
         // without the allowance every mint reverts with ExceedsAllowance.
@@ -309,5 +316,66 @@ describe("Deploy drill: real-USDC path (SKIP_MOCK_USDC)", function () {
         expect(entry.MockUSDC, "MockUSDC must not be recorded on the real-USDC path").to.be.undefined;
         // The `?? loadAddress(.., "USDC")` fallback this replaced threw instead.
         expect(resolveUsdcAddress(result.bookKey)).to.equal(usdc);
+    });
+});
+
+describe("Deploy drill: PSM minting closed at deploy (Cyfrin #2)", function () {
+    this.timeout(600_000);
+
+    let addressBookBackup: string | null = null;
+
+    before(() => {
+        addressBookBackup = fs.existsSync(ADDRESS_BOOK_PATH)
+            ? fs.readFileSync(ADDRESS_BOOK_PATH, "utf-8")
+            : null;
+    });
+
+    after(async () => {
+        if (addressBookBackup !== null) fs.writeFileSync(ADDRESS_BOOK_PATH, addressBookBackup);
+        delete process.env.PSM_MINTING_CLOSED;
+        delete process.env.NETWORK;
+        await network.provider.request({ method: "hardhat_reset", params: [] });
+    });
+
+    it("every mainnet network deploys with a zero PSM minter allowance, whatever the env says", () => {
+        process.env.PSM_MINTING_CLOSED = "false";
+        expect(MAINNET_NETWORKS.size).to.be.greaterThan(0);
+        for (const name of MAINNET_NETWORKS) {
+            expect(getDeploymentConfig(name).minterAllowance, name).to.equal(0n);
+        }
+        expect(getDeploymentConfig("sepolia").minterAllowance).to.equal(TESTNET_MINTER_ALLOWANCE);
+        expect(getDeploymentConfig("hardhat").minterAllowance).to.equal(TESTNET_MINTER_ALLOWANCE);
+        delete process.env.PSM_MINTING_CLOSED;
+    });
+
+    it("a closed deploy verifies, refuses PSM mints, and lets the multiplier be seeded before opening", async () => {
+        delete process.env.NETWORK;
+        delete process.env.SKIP_MOCK_USDC;
+        process.env.PSM_MINTING_CLOSED = "true";
+        await network.provider.request({ method: "hardhat_reset", params: [{}] });
+        const [deployer] = await ethers.getSigners();
+
+        // verifyDeployment runs inside and throws unless the allowance is exactly 0.
+        const result = await runDeploy({ deployer });
+        const psm = await result.litePSM.getAddress();
+        expect(await result.okuMoney.minterAllowance(psm)).to.equal(0n);
+        expect(await result.okuMoney.okuMMultiplier()).to.equal(10n ** 18n);
+
+        const usdc = await ethers.getContractAt("MockUSDC", resolveUsdcAddress(result.bookKey), deployer);
+        const deployerAddr = await deployer.getAddress();
+        await (await usdc.mint(deployerAddr, 1_000_000n)).wait();
+        await (await usdc.approve(psm, 1_000_000n)).wait();
+        await expect(result.litePSM.connect(deployer).mintOkuM(1_000_000n)).to.be.revertedWithCustomError(
+            result.okuMoney,
+            "ExceedsAllowance"
+        );
+
+        // Ceremony: seed the multiplier while closed (deployer still holds the rate role
+        // pre-handover), then the allowance manager opens minting.
+        await (await result.okuMoney.connect(deployer).setOkuMMultiplier(105n * 10n ** 16n)).wait();
+        await network.provider.send("evm_mine", []);
+        await (await result.okuMoney.connect(deployer).configureMinterAllowance(psm, 10n ** 24n)).wait();
+        await (await result.litePSM.connect(deployer).mintOkuM(1_000_000n)).wait();
+        expect(await result.okuMoney.balanceOf(deployerAddr)).to.equal((10n ** 18n * 10n ** 18n) / (105n * 10n ** 16n));
     });
 });

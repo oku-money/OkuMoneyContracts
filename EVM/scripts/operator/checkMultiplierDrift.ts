@@ -40,6 +40,12 @@
  *                              List a non-participating chain (e.g. a stale
  *                              pre-streaming deployment) here to check it too.
  *   TOLERANCE_BPS=<n>          max tolerated multiplier spread, basis points (default 1)
+ *   LAG_ALARM_HOURS=<n>        FAIL when a chain's accrual stops within this many
+ *                              hours while the rest of the fleet keeps accruing
+ *                              (default 6). That chain is about to price PSM mints
+ *                              below the fleet: close its PSM (warm pause) before
+ *                              then and zero its minter allowance (README § Chain
+ *                              lagging the fleet). Off-chain only; tune freely.
  *   EXPIRY_WARN_HOURS=<n>      warn when rateEnd is nearer than this (default 4).
  *                              Keep this well below one epoch length, or it
  *                              fires on every chain on every run.
@@ -63,7 +69,7 @@ import { CHAIN_METADATA } from "../config/chains";
 import { readSvmSchedule } from "../utils/svmValue";
 import { SVM_CHAIN_KEY } from "../utils/globalValue";
 import { parseChainsEnv, participatingChains, expectedValueChains } from "../config/epochChains";
-import { distanceToGrid, classifyAccrual, isExpiringSoon, assessCoverage } from "../utils/driftChecks";
+import { distanceToGrid, classifyAccrual, isExpiringSoon, assessCoverage, findLagRisks } from "../utils/driftChecks";
 import { effectiveRate as mirrorEffectiveRate, PRECISION } from "@okumoney/yield-tooling";
 import {
   EPOCH_ANCHOR_UNIX as DEFAULT_EPOCH_ANCHOR_UNIX,
@@ -76,6 +82,7 @@ const TOLERANCE_BPS = BigInt(process.env.TOLERANCE_BPS ?? "1");
 // window and every chain warns on every run. 4h sits inside the 22.4h base
 // window and fires only once the settlement window is genuinely approaching.
 const EXPIRY_WARN_HOURS = Number(process.env.EXPIRY_WARN_HOURS ?? "4");
+const LAG_ALARM_HOURS = Number(process.env.LAG_ALARM_HOURS ?? "6");
 // Defaults come from the committed grid (scripts/config/epoch.ts) so the check
 // is ON by default rather than silently skipped. Env vars still override, for
 // testing against a non-standard grid.
@@ -372,6 +379,47 @@ async function main() {
           `${handedOver ? "re-anchor and stage the next window" : "stage the successor"}`
       );
     }
+  }
+
+  // --- Lag alarm (Cyfrin audit finding #2) ---
+  //
+  // A chain whose accrual stops before the fleet's sells OkuM below the fleet's
+  // multiplier from that moment. Fire while there is still time to close its
+  // PSM: the warm pauser pauses it before `stopsAt`, the cold allowance manager
+  // zeroes its minter allowance, and only then is it unpaused and caught up.
+  const lagRisks = findLagRisks(
+    readings.map((r) => ({
+      chain: r.chain,
+      state: classifyAccrual({
+        effectiveRate: r.effectiveRate,
+        rateEnd: r.rateEnd,
+        pendingRateEnd: r.pendingRateEnd,
+        now,
+        precision: PRECISION,
+      }),
+    })),
+    now,
+    BigInt(Math.round(LAG_ALARM_HOURS * 3600))
+  );
+  for (const risk of lagRisks) {
+    const fleetUntil =
+      risk.fleetStopsAt === 0n ? "an unbounded window" : new Date(Number(risk.fleetStopsAt) * 1000).toISOString();
+    if (risk.kind === "lagging") {
+      logger.error(
+        `${risk.chain}: LAGGING THE FLEET — accrual halted while the fleet accrues until ${fleetUntil}. ` +
+          `Its PSM mints are priced below the fleet: pause its PSM now (warm), zero its minter ` +
+          `allowance (cold), then catch up (README § Chain lagging the fleet).`
+      );
+    } else {
+      const hrs = Number(risk.stopsAt - now) / 3600;
+      logger.error(
+        `${risk.chain}: LAG IMMINENT — accrual stops in ${hrs.toFixed(1)}h ` +
+          `(${new Date(Number(risk.stopsAt) * 1000).toISOString()}) while the fleet accrues until ${fleetUntil}. ` +
+          `Stage its successor now; if it cannot land in time, pause its PSM (warm) before then and ` +
+          `zero its minter allowance (README § Chain lagging the fleet).`
+      );
+    }
+    failed = true;
   }
 
   // --- Epoch-grid alignment (optional — skipped unless EPOCH_ANCHOR_UNIX is set) ---

@@ -47,14 +47,21 @@ function formatSol(lamports: number): string {
 // Main
 // ============================================================================
 
+async function readPsmConfig(
+  provider: Awaited<ReturnType<typeof createProviderWithClusterCheck>>,
+  psmConfig: PublicKey
+): Promise<any> {
+  const info = await provider.connection.getAccountInfo(psmConfig, 'confirmed');
+  if (!info) throw new Error(`PsmConfig ${psmConfig.toBase58()} not found after initialize`);
+  const idl = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'target/idl/lite_psm.json'), 'utf-8'));
+  return decodePsmConfig(idl, info.data);
+}
+
 async function onChainAuthorities(
   provider: Awaited<ReturnType<typeof createProviderWithClusterCheck>>,
   psmConfig: PublicKey
 ): Promise<{ coldMultisig: string; warmMultisig: string; orchestrator: string }> {
-  const info = await provider.connection.getAccountInfo(psmConfig, 'confirmed');
-  if (!info) throw new Error(`PsmConfig ${psmConfig.toBase58()} not found after initialize`);
-  const idl = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'target/idl/lite_psm.json'), 'utf-8'));
-  const cfg = decodePsmConfig(idl, info.data);
+  const cfg = await readPsmConfig(provider, psmConfig);
   return {
     coldMultisig: cfg.roleAdmin.toBase58(),
     warmMultisig: cfg.pauser.toBase58(),
@@ -69,7 +76,7 @@ async function main() {
 
   const network = detectNetwork();
   const networkConfig = getNetworkConfig(network);
-  const config = getDeploymentConfig();
+  const config = getDeploymentConfig(network);
 
   logger.info(`Network: ${network}`);
   logger.info(`Cluster: ${networkConfig.cluster}`);
@@ -180,6 +187,21 @@ async function main() {
     ? new PublicKey(finalDeployment.programs.litePsm)
     : undefined;
   await verifyDeployment(provider, finalDeployment, litePsmId);
+
+  // PSM minting state (Cyfrin audit finding #2). `initialize` is idempotent and
+  // may have been skipped against an existing config, so read the chain.
+  const onChainCfg = await readPsmConfig(provider, psmConfig);
+  const allowance = onChainCfg.minterAllowance.toString();
+  if (allowance === '0') {
+    logger.info('PSM minter_allowance: 0 (PSM minting CLOSED until the multiplier matches the fleet; README § Opening PSM minting on a chain)');
+  } else if (config.minterAllowance.isZero()) {
+    throw new Error(
+      `PsmConfig minter_allowance is ${allowance} but this deploy requires PSM minting closed (0). ` +
+        'Have the allowance_manager run set_minter_allowance(0) before anything else.'
+    );
+  } else {
+    logger.info(`PSM minter_allowance: ${allowance}`);
+  }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
   logger.log('');

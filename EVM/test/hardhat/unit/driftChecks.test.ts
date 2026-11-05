@@ -6,6 +6,7 @@ import {
     classifyAccrual,
     isExpiringSoon,
     assessCoverage,
+    findLagRisks,
 } from "../../../scripts/utils/driftChecks";
 import {
     EPOCH_ANCHOR_UNIX,
@@ -150,6 +151,66 @@ describe("driftChecks", () => {
 
         it("does not fire for an already-elapsed boundary (that is a halt, not a warning)", () => {
             expect(isExpiringSoon(now - 1n, now, warn)).to.equal(false);
+        });
+    });
+
+    describe("findLagRisks (Cyfrin #2: alarm before a chain falls behind)", () => {
+        const now = 1_000_000n;
+        const H = 3600n;
+        const yielding = (runsOutAt: bigint) => ({ halted: false, handedOver: false, runsOutAt });
+        const halted = { halted: true, handedOver: false, runsOutAt: 0n };
+
+        it("is silent when every chain stops together", () => {
+            const r = findLagRisks(
+                [{ chain: "a", state: yielding(now + 2n * H) }, { chain: "b", state: yielding(now + 2n * H) }],
+                now,
+                6n * H
+            );
+            expect(r).to.deep.equal([]);
+        });
+
+        it("flags a chain whose successor is missing inside the alarm window", () => {
+            const r = findLagRisks(
+                [{ chain: "leader", state: yielding(now + 30n * H) }, { chain: "laggard", state: yielding(now + 5n * H) }],
+                now,
+                6n * H
+            );
+            expect(r).to.have.length(1);
+            expect(r[0]).to.include({ chain: "laggard", kind: "imminent" });
+            expect(r[0].fleetStopsAt).to.equal(now + 30n * H);
+        });
+
+        it("waits while the earlier stop is still outside the alarm window", () => {
+            const r = findLagRisks(
+                [{ chain: "leader", state: yielding(now + 30n * H) }, { chain: "laggard", state: yielding(now + 7n * H) }],
+                now,
+                6n * H
+            );
+            expect(r).to.deep.equal([]);
+        });
+
+        it("flags a halted chain while the fleet still accrues", () => {
+            const r = findLagRisks(
+                [{ chain: "leader", state: yielding(now + 30n * H) }, { chain: "laggard", state: halted }],
+                now,
+                6n * H
+            );
+            expect(r).to.have.length(1);
+            expect(r[0]).to.include({ chain: "laggard", kind: "lagging" });
+        });
+
+        it("treats an unbounded window (0) as the latest horizon", () => {
+            const r = findLagRisks(
+                [{ chain: "open", state: yielding(0n) }, { chain: "bounded", state: yielding(now + H) }],
+                now,
+                6n * H
+            );
+            expect(r.map((x) => x.chain)).to.deep.equal(["bounded"]);
+        });
+
+        it("is silent when the whole fleet is halted", () => {
+            const r = findLagRisks([{ chain: "a", state: halted }, { chain: "b", state: halted }], now, 6n * H);
+            expect(r).to.deep.equal([]);
         });
     });
 

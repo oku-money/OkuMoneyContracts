@@ -414,6 +414,9 @@ and keeping `Anchor.toml [programs.<network>]` equal to the program ID in `deplo
 - [ ] BPF upgrade authority transferred to the cold multisig (`admin:set-upgrade-authority`).
 - [ ] `Anchor.toml [programs.<network>]` matches the freshly-deployed program ID.
 - [ ] `make fetch-token-2022` applied if bankrun runs in CI.
+- [ ] `PsmConfig.minter_allowance` is 0 after `deploy:init:mainnet` (PSM minting closed; the script
+      enforces it), and stays 0 until the multiplier matches the fleet:
+      [`../README.md` § Opening PSM minting on a chain](../README.md#opening-psm-minting-on-a-chain).
 
 ### Mainnet `role_admin` handover
 

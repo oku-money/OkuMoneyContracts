@@ -50,7 +50,7 @@ bounds stay on-chain; business policy moves to the backend.
 | E4 | `setOkuMYieldRateWithSuccessor` | `OkuMoney` | `OKUM_RATE_MANAGER` | E2 + E3 atomically | as above | **No** |
 | E5 | `mint` | `OkuMoney` | `OKUM_MINTER` | Mint to `min(maxSupply − supply, minterAllowance)` | `whenNotPaused`, supply cap, per-minter allowance, sender + recipient blacklist | **No** |
 | E6 | `burn` | `OkuMoney` | `OKUM_BURNER` | Burn caller's own balance only; restores the caller's `minterAllowance` by the amount, up to its `minterAllowanceLimit` | sender blacklist; **no pause gate — works while paused, deliberately** | No |
-| E7 | `configureMinterAllowance` | `OkuMoney` | `OKUM_ALLOWANCE_MANAGER` | Set **any** minter's allowance (and the limit burns restore it to), incl. its own, to `type(uint256).max` | none beyond the role | Yes |
+| E7 | `configureMinterAllowance` | `OkuMoney` | `OKUM_ALLOWANCE_MANAGER` | Set **any** minter's allowance (and the limit burns restore it to), incl. its own, to `type(uint256).max`. 0 on LitePSM is the PSM-mint off-switch: mainnet deploys leave it there, and it closes a lagging chain (`README.md` § Chain lagging the fleet) | none beyond the role; not pause-gated | Yes |
 | E8 | `setMaxSupply` | `OkuMoney` | `OKUM_CAP_MANAGER` | Raise/lower the global cap | `≥ totalSupply` | Yes |
 | E9 | `blacklist` | `OkuMoney` | `OKUM_BLACKLISTER` | Freeze an address as sender, recipient, **or approved spender** (incl. `approve`/`permit`/`transferFrom`/`mint`-as-minter — matched to Circle FiatToken's scope, see `EVM/README.md` Accepted Risk #12) | works while paused; does NOT retroactively revoke allowances already granted | Yes (E10) |
 | E10 | `unblacklist` | `OkuMoney` | `OKUM_UNBLACKLISTER` | Unfreeze | — | — |
@@ -89,7 +89,7 @@ Roles are **pubkeys stored on `PsmConfig`**, enforced by Anchor `has_one`, not a
 | S7 | `withdraw_buffer` | `buffer_withdrawer` | **Drain the vault. Only check is `vault_balance >= amount`** — no solvency test. Same blast radius as E18. | pause **and** yield-lock; destination must be the withdrawer's own USDC account | **No** |
 | S8 | `deposit_buffer` | `buffer_depositor` | Add USDC | pause **and** yield-lock (same as E19) | No |
 | S9 | `set_max_supply` | `cap_manager` | Raise/lower cap | new cap `>=` current supply (`BelowCurrentSupply`; as E8) | Yes |
-| S10 | `set_minter_allowance` | `allowance_manager` | **Single global** PSM mint allowance and `minter_allowance_limit` that `redeem_oku_m` restores it to (EVM's is per-address) | — | Yes |
+| S10 | `set_minter_allowance` | `allowance_manager` | **Single global** PSM mint allowance and `minter_allowance_limit` that `redeem_oku_m` restores it to (EVM's is per-address). 0 is the PSM-mint off-switch: mainnet initializes with it, and it closes a lagging chain (`README.md` § Chain lagging the fleet) | none; works while paused | Yes |
 | S11 | `set_direct_minter_allowance` | `allowance_manager` | Bound/starve S5 — **the only off-switch for S5** | — | Yes |
 | S12 | `set_direct_burner_allowance` | `allowance_manager` | Bound S6 | — | Yes |
 | S13 | `freeze_account` | `freezer` | Freeze **one** OkuM token account (any, not only the ATA) via Token-2022: blocks send **and** receive on that account. The owner's other OkuM accounts are unaffected | not pause-gated, by design | Yes (S14) |

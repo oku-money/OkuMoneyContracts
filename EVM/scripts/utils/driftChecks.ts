@@ -80,6 +80,55 @@ export function isExpiringSoon(runsOutAt: bigint, now: bigint, warnWindowSec: bi
   return runsOutAt !== 0n && runsOutAt > now && runsOutAt - now < warnWindowSec;
 }
 
+export interface LagRisk {
+  chain: string;
+  /** `lagging`: already halted while the fleet accrues. `imminent`: stops within the alarm window, before the fleet. */
+  kind: "lagging" | "imminent";
+  /** When this chain stops accruing (`now` if already halted). */
+  stopsAt: bigint;
+  /** Latest point any chain in the fleet keeps accruing to (0 = unbounded). */
+  fleetStopsAt: bigint;
+}
+
+/**
+ * Chains about to fall (or already fallen) behind the fleet's multiplier.
+ *
+ * A chain whose accrual stops before the rest of the fleet's prices its PSM
+ * mints below the fleet from that moment (Cyfrin audit finding #2). The point
+ * of this check is to fire BEFORE that moment, so the warm pauser can close the
+ * chain's PSM in advance and the allowance manager can zero its minter
+ * allowance before it reopens: a missed broadcast shows up as a successor that
+ * is still not armed `alarmWindowSec` before the chain's accrual runs out.
+ *
+ * A fleet that stops together is not a lag (every chain halts at the same
+ * multiplier); the existing expiry warning and HALTED error cover it.
+ */
+export function findLagRisks(
+  chains: { chain: string; state: AccrualState }[],
+  now: bigint,
+  alarmWindowSec: bigint
+): LagRisk[] {
+  // 0n stands for "unbounded" in the horizon comparison.
+  const horizon = (s: AccrualState): bigint => (s.halted ? now : s.runsOutAt);
+  const later = (a: bigint, b: bigint): boolean => (a === 0n ? b !== 0n : b !== 0n && a > b);
+  let fleet = now;
+  for (const c of chains) {
+    const h = horizon(c.state);
+    if (later(h, fleet)) fleet = h;
+  }
+  const risks: LagRisk[] = [];
+  for (const c of chains) {
+    const h = horizon(c.state);
+    if (!later(fleet, h)) continue; // keeps up with the fleet
+    if (c.state.halted) {
+      risks.push({ chain: c.chain, kind: "lagging", stopsAt: h, fleetStopsAt: fleet });
+    } else if (h - now <= alarmWindowSec) {
+      risks.push({ chain: c.chain, kind: "imminent", stopsAt: h, fleetStopsAt: fleet });
+    }
+  }
+  return risks;
+}
+
 export interface CoverageResult {
   /** Every expected chain produced a reading. */
   complete: boolean;

@@ -38,7 +38,9 @@ One dollar-value-per-token **multiplier** (`m`) prices the whole
 protocol on every chain. It is *computed*, never stored: a pure
 function of a published per-second rate schedule and the current
 timestamp, so every chain returns the same value at the same
-wall-clock second with no messaging between them. Protocol margin
+chain timestamp with no messaging between them. A chain's timestamp normally
+tracks wall clock; the exceptions (an L2 after a sequencer outage, SVM's
+`Clock`) are handled operationally: § L2 sequencer outage. Protocol margin
 comes entirely from the off-chain spread between realized T-Bill
 yield and the rate published on-chain.
 
@@ -98,8 +100,8 @@ Both stacks: `PRECISION = 1e18`, `MAX_MULTIPLIER = 1e24`, `MAX_RATE = PRECISION 
 **Both stacks run the same model.** Yield streams continuously from a
 per-second rate schedule, computed on read rather than written in
 discrete ticks — so there is no step for an arbitrageur to sandwich,
-and every chain returns the same multiplier at the same wall-clock
-second without any messaging between them. SVM's `oku-shared/src/rate.rs`
+and every chain returns the same multiplier at the same chain
+timestamp without any messaging between them. SVM's `oku-shared/src/rate.rs`
 is a line-for-line port of EVM's `MathLib.sol` at the same
 `PRECISION = 1e18`, so identical schedule state yields bit-identical
 multipliers across the fleet.
@@ -420,6 +422,76 @@ While a chain's PSM minting is closed, bridges whose destination leg is that PSM
 mint stall (the pre-flight checklist's allowance check catches it); redemptions and
 the source legs keep working.
 
+#### L2 sequencer outage
+
+**Affected chains:** Arbitrum One, OP Mainnet and Base (any rollup deployment).
+Ethereum and BSC are L1s and are not affected.
+
+The multiplier is priced at `block.timestamp`, and on a rollup that timestamp
+can trail wall clock after a sequencer outage (Cyfrin audit finding #3):
+
+- **Arbitrum:** a message force-included from the delayed inbox executes at the
+  later of the previous L2 timestamp and the L1 timestamp at which it entered the
+  inbox, not at its inclusion time. Forced inclusion opens only after the
+  force-inclusion delay (about one day), so the lag can exceed a day.
+- **OP Mainnet / Base:** each block's timestamp is its parent's plus 2 seconds,
+  so after the sequencer resumes the chain catches up to wall clock in 2-second
+  steps (bounded by the ~12 h sequencing window), and a deposit forced through
+  `OptimismPortal` during the outage executes at its L1 origin's time.
+
+A `mintOkuM` / `mintUsdOku` that executes at a trailing timestamp buys at the old
+multiplier, and a redeem after the clock catches up collects the rise over the lag
+from the PSM buffer (about 134 USDC per 1,000,000 USDC per day of lag at 5 % APY).
+The PSM is fee-free by design, so the defence is operational: **keep the PSM closed
+while that chain's clock trails wall clock.** It needs no third-party
+infrastructure: the protocol's own nodes and the rollup's L1 contracts are the only
+inputs.
+
+**Expected automated behaviour (production monitoring, per affected chain):**
+
+1. **Detect.** Watch the chain's head from the protocol's own L2 nodes (more than
+   one RPC). Raise the outage alarm when no new block has arrived for
+   `SEQUENCER_STALL_SECONDS` (suggested 60 s), or when the latest
+   `block.timestamp` trails wall clock by more than `CLOCK_LAG_TOLERANCE_SECONDS`
+   (suggested 60 s). Also watch the rollup's L1 contracts for forced traffic aimed
+   at the PSM: Arbitrum delayed-inbox messages and `SequencerInbox.forceInclusion`
+   calls, OP Stack `OptimismPortal` `TransactionDeposited` events with
+   `to = LitePSM`.
+2. **Pause through the forced path, immediately.** A transaction sent to the
+   stalled sequencer will not land, so the automated pauser submits
+   `LitePSM.pause()` on L1: Arbitrum `Inbox.sendL2Message` carrying a signed L2
+   transaction (then `SequencerInbox.forceInclusion` once the delay has passed,
+   if the sequencer is still down); OP Stack `OptimismPortal.depositTransaction`
+   with `to = LitePSM`, `data = pause()`. Forced messages execute in submission
+   order, so every mint submitted after the pause fails, and the pause executes
+   before the PSM can be used at a stale timestamp by anyone queued behind it.
+   If the sequencer comes back first, the same pause goes through it.
+3. **Hold.** Leave the PSM paused while the chain catches up. Do not unpause on
+   sequencer recovery alone.
+4. **Unpause (cold)** only once the latest `block.timestamp` is within
+   `CLOCK_LAG_TOLERANCE_SECONDS` of wall clock and the backlog of forced messages
+   has drained. Run `checkMultiplierDrift` first: the chain's schedule must still
+   match the fleet's.
+
+**The automated pauser.** Step 2 cannot wait for a multisig quorum, so each
+affected chain grants `PSM_PAUSER` on `LitePSM` (only that role, only that
+contract) to a dedicated automated key, alongside the warm multisig. It must be an
+**EOA** with the same address on L1 and L2: a contract (e.g. a Safe) sending
+through the Arbitrum inbox or `OptimismPortal` is address-aliased on L2 and would
+not hold the role. Its blast radius is the warm tier's: denial of service only,
+since unpausing needs the cold key. Fund it with L1 ETH for the forced
+submission. Drill the full path (L1 submission, aliasing, execution order) on the
+chain's testnet before launch.
+
+**What remains (accepted).** A mint submitted through the forced path *before*
+the pauser's message executes first and keeps the stale price. Exploiting it
+needs an L2 sequencer outage and winning a race against an automated alarm in its
+first seconds to minutes; the gain is bounded by the multiplier's rise over the
+lag, the buffer, the minter allowance and the supply cap, and appears as a
+redemption against the buffer. Removing it entirely would take a mint fee sized
+for the worst-case rate over the worst-case lag, which ends the fee-free design
+(`EVM/README.md` § Accepted Risks #13 and #15).
+
 #### Minter allowance rotation policy
 
 `minterAllowance` on `OkuMoney` (EVM) and `PsmConfig.minterAllowance`
@@ -477,14 +549,16 @@ issuance, not a single loop); gross PSM mint volume (sum of `OkuMMinted` /
 | Gross PSM mint volume | Rolling 24 h mint volume > 2 × expected | Replaces the gross-volume circuit breaker the allowance no longer provides; respond with warm-key `pause()` |
 | Pause state | PSM paused for > 15 min unexpectedly | Buffer top-ups are blocked while paused; unpause (cold) first |
 | Lag alarm | `checkMultiplierDrift` reports `LAG IMMINENT` or `LAGGING THE FLEET` | `LAG_ALARM_HOURS` (default 6) before a chain stops accruing ahead of the fleet. Stage its successor, or pause its PSM (warm) before then: § Chain lagging the fleet |
+| L2 sequencer / clock lag | No new L2 block for > 60 s, or `block.timestamp` > 60 s behind wall clock, on Arbitrum / OP / Base; or forced L1 traffic to `LitePSM` | Automated `LitePSM.pause()` through the forced path, then hold until caught up: § L2 sequencer outage |
 | Minting left closed | PSM minter allowance 0 on a chain whose schedule and multiplier match the fleet | A finished catch-up or new chain whose minting was never reopened; destination bridge legs to it stall |
 
 SVM bridges use direct `burn_oku_m_direct` / `mint_oku_m_direct` with no USDC
 intermediary, so there is no float to monitor; watch the direct minter/burner
 transaction success rate instead.
 
-All metrics on a 1-min cadence. PagerDuty for "token float", "PSM buffer"
-and "Lag alarm"; Slack warning for the rest.
+All metrics on a 1-min cadence, except the L2 sequencer check, which needs a
+cadence well under its 60 s threshold. PagerDuty for "token float", "PSM buffer",
+"Lag alarm" and "L2 sequencer / clock lag"; Slack warning for the rest.
 
 #### Orchestrator security
 
@@ -522,11 +596,13 @@ and `SVM/oku-programs/programs/lite-psm/src/roles.rs`.
 | Cold Multisig | DEFAULT_ADMIN_ROLE, all `*_UNPAUSER`, all `*_UNBLACKLISTER`, OKUM_CAP_MANAGER, OKUM_ALLOWANCE_MANAGER, all `*_UPGRADER`, PSM_BUFFER_WITHDRAWER, VAULT_RESCUER | role_admin, unpauser, unfreezer, cap_manager, allowance_manager, buffer_withdrawer |
 | Warm Multisig | all `*_PAUSER`, all `*_BLACKLISTER` | pauser, freezer |
 | Orchestrator | OKUM_RATE_MANAGER, PSM_BUFFER_DEPOSITOR | rate_manager, buffer_depositor |
+| Automated L2 pauser (Arbitrum / OP / Base) | PSM_PAUSER on LitePSM only, an EOA (§ L2 sequencer outage) | — |
 | Bridge backend | — | direct_minter, direct_burner (separate keys; may be unset) |
 | LitePSM | OKUM_MINTER, OKUM_BURNER | Mint authority on OkuM Token-2022 mint |
 
 `unfreezer` on SVM is the counterpart of EVM's `OKUM_UNBLACKLISTER` and is cold
-on both stacks. The EVM mainnet split is encoded in
+on both stacks. The automated L2 pauser is granted by the cold admin after the handover
+on each rollup chain; it is not part of `grantRolesMainnet.ts`. The EVM mainnet split is encoded in
 `EVM/scripts/operator/grantRolesMainnet.ts`; the SVM split in
 `scripts/config/authorities.ts` (`MAINNET_*` env vars). Handover order:
 § Mainnet ceremony.
@@ -593,6 +669,7 @@ organisational model it assumes (role names per the RBAC table above).
 |---|---|---|
 | **Cold Multisig** | Squads / Safe, hardware-backed quorum | Total. Upgrade replaces all logic with no timelock. **Do not read `maxSupply` or `minterAllowance` as a bound on this tier** — it sets both. |
 | **Warm Multisig** | Lower quorum, faster to sign | Denial of service only. Pause is a **one-way door** — unpausing needs cold. No access to funds or parameters. |
+| **Automated L2 pauser** | Dedicated EOA, automated (Arbitrum / OP / Base only) | `PSM_PAUSER` on `LitePSM` only, for the forced-path pause in § L2 sequencer outage. Same as the warm tier: denial of service only. |
 | **Orchestrator** | KMS-backed, automated | Can ratchet the multiplier toward `MAX_MULTIPLIER`, inflating dollar value beyond actual backing. Cannot mint on EVM (`OKUM_MINTER` is held by contracts), cannot drain the buffer, cannot touch roles or upgrades. |
 | **Protocol contracts** | n/a | Mint only from inside `mintOkuM` / `mintUsdOku` (LitePSM); burn only from the redeem paths — bounded by `minterAllowance` and `maxSupply`, which the cold tier can raise. |
 

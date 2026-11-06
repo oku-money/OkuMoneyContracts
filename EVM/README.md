@@ -501,10 +501,12 @@ it deliberately does not stamp `lastOverrideBlock`.
 
 ### Cross-chain agreement comes for free
 
-`computeMultiplier` contains **no supply term**, and `block.timestamp` is
-wall-clock on every EVM chain. So given identical schedule state, every chain
-returns the identical `uint256` at the identical instant — **no messaging, no
-light client, no state proofs**.
+`computeMultiplier` contains **no supply term**, so given identical schedule
+state, every chain returns the identical `uint256` at the identical
+`block.timestamp` — **no messaging, no light client, no state proofs**.
+`block.timestamp` tracks wall clock on the L1s (Ethereum, BSC) and on rollups
+in normal operation, but **not on a rollup after a sequencer outage**
+(Accepted Risk #15).
 
 The coordination requirement drops from *per-tick* to *per-epoch*. Every window —
 the active rate's `okuMRateEnd` AND a staged successor's `okuMPendingRateEnd` — is
@@ -1204,6 +1206,39 @@ reserve, so USDT's approve-race rule does not apply.
 
 Tested in `test/psm/LitePSMReserveUSDT.t.sol` against `test/mocks/MockUSDT.sol`.
 
+### 15. Rollup `block.timestamp` can trail wall clock after a sequencer outage
+
+On Arbitrum One, OP Mainnet and Base, `block.timestamp` can fall behind wall clock
+after a sequencer outage: Arbitrum force-included messages execute at their L1
+inbox time (lag can exceed the ~1 day force-inclusion delay); OP Stack blocks
+catch up in 2-second steps after the sequencer resumes (bounded by the ~12 h
+sequencing window), and `OptimismPortal` deposits execute at their L1 origin
+time. `okuMMultiplier()` prices at `block.timestamp`, so a mint executing at a
+trailing timestamp buys at `m(T - lag)` and a redeem once the clock has caught up
+pays `m(T)`: the caller takes the rise over the lag from the PSM buffer (Cyfrin
+audit finding #3; about 1.34e-4 of the deposit per day of lag at 5 % APY).
+
+**Mitigation (operational, no third-party dependency):** keep `LitePSM` paused
+while the chain's clock trails. Production monitoring watches the chain from the
+protocol's own nodes and the rollup's L1 contracts; on a stall or clock lag an
+automated `PSM_PAUSER` EOA submits `LitePSM.pause()` through the forced path
+(Arbitrum inbox, `OptimismPortal`), and the cold unpauser reopens only once
+`block.timestamp` is back within tolerance of wall clock
+([`../README.md` § L2 sequencer outage](../README.md#l2-sequencer-outage)).
+Forced messages execute in submission order, so every mint submitted after the
+pause fails.
+
+**Residual:** a mint forced in before the pauser's message keeps the stale price.
+It needs an outage plus a won race against an automated alarm, and is bounded by
+the multiplier's rise over the lag, the buffer, the minter allowance and the
+supply cap. Closing it entirely needs a mint fee covering `MAX_RATE^lag - 1` over
+the worst-case lag, which would end the fee-free design (#13) and require min-out
+parameters; we do not adopt one. A Chainlink-style sequencer uptime feed is not
+used either: it would make deployment on a chain depend on third-party
+infrastructure being available there.
+
+Tested in `test/psm/LitePSMSequencerLag.t.sol`.
+
 ---
 
 ## Testing
@@ -1288,6 +1323,7 @@ belong here; they should be removed from `src/`.
 | `LitePSM` buffer functions are pause-gated and yield-locked | `test/psm/LitePSM.t.sol`: `test_DepositBuffer_RevertsWhenPaused`, `test_DepositBuffer_RevertsInOverrideBlock`, `test_WithdrawUSDC_RevertsWhenPaused`, `test_WithdrawUSDC_RevertsInOverrideBlock` |
 | Override front-run residual and its pause ceremony (Accepted Risk #11) | `test/psm/LitePSM.t.sol`: `test_SetOkuMMultiplier_PauseCeremony_ClosesFrontRunWindow` |
 | USDT-style reserve: no-return transfers, fee-on-transfer intake credits the received amount, full-fee `AmountTooSmall`, payout fee borne by recipient (Accepted Risk #14) | `test/psm/LitePSMReserveUSDT.t.sol` |
+| Rollup clock lag: a stale-timestamp mint gains the lag; the pause closes it; reopening after catch-up gains nothing (Accepted Risk #15) | `test/psm/LitePSMSequencerLag.t.sol` |
 | No PSM slippage parameter (Accepted Risk #13) | `test/psm/LitePSM.t.sol`: `test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier` |
 | Reentrancy through the PSM | `test/psm/Reentrancy.t.sol`, `test/lib/ReentrancyGuard.t.sol` |
 | `OkuMoney` rate schedule: `setOkuMYieldRate` continuity and non-stamping, `setNextOkuMYieldRate` boundaries, expiry with no successor | `test/token/OkuMoney.t.sol`, `test/token/OkuMoney.fuzz.t.sol` |

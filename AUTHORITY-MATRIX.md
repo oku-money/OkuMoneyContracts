@@ -60,7 +60,7 @@ bounds stay on-chain; business policy moves to the backend.
 | E14 | `blacklist` / `unblacklist` | `OkuDollar` | `OKUM_(UN)BLACKLISTER` | Freeze on the vault — **same role hash as E9/E10, but a separate grant per contract**; same sender/recipient/spender scope as E9 (incl. `transferFrom` and the ERC-4626 `redeem`/`withdraw` spender path). OkuDollar blocks an address if it is on **either** its own list **or** OkuMoney's (E9); the reverse does not hold | works while paused; does NOT retroactively revoke allowances | Yes |
 | E15 | `pause` / `unpause` | `OkuDollar` | `VAULT_PAUSER` / `VAULT_UNPAUSER` | Halt wrap/unwrap/4626 + transfers | — | Yes |
 | E16 | `_authorizeUpgrade` | `OkuDollar` | `VAULT_UPGRADER` | **Replace all vault logic** | **none** | **No** |
-| E17 | `pause` / `unpause` | `LitePSM` | `PSM_PAUSER` / `PSM_UNPAUSER` | Halt all PSM user paths | — | Yes |
+| E17 | `pause` / `unpause` | `LitePSM` | `PSM_PAUSER` / `PSM_UNPAUSER` | Halt all PSM user paths. On Arbitrum / OP / Base `PSM_PAUSER` is also held by an automated EOA that pauses through the rollup's forced path on a sequencer outage (`README.md` § L2 sequencer outage) | — | Yes |
 | E18 | `withdrawUsdc` | `LitePSM` | `PSM_BUFFER_WITHDRAWER` | **Drain the entire reserve buffer — no solvency check against circulating OkuM/UsdOku** | `whenNotPaused`, `whenNoOverrideThisBlock`, `amount <= balance`; no solvency check | **No** |
 | E19 | `depositBuffer(amount)` | `LitePSM` | `PSM_BUFFER_DEPOSITOR` | Add reserve (USDC or USDT; pull from caller, credits the received amount) | `nonReentrant`, `whenNotPaused`, `whenNoOverrideThisBlock` | No |
 | E20 | `_authorizeUpgrade` | `LitePSM` | `PSM_UPGRADER` | **Replace all PSM logic** | **none** | **No** |

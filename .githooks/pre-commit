@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+
+# Run forge fmt on staged Solidity files in EVM/
+staged_sol=$(git diff --cached --name-only --diff-filter=ACM -- 'EVM/**/*.sol')
+
+if [ -n "$staged_sol" ]; then
+    echo "Running forge fmt in EVM/..."
+    (cd EVM && forge fmt)
+    # Re-stage any reformatted files
+    echo "$staged_sol" | xargs git add
+fi
+
+# ---------------------------------------------------------------------------
+# Regenerate the committed build artifacts (artifacts/evm, artifacts/svm)
+#
+# CI rebuilds both and fails when they differ from what is committed, and a
+# stale IDL/ABI misleads every downstream consumer (backend, SDK, frontend). So
+# whenever a commit touches contract sources, rebuild and stage the artifacts
+# here instead of relying on someone remembering the export commands.
+#
+#   EVM: npx hardhat compile && npm run export-abis        (EVM/)
+#   SVM: anchor build --ignore-keys && npm run export-idls (SVM/oku-programs/)
+#
+# The build reads the WORKING TREE, so the artifacts would not match the commit
+# if a source file had unstaged edits (or were untracked); that is refused.
+# SKIP_ARTIFACTS=1 bypasses this hook step; CI remains the backstop.
+# ---------------------------------------------------------------------------
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root" || exit 1
+
+EVM_SRC_PATHS=(EVM/src EVM/hardhat.config.ts EVM/foundry.toml EVM/scripts/utils/exportAbis.ts)
+SVM_SRC_PATHS=(SVM/oku-programs/programs SVM/oku-programs/crates SVM/oku-programs/Cargo.toml
+    SVM/oku-programs/Cargo.lock SVM/oku-programs/Anchor.toml SVM/oku-programs/scripts/utils/exportIdls.ts)
+
+# Refuse when the working tree differs from the index for any source path.
+refuse_if_dirty() {
+    local label="$1"; shift
+    local dirty
+    dirty=$( { git diff --name-only -- "$@"; git ls-files --others --exclude-standard -- "$@"; } | sort -u)
+    if [ -n "$dirty" ]; then
+        echo "pre-commit: $label sources have unstaged or untracked changes:"
+        echo "$dirty" | sed 's/^/    /'
+        echo "The artifacts are built from the working tree, so they would not match this commit."
+        echo "Stage (or stash) them and commit again, or set SKIP_ARTIFACTS=1 to skip the refresh."
+        exit 1
+    fi
+}
+
+if [ "${SKIP_ARTIFACTS:-}" != "1" ]; then
+    evm_changed=$(git diff --cached --name-only -- "${EVM_SRC_PATHS[@]}")
+    svm_changed=$(git diff --cached --name-only -- "${SVM_SRC_PATHS[@]}")
+
+    # Validate both sides before spending minutes on either build.
+    [ -n "$evm_changed" ] && refuse_if_dirty "EVM" "${EVM_SRC_PATHS[@]}"
+    [ -n "$svm_changed" ] && refuse_if_dirty "SVM" "${SVM_SRC_PATHS[@]}"
+
+    if [ -n "$evm_changed" ]; then
+        echo "pre-commit: EVM sources changed, refreshing artifacts/evm ..."
+        if ! (cd EVM && npx hardhat compile && npm run export-abis); then
+            echo "pre-commit: EVM artifact refresh failed; commit aborted."
+            exit 1
+        fi
+        git add artifacts/evm
+    fi
+
+    if [ -n "$svm_changed" ]; then
+        echo "pre-commit: SVM sources changed, refreshing artifacts/svm ..."
+        # Same guard as CI: a different Anchor CLI emits a different IDL.
+        declared=$(sed -n 's/^anchor_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' SVM/oku-programs/Anchor.toml | head -1)
+        installed=$(anchor --version 2>/dev/null | sed -n 's/^anchor-cli \([^ ]*\).*/\1/p')
+        if [ -z "$installed" ] || [ "$declared" != "$installed" ]; then
+            echo "pre-commit: Anchor CLI '${installed:-not found}' does not match Anchor.toml '$declared'."
+            echo "Install the declared version (avm use $declared) so the IDL matches CI, or set SKIP_ARTIFACTS=1."
+            exit 1
+        fi
+        if ! (cd SVM/oku-programs && anchor build --ignore-keys && npm run export-idls); then
+            echo "pre-commit: SVM artifact refresh failed; commit aborted."
+            exit 1
+        fi
+        git add artifacts/svm
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# SVM program-ID consistency check
+# Canonical source: SVM/oku-programs/deployments/devnet.json
+# Verifies every file that embeds a program ID agrees with the deployment.
+#
+# Single-token refactor (2026-07): oku-dollar program removed entirely.
+# Only lite_psm is checked now.
+# ---------------------------------------------------------------------------
+svm_staged=$(git diff --cached --name-only --diff-filter=ACM -- \
+    'SVM/**' 'artifacts/svm/**' 'testnet-addresses.json')
+
+if [ -n "$svm_staged" ]; then
+    DEVNET_JSON="SVM/oku-programs/deployments/devnet.json"
+    if [ ! -f "$DEVNET_JSON" ]; then
+        echo "pre-commit: $DEVNET_JSON not found, skipping SVM address check."
+    else
+        # Extract canonical program ID
+        LITE_PSM=$(sed -n 's/.*"litePsm"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DEVNET_JSON" | head -1)
+
+        if [ -z "$LITE_PSM" ]; then
+            echo "pre-commit: could not parse litePsm program ID from $DEVNET_JSON, skipping."
+        else
+            errors=0
+
+            check_contains() {
+                local file="$1" expected="$2" label="$3"
+                if [ -f "$file" ] && ! grep -q "$expected" "$file"; then
+                    echo "pre-commit: $label mismatch in $file (expected $expected)"
+                    errors=$((errors + 1))
+                fi
+            }
+
+            # Anchor.toml
+            check_contains "SVM/oku-programs/Anchor.toml" "$LITE_PSM" "lite_psm"
+
+            # declare_id! in Rust source
+            check_contains "SVM/oku-programs/programs/lite-psm/src/lib.rs" "$LITE_PSM" "lite_psm declare_id!"
+
+            # Artifact IDL
+            check_contains "artifacts/svm/lite_psm.json" "$LITE_PSM" "lite_psm artifact"
+
+            # testnet-addresses.json
+            check_contains "testnet-addresses.json" "$LITE_PSM" "testnet-addresses litePsm"
+
+            if [ "$errors" -gt 0 ]; then
+                echo ""
+                echo "pre-commit: $errors SVM program-ID mismatch(es) found."
+                echo "Canonical source: $DEVNET_JSON"
+                echo "  litePsm = $LITE_PSM"
+                echo ""
+                echo "Update all files to match, then re-stage."
+                exit 1
+            fi
+        fi
+    fi
+fi

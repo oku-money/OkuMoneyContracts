@@ -3,7 +3,7 @@
 Curated build outputs for downstream consumers (backend services, SDKs, frontends).
 Each file is a stable JSON representation that can be imported directly without running the contract tooling locally.
 
-> **This directory is auto-generated.** Do not hand-edit files here. Run the relevant export command after rebuilding to refresh.
+> **This directory is auto-generated.** Do not hand-edit files here. The versioned pre-commit hook (`.githooks/pre-commit`, enabled by `npm install` through the root `prepare` script, or `git config core.hooksPath .githooks`) rebuilds and stages it whenever a commit touches contract sources (`EVM/src`, `SVM/oku-programs/programs`, `SVM/oku-programs/crates`, and their build config). It refuses the commit if those sources have unstaged edits, and needs the Anchor CLI version declared in `Anchor.toml`. `SKIP_ARTIFACTS=1` skips it; CI rebuilds both sets and fails on any drift. To refresh by hand, run the commands under each section below.
 
 ## Layout
 

@@ -979,9 +979,10 @@
         {
           "name": "config",
           "docs": [
-            "The singleton config PDA. Read-only: a redeem changes no config state (it",
-            "only signs the vault transfer)."
+            "The singleton config PDA. Writable: a redeem restores `minter_allowance`",
+            "(up to `minter_allowance_limit`) and signs the vault transfer."
           ],
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -3289,7 +3290,8 @@
           {
             "name": "minter_allowance",
             "docs": [
-              "Remaining mint allowance (6 decimals), reset by `allowance_manager`"
+              "Remaining mint allowance (6 decimals), reset by `allowance_manager`;",
+              "`redeem_oku_m` restores it up to `minter_allowance_limit`"
             ],
             "type": "u64"
           },
@@ -3398,6 +3400,17 @@
             "type": "u64"
           },
           {
+            "name": "minter_allowance_limit",
+            "docs": [
+              "Allowance last set by `allowance_manager` (6 decimals). A `redeem_oku_m`",
+              "burn restores `minter_allowance` up to it, so the allowance bounds net",
+              "outstanding PSM issuance rather than gross mint volume. Taken from the",
+              "front of `reserved`, so it reads 0 after an upgrade until the next",
+              "`set_minter_allowance` (and 0 never restores)."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "reserved",
             "docs": [
               "Reserved tail for future fields; consume from the front and shrink the",
@@ -3406,7 +3419,7 @@
             "type": {
               "array": [
                 "u8",
-                128
+                120
               ]
             }
           }

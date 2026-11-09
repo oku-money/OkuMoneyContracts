@@ -947,8 +947,9 @@ because every chain starts halted at a 1.00 multiplier (Cyfrin audit finding #2)
 `configureMinterAllowance` and `verifyDeployment` requires the allowance to be 0;
 `SVM/oku-programs/scripts/deploy/lib/config.ts` initializes `minter_allowance = 0`
 and `deploy-init.ts` fails if an existing config has a non-zero one. There is no
-flag to open minting at deploy on mainnet. `PSM_MINTING_CLOSED=true` rehearses the
-closed deploy on a testnet. The production allowance (§ Minter allowance rotation
+flag to open minting at deploy on mainnet. On EVM a throwaway fork that reuses a
+mainnet network name (CI's `FORK_NETWORK=mainnet`) deploys open like a testnet.
+`PSM_MINTING_CLOSED=true` rehearses the closed deploy on a testnet or fork. The production allowance (§ Minter allowance rotation
 policy) is set last, in § Opening PSM minting on a chain.
 
 ### Mainnet ceremony

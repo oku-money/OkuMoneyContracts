@@ -85,17 +85,19 @@ export const TESTNET_MINTER_ALLOWANCE = ethers.parseUnits("1000000000", 18); // 
 /**
  * Every proxy starts halted at a 1.00 multiplier. On a mainnet chain added after
  * the fleet has accrued yield, an open PSM would sell OkuM below its global value
- * (Cyfrin audit finding #2), so mainnet deploys (and forks rehearsing them) leave
- * PSM minting CLOSED: allowance 0, which reverts every `mintOkuM` / `mintUsdOku`
- * with `ExceedsAllowance` while redeems, rate writes and `setOkuMMultiplier` keep
+ * (Cyfrin audit finding #2), so a real mainnet deploy leaves PSM minting CLOSED:
+ * allowance 0, which reverts every `mintOkuM` / `mintUsdOku` with
+ * `ExceedsAllowance` while redeems, rate writes and `setOkuMMultiplier` keep
  * working. The cold allowance manager opens it only once `okuMMultiplier()` has
  * reached the fleet's (README § Opening PSM minting on a chain).
  *
- * `PSM_MINTING_CLOSED=true` rehearses the closed deploy on a testnet. There is no
- * way to open minting at deploy on mainnet.
+ * A fork is a throwaway chain that merely reuses the mainnet NAME (e.g. CI runs
+ * Hardhat with `FORK_NETWORK=mainnet`), so it deploys open like a testnet and the
+ * drill suites can mint. `PSM_MINTING_CLOSED=true` rehearses the closed deploy on
+ * a testnet or fork. There is no way to open minting at deploy on a real mainnet.
  */
-export function getDeploymentConfig(networkName: string): DeploymentConfig {
-  const closed = isMainnetNetwork(networkName) || process.env.PSM_MINTING_CLOSED === "true";
+export function getDeploymentConfig(networkName: string, isFork = false): DeploymentConfig {
+  const closed = (isMainnetNetwork(networkName) && !isFork) || process.env.PSM_MINTING_CLOSED === "true";
   return {
     maxSupply: ethers.parseUnits("1000000000", 18), // 1 billion
     minterAllowance: closed ? 0n : TESTNET_MINTER_ALLOWANCE,
@@ -831,7 +833,7 @@ export async function runDeploy(
   // Returns: { networkName, bookKey, isFork, chainConfig }.
   const ctx = await resolveNetworkContext();
   const { networkName, bookKey, isFork, chainConfig } = ctx;
-  const config = getDeploymentConfig(networkName);
+  const config = getDeploymentConfig(networkName, isFork);
 
   // Deploying a fresh proxy set to a production chain is at least as
   // consequential as any single operator transaction, all of which are gated.

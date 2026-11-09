@@ -348,6 +348,21 @@ describe("Deploy drill: PSM minting closed at deploy (Cyfrin #2)", function () {
         delete process.env.PSM_MINTING_CLOSED;
     });
 
+    it("a fork reusing a mainnet name deploys open, unless PSM_MINTING_CLOSED rehearses the closed deploy", () => {
+        // CI runs Hardhat with FORK_NETWORK=mainnet, so the resolved network name is
+        // a mainnet one even though the chain is a throwaway.
+        delete process.env.PSM_MINTING_CLOSED;
+        for (const name of MAINNET_NETWORKS) {
+            expect(getDeploymentConfig(name, true).minterAllowance, `${name} fork`).to.equal(TESTNET_MINTER_ALLOWANCE);
+            expect(getDeploymentConfig(name, false).minterAllowance, `${name} live`).to.equal(0n);
+        }
+        process.env.PSM_MINTING_CLOSED = "true";
+        for (const name of MAINNET_NETWORKS) {
+            expect(getDeploymentConfig(name, true).minterAllowance, `${name} fork, closed`).to.equal(0n);
+        }
+        delete process.env.PSM_MINTING_CLOSED;
+    });
+
     it("a closed deploy verifies, refuses PSM mints, and lets the multiplier be seeded before opening", async () => {
         delete process.env.NETWORK;
         delete process.env.SKIP_MOCK_USDC;

@@ -13,6 +13,10 @@ import { PSM_CONFIG_LEN } from '../../lib/account-sizes';
  *  an orphaned/stale account of a different shape at the same address. */
 const PSM_CONFIG_DISCRIMINATOR_HEX = '91ddc833e9c956b4';
 
+/** `PsmConfig.usdc_mint` byte offset: discriminator (8) + bump (1) + ten role keys (320).
+ *  Pinned against the committed IDL by tests/scripts/deploy-usdc.test.ts. */
+export const PSM_CONFIG_USDC_MINT_OFFSET = 329;
+
 /**
  * Verify all deployment addresses exist on-chain.
  *
@@ -20,11 +24,16 @@ const PSM_CONFIG_DISCRIMINATOR_HEX = '91ddc833e9c956b4';
  * generation (e.g. a 562-byte pre-streaming-accrual PsmConfig against the
  * current 754) EXISTS at some address without being usable by the current
  * program. So this checks owner + size + discriminator for the PSM config.
+ *
+ * It also checks the stored `usdc_mint` (permanent once initialized, Cyfrin audit
+ * finding #4) equals `expectedUsdcMint`: the configured reserve on real-USDC
+ * networks, else the mint recorded in the deployment.
  */
 export async function verifyDeployment(
   provider: AnchorProvider,
   addresses: DeploymentAddresses,
-  expectedProgramId?: PublicKey
+  expectedProgramId?: PublicKey,
+  expectedUsdcMint?: PublicKey
 ): Promise<boolean> {
   logger.nextStep('Verifying Deployment');
 
@@ -51,6 +60,7 @@ export async function verifyDeployment(
   }
 
   // PSM Config gets the stronger check.
+  const expectedMint = expectedUsdcMint ?? (addresses.tokens?.usdc ? new PublicKey(addresses.tokens.usdc) : PublicKey.default);
   const configAddr = addresses.pdas?.psmConfig;
   if (!configAddr) {
     logger.error('PSM Config: NOT CONFIGURED');
@@ -69,8 +79,18 @@ export async function verifyDeployment(
     } else if (info.data.subarray(0, 8).toString('hex') !== PSM_CONFIG_DISCRIMINATOR_HEX) {
       logger.error('PSM Config: discriminator mismatch — not a PsmConfig account');
       allPassed = false;
+    } else if (
+      !new PublicKey(
+        info.data.subarray(PSM_CONFIG_USDC_MINT_OFFSET, PSM_CONFIG_USDC_MINT_OFFSET + 32)
+      ).equals(expectedMint)
+    ) {
+      logger.error(
+        `PSM Config: usdc_mint is not the expected reserve ${expectedMint.toBase58()} ` +
+          `(it is permanent: a wrong mint needs a new program ID)`
+      );
+      allPassed = false;
     } else {
-      logger.success(`PSM Config: ${configAddr.slice(0, 8)}... (owner, size, discriminator all match)`);
+      logger.success(`PSM Config: ${configAddr.slice(0, 8)}... (owner, size, discriminator, usdc_mint all match)`);
     }
   }
 

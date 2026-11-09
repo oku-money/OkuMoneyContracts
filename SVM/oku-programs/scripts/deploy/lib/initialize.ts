@@ -204,6 +204,19 @@ export async function initializePsm(
     }
   }
 
+  // ---- Reserve binding check (Cyfrin audit finding #4) ----
+  // `usdc_mint` is written once by `initialize` and can never change, so confirm
+  // the config (fresh OR adopted because already initialized) is bound to the mint
+  // this run intended before anything else is wired to it.
+  const initializedCfg: any = await program.account['psmConfig'].fetch(psmConfig);
+  if (!(initializedCfg.usdcMint as PublicKey).equals(usdcMint)) {
+    throw new Error(
+      `PsmConfig.usdc_mint is ${(initializedCfg.usdcMint as PublicKey).toBase58()}, ` +
+        `expected ${usdcMint.toBase58()}. The reserve mint is permanent: this program ` +
+        `ID cannot be used for this deployment.`
+    );
+  }
+
   // ---- Step 4: Configure direct-minter role + allowance ----
   // The Rust `initialize()` intentionally sets `direct_minter = Pubkey::default()`.
   // If the authorities config specifies a non-default directMinter, wire it up

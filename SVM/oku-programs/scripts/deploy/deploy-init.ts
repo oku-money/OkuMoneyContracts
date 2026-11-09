@@ -126,7 +126,9 @@ async function main() {
   // Derive PSM config PDA (needed for mint authority)
   const [psmConfigPDA] = derivePsmConfigPDA(programIds.litePsm);
 
-  // Deploy mock USDC (idempotent — reuses any mint already in the deployment file)
+  // Resolve the reserve mint: the configured Circle USDC on mainnet (no mock is
+  // ever created there), else the mock USDC (idempotent — reuses any mint already
+  // in the deployment file). Cyfrin audit finding #4.
   const { usdcMint } = await deployTokens(
     provider,
     psmConfigPDA,
@@ -186,7 +188,10 @@ async function main() {
   const litePsmId = finalDeployment.programs?.litePsm
     ? new PublicKey(finalDeployment.programs.litePsm)
     : undefined;
-  await verifyDeployment(provider, finalDeployment, litePsmId);
+  const configuredUsdc = networkConfig.usdc.isNative ? undefined : networkConfig.usdc.mint;
+  if (!(await verifyDeployment(provider, finalDeployment, litePsmId, configuredUsdc))) {
+    throw new Error('Deployment verification failed: see the errors above');
+  }
 
   // PSM minting state (Cyfrin audit finding #2). `initialize` is idempotent and
   // may have been skipped against an existing config, so read the chain.

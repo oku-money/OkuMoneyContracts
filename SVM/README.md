@@ -83,6 +83,13 @@ RPC (`amount`), `spl-token accounts`, transfer arguments and `supply`.
 - **Reserve.** USDC only. EVM may use USDC or USDT (`EVM/README.md` Accepted Risk #14); SVM does
   not. The USDC mint is a classic SPL Token mint (`Program<Token>`), which has no transfer-fee
   extension, so SVM needs no balance-delta intake.
+  `usdc_mint` is written once at `initialize` and cannot be changed, so `deploy:init` binds it to
+  the mint configured for the network (`NETWORK_CONFIGS[n].usdc`): Circle USDC
+  `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` on `mainnet-beta` / `mainnet-fork`, where no mock is
+  ever created and any `tokens.usdc` in `deployments/<network>.json` is ignored. It first checks that
+  mint is a live, initialized, 6-decimal classic SPL mint, reads `PsmConfig.usdc_mint` back after
+  `initialize` (fresh or already initialized), and `verifyDeployment` fails the run on any mismatch.
+  Only devnet / localnet create (or reuse) a deployer-owned mock USDC.
 
 ## Program structure
 
@@ -414,6 +421,9 @@ and keeping `Anchor.toml [programs.<network>]` equal to the program ID in `deplo
 - [ ] BPF upgrade authority transferred to the cold multisig (`admin:set-upgrade-authority`).
 - [ ] `Anchor.toml [programs.<network>]` matches the freshly-deployed program ID.
 - [ ] `make fetch-token-2022` applied if bankrun runs in CI.
+- [ ] `PsmConfig.usdc_mint` is Circle USDC (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`) after
+      `deploy:init:mainnet` (the script enforces it; it is permanent, and a wrong mint needs a new
+      program ID). Confirm it independently on an explorer before the role handover.
 - [ ] `PsmConfig.minter_allowance` is 0 after `deploy:init:mainnet` (PSM minting closed; the script
       enforces it), and stays 0 until the multiplier matches the fleet:
       [`../README.md` § Opening PSM minting on a chain](../README.md#opening-psm-minting-on-a-chain).

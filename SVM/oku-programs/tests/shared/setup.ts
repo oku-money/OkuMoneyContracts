@@ -99,11 +99,12 @@ export async function initializePsm(
   program: Program<LitePsm>,
   payer: Keypair,
   usdcMint: PublicKey,
-  minterAllowance: BN = MINTER_ALLOWANCE
+  minterAllowance: BN = MINTER_ALLOWANCE,
+  /** Override the OkuM mint keypair, e.g. to pre-fund its address (audit #22). */
+  okuMMintKeypair: Keypair = Keypair.generate()
 ): Promise<PsmSetupResult> {
-  // Generate a fresh keypair for the OkuM mint — the program's
-  // `initialize` instruction creates it with Token-2022 extensions.
-  const okuMMintKeypair = Keypair.generate();
+  // A fresh keypair for the OkuM mint — the program's `initialize` instruction
+  // creates it with Token-2022 extensions.
   const okuMMint = okuMMintKeypair.publicKey;
 
   const [configPda] = PublicKey.findProgramAddressSync(

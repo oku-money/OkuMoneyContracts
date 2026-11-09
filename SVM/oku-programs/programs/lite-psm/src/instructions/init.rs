@@ -85,6 +85,61 @@ fn validate_granular_authorities(params: &InitializeParams, role_admin: &Pubkey)
     Ok(())
 }
 
+/// Create the mint account, tolerating lamports sent to its address beforehand.
+///
+/// The mint keypair's public key is visible in the pending `initialize`
+/// transaction, so anyone can send it lamports first. `system_program::create_account`
+/// rejects an address that already holds lamports (`AccountAlreadyInUse`), which
+/// would fail the whole initialization for the price of one transfer (Cyfrin audit
+/// finding #22). For a pre-funded address, top up only the shortfall, then
+/// `allocate` and `assign`, which the mint keypair (a signer of this transaction)
+/// authorizes and which fail on an account that already has data or another owner.
+fn create_mint_account(
+    accounts: &Initialize,
+    lamports: u64,
+    space: u64,
+    owner: &Pubkey,
+) -> Result<()> {
+    let mint = accounts.oku_m_mint.to_account_info();
+    let payer = accounts.role_admin.to_account_info();
+    let system = accounts.system_program.to_account_info();
+    let existing = mint.lamports();
+
+    if existing == 0 {
+        return invoke(
+            &anchor_lang::solana_program::system_instruction::create_account(
+                accounts.role_admin.key,
+                mint.key,
+                lamports,
+                space,
+                owner,
+            ),
+            &[payer, mint, system],
+        )
+        .map_err(Into::into);
+    }
+
+    if existing < lamports {
+        invoke(
+            &anchor_lang::solana_program::system_instruction::transfer(
+                accounts.role_admin.key,
+                mint.key,
+                lamports - existing,
+            ),
+            &[payer, mint.clone(), system.clone()],
+        )?;
+    }
+    invoke(
+        &anchor_lang::solana_program::system_instruction::allocate(mint.key, space),
+        &[mint.clone(), system.clone()],
+    )?;
+    invoke(
+        &anchor_lang::solana_program::system_instruction::assign(mint.key, owner),
+        &[mint, system],
+    )?;
+    Ok(())
+}
+
 /// Create and initialize the OkuM Token-2022 mint (Anchor's `init` cannot build
 /// multi-extension mints). The `PsmConfig` PDA is mint, freeze, `ScaledUiAmount`
 /// and metadata authority.
@@ -118,20 +173,7 @@ fn create_oku_m_mint(accounts: &Initialize, bump: u8, uri: &str) -> Result<()> {
         .ok_or(LitePsmError::Overflow)?;
     let lamports = Rent::get()?.minimum_balance(total_space);
 
-    invoke(
-        &anchor_lang::solana_program::system_instruction::create_account(
-            accounts.role_admin.key,
-            &mint_key,
-            lamports,
-            fixed_space as u64,
-            &token_2022_id,
-        ),
-        &[
-            accounts.role_admin.to_account_info(),
-            accounts.oku_m_mint.to_account_info(),
-            accounts.system_program.to_account_info(),
-        ],
-    )?;
+    create_mint_account(accounts, lamports, fixed_space as u64, &token_2022_id)?;
 
     // All extension inits must precede `InitializeMint`, in ascending
     // `ExtensionType` order (MetadataPointer before ScaledUiAmount).

@@ -60,9 +60,17 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub oku_m_mint: Signer<'info>,
 
-    /// PSM's USDC vault (ATA of `config`).
+    /// PSM's USDC vault (ATA of `config`). `init_if_needed`: anyone can create this
+    /// associated token account for any owner before `initialize` runs, and a plain
+    /// `init` would fail on it and block initialization until an upgrade (Cyfrin audit
+    /// finding #8). Anchor validates an existing account against the mint, the config
+    /// authority, the token program and the canonical ATA address. It cannot be left
+    /// in a harmful state: its owner is `config` (never reassigned), a delegate or
+    /// close authority needs that owner's signature, and USDC's freeze authority is
+    /// not the attacker's. Pre-deposited USDC is simply buffer, since the program
+    /// reads `vault_usdc.amount` live.
     #[account(
-        init,
+        init_if_needed,
         payer = role_admin,
         associated_token::mint = usdc_mint,
         associated_token::authority = config,

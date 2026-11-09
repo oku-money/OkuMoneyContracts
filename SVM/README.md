@@ -278,6 +278,22 @@ SVM mechanism the matrix assumes: roles are **pubkey fields on `PsmConfig`** enf
 mint (`ScaledUiAmount` authority, mint and freeze authority = the config PDA). No other PSM-owned
 account exists: redeems burn straight from the user's OkuM account.
 
+### `initialize` cannot be blocked by pre-funding
+
+Both addresses `initialize` writes to are guessable or visible before it lands, so each tolerates being
+funded first (Cyfrin audit findings #8, #22; bankrun `init-prefund.ts`):
+
+- **The USDC vault** is the config PDA's ATA, derived from the program ID and the USDC mint alone, and
+  anyone can create an ATA for any owner. `vault_usdc` is `init_if_needed`: an existing account is
+  validated against the mint, the config as owner, the token program and the canonical address.
+  USDC deposited into it first is simply buffer.
+- **The OkuM mint** is a fresh keypair whose public key appears in the pending transaction, so anyone
+  can send it lamports first, which fails a plain `create_account` with `AccountAlreadyInUse`.
+  `create_mint_account` tops up only the shortfall, then `allocate`s and `assign`s (the mint keypair
+  signs). An address that already holds data or another owner is still refused, and the transaction
+  is atomic, so no config is left behind. The smallest pre-fund an attacker can make is the
+  0-byte rent minimum (~0.00089 SOL), and it only donates that SOL to the mint.
+
 ### Two binding authority constraints at init
 
 Together these force the deployer and the operational roles onto **different keys**:
@@ -369,10 +385,10 @@ From `SVM/oku-programs`; `npm test` runs both suites.
 | Suite | Command | Count |
 |---|---|---|
 | Rust (`cargo test --workspace`) | `npm run test:rust` | 62 (lite-psm 10, oku-shared 51, differential 1) |
-| Bankrun (in-process BPF on litesvm via `anchor-bankrun`) | `npm run test:bankrun` | 143 |
+| Bankrun (in-process BPF on litesvm via `anchor-bankrun`) | `npm run test:bankrun` | 150 |
 | Cross-language `compute_multiplier` (Solidity corpus replayed in Rust and TS; `EVM/test/differential/GenerateVectors.t.sol`) | `npm run test:differential` (repo root) | 3,867 vectors |
 | Stateful sequence fuzz of `lite_psm` (random instruction sequences vs. a model; `tests/fuzz/psm-sequence.ts`) | `npm run test:fuzz` (`FUZZ_SEEDS`, `FUZZ_STEPS`, `FUZZ_SEED` to replay) | 8 seeds x 250 steps |
-| Upgrade-tooling helpers (identity binding, IDL layout diff, state snapshots) | `npm run test:scripts` | 15 |
+| Upgrade-tooling helpers (identity binding, IDL layout diff, state snapshots) | `npm run test:scripts` | 24 |
 | Upgrade drill (real validator: deploy-init, direct, propose → execute → verify, refusals) | `npm run drill:upgrade` | — |
 | Live devnet / fork smoke | `npm run test:onchain[:fork]` | — |
 

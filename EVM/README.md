@@ -1152,7 +1152,7 @@ Cold Multisig). Appropriate for an emergency lever, not routine operation.
 The goal is Circle FiatToken's blacklist posture (`FiatTokenV1/V2.sol`), the
 reference both tokens follow. Across both tokens a blacklisted address cannot
 successfully call any state-changing function as sender, recipient **or approved
-spender**: `approve`/`permit` (owner and spender), `transfer`, `transferFrom`
+spender**: non-zero `approve`/`permit` (owner and spender), `transfer`, `transferFrom`
 (including the spender), OkuDollar's ERC-4626 `withdraw`/`redeem` (including a
 third-party spender), and `mint` (including the minter). `blacklist()` works while
 paused. OkuDollar honours OkuMoney's blacklist as well as its own.
@@ -1164,13 +1164,25 @@ account. PSM behaviour: § LitePSM.sol.
 infrastructure (`LitePSM`), so blacklisting the PSM proxy would brick all minting.
 Kept for parity with the reference.
 
+**Zero-value approvals are exempt: deliberately NOT Circle parity** (Cyfrin audit
+finding #5). `approve(spender, 0)` and a zero-value `permit` succeed even when the
+owner or spender is listed, on both tokens. They grant nothing, and they are the
+only way to revoke an allowance (neither token has `decreaseAllowance`); Circle's
+`FiatToken` reverts them, which leaves a grantor unable to revoke while the spender
+is listed. The cost is that a listed owner can still clear its own allowances or burn
+a permit nonce, both of which only reduce what is granted.
+
 **Unmatched, deliberately, same as Circle.** Blacklisting does not retroactively
 revoke allowances granted earlier (unbounded on-chain for either project), and
 there is no seizure/clawback function (USDT and Paxos add one; Circle does not). A
 blacklisted spender cannot *exercise* an old allowance, but if later unblacklisted
 it is live again without a new `approve`. Mitigation: compliance watches
 `Approval` events for the spender and has grantors `approve(spender, 0)` if
-exposure is a concern.
+exposure is a concern; that call works while the spender is listed, so it can be done
+**before** `unblacklist`. Runbook: before `OkuMoney.unblacklist` or
+`OkuDollar.unblacklist`, review live allowances to and from the address and have
+grantors that are fixed-address contracts revoke first. (SVM has no such path while
+an account is frozen: `SVM/README.md` Accepted Risk #5.)
 
 ### 13. The PSM has no slippage protection — deliberately
 

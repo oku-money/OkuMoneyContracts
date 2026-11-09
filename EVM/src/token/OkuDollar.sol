@@ -290,7 +290,9 @@ contract OkuDollar is
     // ============ ERC20Permit Override (Blacklist Check) ============
 
     /// @notice EIP-2612 permit with blacklist enforcement.
-    /// @dev `value` is in dollars but balances are shares, and `transferFrom` floors the
+    /// @dev A zero `value` is always allowed: it grants nothing, and it is the only way to
+    ///      revoke an allowance to or from a listed address (Cyfrin audit finding #5).
+    ///      `value` is in dollars but balances are shares, and `transferFrom` floors the
     ///      share conversion: when `usdMultiplier > 1e18`, each `transferFrom` debits its full
     ///      `amount` from the allowance but may move up to ~1 share's value less; integrators
     ///      should budget for that dust. Not pause-gated.
@@ -307,13 +309,18 @@ contract OkuDollar is
         virtual
         override
     {
-        if (_blacklisted(owner)) revert SharedErrors.SenderBlacklisted();
-        if (_blacklisted(spender)) revert SharedErrors.RecipientBlacklisted();
+        if (value != 0) {
+            if (_blacklisted(owner)) revert SharedErrors.SenderBlacklisted();
+            if (_blacklisted(spender)) revert SharedErrors.RecipientBlacklisted();
+        }
         super.permit(owner, spender, value, deadline, v, r, s);
     }
 
     /// @dev Blocks a blacklisted owner or spender from creating allowances (as Circle
-    ///      FiatToken). Existing allowances are not revoked; {transferFrom} blocks their use.
+    ///      FiatToken), except that `approve(spender, 0)` always succeeds so an allowance to
+    ///      or from a listed address can be revoked (Cyfrin audit finding #5; Circle reverts
+    ///      here). Existing allowances are not revoked by listing; {transferFrom} blocks
+    ///      their use.
     function approve(
         address spender,
         uint256 value
@@ -322,8 +329,10 @@ contract OkuDollar is
         override(ERC20Upgradeable, IERC20)
         returns (bool)
     {
-        if (_blacklisted(_msgSender())) revert SharedErrors.SenderBlacklisted();
-        if (_blacklisted(spender)) revert SharedErrors.RecipientBlacklisted();
+        if (value != 0) {
+            if (_blacklisted(_msgSender())) revert SharedErrors.SenderBlacklisted();
+            if (_blacklisted(spender)) revert SharedErrors.RecipientBlacklisted();
+        }
         return super.approve(spender, value);
     }
 

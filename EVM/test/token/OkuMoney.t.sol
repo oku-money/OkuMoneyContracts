@@ -2265,6 +2265,107 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.approve(user2, 50e18);
     }
 
+    // ============ Zero-value approvals always succeed (Cyfrin audit finding #5) ============
+    //
+    // A grantor must be able to revoke an allowance to or from a listed address, or it
+    // revives on `unblacklist` while the old allowance is still honoured by `transferFrom`.
+
+    /// @notice Revoking an allowance to a blacklisted spender works while it is listed, so the
+    ///         allowance cannot revive on unblacklisting (the race the finding describes).
+    function test_Approve_ZeroToBlacklistedSpender_RevokesBeforeUnblacklist() public {
+        _mintOkuMoney(user1, 100e18);
+        vm.prank(user1);
+        okuMoney.approve(user2, 50e18);
+
+        vm.prank(blacklister);
+        okuMoney.blacklist(user2);
+
+        vm.prank(user1);
+        assertTrue(okuMoney.approve(user2, 0));
+        assertEq(okuMoney.allowance(user1, user2), 0, "revoked while the spender is listed");
+
+        vm.prank(unblacklister);
+        okuMoney.unblacklist(user2);
+
+        vm.prank(user2);
+        vm.expectRevert();
+        okuMoney.transferFrom(user1, user2, 1);
+    }
+
+    /// @notice A blacklisted owner can zero its own allowances.
+    function test_Approve_ZeroFromBlacklistedOwner_Succeeds() public {
+        vm.prank(user1);
+        okuMoney.approve(user2, 50e18);
+
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1);
+
+        vm.prank(user1);
+        okuMoney.approve(user2, 0);
+        assertEq(okuMoney.allowance(user1, user2), 0);
+    }
+
+    /// @notice Only zero is exempt: any non-zero value still reverts for a listed owner or spender.
+    function test_Approve_NonZeroStillBlocked_WhenOwnerOrSpenderListed() public {
+        vm.prank(blacklister);
+        okuMoney.blacklist(user2);
+        vm.prank(user1);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
+        okuMoney.approve(user2, 1);
+
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1);
+        vm.prank(user1);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
+        okuMoney.approve(user3, 1);
+    }
+
+    /// @notice A signed zero-value permit revokes (and consumes its nonce) for a listed owner
+    ///         and for a listed spender; a signed non-zero permit stays blocked for both.
+    function test_Permit_ZeroValue_AllowedWhenListed_NonZeroStillBlocked() public {
+        address owner = vm.addr(user2Pk);
+        uint256 deadline = block.timestamp + 1 hours;
+
+        vm.prank(owner);
+        okuMoney.approve(user3, 50e18);
+
+        // Listed spender: zero revokes.
+        vm.prank(blacklister);
+        okuMoney.blacklist(user3);
+        _signAndPermit(user2Pk, owner, user3, 0, deadline);
+        assertEq(okuMoney.allowance(owner, user3), 0, "zero permit revokes for a listed spender");
+        assertEq(okuMoney.nonces(owner), 1);
+
+        // Listed spender: non-zero stays blocked.
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
+                owner,
+                user3,
+                uint256(1),
+                okuMoney.nonces(owner),
+                deadline
+            )
+        );
+        bytes32 digest =
+            keccak256(abi.encodePacked("\x19\x01", _getOkuMoneyDomainSeparator(), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(user2Pk, digest);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
+        okuMoney.permit(owner, user3, 1, deadline, v, r, s);
+
+        // Listed owner: zero succeeds.
+        vm.prank(blacklister);
+        okuMoney.blacklist(owner);
+        _signAndPermit(user2Pk, owner, user1, 0, deadline);
+        assertEq(okuMoney.nonces(owner), 2);
+
+        // Listed owner: non-zero stays blocked.
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
+        okuMoney.permit(owner, user1, 1, deadline, v, r, s);
+    }
+
     // ============ Circle Parity: blacklisted spender cannot exercise a prior allowance ============
 
     /// @notice A blacklisted spender holding a pre-existing allowance (not revoked by

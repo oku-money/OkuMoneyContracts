@@ -183,7 +183,10 @@ contract OkuMoney is
 
     // ============ ERC20Permit Override (Blacklist Check) ============
 
-    /// @dev Blocks blacklisted owners/spenders. Not pause-gated: approvals work while paused.
+    /// @dev Blocks blacklisted owners/spenders from GRANTING an allowance. A zero `value` is
+    ///      always allowed: it grants nothing, and it is the only way to revoke an allowance
+    ///      to or from a listed address (Cyfrin audit finding #5). Not pause-gated: approvals
+    ///      work while paused.
     function permit(
         address owner,
         address spender,
@@ -197,14 +200,18 @@ contract OkuMoney is
         virtual
         override
     {
-        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        if ($.isBlacklisted[owner]) revert SharedErrors.SenderBlacklisted();
-        if ($.isBlacklisted[spender]) revert SharedErrors.RecipientBlacklisted();
+        if (value != 0) {
+            OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+            if ($.isBlacklisted[owner]) revert SharedErrors.SenderBlacklisted();
+            if ($.isBlacklisted[spender]) revert SharedErrors.RecipientBlacklisted();
+        }
         super.permit(owner, spender, value, deadline, v, r, s);
     }
 
     /// @dev Blocks a blacklisted owner or spender from creating allowances (as Circle
-    ///      FiatToken). Existing allowances are not revoked; {transferFrom} stops a
+    ///      FiatToken), except that `approve(spender, 0)` always succeeds so an allowance to
+    ///      or from a listed address can be revoked (Cyfrin audit finding #5; Circle reverts
+    ///      here). Existing allowances are not revoked by listing; {transferFrom} stops a
     ///      blacklisted spender from using them.
     function approve(
         address spender,
@@ -214,9 +221,11 @@ contract OkuMoney is
         override(ERC20Upgradeable, IERC20)
         returns (bool)
     {
-        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        if ($.isBlacklisted[_msgSender()]) revert SharedErrors.SenderBlacklisted();
-        if ($.isBlacklisted[spender]) revert SharedErrors.RecipientBlacklisted();
+        if (value != 0) {
+            OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+            if ($.isBlacklisted[_msgSender()]) revert SharedErrors.SenderBlacklisted();
+            if ($.isBlacklisted[spender]) revert SharedErrors.RecipientBlacklisted();
+        }
         return super.approve(spender, value);
     }
 

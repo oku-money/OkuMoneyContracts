@@ -2267,6 +2267,135 @@ contract OkuDollarTest is BaseTest {
         assertEq(okuDollar.allowance(user1, user2), 50e18, "pre-existing allowance untouched");
     }
 
+    // ============ Zero-value approvals always succeed (Cyfrin audit finding #5) ============
+
+    /// @notice Revoking an allowance to a spender listed on OkuDollar works, so it cannot
+    ///         revive on unblacklisting.
+    function test_Approve_ZeroToBlacklistedSpender_RevokesBeforeUnblacklist() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(user1);
+        okuDollar.approve(user2, 50e18);
+
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        vm.prank(user1);
+        assertTrue(okuDollar.approve(user2, 0));
+        assertEq(okuDollar.allowance(user1, user2), 0, "revoked while the spender is listed");
+
+        vm.prank(unblacklister);
+        okuDollar.unblacklist(user2);
+
+        vm.prank(user2);
+        vm.expectRevert();
+        okuDollar.transferFrom(user1, user2, 1);
+    }
+
+    /// @notice Same, when the spender is listed only on OkuMoney (OkuDollar honours that list).
+    function test_Approve_ZeroToSpenderListedOnOkuMoneyOnly_Succeeds() public {
+        vm.prank(user1);
+        okuDollar.approve(user2, 50e18);
+
+        _blacklistOnOkuMoneyOnly(user2);
+
+        vm.prank(user1);
+        okuDollar.approve(user2, 0);
+        assertEq(okuDollar.allowance(user1, user2), 0);
+    }
+
+    /// @notice A blacklisted owner (on either list) can zero its own allowances.
+    function test_Approve_ZeroFromBlacklistedOwner_Succeeds() public {
+        vm.prank(user1);
+        okuDollar.approve(user2, 50e18);
+        vm.prank(user3);
+        okuDollar.approve(user2, 50e18);
+
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+        _blacklistOnOkuMoneyOnly(user3);
+
+        vm.prank(user1);
+        okuDollar.approve(user2, 0);
+        vm.prank(user3);
+        okuDollar.approve(user2, 0);
+        assertEq(okuDollar.allowance(user1, user2), 0);
+        assertEq(okuDollar.allowance(user3, user2), 0);
+    }
+
+    /// @notice Only zero is exempt: any non-zero value still reverts for a listed owner or spender.
+    function test_Approve_NonZeroStillBlocked_WhenOwnerOrSpenderListed() public {
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+        vm.prank(user1);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
+        okuDollar.approve(user2, 1);
+
+        _blacklistOnOkuMoneyOnly(user1);
+        vm.prank(user1);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
+        okuDollar.approve(user3, 1);
+    }
+
+    /// @notice A signed zero-value permit revokes (and consumes its nonce) for a listed owner
+    ///         and for a listed spender; a signed non-zero permit stays blocked for both.
+    function test_Permit_ZeroValue_AllowedWhenListed_NonZeroStillBlocked() public {
+        address owner = vm.addr(user2Pk);
+        uint256 deadline = block.timestamp + 1 hours;
+
+        vm.prank(owner);
+        okuDollar.approve(user3, 50e18);
+
+        // Listed spender: zero revokes.
+        vm.prank(blacklister);
+        okuDollar.blacklist(user3);
+        (uint8 v, bytes32 r, bytes32 s) = _signUsdPermit(user2Pk, owner, user3, 0, deadline);
+        okuDollar.permit(owner, user3, 0, deadline, v, r, s);
+        assertEq(okuDollar.allowance(owner, user3), 0, "zero permit revokes for a listed spender");
+        assertEq(okuDollar.nonces(owner), 1);
+
+        // Listed spender: non-zero stays blocked.
+        (v, r, s) = _signUsdPermit(user2Pk, owner, user3, 1, deadline);
+        vm.expectRevert(SharedErrors.RecipientBlacklisted.selector);
+        okuDollar.permit(owner, user3, 1, deadline, v, r, s);
+
+        // Listed owner (via OkuMoney's list): zero succeeds, non-zero stays blocked.
+        _blacklistOnOkuMoneyOnly(owner);
+        (v, r, s) = _signUsdPermit(user2Pk, owner, user1, 0, deadline);
+        okuDollar.permit(owner, user1, 0, deadline, v, r, s);
+        assertEq(okuDollar.nonces(owner), 2);
+        (v, r, s) = _signUsdPermit(user2Pk, owner, user1, 1, deadline);
+        vm.expectRevert(SharedErrors.SenderBlacklisted.selector);
+        okuDollar.permit(owner, user1, 1, deadline, v, r, s);
+    }
+
+    function _signUsdPermit(
+        uint256 ownerPk,
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline
+    )
+        internal
+        view
+        returns (uint8 v, bytes32 r, bytes32 s)
+    {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
+                owner,
+                spender,
+                value,
+                okuDollar.nonces(owner),
+                deadline
+            )
+        );
+        bytes32 digest =
+            keccak256(abi.encodePacked("\x19\x01", _getOkuDollarDomainSeparator(), structHash));
+        (v, r, s) = vm.sign(ownerPk, digest);
+    }
+
     // ============ Circle Parity: blacklisted spender cannot exercise a prior allowance ============
 
     /// @notice A blacklisted spender holding a pre-existing allowance must not be able

@@ -348,6 +348,19 @@ Trust assumptions the SVM side makes deliberately; reviewers should not re-flag 
    Risks #1, #3). Recovery after unpause, and catch-up if chains diverged anyway
    (`set-yield-rate.ts --target-multiplier`): [`../README.md` § Depeg longer than the armed
    window](../README.md#depeg-longer-than-the-armed-window).
+5. **Freeze is per token account and does not restrict delegates.** `freeze_account` freezes one
+   OkuM token account (Token-2022 `FreezeAccount`); EVM's blacklist also blocks an address as an
+   approved *spender*, which has no SVM equivalent. Verified against the real Token-2022 program
+   (bankrun `freeze-delegate.ts`):
+   - a frozen *delegate's own* account still spends a delegation held on a clean grantor's
+     account, so freezing the delegate alone does not stop it; freeze the grantor's account, or
+     have the grantor `revoke`;
+   - a frozen *grantor* account can neither `revoke` nor `approve` (`AccountFrozen`), and an
+     existing delegation is live again after `thaw_account`: the SPL analogue of the EVM
+     revive-on-unblacklist (`EVM/README.md` Accepted Risk #12). EVM can zero allowances while
+     the address is listed (Cyfrin audit finding #5); Token-2022 cannot. Before thawing, have the
+     grantor revoke any delegation to an address you do not want to hold one, if exposure is a
+     concern. This is Token-2022 behaviour and the program cannot change it.
 
 ## Testing
 
@@ -356,7 +369,7 @@ From `SVM/oku-programs`; `npm test` runs both suites.
 | Suite | Command | Count |
 |---|---|---|
 | Rust (`cargo test --workspace`) | `npm run test:rust` | 62 (lite-psm 10, oku-shared 51, differential 1) |
-| Bankrun (in-process BPF on litesvm via `anchor-bankrun`) | `npm run test:bankrun` | 130 |
+| Bankrun (in-process BPF on litesvm via `anchor-bankrun`) | `npm run test:bankrun` | 143 |
 | Cross-language `compute_multiplier` (Solidity corpus replayed in Rust and TS; `EVM/test/differential/GenerateVectors.t.sol`) | `npm run test:differential` (repo root) | 3,867 vectors |
 | Stateful sequence fuzz of `lite_psm` (random instruction sequences vs. a model; `tests/fuzz/psm-sequence.ts`) | `npm run test:fuzz` (`FUZZ_SEEDS`, `FUZZ_STEPS`, `FUZZ_SEED` to replay) | 8 seeds x 250 steps |
 | Upgrade-tooling helpers (identity binding, IDL layout diff, state snapshots) | `npm run test:scripts` | 15 |

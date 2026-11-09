@@ -275,6 +275,25 @@ Tested by `EVM/test/hardhat/scenarios/RealWorldUsage.ts` (round-trip and
 multiplier-divergence scenarios) and
 `SVM/oku-programs/tests/bankrun/crossChainBridging.ts`.
 
+**Value in flight earns no yield.** On the reserve-mediated routes the user's
+value is reserve (USDC) in orchestrator custody between the two legs, not OkuM.
+The destination mint is priced at the multiplier when it executes, so a delayed
+leg returns the same dollars as fewer raw OkuM and forgoes the multiplier's rise
+over the delay (about 1.3e-4 of the amount per day at 5 % APY). This is the
+intended cost of a dollar-value-preserving bridge, not a loss of principal.
+SVM ↔ SVM is raw 1:1 and keeps accruing. The PSM has no destination min-out, and
+the contracts hold no bridge state (§ Security notes: no on-chain bridge), so
+the orchestrator owns the delay policy. Requirements for whatever orchestrator
+is in production, so none of them is accidental:
+
+| Mechanic | Status | Why |
+|---|---|---|
+| Maximum delay (SLA) | **Required** | The only thing that bounds the forgone yield. Target the destination mint within the batch cycle; alert at > 1 h (§ Monitoring SLAs) and treat it as a stuck bridge (§ Mid-flight failure recovery). Pauses, closed minting (§ Chain lagging the fleet) and L2 outages (§ L2 sequencer outage) are the known causes of long delays. |
+| Dollar reconciliation | **Required** | After each bridge, check `dollars_received_B` against `dollars_redeemed_A` using the bound above. This is the real min-out: it catches a mispriced or short mint, which a raw OkuM floor cannot. |
+| Minimum raw OkuM out | Redundant | Fewer raw OkuM on a delay is the same dollar value, so a raw floor only restates the delay bound. |
+| Quote expiry | Optional | Nothing is quoted on-chain (the multiplier is computed at execution), so there is no quote to expire. A UI must show dollars, or a raw amount labelled an estimate that falls with time. |
+| Compensation for in-flight yield | Optional | A business policy, not a safety control. If offered, pay it only past the SLA, by supplying extra reserve on the destination mint, so it needs no contract support. |
+
 ### Future bridging
 
 OkuBridge (proprietary burn-and-mint) and third-party rails (NTT,

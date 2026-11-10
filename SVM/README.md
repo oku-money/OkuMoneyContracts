@@ -400,7 +400,7 @@ From `SVM/oku-programs`; `npm test` runs both suites.
 | Bankrun (in-process BPF on litesvm via `anchor-bankrun`) | `npm run test:bankrun` | 150 |
 | Cross-language `compute_multiplier` (Solidity corpus replayed in Rust and TS; `EVM/test/differential/GenerateVectors.t.sol`) | `npm run test:differential` (repo root) | 3,867 vectors |
 | Stateful sequence fuzz of `lite_psm` (random instruction sequences vs. a model; `tests/fuzz/psm-sequence.ts`) | `npm run test:fuzz` (`FUZZ_SEEDS`, `FUZZ_STEPS`, `FUZZ_SEED` to replay) | 8 seeds x 250 steps |
-| Upgrade-tooling helpers (identity binding, IDL layout diff, state snapshots) | `npm run test:scripts` | 24 |
+| Upgrade-tooling helpers (identity binding, IDL layout diff, state snapshots), deploy USDC binding, grant-roles guard | `npm run test:scripts` | 32 |
 | Upgrade drill (real validator: deploy-init, direct, propose → execute → verify, refusals) | `npm run drill:upgrade` | — |
 | Live devnet / fork smoke | `npm run test:onchain[:fork]` | — |
 
@@ -539,7 +539,10 @@ record nothing.
 Mainnet roles follow the Squads tiers in
 [`../README.md` § RBAC](../README.md#rbac-role-based-access-control). On devnet/testnet, day-to-day
 operation is often delegated to a coworker- or CI-owned key while governance retains ownership:
-`grant-roles.ts --delegate=<pubkey>` moves only the 4 operational roles.
+`grant-roles.ts --delegate=<pubkey>` moves only the 4 operational roles. `--delegate` is required (no
+default key) and the script **refuses `mainnet-beta` / `mainnet-fork`** before creating a provider;
+there is no `admin:grant-roles:mainnet` alias. Mainnet role changes go through `set-authority.ts`,
+which always names its recipient (Cyfrin audit #15).
 
 - **Operational** (delegable; allowance/cap-bounded): `direct_minter`, `direct_burner`, `rate_manager`,
   `buffer_depositor`.
@@ -571,7 +574,7 @@ All under `scripts/admin/`. Each prints a summary before any state change, honou
 | Script (`npm run …`) | Wraps | Role gate |
 |---|---|---|
 | `admin:set-authority` | `set_authority` (any role; `--role=roleAdmin` only *proposes*) | `role_admin` |
-| `admin:grant-roles` (`--delegate=<pubkey>`) | `set_authority` for the 4 operational roles + resets their allowances | `role_admin` (+ `allowance_manager`, best-effort) |
+| `admin:grant-roles` (`--delegate=<pubkey>`, devnet/testnet only) | `set_authority` for the 4 operational roles + resets their allowances | `role_admin` (+ `allowance_manager`, best-effort) |
 | `admin:pause-psm` / `admin:unpause-psm` | `pause` / `unpause` | `pauser` / `unpauser` |
 | `admin:set-max-supply` | `set_max_supply` | `cap_manager` |
 | `admin:set-minter-allowance` / `admin:set-direct-minter-allowance` / `admin:set-direct-burner-allowance` | `set_*_allowance` | `allowance_manager` |

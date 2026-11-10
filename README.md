@@ -647,7 +647,9 @@ only because testnet OkuM is backed by MockUSDC and has no value:
   rationale: [`EVM/README.md` § Role Grants Policy](EVM/README.md#role-grants-policy).
 - **SVM** — `scripts/admin/grant-roles.ts --delegate=<pubkey>` moves only
   `direct_minter`, `direct_burner`, `rate_manager`, `buffer_depositor`, and will
-  never touch the governance/safety set or `role_admin`. Rationale:
+  never touch the governance/safety set or `role_admin`. Like `grantRoles.ts` it
+  **refuses mainnet-beta and mainnet-fork**, and `--delegate` is required with no
+  default (Cyfrin audit #15); mainnet role changes use `set-authority.ts`. Rationale:
   [`SVM/README.md` § Delegated operation vs. retained ownership](SVM/README.md#delegated-operation-vs-retained-ownership-devnettestnet).
 
 Both tools are idempotent and support a dry run.

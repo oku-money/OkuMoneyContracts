@@ -17,7 +17,9 @@
  * `role_admin` on the PSM program.
  *
  * Usage:
- *   NETWORK=devnet tsx scripts/admin/grant-roles.ts [--delegate=<pubkey>] [--dry-run] [--mint-usdc]
+ *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --delegate=<pubkey> [--dry-run] [--mint-usdc]
+ *   (--delegate is required, there is no default; mainnet-beta / mainnet-fork are refused:
+ *   use set-authority.ts for mainnet role changes)
  *   (--mint-usdc: opt-in mock USDC mint to the delegate)
  */
 
@@ -45,18 +47,16 @@ import { loadDeploymentStrict } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
+import { assertGrantRolesNetworkAllowed, resolveDelegate } from './_lib/grant-roles-guard';
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
 import {
-  DEFAULT_DIRECT_MINTER,
   DIRECT_MINTER_ALLOWANCE as DIRECT_MINTER_ALLOWANCE_CONST,
   DIRECT_BURNER_ALLOWANCE as DIRECT_BURNER_ALLOWANCE_CONST,
 } from '../config/constants';
-
-const DEFAULT_DELEGATE = DEFAULT_DIRECT_MINTER;
 
 function parseArg(name: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));
@@ -67,8 +67,7 @@ function hasFlag(name: string): boolean {
   return process.argv.includes(`--${name}`);
 }
 
-const delegateArg = parseArg('delegate');
-const DELEGATE_PUBKEY = new PublicKey(delegateArg ?? DEFAULT_DELEGATE);
+const DELEGATE_PUBKEY = resolveDelegate(parseArg('delegate'));
 
 /** Opt-in: mint mock USDC to a recipient. Off by default. */
 const MINT_USDC = hasFlag('mint-usdc');
@@ -152,10 +151,7 @@ interface GrantResult {
 async function main() {
   const network = detectNetwork();
   logger.header(`grant-roles (${network})`);
-
-  if (DELEGATE_PUBKEY.equals(PublicKey.default)) {
-    throw new Error('Delegate pubkey cannot be the zero pubkey.');
-  }
+  assertGrantRolesNetworkAllowed(network);
 
   const dryRun = isDryRun();
   const provider = createProvider(network);

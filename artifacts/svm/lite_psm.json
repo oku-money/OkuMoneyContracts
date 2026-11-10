@@ -3608,8 +3608,10 @@
           {
             "name": "base_multiplier",
             "docs": [
-              "Multiplier snapshot taken at this write, so indexers can reconstruct",
-              "`m(t)` without replaying history"
+              "Multiplier at this write. It is the new stored base, except when the write",
+              "re-arms the segment already accruing: then the stored base and anchor are kept",
+              "(or the successor is promoted at `rate_end`; `Schedule::rearm_anchor`) and this",
+              "is only the curve's value at `timestamp`. Read the config for the stored anchor."
             ],
             "type": "u128"
           },

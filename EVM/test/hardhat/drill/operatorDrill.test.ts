@@ -27,7 +27,7 @@
 
 import { expect } from "chai";
 import { ethers, network } from "hardhat";
-import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { time, takeSnapshot } from "@nomicfoundation/hardhat-network-helpers";
 import fs from "fs";
 import path from "path";
 import { OkuMoney } from "../../../typechain-types";
@@ -50,7 +50,7 @@ import { deriveStageSettlement, deriveRollEpoch } from "../../../scripts/operato
 import { loadArtifact } from "../../../scripts/utils/epochArtifact";
 import { applyScheduleToChain } from "../../../scripts/operator/applyScheduleSingleChain";
 import { summarizeLedger, upsertLedgerEntry, backfillReconciliation, buildLedgerEntry, loadLedger } from "../../../scripts/utils/carryLedger";
-import { reconcileActualPayout } from "@okumoney/yield-tooling";
+import { reconcileActualPayout, computeMultiplier } from "@okumoney/yield-tooling";
 
 const ADDRESS_BOOK_PATH = path.join(__dirname, "../../../scripts/config/addresses.json");
 // Gitignored reference-implementation stores. They MUST be cleared before
@@ -359,11 +359,8 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const artifact = await deriveRollEpoch(ctx, admin, {
             epochId: `drill-roll-${Date.now()}`,
             nextRealisedYieldUsd,
-            // One settlement window, NOT a full epoch. `deriveRollEpoch` computes
-            // nextRateEnd = <current on-chain rateEnd> + epochLength*(1-1/15),
-            // and the contract requires nextRateEnd > rateEnd. A full-epoch
-            // value here exceeds that and reverts PendingEndNotAfterRateEnd.
-            nextEndTimestamp: BigInt(await time.latest()) + BigInt(5760),
+            // No nextEndTimestamp: the roll re-arms the running settlement segment with
+            // its own end, read from chain (Cyfrin #13).
             epochLengthSec: 86400,
             // Single-chain local drill: "global" value IS this chain's value.
             // sampleGlobalValueUsd() is CHAIN_METADATA-driven and cannot be
@@ -475,11 +472,8 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const rollArtifactA = await deriveRollEpoch(ctx, admin, {
             epochId: EPOCH_A,
             nextRealisedYieldUsd: supplyAtRoll * 0.0005,
-            // One settlement window, NOT a full epoch. `deriveRollEpoch` computes
-            // nextRateEnd = <current on-chain rateEnd> + epochLength*(1-1/15),
-            // and the contract requires nextRateEnd > rateEnd. A full-epoch
-            // value here exceeds that and reverts PendingEndNotAfterRateEnd.
-            nextEndTimestamp: BigInt(await time.latest()) + BigInt(5760),
+            // No nextEndTimestamp: the roll re-arms the running settlement segment with
+            // its own end, read from chain (Cyfrin #13).
             epochLengthSec: 86400,
             globalValueUsdOverride: supplyAtRoll * multAtRoll,
             chains: drillChains(),
@@ -531,11 +525,8 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const rollArtifactB = await deriveRollEpoch(ctx, admin, {
             epochId: EPOCH_B,
             nextRealisedYieldUsd: supplyAtRollB * 0.0005,
-            // One settlement window, NOT a full epoch. `deriveRollEpoch` computes
-            // nextRateEnd = <current on-chain rateEnd> + epochLength*(1-1/15),
-            // and the contract requires nextRateEnd > rateEnd. A full-epoch
-            // value here exceeds that and reverts PendingEndNotAfterRateEnd.
-            nextEndTimestamp: BigInt(await time.latest()) + BigInt(5760),
+            // No nextEndTimestamp: the roll re-arms the running settlement segment with
+            // its own end, read from chain (Cyfrin #13).
             epochLengthSec: 86400,
             globalValueUsdOverride: supplyAtRollB * multAtRollB,
             chains: drillChains(),
@@ -586,6 +577,140 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const epochAEntry = loadLedger().find((e) => e.epochId === EPOCH_A)!;
         expect(epochAEntry.reconciledCarryUsd).to.equal(rollArtifactB.meta.carryInUsd);
         expect(epochAEntry.carryForwardUsd).to.equal(0); // unchanged — a DIFFERENT field from reconciledCarryUsd
+    });
+
+    it("epoch pipeline in steady state (Cyfrin #13): stage -> roll -> stage -> roll applies, and the stored schedule does not depend on the landing second", async function () {
+        const PRECISION = 10n ** 18n;
+        const EPOCH = 86_400;
+        const SETTLE = 5_760; // 1/15 of the epoch, the default settlement fraction
+        const BASE = EPOCH - SETTLE;
+
+        const value = async () =>
+            Number(ethers.formatEther(await okuMoney.totalSupply())) * (Number(await okuMoney.okuMMultiplier()) / 1e18);
+        const sampleUntil = async (t: number) => {
+            while ((await time.latest()) + 4 * 3600 < t) {
+                await time.increase(4 * 3600);
+                await appendDrillSample(await value());
+            }
+            await time.increaseTo(t);
+            await appendDrillSample(await value());
+        };
+        const stored = async () => ({
+            base: await okuMoney.okuMBaseMultiplier(),
+            anchor: await okuMoney.okuMLastAccrualTime(),
+            rate: await okuMoney.okuMRatePerSecond(),
+            rateEnd: await okuMoney.okuMRateEnd(),
+            pending: await okuMoney.okuMPendingRatePerSecond(),
+            pendingEnd: await okuMoney.okuMPendingRateEnd(),
+        });
+        const scheduleOf = (x: Awaited<ReturnType<typeof stored>>) => ({
+            baseMultiplier: x.base,
+            ratePerSecond: x.rate,
+            lastAccrualTime: x.anchor,
+            rateEnd: x.rateEnd,
+            pendingRatePerSecond: x.pending,
+            pendingRateEnd: x.pendingEnd,
+        });
+        const send = (a: any) =>
+            runSetOkuMYieldRate(ctx, admin, {
+                mode: "withSuccessor",
+                rate: BigInt(a.schedule.rate),
+                endTimestamp: BigInt(a.schedule.rateEnd),
+                nextRate: BigInt(a.schedule.nextRate),
+                pendingEndTimestamp: BigInt(a.schedule.nextRateEnd),
+            });
+
+        /**
+         * Land the same artifact at two different seconds (12 s apart, as two chains
+         * might) from the same pre-state, and require byte-identical stored schedules.
+         * Also require the write to leave the curve unchanged, integer for integer,
+         * up to the end of the segment it re-arms. Then apply it for real through the
+         * production applier.
+         */
+        const applyLandingInvariant = async (a: any, expectedAnchor: bigint) => {
+            const before = await stored();
+            const snap = await takeSnapshot();
+            await send(a);
+            const first = await stored();
+            await snap.restore();
+            await time.increase(12);
+            await send(a);
+            const second = await stored();
+            expect(second, "stored schedule depends on the landing second").to.deep.equal(first);
+            expect(first.anchor, "anchor is the segment start, not the landing second").to.equal(expectedAnchor);
+            const end = BigInt(a.schedule.rateEnd);
+            for (const t of [BigInt(await time.latest()), (BigInt(await time.latest()) + end) / 2n, end]) {
+                expect(computeMultiplier(scheduleOf(first), t), `curve moved at ${t}`).to.equal(
+                    computeMultiplier(scheduleOf(before), t)
+                );
+            }
+            await snap.restore();
+            expect(await applyScheduleToChain(a, ctx, admin, false)).to.equal("recorded");
+            expect(await stored()).to.deep.equal(first);
+        };
+
+        // Fresh first epoch: base window [t0, t0 + BASE]
+        const t0 = (await time.latest()) + 1;
+        await time.setNextBlockTimestamp(t0);
+        await runSetOkuMYieldRate(ctx, admin, { mode: "direct", rate: PRECISION + 10n ** 8n, endTimestamp: BigInt(t0 + BASE) });
+        await appendDrillSample(await value());
+        const supply = Number(ethers.formatEther(await okuMoney.totalSupply()));
+
+        // Epoch 1 stage: the stored active window is still live, so the re-arm keeps it.
+        await sampleUntil(t0 + BASE - 4 * 3600);
+        const stage1 = await deriveStageSettlement(ctx, admin, {
+            epochId: "steady-stage-1", realisedYieldUsd: supply * 0.0005, pendingEndTimestamp: BigInt(t0 + EPOCH), chains: drillChains(),
+        });
+        expect(stage1.schedule.rateEnd).to.equal(t0 + BASE);
+        await applyLandingInvariant(stage1, BigInt(t0));
+
+        // Epoch 1 roll, inside the settlement window: the settlement successor is promoted
+        // at the base window's end, and the next base window ends one BASE after the epoch.
+        await sampleUntil(t0 + BASE + 600);
+        const roll1 = await deriveRollEpoch(ctx, admin, {
+            epochId: "steady-roll-1", nextRealisedYieldUsd: supply * 0.0005, epochLengthSec: EPOCH,
+            globalValueUsdOverride: await value(), chains: drillChains(),
+        });
+        expect(roll1.schedule.rate).to.equal(stage1.schedule.nextRate);
+        expect(roll1.schedule.rateEnd).to.equal(t0 + EPOCH);
+        expect(roll1.schedule.nextRateEnd, "next base window is a full BASE long").to.equal(t0 + EPOCH + BASE);
+        await applyLandingInvariant(roll1, BigInt(t0 + BASE));
+
+        // Epoch 2 stage: steady state. The stored active window (the settlement) has
+        // lapsed and the base rate the roll staged is accruing. This used to derive a
+        // re-arm of the lapsed segment and revert EndTimestampInPast.
+        await sampleUntil(t0 + EPOCH + BASE - 4 * 3600);
+        const stage2 = await deriveStageSettlement(ctx, admin, {
+            epochId: "steady-stage-2", realisedYieldUsd: supply * 0.0005, pendingEndTimestamp: BigInt(t0 + 2 * EPOCH), chains: drillChains(),
+        });
+        expect(stage2.schedule.rate).to.equal(roll1.schedule.nextRate);
+        expect(stage2.schedule.rateEnd).to.equal(t0 + EPOCH + BASE);
+        await applyLandingInvariant(stage2, BigInt(t0 + EPOCH));
+
+        // Epoch 2 roll. A different end for the running settlement is refused first.
+        await sampleUntil(t0 + EPOCH + BASE + 600);
+        await expect(
+            deriveRollEpoch(ctx, admin, {
+                epochId: "steady-roll-bad-end", nextRealisedYieldUsd: 1, epochLengthSec: EPOCH,
+                nextEndTimestamp: BigInt(t0 + 2 * EPOCH + 1), globalValueUsdOverride: await value(), chains: drillChains(),
+            })
+        ).to.be.rejectedWith(/re-arms that segment unchanged/);
+        const roll2 = await deriveRollEpoch(ctx, admin, {
+            epochId: "steady-roll-2", nextRealisedYieldUsd: supply * 0.0005, epochLengthSec: EPOCH,
+            globalValueUsdOverride: await value(), chains: drillChains(),
+        });
+        expect(roll2.schedule.rateEnd).to.equal(t0 + 2 * EPOCH);
+        expect(roll2.schedule.nextRateEnd).to.equal(t0 + 2 * EPOCH + BASE);
+        await applyLandingInvariant(roll2, BigInt(t0 + EPOCH + BASE));
+
+        // Right after the roll the settlement is the stored active window again (not a
+        // live successor): a second roll now is outside the settlement window, refused.
+        await expect(
+            deriveRollEpoch(ctx, admin, {
+                epochId: "steady-roll-early", nextRealisedYieldUsd: 1, epochLengthSec: EPOCH,
+                globalValueUsdOverride: await value(), chains: drillChains(),
+            })
+        ).to.be.rejectedWith(/must run while the staged settlement segment is accruing/);
     });
 
     it("setOkuMMultiplier: emergency override collapses the schedule", async () => {

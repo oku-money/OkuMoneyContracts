@@ -160,8 +160,11 @@ abstract contract OkuMoneyRateSchedule is
     /// @param endTimestamp Expiry. Must be 0 when halting; otherwise strictly future and
     ///        within {Constants.MAX_RATE_WINDOW} (README § Streaming Accrual).
     /// @dev Snapshots the current multiplier as the new base, so the curve is continuous
-    ///      across the write (no `lastOverrideBlock` stamp). Clears any armed
-    ///      successor. Prefer {setOkuMYieldRateWithSuccessor} to two separate transactions.
+    ///      across the write (no `lastOverrideBlock` stamp), except when the write re-arms
+    ///      the segment already accruing, which keeps (or promotes) the stored anchor so the
+    ///      result does not depend on the landing second (see {_rearmAnchor}). Clears any
+    ///      armed successor. Prefer {setOkuMYieldRateWithSuccessor} to two separate
+    ///      transactions.
     function setOkuMYieldRate(
         uint256 newRate,
         uint256 endTimestamp
@@ -300,18 +303,73 @@ abstract contract OkuMoneyRateSchedule is
         // Announce the successor being discarded while it is still in storage.
         _emitPendingRateCancelledIfArmed($);
 
-        // Re-anchor at now with the new rate and window; any staged successor is cleared.
-        $.okuMBaseMultiplier = SafeCast.toUint96(snapshot);
-        $.okuMLastAccrualTime = SafeCast.toUint48(block.timestamp);
+        // Re-anchor with the new rate and window (at now, unless the write re-arms the
+        // segment already accruing); any staged successor is cleared.
+        (uint256 base, uint256 anchor) = _rearmAnchor($, newRate, endTimestamp, snapshot);
+        $.okuMBaseMultiplier = SafeCast.toUint96(base);
+        $.okuMLastAccrualTime = SafeCast.toUint48(anchor);
         $.okuMRatePerSecond = SafeCast.toUint64(newRate);
         $.okuMRateEnd = SafeCast.toUint48(endTimestamp);
         $.okuMPendingRatePerSecond = NO_YIELD_RATE;
         $.okuMPendingRateEnd = 0;
 
+        // `snapshot` is the multiplier at this write. When {_rearmAnchor} keeps or promotes
+        // the anchor it is not the stored base, but it is still the curve's value now.
         emit OkuMYieldRateUpdated(oldRate, newRate, endTimestamp, snapshot);
         // ERC-8056: old == new on purpose; the value is continuous at the write, only the
         // rate going forward changed.
         emit UIMultiplierUpdated(snapshot, snapshot, block.timestamp);
+    }
+
+    /// @dev The `(base, anchor)` an active-rate write stores (Cyfrin audit #13).
+    ///
+    ///      A re-anchor at `block.timestamp` leaves the curve mathematically unchanged, but
+    ///      the stored base is an integer snapshot: `rpow` rounds on every multiply and
+    ///      `compoundFor` floors once per leg, so splitting a segment at different seconds
+    ///      gives different integers. Identical broadcasts landing at different seconds on
+    ///      two chains would leave them wei apart for good, and the epoch pipeline re-arms
+    ///      the running rate twice per epoch. So a write that re-arms the segment ALREADY
+    ///      accruing stores a base and anchor that depend only on the schedule, never on
+    ///      the landing second:
+    ///
+    ///      1. Keep: the active window is live and the write repeats its rate and end. The
+    ///         stored `(base, anchor)` stays as it is.
+    ///      2. Promote: the active window has lapsed, so the armed successor is accruing,
+    ///         and the write repeats the successor's rate and end. The successor becomes
+    ///         the active segment from where it began: base = the multiplier at
+    ///         `okuMRateEnd`, anchor = `okuMRateEnd`. That is exactly how
+    ///         {MathLib.computeMultiplier} already compounds it (branch 2), so the curve is
+    ///         identical integer for integer.
+    ///      3. Anything else (a new rate or end, a halt) re-anchors at now: `snapshot`.
+    ///
+    ///      In cases 1 and 2 the curve is the same integers before and after, so a paused
+    ///      re-arm of the running segment, which the pause gate admits, raises nothing.
+    ///      The emitted events still carry `snapshot`, the multiplier at the write.
+    ///      SVM: `oku_shared::Schedule::rearm_anchor`; TS: `rearmAnchor` (yield-tooling).
+    function _rearmAnchor(
+        RateScheduleStorage storage $,
+        uint256 newRate,
+        uint256 endTimestamp,
+        uint256 snapshot
+    )
+        private
+        view
+        returns (uint256 base, uint256 anchor)
+    {
+        uint256 rateEnd = $.okuMRateEnd;
+        if (newRate > Constants.PRECISION) {
+            if (block.timestamp <= rateEnd) {
+                if (newRate == $.okuMRatePerSecond && endTimestamp == rateEnd) {
+                    return ($.okuMBaseMultiplier, $.okuMLastAccrualTime);
+                }
+            } else if (
+                rateEnd != 0 && newRate == $.okuMPendingRatePerSecond
+                    && endTimestamp == $.okuMPendingRateEnd
+            ) {
+                return (_projectedAtRateEnd($), rateEnd);
+            }
+        }
+        return (snapshot, block.timestamp);
     }
 
     /// @dev Shared body for {setNextOkuMYieldRate} and {setOkuMYieldRateWithSuccessor}.
@@ -369,9 +427,10 @@ abstract contract OkuMoneyRateSchedule is
     ///      whoever redeems first after unpause. A halt always passes. A yielding rate must
     ///      not exceed the EFFECTIVE rate nor outlast the segment accruing it, so the new
     ///      curve grows no faster and stops no later (the cleared successor only lowers it).
-    ///      Exact for rates and ends; a same-rate re-arm can still raise the projected value
-    ///      by a few wei of rounding, since it re-anchors at `block.timestamp` (README
-    ///      Accepted Risk #16).
+    ///      A re-arm of the running segment keeps its anchor ({_rearmAnchor}), so it leaves
+    ///      the curve's integers unchanged. Any other admitted write re-anchors at now; one
+    ///      that cuts the rate by only a few wei per second can still land a few wei above
+    ///      the old curve through rounding (README § Pausing).
     function _requireActiveNotRaisedWhilePaused(
         RateScheduleStorage storage $,
         uint256 newRate,

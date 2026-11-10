@@ -29,7 +29,10 @@ abstract contract OkuMoneyEvents {
     /// @param newRate            New per-second rate (PRECISION = no yield)
     /// @param endTimestamp       Timestamp the new rate expires (0 = halted; only
     ///                           valid when newRate == PRECISION)
-    /// @param snapshotMultiplier Multiplier snapshotted as the new accrual base
+    /// @param snapshotMultiplier Multiplier at the write. This is the new accrual base,
+    ///                           except when the write re-arms the segment already accruing:
+    ///                           then the stored base and anchor are kept (or the successor is
+    ///                           promoted at `okuMRateEnd`) and this is only the curve's value
     event OkuMYieldRateUpdated(
         uint256 oldRate, uint256 newRate, uint256 endTimestamp, uint256 snapshotMultiplier
     );

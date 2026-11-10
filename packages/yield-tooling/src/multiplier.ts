@@ -167,6 +167,58 @@ export function effectiveRate(s: Schedule, nowTs: bigint): bigint {
 }
 
 /**
+ * The rate accruing at `nowTs` and when it stops: the active window up to `rateEnd`,
+ * then the successor up to `pendingRateEnd`, then `(PRECISION, 0n)`.
+ *
+ * Port of `OkuMoneyRateSchedule._effectiveSegment` (EVM) and
+ * `oku_shared::rate::Schedule::effective_segment` (SVM). A re-arm that should not
+ * re-anchor (see {@link rearmAnchor}) writes exactly this pair as its active rate and end.
+ */
+export function effectiveSegment(s: Schedule, nowTs: bigint): { rate: bigint; end: bigint } {
+  if (s.rateEnd !== 0n && nowTs > s.rateEnd) {
+    if (s.pendingRateEnd !== 0n && nowTs > s.pendingRateEnd) return { rate: PRECISION, end: 0n };
+    return { rate: s.pendingRatePerSecond, end: s.pendingRateEnd };
+  }
+  return { rate: s.ratePerSecond, end: s.rateEnd };
+}
+
+/**
+ * The `(baseMultiplier, lastAccrualTime)` an active-rate write of `(newRate, newEnd)` at
+ * `nowTs` stores (Cyfrin audit #13).
+ *
+ * A re-anchor at `nowTs` leaves the curve mathematically unchanged, but the stored base
+ * is an integer snapshot, so splitting a segment at different seconds gives different
+ * integers and identical broadcasts landing at different seconds would leave chains wei
+ * apart. A write that re-arms the segment ALREADY accruing therefore stores a base and
+ * anchor that depend only on the schedule:
+ *   1. keep: the active window is live and the write repeats its rate and end;
+ *   2. promote: the active window has lapsed and the write repeats the live successor's
+ *      rate and end: base = the multiplier at `rateEnd`, anchor = `rateEnd`;
+ *   3. otherwise re-anchor at `nowTs`.
+ *
+ * Port of `OkuMoneyRateSchedule._rearmAnchor` (EVM) and
+ * `oku_shared::rate::Schedule::rearm_anchor` (SVM); checked against the Solidity by the
+ * re-arm differential corpus. Does not validate the write (the chains do).
+ */
+export function rearmAnchor(
+  s: Schedule,
+  nowTs: bigint,
+  newRate: bigint,
+  newEnd: bigint,
+): { baseMultiplier: bigint; lastAccrualTime: bigint } {
+  if (newRate > PRECISION) {
+    if (nowTs <= s.rateEnd) {
+      if (newRate === s.ratePerSecond && newEnd === s.rateEnd) {
+        return { baseMultiplier: s.baseMultiplier, lastAccrualTime: s.lastAccrualTime };
+      }
+    } else if (s.rateEnd !== 0n && newRate === s.pendingRatePerSecond && newEnd === s.pendingRateEnd) {
+      return { baseMultiplier: computeMultiplier(s, s.rateEnd), lastAccrualTime: s.rateEnd };
+    }
+  }
+  return { baseMultiplier: computeMultiplier(s, nowTs), lastAccrualTime: nowTs };
+}
+
+/**
  * Project an Anchor-decoded `PsmConfig` into a {@link Schedule}.
  *
  * Accepts anything BN-like or bigint-like for each field so it works against

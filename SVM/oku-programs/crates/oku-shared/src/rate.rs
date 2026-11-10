@@ -94,6 +94,42 @@ impl Schedule {
         }
         (self.rate_per_second, self.rate_end)
     }
+
+    /// The `(base_multiplier, last_accrual_time)` an active-rate write at `now_ts` stores
+    /// for `(new_rate, new_end)` (Cyfrin audit #13).
+    ///
+    /// A re-anchor at `now_ts` leaves the curve mathematically unchanged, but the stored
+    /// base is an integer snapshot: [`rpow`] rounds on every multiply and [`compound_for`]
+    /// floors once per leg, so splitting a segment at different seconds gives different
+    /// integers. Identical broadcasts landing at different seconds would leave chains wei
+    /// apart for good, and the epoch pipeline re-arms the running rate twice per epoch.
+    /// So a write that re-arms the segment ALREADY accruing stores a base and anchor that
+    /// depend only on the schedule, never on the landing second:
+    ///
+    /// 1. Keep: the active window is live and the write repeats its rate and end.
+    /// 2. Promote: the active window has lapsed, so the armed successor is accruing, and
+    ///    the write repeats the successor's rate and end. Base = the multiplier at
+    ///    `rate_end`, anchor = `rate_end`: exactly how [`compute_multiplier`] already
+    ///    compounds it (branch 2), so the curve is identical integer for integer.
+    /// 3. Anything else (a new rate or end, a halt) re-anchors at `now_ts`.
+    ///
+    /// `None` where [`Self::multiplier_at`] is `None`.
+    /// EVM: `OkuMoneyRateSchedule._rearmAnchor`; TS: `rearmAnchor` (yield-tooling).
+    pub fn rearm_anchor(&self, now_ts: i64, new_rate: u128, new_end: i64) -> Option<(u128, i64)> {
+        if new_rate > PRECISION {
+            if now_ts <= self.rate_end {
+                if new_rate == self.rate_per_second && new_end == self.rate_end {
+                    return Some((self.base_multiplier, self.last_accrual_time));
+                }
+            } else if self.rate_end != 0
+                && new_rate == self.pending_rate_per_second
+                && new_end == self.pending_rate_end
+            {
+                return Some((self.multiplier_at(self.rate_end)?, self.rate_end));
+            }
+        }
+        Some((self.multiplier_at(now_ts)?, now_ts))
+    }
 }
 
 /// `x^n / PRECISION^(n-1)`: exponentiation by squaring with half-up rounding,
@@ -505,6 +541,168 @@ mod tests {
             prev = m;
             t += 997; // prime step, lands on both sides of both boundaries
         }
+    }
+
+    // ---- rearm_anchor (Cyfrin audit #13) ----
+
+    const T0: i64 = 1_800_000_000;
+    const BASE_WINDOW: i64 = 80_640;
+    // about 5% APY and about 8% APY as per-second rates (Cyfrin's PoC)
+    const RATE_BASE: u128 = 1_000_000_001_547_126_016;
+    const RATE_SETTLE: u128 = 1_000_000_002_440_418_608;
+
+    /// What `apply_active_rate` + `apply_successor` store for an atomic re-arm.
+    fn write(s: &Schedule, now: i64, rate: u128, end: i64, next: u128, next_end: i64) -> Schedule {
+        let (base, anchor) = s.rearm_anchor(now, rate, end).unwrap();
+        Schedule {
+            base_multiplier: base,
+            rate_per_second: rate,
+            last_accrual_time: anchor,
+            rate_end: end,
+            pending_rate_per_second: next,
+            pending_rate_end: next_end,
+        }
+    }
+
+    /// Cyfrin's PoC on the SVM math, inverted: 12 s of landing skew over 30 epochs used to
+    /// leave the later chain 81 wei higher. The stored schedules are now identical.
+    #[test]
+    fn rearm_poc_leaves_skewed_chains_identical() {
+        let first = write(
+            &Schedule::halted_at(T0),
+            T0,
+            RATE_BASE,
+            T0 + BASE_WINDOW,
+            RATE_SETTLE,
+            T0 + DAY,
+        );
+        let (mut a, mut b) = (first, first);
+        for k in 0..30 {
+            let s = T0 + k * DAY;
+            let t1 = s + BASE_WINDOW - 3_600;
+            a = write(&a, t1, RATE_BASE, s + BASE_WINDOW, RATE_SETTLE, s + DAY);
+            b = write(
+                &b,
+                t1 + 12,
+                RATE_BASE,
+                s + BASE_WINDOW,
+                RATE_SETTLE,
+                s + DAY,
+            );
+            let t2 = s + BASE_WINDOW + 1_000;
+            a = write(
+                &a,
+                t2,
+                RATE_SETTLE,
+                s + DAY,
+                RATE_BASE,
+                s + DAY + BASE_WINDOW,
+            );
+            b = write(
+                &b,
+                t2 + 12,
+                RATE_SETTLE,
+                s + DAY,
+                RATE_BASE,
+                s + DAY + BASE_WINDOW,
+            );
+        }
+        assert_eq!(a, b);
+        assert_eq!(a.last_accrual_time, T0 + 29 * DAY + BASE_WINDOW);
+        let end = T0 + 30 * DAY;
+        assert_eq!(a.multiplier_at(end), b.multiplier_at(end));
+    }
+
+    fn armed() -> Schedule {
+        write(
+            &Schedule::halted_at(T0),
+            T0,
+            RATE_BASE,
+            T0 + BASE_WINDOW,
+            RATE_SETTLE,
+            T0 + DAY,
+        )
+    }
+
+    #[test]
+    fn rearm_keep_repeating_the_live_active_segment() {
+        let s = armed();
+        let now = T0 + 12_345;
+        assert_eq!(
+            s.rearm_anchor(now, RATE_BASE, T0 + BASE_WINDOW),
+            Some((s.base_multiplier, s.last_accrual_time))
+        );
+    }
+
+    #[test]
+    fn rearm_promote_repeating_the_live_successor_keeps_the_curve() {
+        let s = armed();
+        let now = T0 + BASE_WINDOW + 1_000;
+        let (base, anchor) = s.rearm_anchor(now, RATE_SETTLE, T0 + DAY).unwrap();
+        assert_eq!(anchor, T0 + BASE_WINDOW);
+        assert_eq!(Some(base), s.multiplier_at(T0 + BASE_WINDOW));
+        let after = write(&s, now, RATE_SETTLE, T0 + DAY, PRECISION, 0);
+        let mut t = now;
+        while t <= T0 + DAY {
+            assert_eq!(
+                after.multiplier_at(t),
+                s.multiplier_at(t),
+                "curve moved at {t}"
+            );
+            t += 331;
+        }
+        assert_eq!(after.multiplier_at(T0 + DAY), s.multiplier_at(T0 + DAY));
+    }
+
+    #[test]
+    fn rearm_anything_else_reanchors_at_now() {
+        let s = armed();
+        let now = T0 + 5_000;
+        let fresh = Some((s.multiplier_at(now).unwrap(), now));
+        for (rate, end) in [
+            (RATE_BASE + 1, T0 + BASE_WINDOW),
+            (RATE_BASE - 1, T0 + BASE_WINDOW),
+            (RATE_BASE, T0 + BASE_WINDOW + 1),
+            (RATE_BASE, T0 + BASE_WINDOW - 1),
+            (RATE_SETTLE, T0 + DAY), // the successor while the active window is live
+            (PRECISION, 0),          // a halt
+        ] {
+            assert_eq!(s.rearm_anchor(now, rate, end), fresh, "({rate}, {end})");
+        }
+        // lapsed active window, near misses of the successor
+        let later = T0 + BASE_WINDOW + 10;
+        let fresh = Some((s.multiplier_at(later).unwrap(), later));
+        assert_eq!(s.rearm_anchor(later, RATE_SETTLE + 1, T0 + DAY), fresh);
+        assert_eq!(s.rearm_anchor(later, RATE_SETTLE, T0 + DAY + 1), fresh);
+        assert_eq!(s.rearm_anchor(later, RATE_BASE, T0 + BASE_WINDOW), fresh);
+        // a halted schedule has no segment to keep
+        let h = Schedule::halted_at(T0);
+        assert_eq!(
+            h.rearm_anchor(T0 + 9, RATE_BASE, T0 + 99),
+            Some((PRECISION, T0 + 9))
+        );
+    }
+
+    #[test]
+    fn rearm_identical_resend_is_a_no_op() {
+        let once = write(
+            &armed(),
+            T0 + 777,
+            RATE_BASE,
+            T0 + BASE_WINDOW,
+            RATE_SETTLE,
+            T0 + DAY,
+        );
+        let twice = write(
+            &once,
+            T0 + 9_999,
+            RATE_BASE,
+            T0 + BASE_WINDOW,
+            RATE_SETTLE,
+            T0 + DAY,
+        );
+        assert_eq!(once, twice);
+        assert_eq!(once.last_accrual_time, T0);
     }
 
     #[test]

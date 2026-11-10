@@ -4,9 +4,10 @@
  * Chain-agnostic pieces of the yield system, shared by both stacks.
  *
  * The protocol's cross-chain determinism rests on every deployment returning
- * the same multiplier at the same wall-clock second (up to integer rounding of a few
- * wei: re-arms landing at different seconds re-anchor at each chain's own timestamp), and
- * there is no on-chain layer on either stack that can detect a divergence. Anything that reimplements
+ * the same multiplier at the same wall-clock second, and there is no on-chain
+ * layer on either stack that can detect a divergence. That needs identical stored
+ * schedules, which is why a re-arm of the running segment keeps its anchor instead of
+ * re-anchoring at the landing second (`rearmAnchor`, Cyfrin audit #13). Anything that reimplements
  * that math in a third place is a liability; this package exists so there is
  * exactly one TypeScript implementation rather than one per consumer.
  *

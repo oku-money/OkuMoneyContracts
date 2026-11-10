@@ -49,28 +49,20 @@ adopted 24-hour grid, two days.
   `endTimestamp = 0` is valid only when explicitly halting
   (`newRate == PRECISION`). `setNextOkuMYieldRate` additionally requires
   `pendingEndTimestamp` strictly after the current `okuMRateEnd`.
-- **Re-arming an unchanged rate is skew-free up to integer rounding, not exactly.**
-  Broadcast skew `δ` between chains on the re-anchor path causes a permanent
-  divergence of `(r_old / r_new)^δ` — exactly `1` when the rate does not move, so
-  the *curve* is unaffected. But each re-anchor snapshots the multiplier into the
-  stored base at the chain's own landing second (`MathLib.rpow` rounds on every
-  multiply, `compoundFor` floors once per leg), so the same two re-arms split at
-  different seconds give different integers. The pipeline re-arms the running rate
-  twice per epoch on every chain (both `stage-settlement` and `roll-epoch` need the
-  re-anchor in steady state: by then the stored active segment has lapsed and the
-  successor is live only virtually, so `setNextOkuMYieldRate` would revert
-  `RateAlreadyExpired`), and the
-  gap accumulates. **Measured** (`OkuMoneyRearmSkew.t.sol`, Cyfrin audit #13): a 12 s
-  skew gives 81 wei after 30 epochs and about 1,060 wei after 365, about 1e-15 relative,
-  with the later-landing chain higher at 12 s (the sign depends on the skew). That is
-  four orders of magnitude inside the drift monitor's 1 bps tolerance, so it is not
-  flagged; the later chain's PSM pays the excess on redemptions in proportion to the
-  amount redeemed (at most one unit per redemption at the 81 wei gap while supply stays
-  under the 1 billion OkuM cap). It cannot be closed by a later write, since the
-  multiplier is monotonic. The initial `0% → r` activation is the one genuinely
-  skew-*sensitive* event: there a skew moves the curve itself. A contract change that
-  keeps the stored base and anchor on an unchanged re-arm would remove the residual; it
-  is not made (accepted, EVM README Accepted Risk #16).
+- **Re-arming the running segment is exactly skew-free.** Broadcast skew `δ`
+  between chains on the re-anchor path would cause a permanent divergence of
+  `(r_old / r_new)^δ` — `1` when the rate does not move — but a re-anchor also
+  snapshots the multiplier into the stored base at the chain's own landing second,
+  and integer rounding made that snapshot depend on the second (81 wei after 30
+  epochs at 12 s skew, Cyfrin audit #13). Both pipeline phases re-arm the segment
+  accruing at that moment (in steady state the successor the previous phase staged),
+  and a write that repeats it exactly keeps the stored anchor, or promotes the live
+  successor at `okuMRateEnd` (`EVM/README.md` § Re-arming the running segment). So
+  every chain stores the same schedule wherever its transaction lands, and the drill
+  checks it (`operatorDrill.test.ts`, "epoch pipeline in steady state"). The scripts
+  must therefore send the running segment's exact on-chain rate and end
+  (`runningSegment` in `deriveEpochSchedule.ts`); `roll-epoch` refuses a different
+  end. The initial `0% → r` activation is the one genuinely skew-sensitive event.
 - Rates are always **derived from a declared APY**, never hand-entered, so
   every chain receives a byte-identical integer.
 

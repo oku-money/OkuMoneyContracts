@@ -454,13 +454,15 @@ jobs:
         run: forge test --match-contract GenerateVectors -vv
 
       - name: Fail if the committed corpus is stale
+        # Both corpora: vectors.jsonl (MathLib.computeMultiplier) and rearm-vectors.jsonl
+        # (the re-arm anchor rule in OkuMoneyRateSchedule, Cyfrin audit #13).
         run: |
-          if ! git diff --quiet -- EVM/test/differential/vectors.jsonl; then
-            echo "::error::The committed differential corpus does not match what"
-            echo "::error::MathLib.sol currently produces. Regenerate it and"
+          if ! git diff --quiet -- EVM/test/differential/vectors.jsonl EVM/test/differential/rearm-vectors.jsonl; then
+            echo "::error::A committed differential corpus does not match what"
+            echo "::error::the Solidity currently produces. Regenerate it and"
             echo "::error::re-run the Rust and TypeScript replays:"
             echo "::error::  npm run test:differential"
-            git diff --stat -- EVM/test/differential/vectors.jsonl
+            git diff --stat -- EVM/test/differential/
             exit 1
           fi
 

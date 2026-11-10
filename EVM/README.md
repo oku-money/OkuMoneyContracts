@@ -322,7 +322,7 @@ byte-identical values.
 
 | Script | Purpose |
 |---|---|
-| [`scripts/operator/deriveEpochSchedule.ts`](scripts/operator/deriveEpochSchedule.ts) | **Pure derivation, no broadcast.** `PHASE=<stage-settlement\|roll-epoch>`. Takes one reference-chain read of the current on-chain schedule plus one *global* V̄ sample (SVM-inclusive), and writes `scripts/config/epochs/<epochId>-<phase>.json` via `scripts/utils/epochArtifact.ts`. |
+| [`scripts/operator/deriveEpochSchedule.ts`](scripts/operator/deriveEpochSchedule.ts) | **Pure derivation, no broadcast.** `PHASE=<stage-settlement\|roll-epoch>`. Takes one reference-chain read of the current on-chain schedule plus one *global* V̄ sample (SVM-inclusive), and writes `scripts/config/epochs/<epochId>-<phase>.json` via `scripts/utils/epochArtifact.ts`. Both phases re-arm the segment accruing now with its exact on-chain rate and end, so every chain keeps or promotes its anchor (§ Re-arming the running segment); `roll-epoch` must run inside the settlement window, and `NEXT_END_TIMESTAMP` is only a cross-check of the running settlement's end. The next epoch's base window ends one base window after that settlement ends. |
 | [`scripts/operator/broadcastSchedule.ts`](scripts/operator/broadcastSchedule.ts) | **The orchestrator.** Reads one artifact and applies it to every participating chain — a subprocess of `applyScheduleSingleChain.ts` per EVM chain, plus SVM's own `set-yield-rate.ts --mode=atomic`. Records each chain's receipt back into the artifact, so a partial failure is resumed by re-running the same command. For the `roll-epoch` phase it writes the carry-ledger entry exactly **once**, after every chain confirms. Runs under `tsx`, not `hardhat run`. |
 | [`scripts/operator/applyScheduleSingleChain.ts`](scripts/operator/applyScheduleSingleChain.ts) | Applies one artifact to whichever chain the Hardhat process is bound to. Split out because `resolveNetworkContext()` reads Hardhat's already-bound network runtime and cannot be redirected mid-process. Normally invoked by the broadcaster, not by hand. |
 | [`scripts/config/epochChains.ts`](scripts/config/epochChains.ts) | Single source of truth for the participating chain set (`participatingChains()`), shared by the broadcaster and the V̄ sampler so the rate's denominator and its recipients can never diverge. Refuses any mainnet chain without an explicit `YES_MAINNET`. |
@@ -498,6 +498,35 @@ NatSpec.
 **No discrete step ⇒ nothing to sandwich.** `setOkuMYieldRate` re-anchors the base
 to the *current* value, so the curve is continuous across the write; this is why
 it deliberately does not stamp `lastOverrideBlock`.
+
+### Re-arming the running segment
+
+The base is an integer snapshot: `rpow` rounds on every multiply and `compoundFor`
+floors once per leg, so splitting one segment at two different seconds gives two
+different integers. Re-anchoring at `block.timestamp` therefore made the stored schedule
+depend on the second a broadcast landed in, and identical broadcasts left chains wei
+apart for good (Cyfrin audit #13: 81 wei after 30 epochs at 12 s of skew; the
+multiplier is monotonic, so the gap could never be closed). The epoch pipeline re-arms
+the running rate twice per epoch, so this happened on every epoch.
+
+`setOkuMYieldRate` (and the atomic setter) now store a base and anchor that depend only
+on the schedule when the write repeats the segment already accruing
+(`_rearmAnchor`; SVM `oku_shared::Schedule::rearm_anchor`; TS `rearmAnchor`):
+
+| The write repeats... | Stored base, anchor |
+|---|---|
+| the live active segment (`okuMRatePerSecond`, `okuMRateEnd`) | unchanged (keep) |
+| the live successor, the active window having lapsed | the multiplier at `okuMRateEnd`, `okuMRateEnd` (promote) |
+| anything else: a new rate or end, a halt | the multiplier now, `block.timestamp` (re-anchor) |
+
+Keep and promote leave every integer of the curve unchanged (promote is exactly how
+`computeMultiplier` already compounds a live successor), so they are also safe while
+paused and an identical resend is a no-op. The emitted events still carry the
+multiplier at the write. The epoch scripts re-arm exactly the running segment (rate as
+the on-chain integer, its own end), which is what makes every chain's stored schedule
+identical whatever second it lands in. The three implementations are pinned to each
+other by a differential corpus generated from the real contract
+(`test/differential/rearm-vectors.jsonl`).
 
 ### Cross-chain agreement comes for free
 
@@ -860,7 +889,7 @@ what `whenNotPaused` gates:
   `depositBuffer`, `withdrawUsdc`.
 
 The rate setters may only **lower the projected multiplier curve while paused**
-(else `EnforcedPause`; up to integer rounding of a few wei, Accepted Risk #16), so operators can cut or halt accrual during an incident
+(else `EnforcedPause`), so operators can cut or halt accrual during an incident
 but cannot add yield for whoever redeems first after unpause:
 
 - A halt (`PRECISION`, end 0) always passes.
@@ -868,7 +897,10 @@ but cannot add yield for whoever redeems first after unpause:
   segment accruing now: `okuMRateEnd`, or `okuMPendingRateEnd` once the successor
   is live. Comparing with the effective rate, not raw storage, matters once a
   window has closed. Re-writing the same rate with a later end is an extension and
-  is rejected.
+  is rejected. Re-arming the running segment unchanged is admitted and changes no
+  integer of the curve (§ Re-arming the running segment). Any other admitted write
+  re-anchors at now; one that cuts the rate by only a few wei per second can land a
+  few wei above the old curve through rounding, which is dust, not yield.
 - A yielding successor must not exceed the armed one in rate or end; with none
   armed (including straight after `setOkuMYieldRateWithSuccessor`'s re-anchor,
   which clears it), only a no-yield successor passes.
@@ -1273,50 +1305,7 @@ infrastructure being available there.
 
 Tested in `test/psm/LitePSMSequencerLag.t.sol`.
 
-### 16. Re-arms landing at different seconds leave chains a few wei apart
-
-`setOkuMYieldRate*` re-anchors: it snapshots the multiplier into `okuMBaseMultiplier` and
-stores `block.timestamp` as `okuMLastAccrualTime` (SVM: `yield_ops::apply_active_rate`
-with `Clock::unix_timestamp`). Re-arming an **unchanged** rate leaves the curve
-mathematically unchanged, but `MathLib.rpow` rounds on every multiply and `compoundFor`
-floors once per leg, so the same two re-arms split at different seconds give different
-integers. Identical broadcasts landing at different seconds on two chains therefore leave
-their multipliers wei apart for good, and the multiplier is monotonic, so a later write
-cannot close the gap (Cyfrin audit finding #13). The epoch pipeline re-arms the running
-rate twice per epoch on every chain, so the gap accumulates.
-
-**Size** (`test/token/OkuMoneyRearmSkew.t.sol`): a 12 s landing skew gives 81 wei after 30
-epochs and about 1,060 wei after 365, about 1e-15 relative, the later chain higher at 12 s
-(the sign depends on the skew). The drift monitor tolerates 1 bps and does not flag it. The
-later chain's PSM pays the excess on redemptions in proportion to the amount redeemed: at
-most one unit per redemption at the 81 wei gap while supply stays under the 1 billion OkuM
-cap, more only for a single redemption above about 12.3 billion OkuM (which needs a raised
-cap), and about 81 wei per OkuM on BSC's 18-decimal reserve after 30 epochs, too little to
-extract at a profit.
-
-**Pause gate.** The same rounding lets a paused re-arm at the same rate and end raise the
-projected curve by dust (7 wei at the window's end in the measured case: a same-rate
-re-arm 80,515 s into a 604,800 s window at about 5 % APY), which the gate admits because it
-compares per-second rates and end times. "Rate setters may only lower the projected curve
-while paused" is therefore true up to integer rounding of a few wei, not exactly.
-
-**Why not an ops fix.** In steady state neither pipeline phase can use the non-re-anchoring
-`setNextOkuMYieldRate`. The schedule has two slots (active, successor), and a third segment
-can only be written once the first has lapsed; from then on the successor is live only
-virtually, `setNextOkuMYieldRate` reverts `RateAlreadyExpired`, and the only write path is
-a re-anchor. Checked by running the real scripts stage, roll, stage: at the second
-`stage-settlement` the stored active window had ended 60,480 s earlier. Only the first
-epoch after a fresh `setOkuMYieldRate`, whose active window is still live, could stage
-without re-anchoring.
-
-**Not changed.** Keeping the stored base and anchor on an unchanged re-arm (and promoting
-a lapsed successor at its old `okuMRateEnd`) would remove the residual on both stacks, at
-the cost of a change to the core accrual write path on EVM and SVM for a gap of about 1e-15.
-We accept the residual; the claim "re-arming an unchanged rate is exactly skew-free" has
-been withdrawn from the docs. Operators broadcast a re-arm to every chain in one run to
-keep the skew small, and the monitor's tolerance is the backstop.
-
-### 17. Mainnet deploys sign with a software key that holds every authority until hand-off
+### 16. Mainnet deploys sign with a software key that holds every authority until hand-off
 
 The EVM mainnet networks read `PRIVATE_KEY` and the Solana scripts read the secret-key file
 at `WALLET_PATH`. Until the hand-off ends, that key is admin of all three proxies with every
@@ -1420,7 +1409,7 @@ belong here; they should be removed from `src/`.
 | Override front-run residual and its pause ceremony (Accepted Risk #11) | `test/psm/LitePSM.t.sol`: `test_SetOkuMMultiplier_PauseCeremony_ClosesFrontRunWindow` |
 | USDT-style reserve: no-return transfers, fee-on-transfer intake credits the received amount, full-fee `AmountTooSmall`, payout fee borne by recipient (Accepted Risk #14) | `test/psm/LitePSMReserveUSDT.t.sol` |
 | Rollup clock lag: a stale-timestamp mint gains the lag; the pause closes it; reopening after catch-up gains nothing (Accepted Risk #15) | `test/psm/LitePSMSequencerLag.t.sol` |
-| Re-arm landing-second rounding: 81 wei after 30 epochs at 12 s skew; paused same-rate re-arm raises the curve by 7 wei (Accepted Risk #16) | `test/token/OkuMoneyRearmSkew.t.sol` |
+| Re-arming the running segment stores the same schedule whatever second it lands in: Cyfrin's 30-epoch PoC now leaves the chains identical; keep / promote / re-anchor cases; paused re-arm raises nothing; identical resend is a no-op | `test/token/OkuMoneyRearmSkew.t.sol`, `test/differential/GenerateRearmVectors.t.sol` (replayed by Rust and TypeScript) |
 | No PSM slippage parameter (Accepted Risk #13) | `test/psm/LitePSM.t.sol`: `test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier` |
 | Reentrancy through the PSM | `test/psm/Reentrancy.t.sol`, `test/lib/ReentrancyGuard.t.sol` |
 | `OkuMoney` rate schedule: `setOkuMYieldRate` continuity and non-stamping, `setNextOkuMYieldRate` boundaries, expiry with no successor | `test/token/OkuMoney.t.sol`, `test/token/OkuMoney.fuzz.t.sol` |

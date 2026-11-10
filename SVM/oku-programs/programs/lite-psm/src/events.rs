@@ -158,8 +158,10 @@ pub struct YieldRateUpdated {
     pub new_rate: u64,
     /// Absolute expiry of the new rate; `0` when halting
     pub rate_end: i64,
-    /// Multiplier snapshot taken at this write, so indexers can reconstruct
-    /// `m(t)` without replaying history
+    /// Multiplier at this write. It is the new stored base, except when the write
+    /// re-arms the segment already accruing: then the stored base and anchor are kept
+    /// (or the successor is promoted at `rate_end`; `Schedule::rearm_anchor`) and this
+    /// is only the curve's value at `timestamp`. Read the config for the stored anchor.
     pub base_multiplier: u128,
     pub timestamp: i64,
 }

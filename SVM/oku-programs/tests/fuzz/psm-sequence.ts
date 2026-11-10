@@ -73,6 +73,7 @@ import {
   PRECISION,
   computeMultiplier,
   effectiveRate,
+  rearmAnchor,
   ratePerSecondForApy,
   scheduleFromConfig,
   Schedule,
@@ -753,6 +754,12 @@ class Fuzz {
 
   randRate(ctx: Ctx): [bigint, bigint] {
     const r = this.rng;
+    // Re-arm exactly the segment accruing now: the epoch pipeline's write, which keeps or
+    // promotes the stored anchor instead of re-anchoring (Cyfrin #13, `rearmAnchor`).
+    if (r.chance(0.12)) {
+      const [er, ee] = effectiveSegment(ctx.sched, ctx.now);
+      if (er > PRECISION) return [er, ee];
+    }
     const rate = this.randRateValue(ctx);
     let end: bigint;
     if (rate === PRECISION) end = r.chance(0.85) ? 0n : ctx.now + BigInt(DAY);
@@ -1052,8 +1059,13 @@ class Fuzz {
       const s = scheduleFromConfig(cfg);
       const fail = (m: string) => { throw new Fail(`schedule write read-back: ${m}`); };
       if (s.ratePerSecond !== rate || s.rateEnd !== end) fail(`stored (${s.ratePerSecond}, ${s.rateEnd}) != written (${rate}, ${end})`);
-      if (s.lastAccrualTime !== ctx.now) fail(`last_accrual_time ${s.lastAccrualTime} != now ${ctx.now}`);
-      if (s.baseMultiplier !== ctx.m) fail(`re-anchor base ${s.baseMultiplier} != pre-write multiplier ${ctx.m} (curve not continuous)`);
+      // Re-anchor at now, unless the write re-arms the segment already accruing: then the
+      // anchor is kept or the successor promoted (Cyfrin #13, `rearmAnchor`).
+      const want = rearmAnchor(ctx.sched, ctx.now, rate, end);
+      if (s.lastAccrualTime !== want.lastAccrualTime) fail(`last_accrual_time ${s.lastAccrualTime} != expected ${want.lastAccrualTime} (now ${ctx.now})`);
+      if (s.baseMultiplier !== want.baseMultiplier) fail(`re-anchor base ${s.baseMultiplier} != expected ${want.baseMultiplier} (pre-write multiplier ${ctx.m})`);
+      // Either way the curve is continuous at the write.
+      if (computeMultiplier(s, ctx.now) !== ctx.m) fail(`multiplier at the write moved: ${computeMultiplier(s, ctx.now)} != ${ctx.m}`);
       const wantRate = pending ? pending.rate : PRECISION;
       const wantEnd = pending ? pending.end : 0n;
       if (s.pendingRatePerSecond !== wantRate || s.pendingRateEnd !== wantEnd) fail(`pending (${s.pendingRatePerSecond}, ${s.pendingRateEnd}) != expected (${wantRate}, ${wantEnd})`);
@@ -1091,7 +1103,8 @@ class Fuzz {
     let v = this.activeViolations(rate, end, ctx.now, ctx.sched);
     if (v.length === 0) {
       // The successor is validated against the schedule the first write produces.
-      const after: Schedule = { ...ctx.sched, ratePerSecond: rate, rateEnd: end, baseMultiplier: ctx.m, lastAccrualTime: ctx.now, pendingRatePerSecond: PRECISION, pendingRateEnd: 0n };
+      const anchor = rearmAnchor(ctx.sched, ctx.now, rate, end);
+      const after: Schedule = { ...ctx.sched, ratePerSecond: rate, rateEnd: end, ...anchor, pendingRatePerSecond: PRECISION, pendingRateEnd: 0n };
       v = this.successorViolations(nrate, nend, ctx.now, after);
     }
     const sig = this.signer("rateManager");

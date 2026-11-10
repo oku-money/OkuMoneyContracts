@@ -1,7 +1,9 @@
 //! Rate-schedule instructions. They change the slope of the continuous
 //! multiplier curve (no discrete economic event) except the emergency
-//! override. Every write re-snapshots `okum_base_multiplier` first, so accrual
-//! is continuous across it. See SVM/README.md, "Yield (streaming rate schedule)".
+//! override. Every active-rate write re-anchors `okum_base_multiplier` first
+//! (or keeps / promotes the anchor when it re-arms the segment already
+//! accruing; see `oku_shared::Schedule::rearm_anchor`), so accrual is
+//! continuous across it. See SVM/README.md, "Yield (streaming rate schedule)".
 
 use crate::contexts::{SetOkuMMultiplier, SetYieldRate, SyncDisplayMultiplier};
 use crate::errors::LitePsmError;
@@ -44,12 +46,25 @@ fn validate_rate_window(rate: u64, end_timestamp: i64, now_ts: i64) -> Result<()
     Ok(())
 }
 
-/// Re-snapshot the base multiplier at `now_ts`; skipping this would strand or
-/// double-count yield accrued since the last anchor.
-fn reanchor(config: &mut PsmConfig, now_ts: i64) -> Result<u128> {
+/// Re-anchor the schedule for an active-rate write of `(new_rate, end_timestamp)`, under
+/// the OLD schedule; skipping this would strand or double-count yield accrued since the
+/// last anchor. Usually the anchor moves to `now_ts`; a re-arm of the segment already
+/// accruing keeps it, or promotes the live successor at `okum_rate_end`, so the stored
+/// schedule does not depend on the landing second (Cyfrin audit #13,
+/// `oku_shared::Schedule::rearm_anchor`). Returns the multiplier at `now_ts`, which
+/// the event reports whichever anchor is stored.
+fn reanchor(
+    config: &mut PsmConfig,
+    new_rate: u64,
+    end_timestamp: i64,
+    now_ts: i64,
+) -> Result<u128> {
     let snapshot = multiplier::at(config, now_ts)?;
-    config.okum_base_multiplier = snapshot;
-    config.okum_last_accrual_time = now_ts;
+    let (base, anchor) = multiplier::schedule_of(config)
+        .rearm_anchor(now_ts, new_rate as u128, end_timestamp)
+        .ok_or_else(|| error!(LitePsmError::MultiplierOutOfRange))?;
+    config.okum_base_multiplier = base;
+    config.okum_last_accrual_time = anchor;
     Ok(snapshot)
 }
 
@@ -73,8 +88,10 @@ fn halt_schedule(config: &mut PsmConfig) {
 /// A yielding rate must not exceed the EFFECTIVE rate (the stored one is stale
 /// once its window has closed) nor outlast the segment accruing it, so the new
 /// curve grows no faster and stops no later; the cleared successor only lowers it.
-/// Exact for rates and ends; a same-rate re-arm can still raise the projected value by a
-/// few wei of rounding, since it re-anchors at the Clock (EVM README Accepted Risk #16).
+/// A re-arm of the running segment keeps its anchor (`reanchor`), so it leaves the
+/// curve's integers unchanged. Any other admitted write re-anchors at the Clock; one that
+/// cuts the rate by only a few wei per second can still land a few wei above the old curve
+/// through rounding (EVM README § Pausing).
 /// EVM: `OkuMoneyRateSchedule._requireActiveNotRaisedWhilePaused`.
 fn check_active_pause_gate(
     config: &PsmConfig,
@@ -137,7 +154,7 @@ fn apply_active_rate(
     // multiplier under the OLD schedule (before the new rate is written), so
     // the curve is continuous at this instant.
     emit_pending_cancelled_if_armed(config, now_ts);
-    let snapshot = reanchor(config, now_ts)?;
+    let snapshot = reanchor(config, new_rate, end_timestamp, now_ts)?;
 
     config.okum_rate_per_second = new_rate;
     config.okum_rate_end = end_timestamp;

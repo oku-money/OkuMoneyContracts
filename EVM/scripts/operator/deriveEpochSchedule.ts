@@ -24,8 +24,13 @@
  * Usage (env vars, as every EVM operator script):
  *   PHASE=stage-settlement EPOCH_ID=<id> REALISED_YIELD_USD=<usd> PENDING_END_TIMESTAMP=<unix> \
  *     npx hardhat run scripts/operator/deriveEpochSchedule.ts --network <reference chain>
- *   PHASE=roll-epoch EPOCH_ID=<id> NEXT_REALISED_YIELD_USD=<usd> NEXT_END_TIMESTAMP=<unix> \
- *     EPOCH_LENGTH_SEC=<s> npx hardhat run scripts/operator/deriveEpochSchedule.ts --network <chain>
+ *   PHASE=roll-epoch EPOCH_ID=<id> NEXT_REALISED_YIELD_USD=<usd> EPOCH_LENGTH_SEC=<s> \
+ *     [NEXT_END_TIMESTAMP=<unix>, a cross-check: must equal the running settlement's end] \
+ *     npx hardhat run scripts/operator/deriveEpochSchedule.ts --network <chain>
+ *
+ * Both phases re-arm the segment accruing now exactly as stored (`runningSegment`), so
+ * each chain keeps or promotes its anchor instead of re-anchoring at the second the
+ * broadcast lands (Cyfrin audit #13).
  * Optional: CHAINS, CONSERVATIVE_FACTOR, CARRY_IN_USD, SETTLEMENT_FRACTION,
  * BASE_WINDOW_FRACTION. Then broadcast with broadcastSchedule.ts.
  */
@@ -43,12 +48,15 @@ import {
   distributedUsdOverWindow,
   RateSegment,
   deriveBaseRate,
-  toOnChainSchedule,
   floatRateToBigint,
   DEFAULT_SETTLEMENT_FRACTION,
   EpochGrid,
   describeRate,
   reconcileActualPayout,
+  computeMultiplier,
+  effectiveSegment,
+  PRECISION,
+  type Schedule,
 } from "@okumoney/yield-tooling";
 import { sampleGlobalValueUsd, samplesInWindow, valueAt, warnIfSvmExcluded } from "../utils/globalValue";
 import { summarizeLedger, actualPaidUsd } from "../utils/carryLedger";
@@ -124,6 +132,46 @@ async function readSchedule(okuM: any) {
     rateEndSec: Number(rateEndBn),
     baseMultiplierFloat: Number(baseMultBn) / 1e18,
     currentMultiplierFloat: Number(multiplierBn) / 1e18,
+    exact: {
+      baseMultiplier: baseMultBn as bigint,
+      ratePerSecond: rateBn as bigint,
+      lastAccrualTime: BigInt(anchorBn),
+      rateEnd: BigInt(rateEndBn),
+      pendingRatePerSecond: pendingBn as bigint,
+      pendingRateEnd: BigInt(pendingEndBn),
+    } as Schedule,
+  };
+}
+
+/**
+ * The segment accruing at `nowSec`, exactly: its rate and end (what a re-arm must
+ * repeat, see below), when it began, and the multiplier there.
+ *
+ * Both pipeline phases re-arm the RUNNING rate. In steady state that is not the stored
+ * active rate: by the time either phase runs, the stored active window has lapsed and
+ * the armed successor is the one accruing (the contract's `_effectiveSegment`). Reading
+ * the stored `okuMRatePerSecond` / `okuMRateEnd` there re-armed a segment that had
+ * already ended (`EndTimestampInPast` on every chain).
+ *
+ * A re-arm that repeats exactly this `(rate, end)` keeps (or, once the stored window has
+ * lapsed, promotes) the stored anchor on both stacks instead of re-anchoring at the
+ * landing second, so every chain stores the same schedule whatever second the broadcast
+ * lands in (Cyfrin audit #13; `OkuMoneyRateSchedule._rearmAnchor`). Hence `rate` is the
+ * exact on-chain bigint, never a float round-trip: one wei off and the write becomes a
+ * rate change that re-anchors at the landing second again.
+ */
+export function runningSegment(sched: Schedule, nowSec: number) {
+  const now = BigInt(nowSec);
+  const { rate, end } = effectiveSegment(sched, now);
+  const lapsed = sched.rateEnd !== 0n && now > sched.rateEnd;
+  const startSec = lapsed ? sched.rateEnd : sched.lastAccrualTime;
+  return {
+    rate,
+    endSec: Number(end),
+    startSec: Number(startSec),
+    startMultiplier: computeMultiplier(sched, startSec),
+    /** The stored active window has lapsed: the successor slot is the one accruing. */
+    successorLive: lapsed && rate > PRECISION,
   };
 }
 
@@ -204,6 +252,22 @@ export async function deriveStageSettlement(
   }
 
   const now = (await ethers.provider.getBlock("latest"))!.timestamp;
+  // The base window being closed is the segment accruing NOW (see `runningSegment`): the
+  // stored active one in the first epoch after a fresh setOkuMYieldRate, the successor
+  // the last roll staged in steady state.
+  const running = runningSegment(schedule.exact, now);
+  if (running.rate <= PRECISION) {
+    throw new Error(
+      "No yielding segment is accruing (the armed windows have all lapsed) — " +
+        "restart accrual with setOkuMYieldRate before staging a settlement"
+    );
+  }
+  if (opts.pendingEndTimestamp <= BigInt(running.endSec)) {
+    throw new Error(
+      `pendingEndTimestamp ${opts.pendingEndTimestamp} must be after the running base ` +
+        `window's end ${running.endSec}`
+    );
+  }
   // NOT `outstandingCarryUsd` — that is the carry PRODUCED by the epoch that
   // is currently open (pending reconciliation at the next roll). The carry
   // relevant HERE is what was already baked into THIS epoch's own target
@@ -212,11 +276,12 @@ export async function deriveStageSettlement(
   const carryInUsd = opts.carryInUsd ?? summarizeLedger().currentEpochCarryInUsd;
   const adjustedTargetUsd = opts.realisedYieldUsd * conservativeFactor + carryInUsd;
 
+  const rateFloat = Number(running.rate) / 1e18;
   const segment: RateSegment = {
-    startSec: schedule.anchorSec,
-    endSec: schedule.rateEndSec,
-    ratePerSecond: schedule.rateFloat,
-    anchorMultiplier: schedule.baseMultiplierFloat,
+    startSec: running.startSec,
+    endSec: running.endSec,
+    ratePerSecond: rateFloat,
+    anchorMultiplier: Number(running.startMultiplier) / 1e18,
   };
 
   // GLOBAL samples only. No local-supply fallback: if the V̄ store has no
@@ -228,14 +293,14 @@ export async function deriveStageSettlement(
   const scope = { requested: opts.chains, yesMainnet: forkOrYes(ctx) };
   const valueChains = expectedValueChains(scope);
   warnIfSvmExcluded(participatingChains(scope), valueChains);
-  const samples = samplesInWindow(schedule.anchorSec, now, valueChains);
-  const distributedSoFarUsd = distributedUsdOverWindow([segment], samples, schedule.anchorSec, now);
+  const samples = samplesInWindow(running.startSec, now, valueChains);
+  const distributedSoFarUsd = distributedUsdOverWindow([segment], samples, running.startSec, now);
   const forecastValueUsd = valueAt(samples, now);
-  const settlementLenSec = Number(opts.pendingEndTimestamp) - schedule.rateEndSec;
-  const baseTailSec = Math.max(0, schedule.rateEndSec - now);
+  const settlementLenSec = Number(opts.pendingEndTimestamp) - running.endSec;
+  const baseTailSec = Math.max(0, running.endSec - now);
 
   logger.info(`Adjusted target:      $${adjustedTargetUsd.toFixed(2)} (realised=${opts.realisedYieldUsd}, cf=${conservativeFactor}, carryIn=${carryInUsd.toFixed(2)})`);
-  logger.info(`Distributed so far:   $${distributedSoFarUsd.toFixed(2)} (global)`);
+  logger.info(`Distributed so far:   $${distributedSoFarUsd.toFixed(2)} (global, since ${running.startSec})`);
   logger.info(`Forecast value:       $${forecastValueUsd.toFixed(2)} (global)`);
   logger.info(`Settlement window:    ${settlementLenSec}s, base tail: ${baseTailSec}s`);
 
@@ -244,20 +309,15 @@ export async function deriveStageSettlement(
     distributedSoFarUsd,
     settlementForecastAvgValueUsd: forecastValueUsd,
     settlementLenSec,
-    baseTailRatePerSecond: schedule.rateFloat,
+    baseTailRatePerSecond: rateFloat,
     baseTailSec,
   });
 
-  const onChain = toOnChainSchedule({
-    rBaseFloat: schedule.rateFloat,
-    rSettleFloat,
-    grid: { epochStartSec: schedule.anchorSec, epochLengthSec: settlementLenSec + (schedule.rateEndSec - schedule.anchorSec), settlementFraction: 0 },
-  });
-  // toOnChainSchedule's grid-derived endpoints don't apply cleanly to a
-  // re-anchor-at-same-rate call, so build the schedule fields directly rather
-  // than force this case through a grid abstraction meant for a fresh epoch.
-  const rate = onChain.rBase;
-  const nextRate = onChain.rSettle;
+  // Re-arm the running base segment exactly as stored (bigint rate, its own end), so
+  // every chain keeps or promotes its anchor rather than re-anchoring at the landing
+  // second; only the settlement rate is new.
+  const rate = running.rate;
+  const nextRate = floatRateToBigint(rSettleFloat);
 
   logger.info(`Derived settlement rate: ${describeRate(nextRate)}`);
 
@@ -270,7 +330,7 @@ export async function deriveStageSettlement(
     ...buildBinding(ctx, schedule.preState, opts.chains),
     schedule: {
       rate: rate.toString(),
-      rateEnd: schedule.rateEndSec,
+      rateEnd: running.endSec,
       nextRate: nextRate.toString(),
       nextRateEnd: Number(opts.pendingEndTimestamp),
     },
@@ -291,7 +351,12 @@ export async function deriveStageSettlement(
 export interface DeriveRollEpochOpts {
   epochId: string;
   nextRealisedYieldUsd: number;
-  nextEndTimestamp: bigint;
+  /**
+   * Optional cross-check only. The roll re-arms the running settlement segment with its
+   * own end, which is read from chain; a value here must equal it (a different end would
+   * change the epoch boundary and re-anchor every chain at its own landing second).
+   */
+  nextEndTimestamp?: bigint;
   epochLengthSec: number;
   settlementFraction?: number;
   baseWindowFraction?: number;
@@ -373,7 +438,27 @@ export async function deriveRollEpoch(
     logger.info(`Ex-post reconciliation of ${priorEpochId}: target=$${priorTargetUsd.toFixed(2)} actual=$${actualPaid.toFixed(2)} reconciledCarry=$${reconciledCarryUsd.toFixed(2)}`);
   }
 
-  const grid: EpochGrid = { epochStartSec: schedule.rateEndSec, epochLengthSec: opts.epochLengthSec, settlementFraction };
+  // The roll runs inside the settlement window: the stored active (base) window has
+  // lapsed and the settlement successor is accruing. It re-arms that segment unchanged
+  // (`runningSegment`) and stages the next epoch's base rate, which takes over when the
+  // settlement ends, i.e. when the next epoch starts.
+  const now = (await ethers.provider.getBlock("latest"))!.timestamp;
+  const running = runningSegment(schedule.exact, now);
+  if (!running.successorLive) {
+    throw new Error(
+      `roll-epoch must run while the staged settlement segment is accruing (after ` +
+        `okuMRateEnd ${schedule.rateEndSec}, before its successor ends): now ${now}. ` +
+        `Run stage-settlement first, or wait for the base window to end.`
+    );
+  }
+  if (opts.nextEndTimestamp !== undefined && Number(opts.nextEndTimestamp) !== running.endSec) {
+    throw new Error(
+      `nextEndTimestamp ${opts.nextEndTimestamp} != the running settlement's end ` +
+        `${running.endSec}. The roll re-arms that segment unchanged; omit NEXT_END_TIMESTAMP ` +
+        `or pass ${running.endSec}.`
+    );
+  }
+  const grid: EpochGrid = { epochStartSec: running.endSec, epochLengthSec: opts.epochLengthSec, settlementFraction };
   const nextAdjustedTargetUsd = opts.nextRealisedYieldUsd * conservativeFactor + reconciledCarryUsd;
   const { ratePerSecond: rBaseNextFloat } = deriveBaseRate({
     targetUsd: nextAdjustedTargetUsd,
@@ -381,7 +466,10 @@ export async function deriveRollEpoch(
     measuredAvgValueUsd: globalNow.valueUsd,
     grid,
   });
-  const baseEndNextSec = Math.floor(schedule.rateEndSec + opts.epochLengthSec * (1 - settlementFraction));
+  // The next epoch starts where the running settlement ends. (This used the stored
+  // `okuMRateEnd`, the END OF THE BASE WINDOW just closed, so every next base window ran
+  // one settlement-window short of the length its rate was derived for.)
+  const baseEndNextSec = Math.floor(running.endSec + opts.epochLengthSec * (1 - settlementFraction));
 
   logger.info(`Next epoch adjusted target: $${nextAdjustedTargetUsd.toFixed(2)} (global V=$${globalNow.valueUsd.toFixed(2)}, chains=${chains.join(",")})`);
 
@@ -391,7 +479,7 @@ export async function deriveRollEpoch(
   // running, not the stored base rate), used verbatim as a bigint (see
   // `readSchedule`: round-tripping it through a JS float would perturb it by up
   // to ~128 wei on every chain at once).
-  const rate = schedule.effectiveRateBig;
+  const rate = running.rate;
   // MUST clamp. This is the production multi-chain roll path: `broadcastSchedule`
   // fans this artifact out to every chain, so an out-of-range rate does not fail
   // on one chain — it reverts `RateTooHigh` on ALL of them simultaneously, in the
@@ -410,7 +498,7 @@ export async function deriveRollEpoch(
     ...buildBinding(ctx, schedule.preState, opts.chains),
     schedule: {
       rate: rate.toString(),
-      rateEnd: Number(opts.nextEndTimestamp),
+      rateEnd: running.endSec,
       nextRate: nextRateBig.toString(),
       nextRateEnd: baseEndNextSec,
     },
@@ -467,9 +555,9 @@ if (require.main === module) {
       const nextRealisedYieldUsd = Number(parseArg("nextRealisedYieldUsd"));
       const nextEndTimestamp = parseArg("nextEndTimestamp");
       const epochLengthSec = Number(parseArg("epochLengthSec"));
-      if (!nextRealisedYieldUsd || !nextEndTimestamp || !epochLengthSec) {
+      if (!nextRealisedYieldUsd || !epochLengthSec) {
         throw new Error(
-          "roll-epoch requires --nextRealisedYieldUsd, --nextEndTimestamp, and --epochLengthSec " +
+          "roll-epoch requires --nextRealisedYieldUsd and --epochLengthSec " +
             "(NOTE: for internal testing, pass a short override here, e.g. 3600 for 1h — " +
             "the on-chain contracts place no constraint on epoch length; see epoch.ts's module doc)"
         );
@@ -477,7 +565,7 @@ if (require.main === module) {
       await deriveRollEpoch(ctx, signer, {
         epochId,
         nextRealisedYieldUsd,
-        nextEndTimestamp: BigInt(nextEndTimestamp),
+        nextEndTimestamp: nextEndTimestamp ? BigInt(nextEndTimestamp) : undefined,
         epochLengthSec,
         settlementFraction: parseArg("settlementFraction") ? Number(parseArg("settlementFraction")) : undefined,
         baseWindowFraction: parseArg("baseWindowFraction") ? Number(parseArg("baseWindowFraction")) : undefined,

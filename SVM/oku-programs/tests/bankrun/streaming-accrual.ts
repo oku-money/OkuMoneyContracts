@@ -709,4 +709,100 @@ describe("streaming accrual (continuous rate schedule)", () => {
     await expectBankrunError(() => setRate(next - 1n, end + 5 * DAY + 1), "Paused");
     await setRate(next - 1n, end + 5 * DAY);
   });
+
+  // -------------------------------------------------------------------
+  // 6. Re-arming the running segment does not depend on the landing second
+  //    (Cyfrin audit #13; `oku_shared::Schedule::rearm_anchor`)
+  // -------------------------------------------------------------------
+
+  it("re-arming the live active segment keeps the stored anchor (keep)", async () => {
+    const start = await nowTs();
+    const r1 = ratePerSecondForApy(0.05);
+    const r2 = ratePerSecondForApy(0.08);
+    await setRateWithSuccessor(r1, start + 80_640, r2, start + DAY);
+    const before = await fetchSchedule();
+
+    await warpBy(h, 12_345);
+    const m = await canonical();
+    await setRateWithSuccessor(r1, start + 80_640, r2, start + DAY);
+    const after = await fetchSchedule();
+    expect(after.lastAccrualTime).to.equal(before.lastAccrualTime);
+    expect(after.baseMultiplier).to.equal(before.baseMultiplier);
+    expect(await canonical()).to.equal(m);
+  });
+
+  it("re-arming the live successor promotes it at rateEnd with the same curve (promote)", async () => {
+    const start = await nowTs();
+    const r1 = ratePerSecondForApy(0.05);
+    const r2 = ratePerSecondForApy(0.08);
+    await setRateWithSuccessor(r1, start + 80_640, r2, start + DAY);
+    const old = await fetchSchedule();
+
+    await warpTo(h, start + 80_640 + 1_000);
+    await setRate(r2, start + DAY);
+    const after = await fetchSchedule();
+    expect(after.lastAccrualTime).to.equal(BigInt(start + 80_640));
+    expect(after.baseMultiplier).to.equal(computeMultiplier(old, BigInt(start + 80_640)));
+    for (const t of [start + 80_640 + 1_000, start + 80_640 + 3_333, start + DAY]) {
+      expect(computeMultiplier(after, BigInt(t)), `curve moved at ${t}`).to.equal(
+        computeMultiplier(old, BigInt(t)),
+      );
+    }
+  });
+
+  it("a different rate or end still re-anchors at the Clock", async () => {
+    const start = await nowTs();
+    const r1 = ratePerSecondForApy(0.05);
+    await setRate(r1, start + 80_640);
+    await warpBy(h, 5_000);
+    const m = await canonical();
+    await setRate(r1 + 1n, start + 80_640);
+    const after = await fetchSchedule();
+    expect(after.lastAccrualTime).to.equal(BigInt(await nowTs()));
+    expect(after.baseMultiplier).to.equal(m);
+  });
+
+  // Cyfrin's PoC schedule on the program: two re-arms per epoch, landing on the grid in
+  // one run and 12 s later in the other, each from a fresh program (base 1.0, halted).
+  // The stored schedules, relative to the run's start, must be identical; they used to
+  // drift wei apart. Two `it`s because a fresh harness per run is the only clean restart.
+  const pipelineRuns: Record<number, Record<string, bigint>> = {};
+  const runPipeline = async (skew: number) => {
+    const r1 = ratePerSecondForApy(0.05);
+    const r2 = ratePerSecondForApy(0.08);
+    const BW = 80_640;
+    const t0 = (await nowTs()) + 10;
+    await warpTo(h, t0);
+    await setRateWithSuccessor(r1, t0 + BW, r2, t0 + DAY);
+    for (let k = 0; k < 5; k++) {
+      const s = t0 + k * DAY;
+      await warpTo(h, s + BW - 3_600 + skew);
+      await setRateWithSuccessor(r1, s + BW, r2, s + DAY);
+      await warpTo(h, s + BW + 1_000 + skew);
+      await setRateWithSuccessor(r2, s + DAY, r1, s + DAY + BW);
+    }
+    const x = await fetchSchedule();
+    const T = BigInt(t0);
+    pipelineRuns[skew] = {
+      base: x.baseMultiplier,
+      anchor: x.lastAccrualTime - T,
+      rate: x.ratePerSecond,
+      rateEnd: x.rateEnd - T,
+      pending: x.pendingRatePerSecond,
+      pendingEnd: x.pendingRateEnd - T,
+      mAtEnd: computeMultiplier(x, T + BigInt(5 * DAY + BW)),
+    };
+    // the anchor sits on the epoch grid, not on the landing second
+    expect(pipelineRuns[skew].anchor).to.equal(BigInt(4 * DAY + BW));
+  };
+
+  it("epoch pipeline, landing on the grid", async () => {
+    await runPipeline(0);
+  });
+
+  it("epoch pipeline, landing 12 s late, stores the identical schedule", async () => {
+    expect(pipelineRuns[0], "the on-grid run must have run first").to.exist;
+    await runPipeline(12);
+    expect(pipelineRuns[12]).to.deep.equal(pipelineRuns[0]);
+  });
 });

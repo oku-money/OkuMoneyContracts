@@ -7,7 +7,7 @@
 //! reachable domain, outside the accepted `rpow` overflow divergence
 //! (see `rate.rs`).
 
-use oku_shared::rate::compute_multiplier;
+use oku_shared::rate::{compute_multiplier, Schedule};
 use std::path::PathBuf;
 
 /// One generated case. Parsed by hand to keep the crate dependency-free.
@@ -150,4 +150,99 @@ fn matches_solidity_reference_exactly() {
     );
 
     eprintln!("differential: {checked} vectors matched ({revert_cases} revert cases)");
+}
+
+/// One re-arm case from `rearm-vectors.jsonl`: a schedule, an admitted
+/// `setOkuMYieldRate(new_rate, new_end)` at `now_ts`, and the `(base, anchor)` the
+/// Solidity stored (`OkuMoneyRateSchedule._rearmAnchor`, Cyfrin audit #13).
+struct RearmVector {
+    schedule: Schedule,
+    now_ts: i64,
+    new_rate: u128,
+    new_end: i64,
+    expected_base: u128,
+    expected_anchor: i64,
+}
+
+fn parse_rearm(line: &str) -> RearmVector {
+    RearmVector {
+        schedule: Schedule {
+            base_multiplier: field(line, "base").parse().unwrap(),
+            rate_per_second: field(line, "rate").parse().unwrap(),
+            last_accrual_time: field(line, "anchor").parse().unwrap(),
+            rate_end: field(line, "rateEnd").parse().unwrap(),
+            pending_rate_per_second: field(line, "pendingRate").parse().unwrap(),
+            pending_rate_end: field(line, "pendingRateEnd").parse().unwrap(),
+        },
+        now_ts: field(line, "nowTs").parse().unwrap(),
+        new_rate: field(line, "newRate").parse().unwrap(),
+        new_end: field(line, "newEnd").parse().unwrap(),
+        expected_base: field(line, "expectedBase").parse().unwrap(),
+        expected_anchor: field(line, "expectedAnchor").parse().unwrap(),
+    }
+}
+
+#[test]
+fn rearm_anchor_matches_solidity_reference_exactly() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../../EVM/test/differential/rearm-vectors.jsonl");
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read re-arm corpus at {}: {e}.\n\
+             Generate it with: cd EVM && forge test --match-contract GenerateVectors",
+            path.display()
+        )
+    });
+
+    let (mut checked, mut kept, mut promoted, mut fresh) = (0usize, 0usize, 0usize, 0usize);
+    let mut mismatches: Vec<String> = Vec::new();
+    for (i, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v = parse_rearm(line);
+        let got = v.schedule.rearm_anchor(v.now_ts, v.new_rate, v.new_end);
+        if got != Some((v.expected_base, v.expected_anchor)) {
+            mismatches.push(format!(
+                "line {}: Solidity stored ({}, {}), Rust {:?}\n  {line}",
+                i + 1,
+                v.expected_base,
+                v.expected_anchor,
+                got
+            ));
+        }
+        // Which rule fired, so a corpus that stops exercising one fails loudly.
+        if v.expected_anchor == v.now_ts {
+            fresh += 1;
+        } else if v.expected_anchor == v.schedule.last_accrual_time {
+            kept += 1;
+        } else if v.expected_anchor == v.schedule.rate_end {
+            promoted += 1;
+        }
+        checked += 1;
+    }
+
+    assert!(
+        mismatches.is_empty(),
+        "{} of {checked} re-arm vectors diverged from the Solidity reference:\n\n{}",
+        mismatches.len(),
+        mismatches
+            .iter()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    );
+    assert!(
+        checked > 3_000,
+        "re-arm corpus looks truncated: {checked} vectors"
+    );
+    assert!(
+        kept > 100 && promoted > 100 && fresh > 1_000,
+        "re-arm corpus no longer covers every rule: keep {kept}, promote {promoted}, fresh {fresh}"
+    );
+    eprintln!(
+        "re-arm differential: {checked} vectors matched (keep {kept}, promote {promoted}, fresh {fresh})"
+    );
 }

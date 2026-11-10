@@ -365,7 +365,8 @@ Trust assumptions the SVM side makes deliberately; reviewers should not re-flag 
    steps because `ScaledUiAmount` cannot stream.
 4. **A PSM pause gates SVM rate writes (single `is_paused` flag).** EVM's rate setters honour
    only OkuMoney's pause; here the one flag also gates them, with the same rule: while paused a
-   write may only lower the projected curve (`yield_ops.rs` `check_active_pause_gate` /
+   write may only lower the projected curve (up to integer rounding of a few wei, EVM Accepted
+   Risk #16; `yield_ops.rs` `check_active_pause_gate` /
    `check_successor_pause_gate`). Once the armed window lapses, the effective rate is
    `PRECISION` and every yielding write reverts `Paused` until the cold `unpauser` acts, so a
    pause longer than the armed window (one to two days at 24-hour epochs) halts SVM accrual.

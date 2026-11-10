@@ -73,6 +73,8 @@ fn halt_schedule(config: &mut PsmConfig) {
 /// A yielding rate must not exceed the EFFECTIVE rate (the stored one is stale
 /// once its window has closed) nor outlast the segment accruing it, so the new
 /// curve grows no faster and stops no later; the cleared successor only lowers it.
+/// Exact for rates and ends; a same-rate re-arm can still raise the projected value by a
+/// few wei of rounding, since it re-anchors at the Clock (EVM README Accepted Risk #16).
 /// EVM: `OkuMoneyRateSchedule._requireActiveNotRaisedWhilePaused`.
 fn check_active_pause_gate(
     config: &PsmConfig,

@@ -81,7 +81,7 @@ Roles are **pubkeys stored on `PsmConfig`**, enforced by Anchor `has_one`, not a
 | # | Instruction | Role | Blast radius | Guards | Rev? |
 |---|---|---|---|---|---|
 | S1 | `set_okum_multiplier` | `rate_manager` | **Same 1,000,000× ceiling as E1** — plus a **mandatory Token-2022 CPI**: the emergency lever aborts if `ScaledUiAmount::update_multiplier` fails | pause, yield-lock, strictly-increasing, ≤ `MAX_MULTIPLIER` | **No** |
-| S2 | `set_okum_yield_rate` | `rate_manager` | As E2 | rate + window bounds; while paused may only lower the projected curve (no increase vs effective rate, no extension) | **No** |
+| S2 | `set_okum_yield_rate` | `rate_manager` | As E2 | rate + window bounds; while paused may only lower the projected curve (no increase vs effective rate, no extension; up to a few wei of rounding, EVM README Accepted Risk #16) | **No** |
 | S3 | `set_next_okum_yield_rate` | `rate_manager` | As E3 | as above | **No** |
 | S4 | `set_okum_yield_rate_with_successor` | `rate_manager` | As E4 | as above | **No** |
 | S5 | `mint_oku_m_direct` | `direct_minter` | **Mint with NO collateral** — bounded only by `max_supply` and `direct_minter_allowance`. No EVM equivalent. | pause, yield-lock, cap, allowance | **No** |

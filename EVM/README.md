@@ -860,7 +860,7 @@ what `whenNotPaused` gates:
   `depositBuffer`, `withdrawUsdc`.
 
 The rate setters may only **lower the projected multiplier curve while paused**
-(else `EnforcedPause`), so operators can cut or halt accrual during an incident
+(else `EnforcedPause`; up to integer rounding of a few wei, Accepted Risk #16), so operators can cut or halt accrual during an incident
 but cannot add yield for whoever redeems first after unpause:
 
 - A halt (`PRECISION`, end 0) always passes.
@@ -1273,6 +1273,44 @@ infrastructure being available there.
 
 Tested in `test/psm/LitePSMSequencerLag.t.sol`.
 
+### 16. Re-arms landing at different seconds leave chains a few wei apart
+
+`setOkuMYieldRate*` re-anchors: it snapshots the multiplier into `okuMBaseMultiplier` and
+stores `block.timestamp` as `okuMLastAccrualTime` (SVM: `yield_ops::apply_active_rate`
+with `Clock::unix_timestamp`). Re-arming an **unchanged** rate leaves the curve
+mathematically unchanged, but `MathLib.rpow` rounds on every multiply and `compoundFor`
+floors once per leg, so the same two re-arms split at different seconds give different
+integers. Identical broadcasts landing at different seconds on two chains therefore leave
+their multipliers wei apart for good, and the multiplier is monotonic, so a later write
+cannot close the gap (Cyfrin audit finding #13). The epoch pipeline re-arms the running
+rate twice per epoch on every chain, so the gap accumulates.
+
+**Size** (`test/token/OkuMoneyRearmSkew.t.sol`): a 12 s landing skew gives 81 wei after 30
+epochs and about 1,060 wei after 365, about 1e-15 relative, the later chain higher at 12 s
+(the sign depends on the skew). The drift monitor tolerates 1 bps and does not flag it. The
+later chain's PSM pays the excess on redemptions in proportion to the amount redeemed: at
+most one unit per redemption at the 81 wei gap while supply stays under the 1 billion OkuM
+cap, more only for a single redemption above about 12.3 billion OkuM (which needs a raised
+cap), and about 81 wei per OkuM on BSC's 18-decimal reserve after 30 epochs, too little to
+extract at a profit.
+
+**Pause gate.** The same rounding lets a paused re-arm at the same rate and end raise the
+projected curve by dust (7 wei at the window's end in the measured case: a same-rate
+re-arm 80,515 s into a 604,800 s window at about 5 % APY), which the gate admits because it
+compares per-second rates and end times. "Rate setters may only lower the projected curve
+while paused" is therefore true up to integer rounding of a few wei, not exactly.
+
+**Why not an ops fix.** Neither pipeline phase can use the non-re-anchoring
+`setNextOkuMYieldRate`: by `stage-settlement` and `roll-epoch` the stored active window
+has lapsed (the successor is live only virtually), so it reverts `RateAlreadyExpired`.
+
+**Not changed.** Keeping the stored base and anchor on an unchanged re-arm (and promoting
+a lapsed successor at its old `okuMRateEnd`) would remove the residual on both stacks, at
+the cost of a change to the core accrual write path on EVM and SVM for a gap of about 1e-15.
+We accept the residual; the claim "re-arming an unchanged rate is exactly skew-free" has
+been withdrawn from the docs. Operators broadcast a re-arm to every chain in one run to
+keep the skew small, and the monitor's tolerance is the backstop.
+
 ---
 
 ## Testing
@@ -1358,6 +1396,7 @@ belong here; they should be removed from `src/`.
 | Override front-run residual and its pause ceremony (Accepted Risk #11) | `test/psm/LitePSM.t.sol`: `test_SetOkuMMultiplier_PauseCeremony_ClosesFrontRunWindow` |
 | USDT-style reserve: no-return transfers, fee-on-transfer intake credits the received amount, full-fee `AmountTooSmall`, payout fee borne by recipient (Accepted Risk #14) | `test/psm/LitePSMReserveUSDT.t.sol` |
 | Rollup clock lag: a stale-timestamp mint gains the lag; the pause closes it; reopening after catch-up gains nothing (Accepted Risk #15) | `test/psm/LitePSMSequencerLag.t.sol` |
+| Re-arm landing-second rounding: 81 wei after 30 epochs at 12 s skew; paused same-rate re-arm raises the curve by 7 wei (Accepted Risk #16) | `test/token/OkuMoneyRearmSkew.t.sol` |
 | No PSM slippage parameter (Accepted Risk #13) | `test/psm/LitePSM.t.sol`: `test_NoSlippageParam_RedeemOutputIsMonotoneInMultiplier` |
 | Reentrancy through the PSM | `test/psm/Reentrancy.t.sol`, `test/lib/ReentrancyGuard.t.sol` |
 | `OkuMoney` rate schedule: `setOkuMYieldRate` continuity and non-stamping, `setNextOkuMYieldRate` boundaries, expiry with no successor | `test/token/OkuMoney.t.sol`, `test/token/OkuMoney.fuzz.t.sol` |

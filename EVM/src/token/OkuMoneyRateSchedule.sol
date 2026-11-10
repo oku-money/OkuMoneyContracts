@@ -369,6 +369,9 @@ abstract contract OkuMoneyRateSchedule is
     ///      whoever redeems first after unpause. A halt always passes. A yielding rate must
     ///      not exceed the EFFECTIVE rate nor outlast the segment accruing it, so the new
     ///      curve grows no faster and stops no later (the cleared successor only lowers it).
+    ///      Exact for rates and ends; a same-rate re-arm can still raise the projected value
+    ///      by a few wei of rounding, since it re-anchors at `block.timestamp` (README
+    ///      Accepted Risk #16).
     function _requireActiveNotRaisedWhilePaused(
         RateScheduleStorage storage $,
         uint256 newRate,

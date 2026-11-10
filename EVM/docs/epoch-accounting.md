@@ -57,8 +57,9 @@ adopted 24-hour grid, two days.
   multiply, `compoundFor` floors once per leg), so the same two re-arms split at
   different seconds give different integers. The pipeline re-arms the running rate
   twice per epoch on every chain (both `stage-settlement` and `roll-epoch` need the
-  re-anchor: by then the stored active segment has lapsed and the successor is live
-  only virtually, so `setNextOkuMYieldRate` would revert `RateAlreadyExpired`), and the
+  re-anchor in steady state: by then the stored active segment has lapsed and the
+  successor is live only virtually, so `setNextOkuMYieldRate` would revert
+  `RateAlreadyExpired`), and the
   gap accumulates. **Measured** (`OkuMoneyRearmSkew.t.sol`, Cyfrin audit #13): a 12 s
   skew gives 81 wei after 30 epochs and about 1,060 wei after 365, about 1e-15 relative,
   with the later-landing chain higher at 12 s (the sign depends on the skew). That is

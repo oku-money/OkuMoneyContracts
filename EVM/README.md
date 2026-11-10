@@ -1300,9 +1300,14 @@ re-arm 80,515 s into a 604,800 s window at about 5 % APY), which the gate admits
 compares per-second rates and end times. "Rate setters may only lower the projected curve
 while paused" is therefore true up to integer rounding of a few wei, not exactly.
 
-**Why not an ops fix.** Neither pipeline phase can use the non-re-anchoring
-`setNextOkuMYieldRate`: by `stage-settlement` and `roll-epoch` the stored active window
-has lapsed (the successor is live only virtually), so it reverts `RateAlreadyExpired`.
+**Why not an ops fix.** In steady state neither pipeline phase can use the non-re-anchoring
+`setNextOkuMYieldRate`. The schedule has two slots (active, successor), and a third segment
+can only be written once the first has lapsed; from then on the successor is live only
+virtually, `setNextOkuMYieldRate` reverts `RateAlreadyExpired`, and the only write path is
+a re-anchor. Checked by running the real scripts stage, roll, stage: at the second
+`stage-settlement` the stored active window had ended 60,480 s earlier. Only the first
+epoch after a fresh `setOkuMYieldRate`, whose active window is still live, could stage
+without re-anchoring.
 
 **Not changed.** Keeping the stored base and anchor on an unchanged re-arm (and promoting
 a lapsed successor at its old `okuMRateEnd`) would remove the residual on both stacks, at

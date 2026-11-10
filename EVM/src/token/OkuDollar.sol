@@ -516,10 +516,14 @@ contract OkuDollar is
         return convertToAssets(balanceOf(owner));
     }
 
-    /// @dev See {maxWithdraw}; share units.
+    /// @dev See {maxWithdraw}; share units. Zero when the balance floors to zero OkuM (a
+    ///      one-internal-share dust position above a 1e18 multiplier): `_unwrap` rejects
+    ///      that with `AmountTooSmall`, and EIP-4626 requires `redeem(maxRedeem)` to succeed.
     function maxRedeem(address owner) public view returns (uint256) {
         if (_wrapHalted() || _blacklisted(owner)) return 0;
-        return balanceOf(owner);
+        uint256 balance = balanceOf(owner);
+        if (_toShares(balance, usdMultiplier()) == 0) return 0;
+        return balance;
     }
 
     /// @dev Either pause stops wrap/unwrap: OkuMoney's blocks the OkuM transfer leg.

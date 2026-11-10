@@ -777,6 +777,52 @@ contract OkuDollarTest is BaseTest {
         assertEq(okuDollar.maxRedeem(user1), okuDollar.balanceOf(user1));
     }
 
+    /// @notice Cyfrin #9: a one-internal-share holder above a 1e18 multiplier has
+    ///         balanceOf >= 1 but floors to zero OkuM, which `_unwrap` rejects with
+    ///         `AmountTooSmall`. `maxRedeem` must report 0 so `redeem(maxRedeem)` never reverts.
+    function test_MaxRedeem_ZeroForOneShareDust() public {
+        _setOkuMMultiplierAndRoll(1.05e18);
+
+        _mintUsdOku(user2, 4);
+        vm.prank(user2);
+        okuDollar.transfer(user3, 2);
+        assertEq(okuDollar.usdSharesOf(user3), 1);
+        assertEq(okuDollar.balanceOf(user3), 1);
+
+        assertEq(okuDollar.maxWithdraw(user3), 0);
+        assertEq(okuDollar.maxRedeem(user3), 0, "dust position is not redeemable");
+
+        // control: a three-share position still redeems in full through maxRedeem
+        uint256 maxRedeemUser2 = okuDollar.maxRedeem(user2);
+        assertEq(maxRedeemUser2, 3);
+        vm.prank(user2);
+        okuDollar.redeem(maxRedeemUser2, user2, user2);
+        assertEq(okuDollar.usdSharesOf(user2), 0);
+
+        // the dust itself is still rejected, as before
+        vm.prank(user3);
+        vm.expectRevert(SharedErrors.AmountTooSmall.selector);
+        okuDollar.redeem(1, user3, user3);
+    }
+
+    /// @notice EIP-4626: `redeem(maxRedeem(owner))` succeeds whenever `maxRedeem` is non-zero,
+    ///         for any share count and any multiplier.
+    function testFuzz_MaxRedeem_AlwaysRedeemable(uint256 shares, uint256 multiplier) public {
+        shares = bound(shares, 1, 1e24);
+        multiplier = bound(multiplier, PRECISION, 10 * PRECISION);
+        if (multiplier > PRECISION) _setOkuMMultiplierAndRoll(multiplier);
+
+        _mintUsdOku(user2, shares);
+        uint256 max = okuDollar.maxRedeem(user2);
+        if (max == 0) {
+            // zero is only allowed when the position really cannot exit
+            assertEq(okuDollar.maxWithdraw(user2), 0);
+            return;
+        }
+        vm.prank(user2);
+        okuDollar.redeem(max, user2, user2);
+    }
+
     function test_SupportsInterface_ERC8056() public view {
         // OkuDollar itself does not implement ERC-8056 (OkuMoney does); this pins
         // the ERC-165 surface OkuDollar DOES advertise so a future accidental

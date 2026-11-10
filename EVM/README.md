@@ -1157,7 +1157,9 @@ spender**: non-zero `approve`/`permit` (owner and spender), `transfer`, `transfe
 third-party spender), and `mint` (including the minter). `blacklist()` works while
 paused. OkuDollar honours OkuMoney's blacklist as well as its own.
 `maxDeposit`/`maxWithdraw`/`maxRedeem` report 0 for a blacklisted or paused
-account. PSM behaviour: § LitePSM.sol.
+account, and `maxRedeem` also reports 0 for a dust position that floors to zero OkuM
+(one internal share above a 1e18 multiplier), which `redeem` rejects with
+`AmountTooSmall`, so `redeem(maxRedeem(x))` never reverts. PSM behaviour: § LitePSM.sol.
 
 **Deliberate literal matches that look like footguns.** `OkuMoney.mint` checks the
 **minter's** blacklist, as Circle's does. Here `OKUM_MINTER` is protocol

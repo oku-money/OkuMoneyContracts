@@ -244,7 +244,7 @@ Env vars:
 | `SKIP_VERIFY` | Skip explorer verification of the new implementation. |
 | `SKIP_BYTECODE_CHECK` | Upgrade even if the runtime code is unchanged. |
 | `LOG_CHUNK` | `eth_getLogs` block range per request (default 2000). |
-| `PRIVATE_KEY` / `ETHERSCAN_API_KEY` | Signer / explorer key (Etherscan V2: one key for every chain). |
+| `PRIVATE_KEY` / `ETHERSCAN_API_KEY` | Signer / explorer key (Etherscan V2: one key for every chain). On mainnet `PRIVATE_KEY` is a fresh single-use deployer key passed for one command, never kept in `.env` (root README § Mainnet ceremony, "The deployer key"). |
 | `NETWORK`, `FORK_NETWORK`, `FORK_URL` | Chain selection (see § Quick Start). |
 
 A migration that needs a reinitializer is not supported yet: the script always
@@ -1310,6 +1310,25 @@ the cost of a change to the core accrual write path on EVM and SVM for a gap of 
 We accept the residual; the claim "re-arming an unchanged rate is exactly skew-free" has
 been withdrawn from the docs. Operators broadcast a re-arm to every chain in one run to
 keep the skew small, and the monitor's tolerance is the backstop.
+
+### 17. Mainnet deploys sign with a software key that holds every authority until hand-off
+
+The EVM mainnet networks read `PRIVATE_KEY` and the Solana scripts read the secret-key file
+at `WALLET_PATH`. Until the hand-off ends, that key is admin of all three proxies with every
+role, and the SVM `role_admin` and BPF upgrade authority; a leaked key can upgrade to
+arbitrary logic, and revoking it afterwards does not undo what it already did (Cyfrin audit
+finding #14, informational: the root cause is in out-of-scope deployment tooling).
+
+**Mitigation (procedure, no tooling change):** a fresh single-use key per chain family
+generated on a clean machine, never reused and never kept in a file on a synced or shared
+disk, funded just before the deploy, the hand-off run immediately after it, and the key
+discarded once the scripts assert it holds nothing. Mainnet deploys leave PSM minting closed
+(allowance 0). Steps: [`../README.md` § Mainnet ceremony](../README.md#the-deployer-key-before-anything-is-deployed).
+
+**Residual:** a software key is exposed on the deploying machine for the hours between
+deploy and hand-off. A hardware signer (`@nomicfoundation/hardhat-ledger` on Hardhat 2;
+`solana program deploy --keypair usb://ledger`) would remove it and is not adopted: the
+Solana provider reads a secret-key file, so it would need reworking.
 
 ---
 

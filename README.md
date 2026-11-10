@@ -971,6 +971,42 @@ policy) is set last, in § Opening PSM minting on a chain.
 
 ### Mainnet ceremony
 
+#### The deployer key (before anything is deployed)
+
+Both mainnet deploy paths sign with a software key: EVM from `PRIVATE_KEY` (the five
+mainnet entries in `EVM/hardhat.config.ts`), Solana from the secret-key JSON at
+`WALLET_PATH` (also passed as `--upgrade-authority`). Until the hand-off below ends, that
+key holds every privileged authority over the deployed contracts: it can upgrade them to
+arbitrary logic, open PSM minting and drain the buffer, and revoking it afterwards undoes
+none of what it already did (Cyfrin audit #14). The tooling does not change; the
+procedure bounds the exposure:
+
+1. **A fresh key per chain family, used once.** Generate the EVM deployer and the Solana
+   deployer keypair on a clean machine you control, never reuse a key that has held other
+   funds or roles, and never use a cold, warm or orchestrator key as a deployer. A key that
+   has already touched a plaintext file on a synced, backed-up or shared machine counts as
+   burned: replace it before the deploy.
+2. **Keep it out of files and history.** Pass the EVM key for one command only (`read -rs
+   PRIVATE_KEY; export PRIVATE_KEY`, then `unset PRIVATE_KEY`); do not put a mainnet key in
+   `EVM/.env`. Keep the Solana keypair on tmpfs (`WALLET_PATH=/dev/shm/deployer.json`,
+   `chmod 600`) for the session.
+3. **Fund it with the gas it needs, just before the deploy**, not earlier.
+4. **Run the hand-off straight after the deploy** (EVM: both runs of
+   `grantRolesMainnet.ts` with the cold multisig's `revokeRole` between them; SVM:
+   `role_admin` proposal, cold `accept_role_admin`, then the upgrade-authority transfer),
+   with the cold signers on call, so the window in which the deployer is all-powerful is
+   hours, not days. Mainnet deploys already leave PSM minting closed (allowance 0).
+5. **Retire it.** Once both stacks assert the deployer holds nothing, delete the key
+   material and treat the address as spent. Leave no balance on it.
+
+A hardware signer would remove the plaintext key altogether (`@nomicfoundation/hardhat-ledger`
+on Hardhat 2 for EVM; `solana program deploy --keypair usb://ledger` for the program
+deploy). Neither is wired into these scripts today: the Solana provider (`createProvider`)
+reads the secret-key file, so a Ledger would need that path reworked. Accepted as a
+procedure, not a tooling change.
+
+#### Role hand-off
+
 The **deployer** is the key that ran the deploy: on EVM it holds
 `DEFAULT_ADMIN_ROLE` and every granular role `initialize` gave it; on SVM it is
 `role_admin` and BPF upgrade authority. Hand over in this order, verifying each

@@ -462,6 +462,9 @@ and keeping `Anchor.toml [programs.<network>]` equal to the program ID in `deplo
 ### Pre-mainnet checklist
 
 - [ ] `MAINNET_ORCHESTRATOR` points at a KMS-backed signer, not the deployer wallet.
+- [ ] The deployer wallet (`WALLET_PATH`) is a fresh single-use keypair on tmpfs, never a long-lived
+      file, and the hand-off below runs immediately after `deploy:init:mainnet`; the key is discarded
+      afterwards ([`../README.md` § The deployer key](../README.md#the-deployer-key-before-anything-is-deployed)).
 - [ ] `role_admin` handed from the deployer to the cold multisig and verified on-chain (below).
 - [ ] BPF upgrade authority transferred to the cold multisig (`admin:set-upgrade-authority`).
 - [ ] `Anchor.toml [programs.<network>]` matches the freshly-deployed program ID.

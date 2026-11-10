@@ -2176,6 +2176,34 @@ contract OkuDollarTest is BaseTest {
         assertFalse(okuDollar.isBlacklisted(user1));
     }
 
+    /// @notice Cyfrin #20: `isBlacklisted` is the composite, so it cannot show whether
+    ///         OkuDollar's own entry is set. `isLocallyBlacklisted` reads only that entry.
+    function test_IsLocallyBlacklisted_IgnoresOkuMoneyList() public {
+        assertFalse(okuDollar.isLocallyBlacklisted(user1));
+
+        // OkuMoney lists the account: composite true, local entry untouched
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1);
+        assertTrue(okuDollar.isBlacklisted(user1));
+        assertFalse(okuDollar.isLocallyBlacklisted(user1));
+
+        // the local entry is then installable (the call the old script skipped) ...
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+        assertTrue(okuDollar.isLocallyBlacklisted(user1));
+
+        // ... and survives OkuMoney's release: the account stays blocked here
+        vm.prank(unblacklister);
+        okuMoney.unblacklist(user1);
+        assertTrue(okuDollar.isLocallyBlacklisted(user1));
+        assertTrue(okuDollar.isBlacklisted(user1));
+
+        vm.prank(unblacklister);
+        okuDollar.unblacklist(user1);
+        assertFalse(okuDollar.isLocallyBlacklisted(user1));
+        assertFalse(okuDollar.isBlacklisted(user1));
+    }
+
     // ---- OkuMoney's blacklist applies to OkuDollar too ----
 
     function _blacklistOnOkuMoneyOnly(address account) internal {

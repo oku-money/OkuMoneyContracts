@@ -622,10 +622,45 @@ describe("Operator drill: exercise every lever on a clean local chain", function
         const blResult = await runBlacklistBoth(ctx, admin, badAddr, "blacklist");
         expect(blResult.okuMoneyState).to.be.true;
         expect(blResult.okuDollarState).to.be.true;
+        // the composite above is true as soon as OkuMoney lists the account; the OkuDollar
+        // entry itself is what the script must have installed (cyfrin #20)
+        expect(blResult.okuDollarLocalState).to.be.true;
 
         const unblResult = await runBlacklistBoth(ctx, admin, badAddr, "unblacklist");
         expect(unblResult.okuMoneyState).to.be.false;
         expect(unblResult.okuDollarState).to.be.false;
+        expect(unblResult.okuDollarLocalState).to.be.false;
+    });
+
+    it("blacklistBoth: installs OkuDollar's own entry, which outlives an OkuMoney-only release (cyfrin #20)", async () => {
+        const target = await (await ethers.getSigners())[5].getAddress();
+
+        await runBlacklistBoth(ctx, admin, target, "blacklist");
+        expect(await okuMoney.isBlacklisted(target)).to.be.true;
+        expect(await okuDollar.isLocallyBlacklisted(target)).to.be.true;
+
+        // Releasing only OkuMoney must leave the account blocked on OkuDollar
+        await (await okuMoney.connect(admin).unblacklist(target)).wait();
+        expect(await okuDollar.isBlacklisted(target)).to.be.true;
+
+        // Re-run: OkuMoney leg re-applies, OkuDollar leg is already in the target state
+        const rerun = await runBlacklistBoth(ctx, admin, target, "blacklist");
+        expect(rerun.okuMoneyState).to.be.true;
+        expect(rerun.okuDollarLocalState).to.be.true;
+
+        // Account only on OkuMoney (the old script's blind spot): the script still installs
+        // the OkuDollar entry rather than reporting success on the composite
+        await (await okuDollar.connect(admin).unblacklist(target)).wait();
+        expect(await okuMoney.isBlacklisted(target)).to.be.true;
+        expect(await okuDollar.isBlacklisted(target)).to.be.true; // composite, via OkuMoney
+        expect(await okuDollar.isLocallyBlacklisted(target)).to.be.false;
+        const fixed = await runBlacklistBoth(ctx, admin, target, "blacklist");
+        expect(fixed.okuDollarLocalState).to.be.true;
+
+        const released = await runBlacklistBoth(ctx, admin, target, "unblacklist");
+        expect(released.okuMoneyState).to.be.false;
+        expect(released.okuDollarState).to.be.false;
+        expect(released.okuDollarLocalState).to.be.false;
     });
 
     it("pause / unpause: all three targets", async () => {

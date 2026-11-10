@@ -5,6 +5,10 @@
  * Calling only one leaves a hole (e.g. a user blacklisted on OkuMoney can
  * still hold/move OkuDollar). This wrapper closes that operational footgun.
  *
+ * Each leg is decided from that contract's OWN entry (`OkuMoney.isBlacklisted`,
+ * `OkuDollar.isLocallyBlacklisted`), never from `OkuDollar.isBlacklisted`, which is a
+ * composite that is already true once OkuMoney lists the account.
+ *
  * The role hash is shared but role grants are per-contract: the signer must
  * already hold the role on EACH contract. See scripts/operator/grantRoles*.ts.
  *
@@ -37,13 +41,22 @@ import type { OkuMoney, OkuDollar } from "../../typechain-types";
 export type BlacklistAction = "blacklist" | "unblacklist";
 
 export interface BlacklistBothResult {
+  /** `OkuMoney.isBlacklisted`. */
   okuMoneyState: boolean;
+  /**
+   * `OkuDollar.isBlacklisted`: the COMPOSITE (OkuDollar's own list OR OkuMoney's), the view
+   * the contract enforces. Not evidence that OkuDollar's own entry is set.
+   */
   okuDollarState: boolean;
+  /** `OkuDollar.isLocallyBlacklisted`: OkuDollar's own list only. */
+  okuDollarLocalState: boolean;
 }
 
 async function applyOne(
   label: string,
   contract: OkuMoney | OkuDollar,
+  /** The entry THIS contract's `blacklist` / `unblacklist` writes, not a composite view. */
+  isListed: boolean,
   account: string,
   action: BlacklistAction,
   dryRun: boolean
@@ -52,7 +65,11 @@ async function applyOne(
   // NotBlacklisted on duplicate calls. Skip-with-log instead of letting the
   // tx revert mid-pair (which would leave the other side in a desynced state
   // depending on order).
-  const isBlacklisted: boolean = await contract.isBlacklisted(account);
+  //
+  // `isListed` must be the contract's OWN entry. OkuDollar.isBlacklisted() is a composite
+  // that turns true as soon as OkuMoney lists the account, so reading it here skipped
+  // OkuDollar's own entry and reported success without installing it (cyfrin #20).
+  const isBlacklisted = isListed;
   if (action === "blacklist" && isBlacklisted) {
     logger.info(`  [${label}] already blacklisted — skipping`);
     return;
@@ -97,21 +114,33 @@ export async function runBlacklistBoth(
   logger.info(`OkuMoney:  ${okuMoneyAddr}`);
   logger.info(`OkuDollar: ${okuDollarAddr}`);
 
-  await applyOne("OkuMoney", okuMoney, account, action, dryRun);
-  await applyOne("OkuDollar", okuDollar, account, action, dryRun);
+  // OkuMoney first, then OkuDollar's OWN entry. The order is not load-bearing any more:
+  // each leg reads its own list, not the composite.
+  await applyOne("OkuMoney", okuMoney, await okuMoney.isBlacklisted(account), account, action, dryRun);
+  await applyOne(
+    "OkuDollar",
+    okuDollar,
+    await okuDollar.isLocallyBlacklisted(account),
+    account,
+    action,
+    dryRun
+  );
 
   const okuMoneyState: boolean = await okuMoney.isBlacklisted(account);
   const okuDollarState: boolean = await okuDollar.isBlacklisted(account);
+  const okuDollarLocalState: boolean = await okuDollar.isLocallyBlacklisted(account);
   const expected = action === "blacklist";
-  logger.info(`Post-state OkuMoney.isBlacklisted:  ${okuMoneyState}`);
-  logger.info(`Post-state OkuDollar.isBlacklisted: ${okuDollarState}`);
-  if (!dryRun && (okuMoneyState !== expected || okuDollarState !== expected)) {
+  logger.info(`Post-state OkuMoney.isBlacklisted:            ${okuMoneyState}`);
+  logger.info(`Post-state OkuDollar.isLocallyBlacklisted:    ${okuDollarLocalState}`);
+  logger.info(`Post-state OkuDollar.isBlacklisted (composite): ${okuDollarState}`);
+  if (!dryRun && (okuMoneyState !== expected || okuDollarLocalState !== expected)) {
     throw new Error(
-      `Post-state mismatch: OkuMoney=${okuMoneyState}, OkuDollar=${okuDollarState}, expected=${expected}`
+      `Post-state mismatch: OkuMoney=${okuMoneyState}, OkuDollar local=${okuDollarLocalState}, ` +
+        `expected=${expected}`
     );
   }
-  logger.success(`Done — both contracts in sync (isBlacklisted=${expected})`);
-  return { okuMoneyState, okuDollarState };
+  logger.success(`Done — both lists in the target state (blacklisted=${expected})`);
+  return { okuMoneyState, okuDollarState, okuDollarLocalState };
 }
 
 if (require.main === module) {

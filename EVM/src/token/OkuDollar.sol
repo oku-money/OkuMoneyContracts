@@ -157,6 +157,15 @@ contract OkuDollar is
         return _blacklisted(account);
     }
 
+    /// @notice Whether `account` is on OkuDollar's OWN list, ignoring OkuMoney's.
+    /// @dev {isBlacklisted} is the composite, so it reads true once OkuMoney lists the
+    ///      account whether or not this list does. Operator tooling needs this one to see
+    ///      what `blacklist` / `unblacklist` here would actually change: if only OkuMoney's
+    ///      entry is ever removed, an account never listed here is released (cyfrin #20).
+    function isLocallyBlacklisted(address account) external view returns (bool) {
+        return _getOkuDollarStorage().isBlacklisted[account];
+    }
+
     /// @dev Blocked on either list. OkuDollar honours OkuMoney's blacklist (an external
     ///      read) so a single OkuMoney blacklisting also freezes the address's UsdOku.
     function _blacklisted(address account) internal view returns (bool) {

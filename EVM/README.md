@@ -698,8 +698,13 @@ There is no vault-side rate or reserve surface: yield is set on OkuMoney by
 **and honours OkuMoney's**: `isBlacklisted(account)` is true if either list
 contains the account. It applies to `transfer`, `transferFrom` (including the
 spender), `wrap`, `unwrap`, `approve`, `permit`, the ERC-4626 withdraw/redeem
-paths and the `max*` views. `scripts/operator/blacklistBoth.ts` lists an address
-on both tokens in one run.
+paths and the `max*` views. `isLocallyBlacklisted(account)` reads OkuDollar's own
+entry alone, which is what `blacklist` / `unblacklist` here write.
+`scripts/operator/blacklistBoth.ts` lists an address on both tokens in one run and
+decides each leg from that contract's own entry (`OkuMoney.isBlacklisted`,
+`OkuDollar.isLocallyBlacklisted`), never the composite: the composite is already true
+once OkuMoney lists the account, and an OkuDollar entry that was never set would let
+the account out as soon as OkuMoney alone unblacklists it (Cyfrin audit #20).
 
 ### Wrap / Unwrap
 

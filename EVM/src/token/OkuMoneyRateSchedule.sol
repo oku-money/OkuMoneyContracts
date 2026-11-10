@@ -16,6 +16,8 @@ import {OkuMoneyEvents} from "../lib/events/OkuMoneyEvents.sol";
 import {OkuMoneyErrors} from "../lib/errors/OkuMoneyErrors.sol";
 import {SharedErrors} from "../lib/errors/SharedErrors.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
+import {L2BlockNumber} from "../lib/L2BlockNumber.sol";
+import {OverrideBlockGuard} from "../lib/OverrideBlockGuard.sol";
 import {IScaledUIAmount, IScaledUIAmountNewUIMultiplier} from "../interfaces/IScaledUIAmount.sol";
 
 /**
@@ -54,8 +56,8 @@ abstract contract OkuMoneyRateSchedule is
         uint48 okuMRateEnd;
         // Successor expiry; bounds unattended compounding past `okuMRateEnd`. 0 = none armed.
         uint48 okuMPendingRateEnd;
-        // Block of the last discrete override (read via OverrideBlockGuard). Streaming
-        // accrual never stamps it.
+        // L2 block height of the last discrete override ({L2BlockNumber.current}; read via
+        // OverrideBlockGuard). Streaming accrual never stamps it.
         uint256 lastOverrideBlock;
     }
 
@@ -217,13 +219,20 @@ abstract contract OkuMoneyRateSchedule is
     ///      called afterward to resume accrual. This creates a discontinuity, so it stamps
     ///      `lastOverrideBlock` and `whenNoOverrideThisBlock` paths revert for the
     ///      rest of the block. Rejects `newMultiplier <= current` so a no-op cannot burn that
-    ///      stamp. Pause-gated: a discrete value move freezes alongside transfers.
+    ///      stamp, and a second override in the same L2 block (`OverrideInProgress`): two
+    ///      back-to-back corrections would land on SVM and EVM at different bases, since
+    ///      `yield_ops::set_okum_multiplier` self-fences on its slot (cyfrin audit #12).
+    ///      "Block" is {L2BlockNumber.current}: on Arbitrum `block.number` is a parent-chain
+    ///      estimate shared by many L2 blocks (#11). Pause-gated: a discrete value move
+    ///      freezes alongside transfers.
     function setOkuMMultiplier(uint256 newMultiplier)
         external
         onlyRole(Roles.OKUM_RATE_MANAGER)
         whenNotPaused
     {
         RateScheduleStorage storage $ = _getRateScheduleStorage();
+        uint256 l2Block = L2BlockNumber.current();
+        if (l2Block == $.lastOverrideBlock) revert OverrideBlockGuard.OverrideInProgress();
         uint256 currentMultiplier = okuMMultiplier();
         if (newMultiplier <= currentMultiplier) revert SharedErrors.MultiplierCannotDecrease();
         if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
@@ -233,11 +242,11 @@ abstract contract OkuMoneyRateSchedule is
 
         // Stamp the block so same-block PSM/vault paths revert, then jump the base to the
         // new value with no accrual until a rate is set again.
-        $.lastOverrideBlock = block.number;
+        $.lastOverrideBlock = l2Block;
         _haltSchedule($, newMultiplier);
 
         emit OkuMMultiplierUpdated(
-            currentMultiplier, newMultiplier, _supplyForOverrideEvent(), block.number
+            currentMultiplier, newMultiplier, _supplyForOverrideEvent(), l2Block
         );
         emit UIMultiplierUpdated(currentMultiplier, newMultiplier, block.timestamp);
     }

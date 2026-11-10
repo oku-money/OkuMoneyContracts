@@ -233,6 +233,9 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         assertEq(okuMoney.okuMMultiplier(), price1, "Price after first update");
 
+        // A second override in the same block reverts (cyfrin #12), so move on one
+        vm.roll(block.number + 1);
+
         // Second price update
         uint256 price2 = price1 + increase2;
         vm.prank(rateManager);
@@ -251,6 +254,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(higherPrice);
+        vm.roll(block.number + 1); // a same-block override would revert OverrideInProgress
 
         // Try to set a lower price (any amount below current)
         decrease = bound(decrease, 1, higherPrice);

@@ -14,7 +14,9 @@ abstract contract OkuMoneyEvents {
     /// @param oldMultiplier  Multiplier immediately before the override
     /// @param newMultiplier  New base multiplier
     /// @param totalSupply    Token supply at time of update
-    /// @param blockNumber    `block.number` at update time
+    /// @param blockNumber    L2 block height at update time (`L2BlockNumber.current()`):
+    ///                       `block.number` everywhere except Arbitrum, where it is the
+    ///                       height from `ArbSys.arbBlockNumber()`
     event OkuMMultiplierUpdated(
         uint256 oldMultiplier,
         uint256 newMultiplier,

@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
+import {L2BlockNumber} from "./L2BlockNumber.sol";
 
 /**
  * @title OverrideBlockGuard
@@ -16,10 +17,12 @@ abstract contract OverrideBlockGuard {
     ///         Retry in a later block.
     error OverrideInProgress();
 
-    /// @dev Reverts if `setOkuMMultiplier` ran earlier in this block. Reads OkuMoney's
-    ///      `lastOverrideBlock` (an external call on every guarded path).
+    /// @dev Reverts if `setOkuMMultiplier` ran earlier in this L2 block. Reads OkuMoney's
+    ///      `lastOverrideBlock` (an external call on every guarded path). Compares
+    ///      {L2BlockNumber.current}, not `block.number`: on Arbitrum the latter is a
+    ///      parent-chain estimate and would lock every guarded path for many L2 blocks.
     modifier whenNoOverrideThisBlock() {
-        if (block.number == _overrideBlockOkuMoney().lastOverrideBlock()) {
+        if (L2BlockNumber.current() == _overrideBlockOkuMoney().lastOverrideBlock()) {
             revert OverrideInProgress();
         }
         _;

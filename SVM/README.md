@@ -84,7 +84,8 @@ RPC (`amount`), `spl-token accounts`, transfer arguments and `supply`.
 
 - **Single-slot sandwich lock.** Only `set_okum_multiplier` (emergency override) stamps
   `last_override_slot`; PSM operations require `current_slot != last_override_slot`.
-  Mirrors EVM `lastOverrideBlock`. Unlike EVM, the override is blocked by the program's
+  Mirrors EVM `lastOverrideBlock` (which now also fences a second override in the same L2
+  block, as `set_okum_multiplier` fences its own slot). Unlike EVM, the override is blocked by the program's
   single pause flag, so EVM's pause-around-the-override ceremony (EVM Accepted Risk #11) cannot be
   used here: a mint landing in an earlier slot ahead of an honest override is an accepted residual.
   The pause flag still stops a compromised `rate_manager` from forcing the multiplier.
@@ -618,6 +619,7 @@ mirror nothing prices against.
 | Pause flags | separate `OkuMoney` / `LitePSM` / `OkuDollar` pauses | one `is_paused` |
 | `freeze_account` / `thaw_account` | bypass pause (freeze authority independent of `Pausable`) | bypass pause (config-PDA CPI; check intentionally omitted) |
 | PSM mint / redeem, buffer deposit / withdraw | `whenNotPaused` + `whenNoOverrideThisBlock` | `Paused` + `OverrideInProgress` — **matches**; neither buffer path has a solvency check |
+| Second override in the same block / slot | reverts `OverrideInProgress`, compared on the L2 height (`ArbSys.arbBlockNumber()` on Arbitrum, else `block.number`) | reverts `OverrideInProgress` on the slot — **matches** (Cyfrin audit #11 / #12) |
 | OkuM peer-to-peer transfers while paused | blocked (`OkuMoney` pause) | not blocked (Token-2022 transfers bypass the program) |
 | Direct burn while paused | `burn()` works | `burn_oku_m_direct` is blocked |
 | Rate writes while paused | may only lower the projected curve: a yielding rate `<=` the *effective* rate and ending no later than the segment accruing now; a successor no higher / no later than the armed one; halts always pass | same, against the single flag |

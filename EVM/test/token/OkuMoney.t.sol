@@ -22,6 +22,7 @@ import {
 } from "../../src/interfaces/IScaledUIAmount.sol";
 import {OkuMoneyErrors} from "../../src/lib/errors/OkuMoneyErrors.sol";
 import {SharedErrors} from "../../src/lib/errors/SharedErrors.sol";
+import {OverrideBlockGuard} from "../../src/lib/OverrideBlockGuard.sol";
 
 /**
  * @title OkuMoneyTest
@@ -1968,18 +1969,45 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.totalSupply(), MAX_SUPPLY);
     }
 
+    /// @notice Cyfrin #12: a second override in the same block reverts before any state
+    ///         change, matching SVM's slot self-fence, so a back-to-back correction cannot
+    ///         leave the chains at different bases.
     function test_MultipleOkuMMultiplierUpdates_SameBlock() public {
         _mintOkuMoney(user1, 100e18);
 
         vm.startPrank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         okuMoney.setOkuMMultiplier(PRECISION * 3);
         vm.stopPrank();
 
-        // okuMMultiplier should be updated to 3x
-        assertEq(okuMoney.okuMMultiplier(), PRECISION * 3);
-        // balanceOf should NOT change — standard ERC-20
+        // the first override stands; nothing moved
+        assertEq(okuMoney.okuMMultiplier(), PRECISION * 2);
+        assertEq(okuMoney.lastOverrideBlock(), block.number);
         assertEq(okuMoney.balanceOf(user1), 100e18);
+
+        // the next block takes the correction
+        vm.roll(block.number + 1);
+        vm.prank(rateManager);
+        okuMoney.setOkuMMultiplier(PRECISION * 3);
+        assertEq(okuMoney.okuMMultiplier(), PRECISION * 3);
+        // balanceOf should NOT change: standard ERC-20
+        assertEq(okuMoney.balanceOf(user1), 100e18);
+    }
+
+    /// @notice The fence runs before the no-decrease check, so a rejected same-block
+    ///         override reports `OverrideInProgress` and leaves the stamp alone.
+    function test_SameBlockOverride_RejectedBeforeAnyStateChange() public {
+        vm.prank(rateManager);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
+        uint256 stamp = okuMoney.lastOverrideBlock();
+
+        vm.prank(rateManager);
+        vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
+        okuMoney.setOkuMMultiplier(PRECISION); // would otherwise be MultiplierCannotDecrease
+
+        assertEq(okuMoney.lastOverrideBlock(), stamp);
+        assertEq(okuMoney.okuMMultiplier(), PRECISION * 2);
     }
 
     // ============ EIP-2612 Permit Tests ============

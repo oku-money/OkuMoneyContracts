@@ -824,6 +824,21 @@ one block *before* the override plus a redeem one block after is not blocked.
 See Accepted Risk #11 for the residual and the pause-around-the-override
 mitigation.
 
+"Block" means the **L2 block height**, `L2BlockNumber.current()`
+([`src/lib/L2BlockNumber.sol`](src/lib/L2BlockNumber.sol)): `block.number` everywhere
+except Arbitrum One / Sepolia, where `block.number` is a parent-chain estimate shared by
+many L2 blocks and the height comes from `ArbSys.arbBlockNumber()` (Cyfrin audit #11;
+with `block.number` an override would lock every guarded path for the 13-15 s the estimate
+takes to move). The stamp, the guard and the `OkuMMultiplierUpdated.blockNumber` field
+all use it. The library is keyed by chain id: an Arbitrum-family chain added later (Nova,
+42170) must be added to it. A chain id of 42161 without the precompile (a Hardhat fork)
+falls back to `block.number`.
+
+A **second override in the same L2 block reverts `OverrideInProgress`**, before any state
+change (Cyfrin audit #12), as SVM's `set_okum_multiplier` already did with its slot
+self-fence. Without it two back-to-back corrections `override(m1)`, `override(m2)` could
+land as `m2` on EVM and `m1` on SVM. Send corrections one per block.
+
 ---
 
 ## Pause Behavior

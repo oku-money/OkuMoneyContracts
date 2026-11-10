@@ -723,7 +723,7 @@ The three differences that are pure toolchain rather than design (versions:
 | | EVM | SVM |
 |---|---|---|
 | Language | Solidity | Rust (Anchor) |
-| Yield lock primitive | `block.number` | `Clock::slot` |
+| Yield lock primitive | L2 block height (`block.number`; `ArbSys.arbBlockNumber()` on Arbitrum) | `Clock::slot` |
 | Upgrade mechanism | UUPS proxy (all three contracts) | Solana BPF program upgrade (Squads authority) |
 
 ---

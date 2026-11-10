@@ -44,7 +44,7 @@ bounds stay on-chain; business policy moves to the backend.
 
 | # | Path | Contract | Role | Blast radius | Guards | Rev? |
 |---|---|---|---|---|---|---|
-| E1 | `setOkuMMultiplier` | `OkuMoney` | `OKUM_RATE_MANAGER` | **Raise multiplier up to 1e24 — a 1,000,000× inflation of every balance, redeemable against the PSM buffer** | `whenNotPaused`, strictly-increasing, ≤ `MAX_MULTIPLIER` | **No** |
+| E1 | `setOkuMMultiplier` | `OkuMoney` | `OKUM_RATE_MANAGER` | **Raise multiplier up to 1e24 — a 1,000,000× inflation of every balance, redeemable against the PSM buffer** | `whenNotPaused`, strictly-increasing, ≤ `MAX_MULTIPLIER`, at most one per L2 block (`OverrideInProgress`) | **No** |
 | E2 | `setOkuMYieldRate` | `OkuMoney` | `OKUM_RATE_MANAGER` | Stream ≤ `MAX_RATE` for ≤ 90 d (≈ 2.18× per window) | rate + window bounds; pause-gated **only** on increase vs *effective* rate | **No** |
 | E3 | `setNextOkuMYieldRate` | `OkuMoney` | `OKUM_RATE_MANAGER` | Arm successor, same bounds | as above, successor window bounded independently | **No** |
 | E4 | `setOkuMYieldRateWithSuccessor` | `OkuMoney` | `OKUM_RATE_MANAGER` | E2 + E3 atomically | as above | **No** |

@@ -46,6 +46,7 @@ interface IOkuMoney is IERC20 {
     function okuMPendingRatePerSecond() external view returns (uint256);
     /// @notice Emergency discrete override — re-anchors the accrual base.
     function setOkuMMultiplier(uint256 newMultiplier) external;
-    /// @notice Block of the last discrete override (the override-block stamp).
+    /// @notice L2 block height of the last discrete override (the override-block stamp; see
+    ///         `L2BlockNumber.current`, which is not `block.number` on Arbitrum).
     function lastOverrideBlock() external view returns (uint256);
 }

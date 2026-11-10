@@ -899,7 +899,7 @@ The two scripts are NOT interchangeable. They implement different threat models:
 |---|---|---|
 | Target | `MASTER_EOA` (single testnet operator key) | Cold Multisig / Warm Multisig / Orchestrator (3-key topology, from `MAINNET_COLD_MULTISIG` / `MAINNET_WARM_MULTISIG` / `MAINNET_ORCHESTRATOR` env vars) |
 | Grants | The operational (non-admin, non-upgrader) roles in its `ROLE_MAP`, including `OKUM_MINTER` / `OKUM_BURNER` / `OKUM_ALLOWANCE_MANAGER` / `OKUM_CAP_MANAGER`, plus a `configureMinterAllowance` call so the mint grant is usable | The production RBAC split in its `buildRoleMap` (see [`AUTHORITY-MATRIX.md`](../AUTHORITY-MATRIX.md)) |
-| `DEFAULT_ADMIN_ROLE` / `*_UPGRADER` | Never granted: stays on the deployer | Cold Multisig only; deployer's admin is revoked as the script's final step |
+| `DEFAULT_ADMIN_ROLE` / `*_UPGRADER` | Never granted: stays on the deployer | Cold Multisig only; the cold multisig itself revokes the deployer's admin between two runs, and the script proceeds only on that `RoleRevoked` log |
 | Runs on mainnet? | **Refuses unconditionally** (see its NatSpec header) | Yes (its purpose) |
 
 Two EVM-specific points; the per-role blast radius is canonical in

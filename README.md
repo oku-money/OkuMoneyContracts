@@ -964,22 +964,35 @@ step on-chain before the next. Dry-run first (`DRY_RUN=1` on EVM,
 
 **EVM, per chain.**
 
-1. Run `grantRolesMainnet.ts`. It checks LitePSM holds `OKUM_MINTER` /
-   `OKUM_BURNER`, grants the cold / warm / orchestrator sets from the RBAC
-   table, refuses to continue unless the cold multisig holds
-   `DEFAULT_ADMIN_ROLE` on all three contracts, has the deployer
-   `renounceRole` every granular role `initialize` gave it (all `*_UPGRADER`,
-   `OKUM_MINTER` / `OKUM_BURNER`, `OKUM_RATE_MANAGER`, `PSM_BUFFER_WITHDRAWER`, ...),
-   revokes the deployer's `DEFAULT_ADMIN_ROLE` last, and finally asserts with
-   `hasRole` that the deployer holds nothing. Every grant, renounce and revoke
-   is ledgered. Re-running is idempotent.
+1. **Run 1:** `grantRolesMainnet.ts`. It checks LitePSM holds `OKUM_MINTER` /
+   `OKUM_BURNER` and grants the cold / warm / orchestrator sets from the RBAC
+   table. It then **stops with exit code 2 and strips nothing**, printing for
+   each contract the `revokeRole(DEFAULT_ADMIN_ROLE, <deployer>)` call to send
+   from the cold multisig. The roles are single-step (no accept step), so
+   holding `DEFAULT_ADMIN_ROLE` proves nothing about whether anyone can sign as
+   the cold address on this chain; a typo, or a Safe not yet deployed there,
+   would orphan all three proxies once the deployer renounced (Cyfrin audit #16).
 
    ```bash
    MAINNET_COLD_MULTISIG=0x... MAINNET_WARM_MULTISIG=0x... MAINNET_ORCHESTRATOR=0x... YES_MAINNET=1 \
      npx hardhat run scripts/operator/grantRolesMainnet.ts --network base
    ```
 
-2. Upgrades from here on are proposed to the cold multisig, not signed by
+2. **Cold multisig:** once run 1 has granted everything, send the three
+   `revokeRole(DEFAULT_ADMIN_ROLE, <deployer>)` transactions from the cold multisig
+   on that chain (one per contract; run 1 prints `to` and `data`). Do this only
+   after run 1 completed its grants: the deployer cannot grant anything once it
+   has lost `DEFAULT_ADMIN_ROLE`.
+3. **Run 2:** run the same command again. It proceeds only when it finds a
+   `RoleRevoked(DEFAULT_ADMIN_ROLE, deployer, cold)` log on every contract, which
+   only a transaction sent by the cold address can have produced. It then has the
+   deployer `renounceRole` every granular role `initialize` gave it (all
+   `*_UPGRADER`, `OKUM_MINTER` / `OKUM_BURNER`, `OKUM_RATE_MANAGER`,
+   `PSM_BUFFER_WITHDRAWER`, ...) and asserts with `hasRole` that it holds nothing.
+   Every grant, renounce and revoke the script sends is ledgered. Re-running is
+   idempotent. If the RPC limits `eth_getLogs` ranges, set `HANDOFF_FROM_BLOCK` to
+   the deployment block.
+4. Upgrades from here on are proposed to the cold multisig, not signed by
    the deployer: [`EVM/README.md`](EVM/README.md#upgrading-deployed-proxies) § Upgrading deployed proxies.
 
 **SVM.** The deploy's `initialize` assigns the 9 granular roles directly to

@@ -21,15 +21,33 @@
  * none of the roles in `expectedRoleGrants()` — a mainnet deployer key that
  * keeps OKUM_MINTER + OKUM_ALLOWANCE_MANAGER can mint without bound.
  *
+ * TWO RUNS, with a cold-multisig transaction between them (Cyfrin audit #16).
+ * The roles are single-step (`AccessControl`, no accept step), so granting the cold
+ * address DEFAULT_ADMIN_ROLE proves nothing about whether anyone can sign as it on this
+ * chain: a typo, or a Safe not yet deployed here, would orphan every proxy once the
+ * deployer renounced. So:
+ *   run 1  grants everything to the cold / warm / orchestrator keys, then STOPS (exit
+ *          code 2) and prints, per contract, the `revokeRole(DEFAULT_ADMIN_ROLE,
+ *          deployer)` call to send FROM the cold multisig;
+ *   cold   sends those calls (only an address that can really transact can);
+ *   run 2  finds a `RoleRevoked(DEFAULT_ADMIN_ROLE, deployer, cold)` log on every
+ *          contract, which proves it, then renounces the deployer's granular roles and
+ *          verifies it holds nothing.
+ * Send the cold calls only after run 1 has granted everything: once the deployer has
+ * lost DEFAULT_ADMIN_ROLE it can no longer grant the remaining roles.
+ *
  * REQUIRES the following environment variables:
  *   MAINNET_COLD_MULTISIG   — Cold multisig address (hardware-wallet quorum; no timelock)
  *   MAINNET_WARM_MULTISIG   — Warm multisig address (day-to-day ops)
  *   MAINNET_ORCHESTRATOR    — Orchestrator KMS signer address
  *
  * Optional: CONFIRMATIONS=N (default 2) confirmations to wait per tx.
+ *           HANDOFF_FROM_BLOCK=N  first block of the cold-revoke log search (default 0).
+ *           Set it to the deployment block when the RPC rejects wide `eth_getLogs` ranges.
  *
  * The signer executing this script must hold DEFAULT_ADMIN_ROLE on all
- * contracts (i.e. the original deployer key).
+ * contracts for run 1 (i.e. the original deployer key). Run 2 needs only the roles the
+ * deployer still holds: the cold multisig has taken DEFAULT_ADMIN_ROLE off it by then.
  *
  * Usage:
  *   MAINNET_COLD_MULTISIG=0x... MAINNET_WARM_MULTISIG=0x... MAINNET_ORCHESTRATOR=0x... \
@@ -280,8 +298,64 @@ export function deployerInitRoles(): Array<{ contractName: string; roleName: Rol
 // Main
 // ============================================================================
 
+/**
+ * How a run ended. `awaiting-cold-revoke`: everything is granted, nothing was stripped,
+ * and the cold multisig still has to send its `revokeRole` calls (see the header).
+ */
+export type HandoffOutcome = "complete" | "awaiting-cold-revoke" | "dry-run";
+
+/** Exit code of the CLI for `awaiting-cold-revoke`: not a failure, and not done either. */
+export const EXIT_AWAITING_COLD_REVOKE = 2;
+
+/** True once `cold` itself sent `revokeRole(DEFAULT_ADMIN_ROLE, deployer)` on `contract`. */
+export async function coldRevokedDeployerAdmin(
+  contract: Contract,
+  deployer: string,
+  cold: string,
+  fromBlock: number
+): Promise<boolean> {
+  try {
+    const logs = await contract.queryFilter(
+      contract.filters.RoleRevoked(ROLES.DEFAULT_ADMIN_ROLE, deployer, cold),
+      fromBlock
+    );
+    return logs.length > 0;
+  } catch (e: any) {
+    throw new Error(
+      `Could not search for the cold multisig's revokeRole log: ${e.message ?? e}. ` +
+        `If the RPC rejects wide log ranges, set HANDOFF_FROM_BLOCK to the deployment block.`
+    );
+  }
+}
+
+/** Print the calls the cold multisig must send, and why the script is stopping. */
+async function reportAwaitingColdRevoke(
+  contracts: Record<string, Contract>,
+  unproven: string[],
+  deployer: string,
+  cold: string
+): Promise<void> {
+  const header = DRY_RUN
+    ? `  [dry-run] cold multisig has not yet revoked deployer admin on ${unproven.join(", ")}`
+    : `  STOPPING before the irreversible step: no RoleRevoked(DEFAULT_ADMIN_ROLE, ${deployer}, ` +
+      `${cold}) log on ${unproven.join(", ")}.`;
+  (DRY_RUN ? logger.info : logger.warning)(header);
+  logger.info("  From the COLD multisig on this chain, send (one transaction per contract):");
+  for (const name of unproven) {
+    const c = contracts[name];
+    const data = c.interface.encodeFunctionData("revokeRole", [ROLES.DEFAULT_ADMIN_ROLE, deployer]);
+    logger.info(`    ${name}  to=${await c.getAddress()}`);
+    logger.info(`      revokeRole(DEFAULT_ADMIN_ROLE, ${deployer})  data=${data}`);
+  }
+  logger.info(
+    "  Only an address that can really transact here can do this, which is the point: a " +
+      "typo or an undeployed Safe would otherwise orphan these contracts. Then re-run " +
+      "this script to renounce the deployer's remaining roles."
+  );
+}
+
 /** Distribute roles to the cold/warm/orchestrator keys, then strip every role from the deployer. */
-export async function runGrantRolesMainnet(): Promise<void> {
+export async function runGrantRolesMainnet(): Promise<HandoffOutcome> {
   DRY_RUN = isDryRun();
   const ctx = await resolveNetworkContext();
   CONFIRMATIONS =
@@ -396,28 +470,24 @@ export async function runGrantRolesMainnet(): Promise<void> {
   logger.step(4, `Revoking deployer (${deployerAddress}) roles`);
   logger.warning("  This step makes the Cold Multisig the sole meta-role holder.");
 
-  // Verified, not merely warned about: this is the one irreversible step in the
-  // script. If the cold multisig does not already hold DEFAULT_ADMIN_ROLE on a
-  // contract, revoking the deployer's leaves that contract with NO admin and no
-  // way to grant one. A contract missing from the address book is skipped by the
-  // grant loops above but would still be revoked here, so check every one.
-  const adminless: string[] = [];
+  // This is the one irreversible step, so it waits for PROOF that the cold multisig can
+  // act on this chain: its own transaction revoking the deployer's DEFAULT_ADMIN_ROLE on
+  // every contract. Merely holding the role proves nothing, step 1 has just granted it to
+  // whatever address was supplied, operable or not. A contract missing from the address
+  // book is skipped by the grant loops above but would still be stripped here, so every
+  // loaded one is checked.
+  const fromBlock = Number(process.env.HANDOFF_FROM_BLOCK ?? 0);
+  const unproven: string[] = [];
   for (const [name, c] of Object.entries(contracts)) {
-    if (!(await c.hasRole(ROLES.DEFAULT_ADMIN_ROLE, cold))) adminless.push(name);
+    if (!(await coldRevokedDeployerAdmin(c, deployerAddress, cold, fromBlock))) unproven.push(name);
   }
-  if (adminless.length > 0 && DRY_RUN) {
-    // Expected in a dry run: step 1 only printed the grants.
-    logger.info(`  [dry-run] cold multisig not yet admin on ${adminless.join(", ")} (step 1 not broadcast)`);
-  } else if (adminless.length > 0) {
-    throw new Error(
-      `Refusing to revoke deployer admin: cold multisig ${cold} does NOT hold ` +
-        `DEFAULT_ADMIN_ROLE on ${adminless.join(", ")}. Revoking now would leave ` +
-        `${adminless.length === 1 ? "that contract" : "those contracts"} permanently ` +
-        `without an admin. Re-run step 1 and confirm it succeeded.`
-    );
-  } else {
-    logger.success(`  Verified cold multisig holds DEFAULT_ADMIN_ROLE on all ${Object.keys(contracts).length} contracts`);
+  if (unproven.length > 0) {
+    await reportAwaitingColdRevoke(contracts, unproven, deployerAddress, cold);
+    return DRY_RUN ? "dry-run" : "awaiting-cold-revoke";
   }
+  logger.success(
+    `  Verified: cold multisig revoked deployer admin on all ${Object.keys(contracts).length} contracts`
+  );
 
   // Granular roles first, then DEFAULT_ADMIN_ROLE last.
   // Done while the deployer is still admin, so a partial failure leaves it
@@ -468,7 +538,7 @@ export async function runGrantRolesMainnet(): Promise<void> {
 
   if (DRY_RUN) {
     logger.info("DRY_RUN=true — no transactions were broadcast.");
-    return;
+    return "dry-run";
   }
 
   // -------- Assert: the deployer holds nothing --------
@@ -484,11 +554,12 @@ export async function runGrantRolesMainnet(): Promise<void> {
     throw new Error(`Deployer still holds: ${leftover.join(", ")}`);
   }
   logger.success("  Deployer holds no roles. Review the output above before declaring mainnet RBAC complete.");
+  return "complete";
 }
 
 if (require.main === module) {
   runGrantRolesMainnet().then(
-    () => process.exit(0),
+    (outcome) => process.exit(outcome === "awaiting-cold-revoke" ? EXIT_AWAITING_COLD_REVOKE : 0),
     (err) => {
       logger.error(String(err));
       process.exit(1);

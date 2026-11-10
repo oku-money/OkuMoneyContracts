@@ -176,8 +176,9 @@ Testnet vs mainnet shape, per §3-D:
   design**. The deployer retains `DEFAULT_ADMIN_ROLE` and all `*_UPGRADER` roles. This is a
   deliberate waiver for internal testing; `grantRoles.ts` refuses mainnet.
 - **Mainnet:** `grantRolesMainnet.ts` splits the same powers across cold / warm / orchestrator
-  keys, has the deployer renounce every granular role, revokes its `DEFAULT_ADMIN_ROLE`
-  last, and asserts it holds nothing (`README.md` § Mainnet ceremony). On SVM the
+  keys; the cold multisig then revokes the deployer's `DEFAULT_ADMIN_ROLE` itself on each
+  contract (proof it can sign on that chain), and a second run has the deployer renounce
+  every granular role and asserts it holds nothing (`README.md` § Mainnet ceremony). On SVM the
   granular roles are set to their final holders at `initialize`, while `role_admin` starts
   on the deployer and moves by the two-step handover (S16–S18).
 

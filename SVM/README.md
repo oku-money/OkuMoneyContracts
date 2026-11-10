@@ -59,6 +59,17 @@ crank (60 s recommended; not a protocol constant), always at or below canonical,
 least what the wallet showed (about $0.35 under-read per $1,000,000 at 20% APY). Display freshness
 is entirely the crank's job (see § Compute budget).
 
+**A wallet balance is a display, not a quote.** Token-2022 renders `trunc(raw as f64 * stored_f64)`, a
+rounding of its own. The stored `f64` is therefore three ULPs below `m / PRECISION`, so for balances up
+to `2^53` raw the rendered amount is never above `floor(raw * m / PRECISION)`, which is what
+`redeem_oku_m` pays (Cyfrin audit finding #23; a two-step floor rendered one micro-USDC too high at
+e.g. multiplier `1849869492742330240`, raw `37161506851`). That holds for Token-2022's truncating
+renderer only. A client must **not** derive `min_usdc_out` from the displayed amount: compute the
+canonical multiplier from the `PsmConfig` schedule (`computeMultiplier` in `@okumoney/yield-tooling`,
+the same code `redeem_oku_m` runs), take `floor(raw * m / 1e18)`, and apply its own slippage margin to
+that. The supply cap must stay at or below `2^53` raw (9.0 billion OkuM; deploy default 1e15 raw): above
+it `raw as f64` is itself inexact and the guarantee lapses.
+
 ### Naming: OkuM on-chain, usdOku in the wallet
 
 On-chain identity is **OkuM** everywhere; the mint's `TokenMetadata` is `name: "OkuMoney",
@@ -384,7 +395,7 @@ From `SVM/oku-programs`; `npm test` runs both suites.
 
 | Suite | Command | Count |
 |---|---|---|
-| Rust (`cargo test --workspace`) | `npm run test:rust` | 62 (lite-psm 10, oku-shared 51, differential 1) |
+| Rust (`cargo test --workspace`) | `npm run test:rust` | 63 (lite-psm 18, oku-shared 44, differential 1) |
 | Bankrun (in-process BPF on litesvm via `anchor-bankrun`) | `npm run test:bankrun` | 150 |
 | Cross-language `compute_multiplier` (Solidity corpus replayed in Rust and TS; `EVM/test/differential/GenerateVectors.t.sol`) | `npm run test:differential` (repo root) | 3,867 vectors |
 | Stateful sequence fuzz of `lite_psm` (random instruction sequences vs. a model; `tests/fuzz/psm-sequence.ts`) | `npm run test:fuzz` (`FUZZ_SEEDS`, `FUZZ_STEPS`, `FUZZ_SEED` to replay) | 8 seeds x 250 steps |
@@ -413,10 +424,13 @@ Traps that are not visible from the code alone. Cross-stack invariants live in
 [`../README.md` § Cross-stack invariants](../README.md#cross-stack-invariants).
 
 - **`multiplier_to_f64_floor`'s `display <= canonical` holds by exact cancellation, not
-  by margin.** Two `next_down` steps cancel two f64 roundings with almost nothing left
-  over, so adding any third rounding operation breaks it. The margin is per-binade and
-  found by search, so sampled checks over-estimate it. The invariant is checked in exact
-  integer arithmetic; do not simplify it to a float threshold. Derivation and the wrong
+  by margin.** Two `next_down` steps cancel the two f64 roundings of the conversion with
+  almost nothing left over, so adding any further rounding operation breaks it; a third
+  step then clears Token-2022's balance-level rounding (finding #23). The margin is
+  per-binade and found by search, so sampled checks over-estimate it: random balances
+  essentially never hit the failing case, which is why the tests pin witnesses and scan
+  dense balance windows around them. The invariant is checked in exact integer
+  arithmetic; do not simplify it to a float threshold. Derivation and the wrong
   approaches to avoid: doc comments in `helpers/display_sync.rs`.
 - **`PsmConfig` carries a `reserved` byte array and its `LEN` is pinned by a
   compile-time `assert!`.** New fields are consumed from the front of `reserved` with

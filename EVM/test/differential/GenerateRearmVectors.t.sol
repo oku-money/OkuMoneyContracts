@@ -266,6 +266,9 @@ contract GenerateVectorsRearmTest is Test {
     }
 
     function test_GenerateRearmVectors() public {
+        // About 1e9 gas of schedule writes, at the edge of the default per-test gas limit
+        // (and over it on some Foundry versions). Gas is irrelevant to a generator.
+        vm.pauseGasMetering();
         vm.writeFile(OUT_PATH, "");
         _buildStructured();
         _buildSeeded(300);

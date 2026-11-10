@@ -5,7 +5,7 @@ import {BaseTest} from "../Base.t.sol";
 import {L2BlockNumber} from "../../src/lib/L2BlockNumber.sol";
 import {OverrideBlockGuard} from "../../src/lib/OverrideBlockGuard.sol";
 import {OkuMoneyEvents} from "../../src/lib/events/OkuMoneyEvents.sol";
-import {MockArbSys} from "../mocks/MockArbSys.sol";
+import {IArbSys} from "../../src/lib/L2BlockNumber.sol";
 
 contract L2BlockNumberHarness {
     function current() external view returns (uint256) {
@@ -28,14 +28,17 @@ contract L2BlockNumberTest is BaseTest {
         harness = new L2BlockNumberHarness();
     }
 
-    function _etchArbSys(uint256 l2Height) internal {
-        vm.etch(ARB_SYS, address(new MockArbSys()).code);
-        MockArbSys(ARB_SYS).setArbBlockNumber(l2Height);
+    /// @dev ArbSys is faked with `vm.mockCall`, not an etched contract. Foundry (v1.8.5, the
+    ///      version CI pins) emulates the ArbSys precompile at address 100 itself whenever the
+    ///      chain id is Arbitrum, answering `arbBlockNumber()` with `block.number`; `vm.etch`
+    ///      cannot override that, but a mock intercepts before it. Re-mocking replaces the value.
+    function _setArbBlock(uint256 l2Height) internal {
+        vm.mockCall(ARB_SYS, abi.encodeCall(IArbSys.arbBlockNumber, ()), abi.encode(l2Height));
     }
 
     function _arbitrum(uint256 chainId, uint256 l2Height) internal {
         vm.chainId(chainId);
-        _etchArbSys(l2Height);
+        _setArbBlock(l2Height);
     }
 
     // ---- library ----
@@ -45,7 +48,7 @@ contract L2BlockNumberTest is BaseTest {
 
         // a chain that is not Arbitrum never calls address 100, even if code sits there
         vm.chainId(8453);
-        _etchArbSys(999_999);
+        _setArbBlock(999_999);
         assertEq(harness.current(), block.number);
 
         vm.chainId(1);
@@ -62,13 +65,22 @@ contract L2BlockNumberTest is BaseTest {
     }
 
     function test_Current_FallsBackToBlockNumberWithoutPrecompile() public {
-        // A Hardhat fork of Arbitrum reports chain id 42161 but emulates no ArbSys
+        // A Hardhat fork of Arbitrum reports chain id 42161 but emulates no ArbSys: the call
+        // returns nothing usable and the library falls back to `block.number`
         vm.chainId(ARBITRUM_ONE);
-        assertEq(ARB_SYS.code.length, 0);
+        vm.mockCall(ARB_SYS, abi.encodeCall(IArbSys.arbBlockNumber, ()), hex"");
         assertEq(harness.current(), block.number);
 
         // ... and so does a precompile that answers with something other than one word
-        vm.etch(ARB_SYS, hex"00");
+        vm.mockCall(ARB_SYS, abi.encodeCall(IArbSys.arbBlockNumber, ()), hex"00");
+        assertEq(harness.current(), block.number);
+        vm.mockCall(
+            ARB_SYS, abi.encodeCall(IArbSys.arbBlockNumber, ()), abi.encode(uint256(5), uint256(6))
+        );
+        assertEq(harness.current(), block.number);
+
+        // a failing call falls back too
+        vm.mockCallRevert(ARB_SYS, abi.encodeCall(IArbSys.arbBlockNumber, ()), "boom");
         assertEq(harness.current(), block.number);
     }
 
@@ -104,7 +116,7 @@ contract L2BlockNumberTest is BaseTest {
 
         // next L2 block; the parent-chain estimate (`block.number`) has not moved
         uint256 estimate = block.number;
-        MockArbSys(ARB_SYS).setArbBlockNumber(7_000_001);
+        _setArbBlock(7_000_001);
         assertEq(block.number, estimate);
 
         vm.prank(user1);
@@ -143,7 +155,7 @@ contract L2BlockNumberTest is BaseTest {
         vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         okuMoney.setOkuMMultiplier(PRECISION * 3);
 
-        MockArbSys(ARB_SYS).setArbBlockNumber(7_000_001); // next L2 block
+        _setArbBlock(7_000_001); // next L2 block
         vm.prank(rateManager);
         okuMoney.setOkuMMultiplier(PRECISION * 3);
         assertEq(okuMoney.okuMMultiplier(), PRECISION * 3);
@@ -160,7 +172,7 @@ contract L2BlockNumberTest is BaseTest {
         vm.expectRevert(OverrideBlockGuard.OverrideInProgress.selector);
         litePsm.redeemOkuM(1e18);
 
-        MockArbSys(ARB_SYS).setArbBlockNumber(7_000_001);
+        _setArbBlock(7_000_001);
         // past the guard: whatever happens next is not OverrideInProgress
         vm.prank(user1);
         try litePsm.redeemOkuM(1e18) {}

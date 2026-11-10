@@ -25,6 +25,8 @@
  * yielding write reverts `Paused`.
  *   NETWORK=devnet tsx scripts/admin/set-yield-rate.ts --mode=active \
  *       --target-multiplier=<wad> --end=<unix>
+ * "Now" for the window is the chain's Clock, which is what the program anchors at, never
+ * wall clock (it can lag by tens of seconds).
  *
  * Rates are WAD (1e18); `1e18` means "no yield". Rates below PRECISION are
  * rejected on-chain (no representation of a loss).
@@ -39,6 +41,7 @@ import { loadDeploymentStrict } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
 import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
+import { chainNowSec } from '../utils/chainClock';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 import {
   PRECISION,
@@ -80,7 +83,8 @@ function resolveRate(rateArg?: string, apyArg?: string, label = 'rate'): bigint 
  * reaches that multiplier at `end` (see `catchUpRate`). For a chain that lags the
  * others, e.g. after a pause outlasted the armed window. Mutually exclusive with
  * `--rate` / `--apy`. The write must land while UNPAUSED; a late landing leaves the
- * chain marginally below target, never above.
+ * chain marginally below target, never above, PROVIDED the window starts from the chain's
+ * own clock (`nowSec` here is the Clock sysvar, not `Date.now()`; see `chainClock.ts`).
  */
 function resolveCatchUpRate(
   targetArg: string,
@@ -124,7 +128,9 @@ async function main() {
   const cfg: any = await program.account.psmConfig.fetch(psmConfig);
   const rateManager = resolveRoleSigner(provider, cfg, 'rateManager');
   const schedule = scheduleFromConfig(cfg);
-  const nowSec = Math.floor(Date.now() / 1000);
+  // Chain time, the clock the program anchors at. `Date.now()` can run ahead of it, which
+  // makes the on-chain window longer than the one a catch-up rate was derived for.
+  const nowSec = await chainNowSec(provider.connection);
   const currentMultiplier = computeMultiplier(schedule, BigInt(nowSec));
 
   const common = {
@@ -251,7 +257,7 @@ async function main() {
       'pendingRate (wad)': after.pendingRatePerSecond.toString(),
       pendingRateEnd: after.pendingRateEnd.toString(),
       'base (wad)': after.baseMultiplier.toString(),
-      'multiplier now (wad)': computeMultiplier(after, BigInt(Math.floor(Date.now() / 1000))).toString(),
+      'multiplier now (wad)': computeMultiplier(after, BigInt(await chainNowSec(provider.connection))).toString(),
     }),
   );
 }

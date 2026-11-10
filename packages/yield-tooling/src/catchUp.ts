@@ -14,7 +14,10 @@
  *   - The write re-anchors at the block time it lands in, not at `nowTs`. A
  *     transaction landing `d` seconds late leaves a `windowSeconds - d` window, so
  *     the chain ends slightly BELOW target (the safe direction: a shortfall can be
- *     topped up, an overshoot cannot be corrected).
+ *     topped up, an overshoot cannot be corrected). That holds only if `windowSeconds`
+ *     is measured from the CHAIN's clock (EVM `block.timestamp`, SVM the Clock sysvar).
+ *     From wall clock, a chain whose clock lags by more than the landing delay gets a
+ *     longer window than the rate was derived for and ends ABOVE target for good.
  *   - The write is a yielding write, so it is rejected while the contract is paused
  *     (EVM `EnforcedPause` / SVM `Paused`). Unpause first.
  */

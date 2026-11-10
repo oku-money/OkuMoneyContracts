@@ -426,7 +426,13 @@ on the monitoring cadence (§ Monitoring SLAs).
    `setOkuMYieldRate.ts`, SVM `set-yield-rate.ts --mode=successor`)
    so the same successor takes over everywhere at `rateEnd`. `planCatchUp` computes target
    and rate from two schedules. A transaction landing late leaves the chain marginally
-   under target, never over. Expect `checkMultiplierDrift` to report a rate mismatch and
+   under target, never over, **because the window is measured from the chain's own clock**
+   (EVM `block.timestamp`; SVM the Clock sysvar, which `set-yield-rate.ts` reads, never
+   `Date.now()`): the Solana Clock can lag wall clock by tens of seconds, and a window
+   sized from wall clock would end the laggard above the leader for good, since the
+   multiplier never decreases (Cyfrin audit #19). A write landing in the very same chain
+   second as the read can end a few thousand wei above (rate granularity); any later one
+   ends below. Expect `checkMultiplierDrift` to report a rate mismatch and
    multiplier spread on the laggard until `rateEnd`; that is the catch-up working, not a
    fault. A gap that needs more than `MAX_RATE` (about 2242% APY) over the window must be
    closed over several windows.

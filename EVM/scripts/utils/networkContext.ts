@@ -50,6 +50,40 @@ export interface NetworkContext {
 const FORK_RUNTIME_NETWORKS = new Set(["localhost", "hardhat"]);
 
 /**
+ * Whether the connected chainId must be checked against the resolved network name:
+ * always, except on a fork whose name was auto-detected FROM that chainId.
+ */
+export function chainIdCheckApplies(isFork: boolean, explicit: boolean): boolean {
+  return explicit || !isFork;
+}
+
+/** Throws when the connected chain is not the one `networkName` names. */
+export function assertChainIdMatches(p: {
+  isFork: boolean;
+  explicit: boolean;
+  networkName: string;
+  hardhatNetworkName: string;
+  liveChainId: number;
+  expectedChainId: number;
+}): void {
+  if (p.liveChainId === p.expectedChainId) return;
+  throw new Error(
+    p.isFork
+      ? `Chain ID mismatch: local node reports chainId ${p.liveChainId}, ` +
+          `but NETWORK=${p.networkName} expects chainId ${p.expectedChainId}.\n` +
+          `  - To deploy to "${p.networkName}": restart \`hh node\` with ` +
+          `\`FORK_NETWORK=${p.networkName} hh node\`.\n` +
+          `  - To use the running fork: unset NETWORK to auto-detect, or set ` +
+          `NETWORK to match the fork's chainId.`
+      : `Chain ID mismatch: the connected chain (hardhat network "${p.hardhatNetworkName}") ` +
+          `reports chainId ${p.liveChainId}, but "${p.networkName}"` +
+          `${p.explicit ? " (from the NETWORK env var; unset a stale one)" : ""} ` +
+          `expects chainId ${p.expectedChainId}. Refusing to continue: the network name ` +
+          `decides the mainnet gate and which USDC is used.`
+  );
+}
+
+/**
  * Resolve the full network context for the current hardhat run.
  *
  * Async because it may need to query the running node's chainId for auto-detect.
@@ -94,20 +128,21 @@ export async function resolveNetworkContext(
 
   const chainConfig = getChainConfig(networkName);
 
-  // Cross-check explicit NETWORK= against the running fork's actual chainId.
-  // Auto-detect path already guarantees agreement so we skip there.
-  if (isFork && explicit) {
+  // Cross-check the resolved name against the connected chain's actual chainId, on every
+  // path except fork auto-detect (which derived the name FROM the chainId, so it agrees by
+  // construction). Without it a stale `NETWORK=` left over from a fork session, or a
+  // mis-wired RPC, makes the name, and with it the mainnet gate and the real-USDC
+  // requirement, describe a chain the script is not connected to (Cyfrin audit #17).
+  if (chainIdCheckApplies(isFork, !!explicit)) {
     const liveChainId = Number((await ethers.provider.getNetwork()).chainId);
-    if (liveChainId !== chainConfig.chainId) {
-      throw new Error(
-        `Chain ID mismatch: local node reports chainId ${liveChainId}, ` +
-        `but NETWORK=${networkName} expects chainId ${chainConfig.chainId}.\n` +
-        `  - To deploy to "${networkName}": restart \`hh node\` with ` +
-        `\`FORK_NETWORK=${networkName} hh node\`.\n` +
-        `  - To use the running fork: unset NETWORK to auto-detect, or set ` +
-        `NETWORK to match the fork's chainId.`
-      );
-    }
+    assertChainIdMatches({
+      isFork,
+      explicit: !!explicit,
+      networkName,
+      hardhatNetworkName: network.name,
+      liveChainId,
+      expectedChainId: chainConfig.chainId,
+    });
   }
 
   const bookKey = isFork ? `fork:${networkName}` : networkName;

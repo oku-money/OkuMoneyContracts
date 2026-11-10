@@ -936,6 +936,15 @@ non-generic ones:
 - **`Chain ID mismatch: local node reports X, NETWORK=Y expects Z`** — restart
   `hh node` with `FORK_NETWORK=Y`, or unset `NETWORK` and let the script
   auto-detect from the live chainId.
+- **`Chain ID mismatch: the connected chain (hardhat network "N") reports X, but "Y" …`** —
+  on a live run the network name is checked against the connected chainId too
+  (Cyfrin audit #17): the name decides the mainnet gate and which USDC is used.
+  Unset a stale `NETWORK` left over from a fork session, or fix the RPC behind
+  `--network`.
+- **`Refusing to deploy MockUSDC on chainId X`** — the permissionless MockUSDC reserve
+  is deployed only on a fork or a chain in `MOCK_USDC_NETWORKS`
+  (`EVM/scripts/config/chains.ts`: the five testnets). A chain added to `chains.ts`
+  needs its real USDC address, or an entry there if it is a testnet.
 
 ### Initial deploy parameters
 

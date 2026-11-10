@@ -350,6 +350,44 @@ export function getNetworkNameByChainId(chainId: number): string | undefined {
   return undefined;
 }
 
+/**
+ * Testnets where the deploy may create a permissionless MockUSDC as the PSM reserve
+ * (`MockUSDC.mint` has no access control). A positive list on purpose: a chain added to
+ * CHAIN_METADATA later gets a real USDC address, or an entry here if it is a testnet; it
+ * never falls into the mock path by omission from a mainnet list (Cyfrin audit #17).
+ */
+export const MOCK_USDC_NETWORKS = [
+  "sepolia",
+  "opSepolia",
+  "baseSepolia",
+  "arbSepolia",
+  "bscTestnet",
+] as const;
+
+/** Whether a MockUSDC reserve may be deployed on the live chain with this chainId. */
+export function isMockUsdcChainId(chainId: number): boolean {
+  return MOCK_USDC_NETWORKS.some((n) => CHAIN_METADATA[n].chainId === chainId);
+}
+
+/**
+ * Throws unless a MockUSDC reserve may be deployed here. Forks are exempt (throwaway
+ * chains that reuse the real chain's name); a live chain must be a listed testnet,
+ * judged by the CONNECTED chainId, not by a network name that may be stale.
+ */
+export function assertMockUsdcAllowed(p: {
+  isFork: boolean;
+  liveChainId: number;
+  networkName: string;
+}): void {
+  if (p.isFork || isMockUsdcChainId(p.liveChainId)) return;
+  throw new Error(
+    `Refusing to deploy MockUSDC on chainId ${p.liveChainId} (${p.networkName}): not a listed ` +
+      `testnet (${MOCK_USDC_NETWORKS.join(", ")}). Its mint() is permissionless, and the PSM ` +
+      `takes the token as its one-time reserve. Configure the chain's real USDC in ` +
+      `scripts/config/chains.ts, or add it to MOCK_USDC_NETWORKS if it is a testnet.`
+  );
+}
+
 // ============================================================================
 // Fork Testing Configuration
 // ============================================================================

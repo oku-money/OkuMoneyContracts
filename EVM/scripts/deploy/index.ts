@@ -27,6 +27,7 @@ import { publicRpcUrl, RpcChain } from "../config/rpc";
 import {
   getChainMetadata,
   DEV_WALLET_ADDRESS,
+  assertMockUsdcAllowed,
 } from "../config/chains";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { ROLES, getRoleName } from "../config/roles";
@@ -924,6 +925,13 @@ export async function runDeploy(
     saveAddress(bookKey, "USDC", usdcAddress);
     logger.info(`  USDC: ${usdcAddress}`);
   } else {
+    // Judged by the connected chainId (resolveNetworkContext has already tied the name to
+    // it), and by a list of testnets rather than by the name falling outside a mainnet set.
+    assertMockUsdcAllowed({
+      isFork,
+      liveChainId: Number((await ethers.provider.getNetwork()).chainId),
+      networkName,
+    });
     usdcAddress = await deployMockUSDC(bookKey, deployer);
   }
 

@@ -10,8 +10,12 @@
 //!    pure lag behind a monotonically increasing curve.
 //! 2. The `f64` conversion is biased downward ([`multiplier_to_f64_floor`]).
 //! 3. The bias is large enough that Token-2022's own rounding, when it multiplies
-//!    a balance by the stored `f64`, cannot round a rendered amount up past the
-//!    PSM's integer redeem floor (Cyfrin audit finding #23).
+//!    a balance by the stored `f64` and then divides by `1e6` for display, cannot
+//!    round a rendered amount up past the PSM's integer redeem floor (Cyfrin audit
+//!    finding #23).
+//!
+//! Legs 1 and 2 are proved below; leg 3 above `2^33` USD per balance is measured. See
+//! [`multiplier_to_f64_floor`], "Range".
 
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
@@ -20,44 +24,65 @@ use anchor_spl::token_2022::spl_token_2022::extension::scaled_ui_amount::instruc
 use oku_shared::PRECISION;
 
 /// Convert a WAD-scaled multiplier to the `f64` the extension stores, biased
-/// three ULPs **downward** so the result never exceeds `m / PRECISION` and a
+/// four ULPs **downward** so the result never exceeds `m / PRECISION` and a
 /// rendered balance never exceeds `raw_to_dollars(balance, m)`.
 ///
 /// A compare-and-step-down check cannot work: `m as f64` is itself lossy at WAD
 /// scale, so both sides of the comparison are rounded.
 ///
-/// Let `u = 2^-53` and `x = m / PRECISION` (exact real).
+/// Let `u = 2^-53` and `x = m / PRECISION` (exact real). Every `next_down` lowers a
+/// value `v` by at least `u v` (one ULP is at least `u` of the value).
 ///
 /// Leg 1, `f2 <= x`. `1e18` is exact in `f64`, so `q = fl(fl(m) / 1e18)` carries
-/// two roundings and `q <= x(1+u)^2`. One `next_down` removes one ULP, which is at
-/// least `u * value`, so two steps give `f2 <= q(1-u)^2 <= x(1-u^2)^2 < x`. The
-/// slack is second-order: the decrement exactly cancels the roundings.
+/// two roundings and `q <= x(1+u)^2`. Two steps give `f2 <= q(1-u)^2 <= x(1-u^2)^2 < x`.
+/// The slack is second-order: the decrement exactly cancels the roundings.
 ///
 /// Leg 2, the balance level. Token-2022 renders a balance `a` as
 /// `trunc(fl(a as f64 * f))`, a THIRD rounding. For `a <= 2^53`, `a as f64` is
 /// exact and `fl(a f) <= a f (1+u)`, so the render exceeds the exact floor
 /// `floor(a x)` only if `f(1+u) >= x`. With `f2` that is possible: `x - f2` can be
 /// as small as ~0.95 `u f2`, and a product just under an integer then rounds UP
-/// across it. One more `next_down` moves `f` down by at least `u * f2`, so
+/// across it. A third step moves `f` down by at least `u * f2`, so
 /// `x - f3 >= f2 - f3 >= u f2 > u f3`, i.e. `f3 (1+u) < x`, hence
 /// `fl(a f3) < a x` and the truncation cannot exceed `floor(a x)`.
 ///
-/// Precondition: balances at most `2^53` raw (9.007e15, ~9.0 billion OkuM at 6
-/// decimals), where `a as f64` is exact. The deploy supply cap is 1e15 raw. A
-/// `set_max_supply` above `2^53` would add a fourth, uncovered rounding.
+/// Leg 3, the renderer's quotient (Cyfrin's follow-up on #23). After the product,
+/// Token-2022 computes `trunc(fl(a f)) / 1e6` in `f64` and prints six decimals.
+/// - Below `2^33` USD displayed (the `f64` spacing there is at most `2^-20 < 1e-6`),
+///   the nearest `f64` to a whole number of micro-units is within `2^-21 < 5e-7` of it
+///   and prints exactly, so leg 2 is enough. PROVED.
+/// - From `2^33` up the spacing is `2^-19` and the nearest `f64` can sit nearly a
+///   micro-unit from the exact quotient, so the string can read one micro-unit above
+///   `trunc(fl(a f))`, at any multiplier, when the product has also rounded up onto the
+///   exact floor. Three steps read high on about 0.2% of consecutive balances around
+///   Cyfrin's witness (132 of 3.6 million in an out-of-tree scan at the worst case for ULP
+///   size, `f` just under a power of two; 1,378 of 600,000 around the witness itself). A fourth
+///   step lowers the product by about `value * 2^-53`, the same order as the quotient
+///   error, and none of those scans read high with four. MEASURED, not proved: with
+///   `V = a x` the four-step bound is `shown <= V + 1/2`, which leaves the last half
+///   unit open. FIVE steps prove it (`shown <= V - V u`, and `V u >= 1/2` from `2^33`
+///   USD up); that costs another ~1e-16 of relative bias and was not taken.
 ///
-/// Caveat: this holds for Token-2022's truncating renderer (`amount_to_ui_amount`
-/// in `spl-token-2022-interface`, pinned in Cargo.lock). A client that rounds to
-/// nearest instead of truncating can still display one unit more; derive any
-/// `min_usdc_out` from the canonical multiplier, not from the displayed amount
-/// (SVM/README.md, "The mint extension is NOT the source of truth").
+/// Range. The guarantee `displayed <= raw_to_dollars(balance, m)` covers balances of
+/// at most `2^53` raw (9.007e15, ~9.0 billion OkuM at 6 decimals, where `a as f64` is
+/// exact), proved below `2^33` USD displayed (8.59e9) and measured above it. A
+/// `set_max_supply` above `2^53` would add a further, uncovered rounding. The deploy
+/// supply cap is 1e15 raw, so a single balance reaches `2^33` USD only above a
+/// multiplier of about 8.6 (a dozen years of accrual at 20% APY, more than forty at
+/// 5%), and the PSM buffer could not pay such a redemption.
 ///
-/// Do not add another rounding (an `f32` hop, a normalising multiply, a
-/// different divisor): it breaks the cancellation. The tests check the bound in
-/// exact integer arithmetic, and the render against the real Token-2022 code.
+/// Caveat: this holds for Token-2022's truncating renderer (`amount_to_ui_amount` in
+/// `spl-token-2022-interface`, pinned in Cargo.lock). A client that rounds to nearest
+/// instead of truncating can still display one unit more; derive any `min_usdc_out`
+/// from the canonical multiplier, not from the displayed amount (SVM/README.md, "The
+/// mint extension is NOT the source of truth").
 ///
-/// Rendered impact is invisible: OkuM has 6 decimals and the bias is ~3e-16
-/// relative, far below the by-design lag of one crank interval.
+/// Do not add another rounding (an `f32` hop, a normalising multiply, a different
+/// divisor): it breaks the cancellation. The tests check the bound in exact integer
+/// arithmetic, and the render against the real Token-2022 code.
+///
+/// Rendered impact is invisible: OkuM has 6 decimals and the bias is ~4e-16 relative,
+/// far below the by-design lag of one crank interval.
 #[inline]
 pub fn multiplier_to_f64_floor(multiplier: u128) -> f64 {
     let scaled = multiplier as f64 / PRECISION as f64;
@@ -66,7 +91,7 @@ pub fn multiplier_to_f64_floor(multiplier: u128) -> f64 {
         // into a negative subnormal, which a mint must never store.
         return scaled;
     }
-    scaled.next_down().next_down().next_down()
+    scaled.next_down().next_down().next_down().next_down()
 }
 
 /// Push `multiplier` into the mint's `ScaledUiAmountConfig`, effective now.
@@ -156,7 +181,7 @@ mod tests {
     /// pinned: the weak point depends jointly on the bit patterns of `fl(m)` and
     /// the division, so it has no closed form. Margin is the exact integer
     /// quantity `m - f * 1e18`; each witness violates the leg-1 invariant at ONE
-    /// `next_down` (the production function takes three, see leg 2).
+    /// `next_down` (the production function takes four, see legs 2 and 3).
     fn weak_region_cases() -> Vec<u128> {
         vec![
             1_997_203_241_501_062_532u128,
@@ -323,13 +348,13 @@ mod tests {
         let stored = multiplier_to_f64_floor(CANONICAL_MULTIPLIER);
         assert_eq!(
             stored.to_bits(),
-            old.to_bits() - 1,
-            "one ULP lower than before"
+            old.to_bits() - 2,
+            "two ULPs below the old two-step value"
         );
         assert_eq!(rendered_micro(RAW_OKU_M, stored), redeemable);
     }
 
-    /// Every pinned case renders above the floor with two steps (so the third is
+    /// Every pinned case renders above the floor with two steps (so more are
     /// necessary) and at or below it with the production function.
     #[test]
     fn two_step_floor_overshoots_and_production_floor_does_not() {
@@ -431,9 +456,148 @@ mod tests {
         }
     }
 
-    /// Bound the bias in dollars: three ULPs cost ~6e-16 relative, so at the deploy
+    /// Displayed-value bound of the renderer's quotient (see `multiplier_to_f64_floor`,
+    /// "Range"): `2^33` USD, in micro-units.
+    const TWO_POW_33_USD_MICRO: u128 = (1u128 << 33) * 1_000_000;
+
+    /// Cyfrin's witness above the bound (finding #23, follow-up): multiplier ~15.89 and a
+    /// balance worth ~$9.12 billion. With three steps the float product IS the redeemable
+    /// floor (leg 2 holds exactly) yet the string reads one micro-unit high, because the
+    /// renderer divides by 1e6 in `f64` at a magnitude where `f64` is coarser than a
+    /// micro-unit (leg 3). The production four steps lower the product enough to clear it.
+    #[test]
+    fn witness_above_two_pow_33_usd_reads_high_with_three_steps_not_four() {
+        const M: u128 = 15_888_210_600_498_533_406;
+        const A: u64 = 574_156_416_895_709;
+
+        let redeemable = u128::from(raw_to_dollars(A, M).unwrap());
+        assert_eq!(redeemable, 9_122_318_069_266_658);
+        assert!(
+            redeemable > TWO_POW_33_USD_MICRO,
+            "the witness is above the 2^33 USD bound"
+        );
+        const _: () = assert!(A < 1u64 << 53, "inside the raw-balance precondition");
+
+        let f3 = floor_steps(M, 3);
+        assert_eq!(
+            rendered_trunc(A, f3),
+            redeemable,
+            "three steps: the product equals the exact floor"
+        );
+        assert_eq!(
+            rendered_micro(A, f3),
+            redeemable + 1,
+            "three steps: the renderer's quotient reads one micro-unit high (Cyfrin's report)"
+        );
+
+        let f4 = multiplier_to_f64_floor(M);
+        assert_eq!(f4.to_bits(), f3.to_bits() - 1);
+        assert!(rendered_trunc(A, f4) < redeemable);
+        // below the floor, the safe direction: this witness reads one micro-unit under
+        assert_eq!(rendered_micro(A, f4), redeemable - 1);
+    }
+
+    /// Below the bound the quotient is exact: around the witness's neighbourhood scaled
+    /// down to under `2^33` USD, and across multipliers up to ~20x, the string never
+    /// exceeds the redeemable amount.
+    #[test]
+    fn rendered_string_never_high_below_two_pow_33_usd() {
+        let mut state: u128 = 0x51D3_77AA_0C9E_4B21;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as u64
+        };
+        let mut checked = 0u32;
+        for _ in 0..600 {
+            // 1x..20x
+            let m = PRECISION + u128::from(next()) % (19 * PRECISION);
+            let f = multiplier_to_f64_floor(m);
+            for _ in 0..40 {
+                // A target value anywhere below the bound, then the balance worth it.
+                let value =
+                    1 + (u128::from(next()) << 14 ^ u128::from(next())) % TWO_POW_33_USD_MICRO;
+                let a = (value * PRECISION / m) as u64;
+                if a == 0 || a > 1u64 << 53 {
+                    continue;
+                }
+                let exact = u128::from(raw_to_dollars(a, m).unwrap());
+                if exact >= TWO_POW_33_USD_MICRO {
+                    continue;
+                }
+                assert!(rendered_micro(a, f) <= exact, "m = {m}, a = {a}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 10_000, "sweep covered only {checked} cases");
+    }
+
+    /// Dense windows just under the bound, at the multiplier where the witness lives:
+    /// the renderer's quotient is exact for every balance worth less than `2^33` USD
+    /// (about two million consecutive balances, the last 20,000 right up to the bound).
+    #[test]
+    fn dense_window_below_two_pow_33_usd_never_reads_high() {
+        const M: u128 = 15_888_210_600_498_533_406;
+        let f = multiplier_to_f64_floor(M);
+        // Balance whose redeemable value is nearest the bound.
+        let centre = (TWO_POW_33_USD_MICRO * PRECISION / M) as u64;
+        for a in (centre - 400_000)..=centre {
+            let exact = u128::from(raw_to_dollars(a, M).unwrap());
+            if exact >= TWO_POW_33_USD_MICRO {
+                continue;
+            }
+            assert!(
+                rendered_micro(a, f) <= exact,
+                "a = {a}: reads high below the 2^33 USD bound"
+            );
+        }
+    }
+
+    /// Measurement behind leg 3 of the doc comment: around the witness three steps read
+    /// high on some balances (so this is not vacuous) and the production four on none.
+    /// Not a proof; see "Leg 3".
+    #[test]
+    fn four_steps_clear_the_dense_witness_window_that_three_do_not() {
+        const M: u128 = 15_888_210_600_498_533_406;
+        const A0: u64 = 574_156_416_895_709;
+        let (f3, f4) = (floor_steps(M, 3), floor_steps(M, 4));
+        assert_eq!(f4, multiplier_to_f64_floor(M));
+        let (mut high3, mut high4) = (0u32, 0u32);
+        for a in (A0 - 60_000)..=(A0 + 60_000) {
+            let exact = u128::from(raw_to_dollars(a, M).unwrap());
+            high3 += u32::from(rendered_micro(a, f3) > exact);
+            high4 += u32::from(rendered_micro(a, f4) > exact);
+        }
+        assert!(high3 > 0, "expected three steps to read high somewhere");
+        assert_eq!(high4, 0, "four steps read high on {high4} balances");
+    }
+
+    /// The same, above the bound in general: values from 1x to 1.5x of `2^33` USD at
+    /// multipliers whose `f` sits just under a power of two (where one ULP is the
+    /// smallest share of `f`, the worst case for the bias). The production floor never
+    /// reads high.
+    #[test]
+    fn production_floor_never_reads_high_above_two_pow_33_usd_near_binade_top() {
+        let mut checked = 0u32;
+        for d in [0u128, 1, 3, 100, 1_000_000_000_000] {
+            let m = 16 * PRECISION - 1 - d; // f just under 16
+            let f = multiplier_to_f64_floor(m);
+            for mult_num in [100u128, 106, 150] {
+                let centre = (TWO_POW_33_USD_MICRO * mult_num / 100 * PRECISION / m) as u64;
+                for a in (centre - 3_000)..=(centre + 3_000) {
+                    let exact = u128::from(raw_to_dollars(a, m).unwrap());
+                    assert!(rendered_micro(a, f) <= exact, "m = {m}, a = {a}");
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 90_000);
+    }
+
+    /// Bound the bias in dollars: four ULPs cost ~9e-16 relative, so at the deploy
     /// supply cap (1e15 raw, ~$1e9) the shortfall is far below a micro-unit's worth
-    /// of rounding, and even at `u64::MAX` raw (~$1.9e13, unreachable) it is ~1.2 cents.
+    /// of rounding, and even at `u64::MAX` raw (~$1.9e13, unreachable) it is ~1.7 cents.
     #[test]
     fn bias_is_negligible_in_dollar_terms_at_every_representable_balance() {
         let m = 1_037_419_283_746_192_837u128; // ~1.037x

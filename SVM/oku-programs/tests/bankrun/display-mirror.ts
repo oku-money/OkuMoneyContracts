@@ -167,8 +167,8 @@ describe("display mirror (ScaledUiAmount)", () => {
       // forever. The mirror must be CORRECT AS OF ITS LAST CRANK -- it may lag,
       // but must not sit materially below the value at that crank.
       //
-      // The slack is 1e-12 relative. That is ~3000x the deliberate f64
-      // conversion bias (three `next_down` steps, ~3.3e-16) and still ~4 orders
+      // The slack is 1e-12 relative. That is ~2000x the deliberate f64
+      // conversion bias (four `next_down` steps, ~4.4e-16) and still ~4 orders
       // of magnitude tighter than one crank interval of accrual at 20% APY, so
       // a frozen or regressing mirror fails.
       const syncFloor = atSync - atSync / 1_000_000_000_000n;

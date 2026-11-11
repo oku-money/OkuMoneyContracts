@@ -5,6 +5,7 @@ import {BaseTest} from "../Base.t.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {OkuMoneyEvents} from "../../src/lib/events/OkuMoneyEvents.sol";
 import {Deploy} from "../shared/Deploy.sol";
+import {OkuMoneyErrors} from "../../src/lib/errors/OkuMoneyErrors.sol";
 
 /// @notice Cyfrin audit #13. Re-arming the segment already accruing used to re-anchor the
 ///         stored base at each chain's own landing second; integer rounding then left
@@ -284,4 +285,87 @@ contract OkuMoneyRearmSkewTest is BaseTest {
         vm.warp(T0 + DAY);
         assertEq(okuMoney.okuMMultiplier(), untouched);
     }
+
+    // ---- a chain that lands outside the segment the broadcast re-arms (Cyfrin #13 follow-up) ----
+    //
+    // The fix makes every chain store the same schedule PROVIDED each processes the broadcast
+    // inside the same effective segment. These tests pin what happens when one does not.
+
+    /// @dev Late: the stage-settlement artifact repeats the base segment (RATE_BASE, base end).
+    ///      A chain that lands after that window ended is asked to re-arm a segment in the
+    ///      past. It reverts and stores nothing, so a straggler cannot diverge silently.
+    function test_Straddle_LateStageRepeatRevertsAndStoresNothing() public {
+        vm.warp(T0);
+        _apply(okuMoney, RATE_BASE, T0 + BASE_WINDOW, RATE_SETTLE, T0 + DAY);
+        Stored memory before = _stored(okuMoney);
+
+        uint256[3] memory landings = [T0 + BASE_WINDOW, T0 + BASE_WINDOW + 1, T0 + DAY - 1];
+        for (uint256 i = 0; i < landings.length; i++) {
+            vm.warp(landings[i]);
+            vm.prank(rateManager);
+            vm.expectRevert(OkuMoneyErrors.EndTimestampInPast.selector);
+            okuMoney.setOkuMYieldRateWithSuccessor(
+                RATE_BASE, T0 + BASE_WINDOW, RATE_SETTLE, T0 + DAY
+            );
+            Stored memory after_ = _stored(okuMoney);
+            assertEq(after_.base, before.base, "base");
+            assertEq(after_.anchor, before.anchor, "anchor");
+            assertEq(after_.rateEnd, before.rateEnd, "rateEnd");
+        }
+    }
+
+    /// @dev Late: the roll repeats the settlement segment. Landing after the settlement ended
+    ///      reverts the same way, including at the exact end second (end <= now).
+    function test_Straddle_LateRollRepeatRevertsAndStoresNothing() public {
+        vm.warp(T0);
+        _apply(okuMoney, RATE_BASE, T0 + BASE_WINDOW, RATE_SETTLE, T0 + DAY);
+        Stored memory before = _stored(okuMoney);
+
+        uint256[2] memory landings = [T0 + DAY, T0 + DAY + 5];
+        for (uint256 i = 0; i < landings.length; i++) {
+            vm.warp(landings[i]);
+            vm.prank(rateManager);
+            vm.expectRevert(OkuMoneyErrors.EndTimestampInPast.selector);
+            okuMoney.setOkuMYieldRateWithSuccessor(
+                RATE_SETTLE, T0 + DAY, RATE_BASE, T0 + DAY + BASE_WINDOW
+            );
+            Stored memory after_ = _stored(okuMoney);
+            assertEq(after_.base, before.base, "base");
+            assertEq(after_.anchor, before.anchor, "anchor");
+        }
+    }
+
+    /// @dev Early, a chain whose clock LAGS (an L2 after a sequencer outage, Accepted Risk
+    ///      #15): the roll artifact (RATE_SETTLE, settlement end) is derived once the base
+    ///      window has ended, but this chain's `block.timestamp` is still inside it. The
+    ///      write is not a re-arm of the running segment (that is the base rate), so it is
+    ///      a plain rate change and re-anchors at the lagging clock, replacing the rest of
+    ///      the base window with the settlement rate. The contract admits it and the chains
+    ///      DIVERGE from then on. The contract cannot tell, so this is pinned as the reason for
+    ///      the off-chain guard: `applyScheduleToChain` (EVM) and `set-yield-rate.ts` (SVM)
+    ///      refuse the write by the chain's own clock (`rearmWindowProblem`, yield-tooling).
+    function test_Straddle_EarlyRollOnLaggingChainDivergesSilently() public {
+        OkuMoney leader = okuMoney;
+        OkuMoney lagger = _second();
+
+        vm.warp(T0);
+        _apply(leader, RATE_BASE, T0 + BASE_WINDOW, RATE_SETTLE, T0 + DAY);
+        _apply(lagger, RATE_BASE, T0 + BASE_WINDOW, RATE_SETTLE, T0 + DAY);
+
+        // the leader's clock is past the base window: the roll re-arms the live successor
+        vm.warp(T0 + BASE_WINDOW + 1000);
+        _apply(leader, RATE_SETTLE, T0 + DAY, RATE_BASE, T0 + DAY + BASE_WINDOW);
+        assertEq(leader.okuMLastAccrualTime(), T0 + BASE_WINDOW, "leader promoted");
+
+        // the lagging chain receives the same artifact, but its clock is 2 hours behind
+        vm.warp(T0 + BASE_WINDOW - 2 hours);
+        _apply(lagger, RATE_SETTLE, T0 + DAY, RATE_BASE, T0 + DAY + BASE_WINDOW);
+        assertEq(lagger.okuMLastAccrualTime(), T0 + BASE_WINDOW - 2 hours, "lagger re-anchored");
+
+        vm.warp(T0 + DAY);
+        assertTrue(leader.okuMMultiplier() != lagger.okuMMultiplier(), "chains diverged");
+        // the stored schedules differ too, which a drift check on anchors would catch
+        assertTrue(leader.okuMLastAccrualTime() != lagger.okuMLastAccrualTime());
+    }
 }
+

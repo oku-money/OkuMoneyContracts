@@ -41,6 +41,7 @@ import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
 import { isYesMainnet, isDryRun, parseArg, runMain } from "../utils/cli";
 import { loadAddress } from "../utils/addressBook";
+import { rearmWindowProblem, type Schedule } from "@okumoney/yield-tooling";
 import { runSetOkuMYieldRate } from "./setOkuMYieldRate";
 import type { SetOkuMYieldRateResult } from "./setOkuMYieldRate";
 import type { NetworkContext } from "../utils/networkContext";
@@ -66,6 +67,12 @@ export interface ChainState {
   /** The OkuMoney address this process would submit to (`ctx.bookKey`'s entry). */
   address: string;
   schedule: OnChainSchedule;
+  /**
+   * The chain's OWN clock: its latest block's timestamp, which is what the contract
+   * anchors at, NOT wall clock. A rollup after a sequencer outage can trail wall clock by
+   * hours; the re-arm guard below must judge the artifact by the clock the write will land at.
+   */
+  chainTimeSec: number;
 }
 
 /** Reads {@link ChainState}; injectable for tests. */
@@ -96,7 +103,7 @@ export const readChainState: ChainStateReader = async (ctx, signer) => {
   const address = loadAddress(ctx.bookKey, "OkuMoney");
   if (!address) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
   const c = new ethers.Contract(address, SCHEDULE_ABI, provider);
-  const [net, rate, rateEnd, pendingRate, pendingRateEnd, base, last] = await Promise.all([
+  const [net, rate, rateEnd, pendingRate, pendingRateEnd, base, last, latest] = await Promise.all([
     provider.getNetwork(),
     c.okuMRatePerSecond(),
     c.okuMRateEnd(),
@@ -104,9 +111,12 @@ export const readChainState: ChainStateReader = async (ctx, signer) => {
     c.okuMPendingRateEnd(),
     c.okuMBaseMultiplier(),
     c.okuMLastAccrualTime(),
+    provider.getBlock("latest"),
   ]);
+  if (!latest) throw new Error("could not read the latest block (chain clock)");
   return {
     chainId: Number(net.chainId),
+    chainTimeSec: Number(latest.timestamp),
     address,
     schedule: {
       rate: rate.toString(),
@@ -155,6 +165,18 @@ export const findAppliedTx: AppliedTxFinder = async (_ctx, signer, state, artifa
   }
   return undefined;
 };
+
+/** `OnChainSchedule` (decimal strings, numbers) as the bigint schedule the math uses. */
+function toSchedule(o: OnChainSchedule): Schedule {
+  return {
+    baseMultiplier: BigInt(o.baseMultiplier),
+    ratePerSecond: BigInt(o.rate),
+    lastAccrualTime: BigInt(o.lastAccrualTime),
+    rateEnd: BigInt(o.rateEnd),
+    pendingRatePerSecond: BigInt(o.pendingRate),
+    pendingRateEnd: BigInt(o.pendingRateEnd),
+  };
+}
 
 export interface ApplyDeps {
   readChain?: ChainStateReader;
@@ -291,6 +313,33 @@ export async function applyScheduleToChain(
     throw new Error(
       `${tag} on-chain schedule no longer matches the artifact's expected pre-state ` +
         `(nor its target): ${mismatches.join("; ")}. State moved since derivation — re-derive.`
+    );
+  }
+
+  // The re-arm only keeps every chain's stored schedule identical when this chain processes
+  // the artifact INSIDE the segment it re-arms, judged by this chain's own clock. A chain
+  // whose clock lags would otherwise take a roll artifact too early as a plain rate change
+  // and diverge silently (Cyfrin audit #13 follow-up; `rearmWindowProblem`).
+  const problem = rearmWindowProblem(
+    toSchedule(state.schedule),
+    BigInt(state.chainTimeSec),
+    BigInt(artifact.schedule.rate),
+    BigInt(artifact.schedule.rateEnd)
+  );
+  if (problem === "segment-not-started") {
+    throw new Error(
+      `${tag} this chain's clock (${state.chainTimeSec}) has not reached the segment the artifact ` +
+        `re-arms: it repeats the armed successor, but the active window runs until ` +
+        `${state.schedule.rateEnd}. Submitting now would replace the rest of the active window ` +
+        `with the successor's rate and leave this chain diverged. Wait until the chain's clock ` +
+        `passes ${state.schedule.rateEnd} (the chain may be lagging; see Accepted Risk #15), then retry.`
+    );
+  }
+  if (problem === "segment-ended") {
+    throw new Error(
+      `${tag} the segment the artifact re-arms (ending ${artifact.schedule.rateEnd}) has already ` +
+        `ended on this chain (clock ${state.chainTimeSec}). Re-derive the artifact; the contract ` +
+        `would revert EndTimestampInPast.`
     );
   }
 

@@ -528,6 +528,20 @@ identical whatever second it lands in. The three implementations are pinned to e
 other by a differential corpus generated from the real contract
 (`test/differential/rearm-vectors.jsonl`).
 
+**Every chain must process the broadcast inside the segment it re-arms.** Outside it the
+contracts cannot help: a chain that lands after the segment ended reverts
+`EndTimestampInPast` and stores nothing, which is safe; but a chain whose clock LAGS (a
+rollup after a sequencer outage, Accepted Risk #15; Solana's Clock, which trails wall clock)
+can receive a roll artifact while its clock is still inside the base window. That write
+repeats the armed successor rather than the running segment, so it is a plain rate change:
+the chain re-anchors at its lagging time, replaces the rest of the base window with the
+settlement rate, and diverges with no on-chain signal
+(`test_Straddle_EarlyRollOnLaggingChainDivergesSilently`). The guard is off-chain, by the
+chain's own clock, in both senders: `applyScheduleToChain` reads the latest block timestamp
+and `set-yield-rate.ts` the Clock sysvar, and both refuse via `rearmWindowProblem`
+(yield-tooling) before submitting, including under `DRY_RUN`. A refused chain is retried once
+its clock has passed the base window's end, or paused per the lag runbook.
+
 ### Cross-chain agreement comes for free
 
 `computeMultiplier` contains **no supply term**, so given identical schedule

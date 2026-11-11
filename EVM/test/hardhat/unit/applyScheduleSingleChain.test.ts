@@ -90,7 +90,7 @@ describe("scripts/operator/applyScheduleSingleChain", () => {
   let deps: ApplyDeps;
 
   beforeEach(() => {
-    live = { chainId: CHAIN_ID, address: ADDR, schedule: { ...PRE_STATE } };
+    live = { chainId: CHAIN_ID, address: ADDR, chainTimeSec: 1_000, schedule: { ...PRE_STATE } };
     deps = { readChain: async () => live, findTx: async () => "0xfound", nowSec: NOW };
     calls = [];
     applier = async (_c, _s, opts) => {
@@ -362,6 +362,78 @@ describe("scripts/operator/applyScheduleSingleChain", () => {
     // On a non-reference chain the anchor legitimately differs (own block.timestamp).
     const other = save(makeArtifact({ referenceChain: "baseSepolia" }));
     expect(await applyScheduleToChain(other, ctx, {} as any, false, applier, deps)).to.equal("recorded");
+  });
+
+  // ---- chain-clock guard (Cyfrin audit #13 follow-up) ----
+  //
+  // The re-arm only keeps every chain's stored schedule identical when each chain processes
+  // the artifact INSIDE the segment it re-arms, by that chain's own clock. PRE_STATE: active
+  // (rate ...100000000, ends 1500), armed successor (rate ...300000000, ends 1800).
+
+  const ACTIVE = { rate: "1000000000100000000", rateEnd: 1500 };
+  const SUCCESSOR = { rate: "1000000000300000000", rateEnd: 1800 };
+  const repeating = (seg: { rate: string; rateEnd: number }, next = { rate: "1000000000200000", end: 3000 }) =>
+    makeArtifact({
+      schedule: { rate: seg.rate, rateEnd: seg.rateEnd, nextRate: next.rate, nextRateEnd: next.end },
+    });
+
+  it("refuses a roll artifact (repeats the armed successor) on a chain whose clock has not passed the base window", async () => {
+    // A lagging chain (a rollup after a sequencer outage): its clock is still inside the
+    // active window, so the write would replace the rest of it and the chain would diverge.
+    live.chainTimeSec = 1_400;
+    const a = repeating(SUCCESSOR);
+    const err = await rejection(applyScheduleToChain(a, ctx, {} as any, false, applier, deps));
+    expect(err.message).to.match(/clock \(1400\) has not reached the segment the artifact re-arms/);
+    expect(err.message).to.match(/active window runs until 1500/);
+    expect(calls, "nothing was submitted").to.have.length(0);
+    expect(a.receipts[BOOK_KEY]).to.equal(undefined);
+  });
+
+  it("the roll guard is strict at the boundary: refused at the base end second, applied one second later", async () => {
+    live.chainTimeSec = 1_500;
+    const refused = await rejection(
+      applyScheduleToChain(repeating(SUCCESSOR), ctx, {} as any, false, applier, deps)
+    );
+    expect(refused.message).to.match(/has not reached/);
+    expect(calls).to.have.length(0);
+
+    live.chainTimeSec = 1_501;
+    expect(await applyScheduleToChain(repeating(SUCCESSOR), ctx, {} as any, false, applier, deps)).to.equal("recorded");
+    expect(calls).to.have.length(1);
+  });
+
+  it("the guard also holds for a dry run, which must show the refusal", async () => {
+    live.chainTimeSec = 1_200;
+    const err = await rejection(applyScheduleToChain(repeating(SUCCESSOR), ctx, {} as any, true, applier, deps));
+    expect(err.message).to.match(/has not reached/);
+    expect(calls).to.have.length(0);
+  });
+
+  it("applies a stage artifact (repeats the live active segment) inside it, refuses once it has ended", async () => {
+    live.chainTimeSec = 1_000;
+    expect(await applyScheduleToChain(repeating(ACTIVE), ctx, {} as any, false, applier, deps)).to.equal("recorded");
+    expect(calls).to.have.length(1);
+
+    calls.length = 0;
+    live.chainTimeSec = 1_500; // the end second: the contract needs end > now
+    const ended = await rejection(applyScheduleToChain(repeating(ACTIVE), ctx, {} as any, false, applier, deps));
+    expect(ended.message).to.match(/has already ended on this chain \(clock 1500\)/);
+    expect(calls).to.have.length(0);
+  });
+
+  it("refuses a successor re-arm once the successor has ended too", async () => {
+    live.chainTimeSec = 1_800;
+    const err = await rejection(applyScheduleToChain(repeating(SUCCESSOR), ctx, {} as any, false, applier, deps));
+    expect(err.message).to.match(/has already ended/);
+    expect(calls).to.have.length(0);
+  });
+
+  it("does not guard an artifact that is not a repeat of a stored segment (a new rate or end)", async () => {
+    // The default artifact carries a genuinely new rate: a plain re-anchor on any chain,
+    // lagging or not.
+    live.chainTimeSec = 100;
+    expect(await applyScheduleToChain(makeArtifact(), ctx, {} as any, false, applier, deps)).to.equal("recorded");
+    expect(calls).to.have.length(1);
   });
 
   it("recovers (records, does not resend) when the chain already carries the target schedule", async () => {

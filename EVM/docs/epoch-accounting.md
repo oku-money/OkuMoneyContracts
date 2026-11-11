@@ -62,7 +62,11 @@ adopted 24-hour grid, two days.
   checks it (`operatorDrill.test.ts`, "epoch pipeline in steady state"). The scripts
   must therefore send the running segment's exact on-chain rate and end
   (`runningSegment` in `deriveEpochSchedule.ts`); `roll-epoch` refuses a different
-  end. The initial `0% → r` activation is the one genuinely skew-sensitive event.
+  end. This holds for a chain that processes the artifact inside the segment it re-arms by
+  ITS OWN clock: the senders refuse a roll artifact on a chain whose clock has not passed the
+  base window (a lagging rollup or Solana's Clock), and a late chain reverts
+  `EndTimestampInPast`; see `EVM/README.md` § Re-arming the running segment. The initial
+  `0% → r` activation is the one genuinely skew-sensitive event.
 - Rates are always **derived from a declared APY**, never hand-entered, so
   every chain receives a byte-identical integer.
 

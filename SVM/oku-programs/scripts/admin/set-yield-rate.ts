@@ -42,6 +42,7 @@ import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
 import { resolveRoleSigner, describeRoleSigner } from '../utils/roleSigner';
 import { chainNowSec } from '../utils/chainClock';
+import { assertRearmWindow } from './_lib/rearm-window';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 import {
   PRECISION,
@@ -187,6 +188,7 @@ async function main() {
       parseArg('next-end') ?? (() => { throw new Error('Required: --next-end=<unix seconds>'); })(),
     );
     if (nextEnd <= end) throw new Error(`--next-end (${nextEnd}) must be after --end (${end}).`);
+    assertRearmWindow(schedule, nowSec, rate, end);
     summary = {
       ...common,
       mode,
@@ -223,6 +225,7 @@ async function main() {
           `bounded window so an unattended schedule halts rather than running on.`,
       );
     }
+    assertRearmWindow(schedule, nowSec, rate, end);
     summary = {
       ...common,
       mode: halting ? 'active (HALT)' : 'active',

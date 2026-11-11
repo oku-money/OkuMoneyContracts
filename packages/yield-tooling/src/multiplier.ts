@@ -218,6 +218,47 @@ export function rearmAnchor(
   return { baseMultiplier: computeMultiplier(s, nowTs), lastAccrualTime: nowTs };
 }
 
+/** Why a re-arm of a named segment cannot be applied on a chain at its own clock. */
+export type RearmWindowProblem = "segment-ended" | "segment-not-started";
+
+/**
+ * Whether a write of `(newRate, newEnd)` that REPEATS a stored segment can be applied at the
+ * chain's own clock `nowTs` without changing the curve (Cyfrin audit #13 follow-up).
+ *
+ * `rearmAnchor` makes every chain store the same schedule only when each chain processes the
+ * broadcast INSIDE the segment it re-arms. Outside it:
+ *   - `segment-ended`: the segment this write repeats has already ended on this chain. The
+ *     contracts reject it (`EndTimestampInPast`), so it is safe, but a straggler is better
+ *     refused before spending gas.
+ *   - `segment-not-started`: the write repeats the armed SUCCESSOR while this chain's clock is
+ *     still inside the active window (a chain whose clock LAGS, e.g. a rollup after a
+ *     sequencer outage, or Solana's Clock, which trails wall clock). It is not a re-arm of
+ *     the running segment, so the contracts accept it as a plain rate change, re-anchor at the
+ *     lagging time and replace the rest of the active window with the successor's rate: this
+ *     chain diverges from the others and nothing on-chain says so. This one is the silent one.
+ *
+ * `null` means the write is not a repeat of a stored segment (a new rate or end, a halt,
+ * a first activation: nothing to guard) or it is inside its segment. Mirrors the contracts'
+ * `_rearmAnchor` branch conditions: keep needs `nowTs < rateEnd` (a write needs `end > now`),
+ * promote needs `nowTs > rateEnd`.
+ */
+export function rearmWindowProblem(
+  s: Schedule,
+  nowTs: bigint,
+  newRate: bigint,
+  newEnd: bigint,
+): RearmWindowProblem | null {
+  if (newRate <= PRECISION) return null;
+  if (newRate === s.ratePerSecond && newEnd === s.rateEnd) {
+    return nowTs >= s.rateEnd ? "segment-ended" : null;
+  }
+  if (s.rateEnd !== 0n && newRate === s.pendingRatePerSecond && newEnd === s.pendingRateEnd) {
+    if (nowTs <= s.rateEnd) return "segment-not-started";
+    return nowTs >= s.pendingRateEnd ? "segment-ended" : null;
+  }
+  return null;
+}
+
 /**
  * Project an Anchor-decoded `PsmConfig` into a {@link Schedule}.
  *

@@ -30,6 +30,7 @@
     "deploy:bscTestnet": "hardhat run scripts/deploy/index.ts --network bscTestnet",
     "deploy:base": "hardhat run scripts/deploy/index.ts --network base",
     "deploy:bsc": "hardhat run scripts/deploy/index.ts --network bsc",
+    "deploy:arbitrum": "hardhat run scripts/deploy/index.ts --network arbitrum",
     "verify:opSepolia": "hardhat run scripts/deploy/verify.ts --network opSepolia",
     "verify:sepolia": "hardhat run scripts/deploy/verify.ts --network sepolia",
     "verify:baseSepolia": "hardhat run scripts/deploy/verify.ts --network baseSepolia",
@@ -37,6 +38,7 @@
     "verify:bscTestnet": "hardhat run scripts/deploy/verify.ts --network bscTestnet",
     "verify:base": "hardhat run scripts/deploy/verify.ts --network base",
     "verify:bsc": "hardhat run scripts/deploy/verify.ts --network bsc",
+    "verify:arbitrum": "hardhat run scripts/deploy/verify.ts --network arbitrum",
     "upgrade": "hardhat run scripts/upgrade/index.ts --network localhost",
     "upgrade:sepolia": "NETWORK=sepolia hardhat run scripts/upgrade/index.ts --network sepolia",
     "upgrade:opSepolia": "NETWORK=opSepolia hardhat run scripts/upgrade/index.ts --network opSepolia",
@@ -72,6 +74,7 @@
     "operator:grantRolesMainnet": "hardhat run scripts/operator/grantRolesMainnet.ts"
   },
   "devDependencies": {
+    "@gfxlabs/oku-chains": "1.21.2",
     "@nomicfoundation/hardhat-toolbox": "6.1.2",
     "@openzeppelin/contracts": "5.6.1",
     "@openzeppelin/contracts-upgradeable": "5.6.1",
@@ -90,7 +93,8 @@
     "ts-node": "10.9.2",
     "tsx": "^4.21.0",
     "typechain": "8.3.2",
-    "typescript": "5.6.3"
+    "typescript": "5.6.3",
+    "viem": "2.57.19"
   },
   "keywords": [
     "solidity",

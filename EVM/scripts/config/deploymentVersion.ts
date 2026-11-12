@@ -31,7 +31,7 @@
  * See `scripts/config/addresses.README.md` for the address-book split and
  * `scripts/config/epochChains.ts` for the MVP chain set.
  */
-export const DEPLOYMENT_VERSION = "v0.4";
+export const DEPLOYMENT_VERSION = "v0.5";
 
 /**
  * Canonical Arachnid CREATE2 factory. Same address on every supported chain.

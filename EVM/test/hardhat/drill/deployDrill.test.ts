@@ -348,6 +348,31 @@ describe("Deploy drill: PSM minting closed at deploy (Cyfrin #2)", function () {
         delete process.env.PSM_MINTING_CLOSED;
     });
 
+    it("INTERNAL_TESTING_MAINNET opens minting on bsc/arbitrum only; production mainnets stay closed", () => {
+        delete process.env.PSM_MINTING_CLOSED;
+        process.env.INTERNAL_TESTING_MAINNET = "true";
+        try {
+            for (const name of ["bsc", "arbitrum"]) {
+                expect(getDeploymentConfig(name, false).minterAllowance, name).to.equal(TESTNET_MINTER_ALLOWANCE);
+            }
+            for (const name of MAINNET_NETWORKS) {
+                if (name === "bsc" || name === "arbitrum") continue;
+                expect(getDeploymentConfig(name, false).minterAllowance, `${name} must stay closed`).to.equal(0n);
+            }
+            // An explicit PSM_MINTING_CLOSED still wins.
+            process.env.PSM_MINTING_CLOSED = "true";
+            expect(getDeploymentConfig("bsc", false).minterAllowance).to.equal(0n);
+            delete process.env.PSM_MINTING_CLOSED;
+            // Only the exact string "true" opts in.
+            process.env.INTERNAL_TESTING_MAINNET = "1";
+            expect(getDeploymentConfig("bsc", false).minterAllowance).to.equal(0n);
+        } finally {
+            delete process.env.INTERNAL_TESTING_MAINNET;
+            delete process.env.PSM_MINTING_CLOSED;
+        }
+        expect(getDeploymentConfig("bsc", false).minterAllowance).to.equal(0n);
+    });
+
     it("a fork reusing a mainnet name deploys open, unless PSM_MINTING_CLOSED rehearses the closed deploy", () => {
         // CI runs Hardhat with FORK_NETWORK=mainnet, so the resolved network name is
         // a mainnet one even though the chain is a throwaway.

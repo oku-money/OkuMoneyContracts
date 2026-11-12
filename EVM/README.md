@@ -96,8 +96,8 @@ Caveats:
 | [`scripts/config/upgradeBaselines.json`](scripts/config/upgradeBaselines.json) | **Tracked** storage-layout baseline of the implementation behind each proxy, bound to its runtime code hash; `fork:*` keys go to the gitignored `upgradeBaselines.local.json`. An independent check on the manifest. | Deploy script, upgrade script (direct and `MODE=verify`). |
 | `upgrade-proposals/<chain>/` | **Tracked** multisig upgrade proposals (`<stamp>.json`) and their Safe Transaction Builder batches (`<stamp>.safe.json`). | Upgrade script, `MODE=propose`. |
 
-`DEPLOYMENT_VERSION` is `v0.4`. The address book, registry, and role-grant
-ledger are empty until the clean-slate deploy of that version.
+`DEPLOYMENT_VERSION` is `v0.5`. The address book, registry, and role-grant
+ledger are repopulated by the v0.5 clean-slate deploy (MockUSDC is reused on testnets).
 
 ### Configured networks
 

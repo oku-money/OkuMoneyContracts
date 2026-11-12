@@ -9,7 +9,8 @@
  * EVM mirror of SVM's `scripts/admin/grant-roles.ts --delegate=<pubkey>`; role
  * mapping in `../../../README.md § RBAC`.
  *
- * TESTNET ONLY. OKUM_MINTER + OKUM_ALLOWANCE_MANAGER + OKUM_CAP_MANAGER on one
+ * TESTNET ONLY (plus internal test deployments on bsc/arbitrum, which must set
+ * INTERNAL_TESTING_MAINNET=true and YES_MAINNET=true). OKUM_MINTER + OKUM_ALLOWANCE_MANAGER + OKUM_CAP_MANAGER on one
  * key leaves its minting unbounded (`configureMinterAllowance` and
  * `setMaxSupply` are both role-gated, so it can raise its own allowance and
  * the global cap), and PSM_BUFFER_WITHDRAWER can drain the PSM USDC buffer.
@@ -28,6 +29,9 @@
  *   NETWORK=base npx hardhat run scripts/operator/grantRoles.ts --network localhost
  *
  *   # Mainnet is refused outright — use grantRolesMainnet.ts instead.
+ *   # Exception, internal test deployments only (bsc, arbitrum):
+ *   YES_MAINNET=true INTERNAL_TESTING_MAINNET=true \\
+ *     npx hardhat run scripts/operator/grantRoles.ts --network arbitrum
  *
  * Environment knobs (live networks only; forks are unaffected):
  *   MASTER_EOA        override the delegate address (default: the shared
@@ -50,7 +54,7 @@ import { getDeployedContract } from "../utils/deploy";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
 import { DEV_WALLET_ADDRESS, MASTER_OPERATOR_EOA } from "../config/chains";
-import { isMainnetNetwork } from "../utils/mainnetGuard";
+import { isMainnetNetwork, isInternalTestingMainnet, isInternalTestingMainnetConfirmed } from "../utils/mainnetGuard";
 import { runConfigureMinterAllowance } from "./configureMinterAllowance";
 import { recordRoleGrant, roleGrantsPath } from "../utils/roleRegistry";
 import { isDryRun } from "../utils/cli";
@@ -105,6 +109,18 @@ const DRY_RUN = isDryRun();
 function assertNotMainnet(networkName: string) {
   if (!isMainnetNetwork(networkName)) return;
   if (DRY_RUN) return; // dry-run is always safe
+  // Internal test deployments on bsc/arbitrum only: INTERNAL_TESTING_MAINNET=true plus
+  // YES_MAINNET. The deployer keeps DEFAULT_ADMIN_ROLE and can revoke all of it.
+  if (isInternalTestingMainnetConfirmed(networkName)) {
+    logger.warning(
+      `INTERNAL_TESTING_MAINNET: granting direct mint/burn/buffer roles to MASTER_EOA on ${networkName}. ` +
+        `Internal test deployment only.`
+    );
+    return;
+  }
+  if (isInternalTestingMainnet(networkName)) {
+    throw new Error(`INTERNAL_TESTING_MAINNET is set for ${networkName} but YES_MAINNET=true is not.`);
+  }
   throw new Error(
     `Refusing to broadcast on ${networkName}. This script grants direct ` +
     `OKUM_MINTER/OKUM_BURNER to an EOA (MASTER_EOA), which is a testnet-only ` +

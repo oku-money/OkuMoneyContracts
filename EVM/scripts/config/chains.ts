@@ -12,7 +12,39 @@
 // Chain Addresses
 // ============================================================================
 
+import { getAddress } from "ethers";
+import { networkById } from "@gfxlabs/oku-chains";
 import { rpcUrl } from "./rpc";
+
+/**
+ * Native USDC for a mainnet chain, read from `@gfxlabs/oku-chains` (chain-config).
+ *
+ * Selection rule: the chain's `tokenList` entry whose symbol is EXACTLY "USDC".
+ * Do NOT use `chain.token.usdcAddress`: on Arbitrum One it is the bridged USDC.e
+ * (0xFF97...), while native USDC (0xaf88...) is only in `tokenList`. Bridged
+ * variants are listed as "USDC.e", so the exact-symbol match excludes them.
+ *
+ * `override` is the in-repo escape hatch for a chain where chain-config is
+ * missing the token or lists something other than the token we want as reserve;
+ * it wins over chain-config. Nothing currently needs one. Throws rather than
+ * guessing when there is no unique match and no override, because the PSM takes
+ * this token as its one-time reserve.
+ *
+ * Testnets are not resolved here: chain-config does not define Base/Arbitrum
+ * Sepolia, BSC testnet or OP Sepolia, and its Sepolia USDC differs from the
+ * Circle token used below.
+ */
+export function resolveNativeUsdc(chainId: number, override?: string): string {
+  if (override) return getAddress(override);
+  const matches = networkById(chainId).tokenList.filter((t) => t.symbol === "USDC");
+  if (matches.length !== 1) {
+    throw new Error(
+      `chain-config has ${matches.length} "USDC" entries for chainId ${chainId}; expected exactly 1. ` +
+        `Pass an explicit override in scripts/config/chains.ts.`
+    );
+  }
+  return getAddress(matches[0].address);
+}
 
 export interface ChainAddresses {
   tokens: {
@@ -40,7 +72,7 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   // Ethereum Mainnet
   mainnet: {
     tokens: {
-      usdc: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      usdc: resolveNativeUsdc(1),
       weth: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
       dai: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
       usdt: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
@@ -60,7 +92,7 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   // Optimism Mainnet
   optimism: {
     tokens: {
-      usdc: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", // Bridged USDC (official)
+      usdc: resolveNativeUsdc(10),
       weth: "0x4200000000000000000000000000000000000006",
       dai: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
       usdt: "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58",
@@ -79,7 +111,7 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   // Arbitrum One
   arbitrum: {
     tokens: {
-      usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", // Native USDC
+      usdc: resolveNativeUsdc(42161), // native USDC (not USDC.e); see resolveNativeUsdc
       weth: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
       dai: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
       usdt: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
@@ -98,7 +130,7 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   // Base
   base: {
     tokens: {
-      usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // Native USDC (6 decimals)
+      usdc: resolveNativeUsdc(8453), // Native USDC (6 decimals)
       weth: "0x4200000000000000000000000000000000000006",
       dai: "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb",
     },
@@ -122,7 +154,7 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   // in test/psm/LitePSM.t.sol; SKIP_MOCK_USDC=true on BSC is unblocked.
   bsc: {
     tokens: {
-      usdc: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", // Binance-Peg USDC (18 decimals)
+      usdc: resolveNativeUsdc(56), // Binance-Peg USDC (18 decimals)
       weth: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", // WBNB
     },
     whales: {

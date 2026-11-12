@@ -31,7 +31,7 @@ import {
 } from "../config/chains";
 import { resolveNetworkContext, NetworkContext } from "../utils/networkContext";
 import { ROLES, getRoleName } from "../config/roles";
-import { mainnetGuard, isMainnetNetwork } from "../utils/mainnetGuard";
+import { mainnetGuard, isMainnetNetwork, isInternalTestingMainnet } from "../utils/mainnetGuard";
 import { isYesMainnet } from "../utils/cli";
 import { recordRoleGrant } from "../utils/roleRegistry";
 import { recordBaseline } from "../utils/upgradeBaseline";
@@ -95,10 +95,16 @@ export const TESTNET_MINTER_ALLOWANCE = ethers.parseUnits("1000000000", 18); // 
  * A fork is a throwaway chain that merely reuses the mainnet NAME (e.g. CI runs
  * Hardhat with `FORK_NETWORK=mainnet`), so it deploys open like a testnet and the
  * drill suites can mint. `PSM_MINTING_CLOSED=true` rehearses the closed deploy on
- * a testnet or fork. There is no way to open minting at deploy on a real mainnet.
+ * a testnet or fork. The only way to open minting at deploy on a real mainnet is the
+ * internal-testing opt-in (`INTERNAL_TESTING_MAINNET=true`, bsc/arbitrum only; see
+ * `isInternalTestingMainnet`), which is for non-production test deployments.
  */
 export function getDeploymentConfig(networkName: string, isFork = false): DeploymentConfig {
-  const closed = (isMainnetNetwork(networkName) && !isFork) || process.env.PSM_MINTING_CLOSED === "true";
+  // INTERNAL_TESTING_MAINNET=true (bsc/arbitrum only) deploys open like a testnet, for
+  // internal test deployments that are not the production deploy.
+  const closed =
+    (isMainnetNetwork(networkName) && !isFork && !isInternalTestingMainnet(networkName)) ||
+    process.env.PSM_MINTING_CLOSED === "true";
   return {
     maxSupply: ethers.parseUnits("1000000000", 18), // 1 billion
     minterAllowance: closed ? 0n : TESTNET_MINTER_ALLOWANCE,

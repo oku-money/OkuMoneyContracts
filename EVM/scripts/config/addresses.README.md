@@ -3,7 +3,7 @@
 `addresses.json` is the LIVE, tracked address book that
 `scripts/utils/addressBook.ts` reads/writes.
 
-**Current state: `DEPLOYMENT_VERSION = "v0.4"` is pending; the book is empty**
+**Current state: `DEPLOYMENT_VERSION = "v0.5"` is pending; core entries are cleared before the redeploy**
 (every network key is `{}`, as are the EVM entries in the root
 `testnet-addresses.json`). The first deploy populates `MockUSDC`, `OkuMoney`,
 `OkuDollar` and `LitePSM` for each of the four MVP testnets — `sepolia`,

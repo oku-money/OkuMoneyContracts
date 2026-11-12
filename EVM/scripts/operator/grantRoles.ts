@@ -423,7 +423,7 @@ function printSummary(results: GrantResult[], skippedContracts: string[]) {
       `(the ${ethers.formatEther(MINTER_ALLOWANCE)} OkuM allowance is a ` +
       "starting value it can change itself). It can also drain the PSM USDC " +
       "buffer. The only backstop is the deployer's DEFAULT_ADMIN_ROLE. " +
-      "Testnet-only by design — this script hard-refuses mainnet."
+      "Testnet-only by design; it runs on bsc/arbitrum only with INTERNAL_TESTING_MAINNET=true (internal test deployments)."
   );
 
   // State the grantee last, where it can't be missed — it is the single

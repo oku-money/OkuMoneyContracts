@@ -3,23 +3,26 @@
 `addresses.json` is the LIVE, tracked address book that
 `scripts/utils/addressBook.ts` reads/writes.
 
-**Current state: `DEPLOYMENT_VERSION = "v0.5"` is pending; core entries are cleared before the redeploy**
-(every network key is `{}`, as are the EVM entries in the root
-`testnet-addresses.json`). The first deploy populates `MockUSDC`, `OkuMoney`,
-`OkuDollar` and `LitePSM` for each of the four MVP testnets — `sepolia`,
-`baseSepolia`, `arbSepolia`, `bscTestnet`. Addresses are identical across chains
-because every deploy goes through the Arachnid CREATE2 factory with a
-`DEPLOYMENT_VERSION`-scoped salt. Until then, scripts that read EVM addresses
-(operator scripts, `bridge-svm-evm.ts`) fail on a missing entry.
+**Current state: `DEPLOYMENT_VERSION = "v0.5"` is deployed** on the five testnets
+(`sepolia`, `baseSepolia`, `arbSepolia`, `opSepolia`, `bscTestnet`) and, as an
+internal test deployment (`INTERNAL_TESTING_MAINNET=true`), on `arbitrum` and `bsc`
+mainnet using each chain's real USDC. `MockUSDC` was retained across the v0.4 -> v0.5
+bump (testnets only), so it keeps its v0.4 address `0x9705F7e8...F09b`; `OkuMoney`
+and `OkuDollar` share one address on every chain, `LitePSM` is identical across the
+testnets and differs on `arbitrum` / `bsc` because its constructor takes the real
+USDC. Addresses come from the Arachnid CREATE2 factory with a
+`DEPLOYMENT_VERSION`-scoped salt. The authoritative list is `addresses.json` and the
+root `testnet-addresses.json`.
 
-`base` / `bsc` (mainnet) are **not** in this book. They carry a live
-pre-streaming `v0.2` deployment from before the streaming-yield refactor
-(`setOkuMYieldRate` did not exist in that source tree), and they are not part
-of the internal-testing MVP chain set
-(`scripts/config/epochChains.ts::DEFAULT_EPOCH_CHAINS`). They were not
-redeployed and are expected to show as drifted by
-`operator:checkMultiplierDrift`, which deliberately scans wider than the
-participating set.
+`base` (mainnet) is **not** in this book. It carries a live pre-streaming `v0.2`
+deployment from before the streaming-yield refactor (`setOkuMYieldRate` did not
+exist in that source tree), was not redeployed, and is not part of the
+internal-testing chain set. `bsc` previously carried the same `v0.2` deployment
+(`0x0696...2796` etc., still live and orphaned); the v0.5 internal-test deploy
+sits alongside it at fresh addresses, and the book only tracks the v0.5 one.
+`arbitrum` and `bsc` are internal test deployments and are NOT in
+`scripts/config/epochChains.ts::DEFAULT_EPOCH_CHAINS`; include them explicitly
+with `CHAINS=` (plus `YES_MAINNET=true` for broadcasts) when running epoch tooling.
 
 ## The `tryAttach` hazard — read before any `DEPLOYMENT_VERSION` bump
 

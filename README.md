@@ -768,9 +768,9 @@ on-chain bridge.
 > Authoritative deployment state lives in
 > [`testnet-addresses.json`](testnet-addresses.json) at the repo root,
 > auto-synced by every successful live EVM deploy. Do NOT hand-edit;
-> rerun the deploy script to refresh. **`DEPLOYMENT_VERSION` is `v0.4` and the
-> EVM entries are empty until the clean-slate deploy runs** (including
-> `MockUSDC`, whose bytecode changed); see
+> rerun the deploy script to refresh. **`DEPLOYMENT_VERSION` is `v0.5`**
+> (five testnets plus internal-test deploys on `bsc` and `arbitrum`; `MockUSDC` is reused on
+> testnets); see
 > [`EVM/scripts/config/addresses.README.md`](EVM/scripts/config/addresses.README.md)
 > for the version-bump procedure.
 >
@@ -923,7 +923,7 @@ NETWORK=devnet npm run test:onchain -- --step=redeem   # single step; an unknown
 EVM cross-chain accounting covered by
 `EVM/test/hardhat/scenarios/RealWorldUsage.ts`. Full EVM↔SVM
 roundtrip bridge test (reads EVM addresses from `testnet-addresses.json`, so it
-fails until the v0.4 EVM deploy has repopulated them):
+reads the v0.5 EVM deploy from the registry):
 
 ```bash
 cd SVM/oku-programs

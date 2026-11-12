@@ -2,7 +2,7 @@
 
 ## `devnet.json` — live
 
-The current devnet deployment (program `4k5gmUht…`, see `Anchor.toml`). Written by
+The current devnet deployment (program `9PrySZ1P…`, see `Anchor.toml`). Written by
 `deploy:programs` / `deploy:init`; `scripts/utils/addressBook.ts::saveDeployment` **merges** into any
 existing file at the same path, so a genuinely fresh deploy should start from no file (move or delete
 the old one first, or stale keys survive into the new record).
@@ -29,7 +29,8 @@ closed"), and a closed program ID can never be redeployed:
 | `BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g` | `devnet.v1-pre-streaming.json` | old `lite_psm` |
 | `3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N` | `devnet-fork.v1-pre-streaming.json` (and `upgrades[]` of the devnet archive) | old `lite_psm` |
 | `3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy` | `devnet-fork.v1-pre-streaming.json` | `oku_dollar` (crate removed) |
+| `FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW` | `devnet.v3-FxTL.json` | `lite_psm` v3 (closed 2026-11-12, 2.971 SOL reclaimed; config `4PnL…`, vault `GxKK…` and OkuM mint `2P6i…` stranded; its mock USDC mint `Dm2fREep…` is reused by the current deploy) |
 | `4k5gmUhtp3XqW2zf3XzdquMTSyMVfgA5TubuinTSUjNN` | `devnet.v2-4k5gm.json` | `lite_psm` v2 (closed 2026-10-22, 3.108 SOL reclaimed; config `EBL4…`, vault, OkuM mint `BZw8…` and `5B3k…` stranded) |
 
-The current devnet deploy (`devnet.json`) is `lite_psm` `FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW`
-(deployed 2026-10-22).
+The current devnet deploy (`devnet.json`) is `lite_psm` `9PrySZ1PGMANowvAsdigSEBv6JBusfsv7mzwvniWj4nn`
+(deployed 2026-11-12, post-Cyfrin-audit fixes; reuses the mock USDC mint).

@@ -1,16 +1,16 @@
 {
   "network": "devnet",
-  "timestamp": "2026-10-22T18:05:57.044Z",
   "tokens": {
     "usdc": "Dm2fREepXZf1rdv5f6NM3kSs5Wrfq2yhM23hYDzRBCNW",
-    "okuM": "2P6iLj3eggFXH3PEmUYHWgi79P6Lz4deLtU8mD7TBhGc"
+    "okuM": "VWqziRP5gmRfhvsxAAXSYZBTd6TWXCcZhrssiaAMNWu"
   },
   "programs": {
-    "litePsm": "FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW"
+    "litePsm": "9PrySZ1PGMANowvAsdigSEBv6JBusfsv7mzwvniWj4nn"
   },
+  "timestamp": "2026-11-12T23:05:03.777Z",
   "pdas": {
-    "psmConfig": "4PnLTKxZndU7LR7At7RW615mJ6JFKGqHr9ckmrRpuNe8",
-    "psmVaultUsdc": "GxKKZxjK5K2nLFg47QU38ok3fnKN7Bw7Cc89hqKXFanZ"
+    "psmConfig": "9zmsz3DiyvBeZXeCPgVEp6uABXmvbLKs2f5DTTF3ZqcQ",
+    "psmVaultUsdc": "5vNrY8YzHhaxKpnujuM1YjGEZmDyK4Q8FKg17wjUrYnq"
   },
   "authorities": {
     "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
@@ -20,19 +20,19 @@
   "upgrades": [
     {
       "program": "LitePsm",
-      "programId": "FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW",
+      "programId": "9PrySZ1PGMANowvAsdigSEBv6JBusfsv7mzwvniWj4nn",
       "oldElfSize": 0,
-      "newElfSize": 584608,
+      "newElfSize": 594128,
       "oldElfSha256": "<none>",
-      "newElfSha256": "532a673dd2973b3c393490fa71ffda185c5c9040b6cbffa43357698b4749799f",
+      "newElfSha256": "849caf68db2395624e24b74ceab90fa7b6e4fcd5d74357bf1d444d8d5e72b333",
       "txSignature": "<initial-deploy>",
-      "timestamp": "2026-10-22T18:05:48.096Z",
+      "timestamp": "2026-11-12T23:04:46.861Z",
       "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
       "mode": "deploy",
       "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
-      "gitCommit": "035ed2198fb6aaf14304e53c1fcb7dd0b0a58d7d",
-      "idlSnapshotFile": "devnet-lite_psm-b851ae709b98081d.json",
-      "idlSha256": "b851ae709b98081d5dd1f6f0acdc57e45499235f3b826b6827b7bb5fd037cd1c"
+      "gitCommit": "a12e14af030a4470b72992f2a0bdf2c04de2f3a3",
+      "idlSnapshotFile": "devnet-lite_psm-36589aa04af7543a.json",
+      "idlSha256": "36589aa04af7543a9cd945ccb21b7aab8dcf2a0c82b8a404f9bb5dfb4b1bf9e1"
     }
   ]
 }

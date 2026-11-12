@@ -187,8 +187,8 @@ Current testnet holders (redeploy of 2026-10-22):
 - **EVM** (sepolia, baseSepolia, arbSepolia, bscTestnet, opSepolia; same CREATE2 addresses on each):
   admin/upgraders on deployer `0x3CB68a6762041aA05E762814A8791CA9d98E79A0`; the 18
   `grantRoles.ts` operational roles on `0x971A3e2b0031dE23715Fa1ce53843B5B045dae00`.
-- **SVM devnet** (`lite_psm` `FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW`, config
-  `4PnLTKxZndU7LR7At7RW615mJ6JFKGqHr9ckmrRpuNe8`): `role_admin` and upgrade authority
+- **SVM devnet** (`lite_psm` `9PrySZ1PGMANowvAsdigSEBv6JBusfsv7mzwvniWj4nn`, config
+  `9zmsz3DiyvBeZXeCPgVEp6uABXmvbLKs2f5DTTF3ZqcQ`): `role_admin` and upgrade authority
   `5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej`; `rate_manager`, `direct_minter`,
   `direct_burner`, `buffer_depositor` on the Fordefi Solana vault
   `5Miw5ZQ4vT8MBSFcp8vtwearNpZiXZVa43WrRZDpXbzT` (`rate_manager` set by a one-off

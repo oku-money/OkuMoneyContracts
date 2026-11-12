@@ -75,7 +75,7 @@ npm run export-idls   # copy into ../../artifacts/svm/
 
 ## Current canonical deployments
 
-See `/testnet-addresses.json` at the repo root for the addresses these ABIs / IDLs are deployed at on each network (EVM v0.4 on sepolia, baseSepolia, arbSepolia, bscTestnet, opSepolia; SVM devnet `lite_psm` `FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW`).
+See `/testnet-addresses.json` at the repo root for the addresses these ABIs / IDLs are deployed at on each network (EVM v0.4 on sepolia, baseSepolia, arbSepolia, bscTestnet, opSepolia; SVM devnet `lite_psm` `9PrySZ1PGMANowvAsdigSEBv6JBusfsv7mzwvniWj4nn`).
 
 ## Usage examples
 

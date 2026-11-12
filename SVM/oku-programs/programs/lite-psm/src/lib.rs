@@ -28,7 +28,7 @@ pub mod state;
 use contexts::*;
 use roles::*;
 
-declare_id!("FxTLKSUPmuUJWQZ7EaYHkpcvAg3h4HZvmnUhhPCD5DwW");
+declare_id!("9PrySZ1PGMANowvAsdigSEBv6JBusfsv7mzwvniWj4nn");
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_security_txt::security_txt! {
